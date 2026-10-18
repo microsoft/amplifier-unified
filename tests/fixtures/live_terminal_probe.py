@@ -158,13 +158,18 @@ Reply with the fixture response.
             # A has exited while the actual worker is still waiting on its provider.
             assert sid in service.runtime.workers
             (gates / "terminal-detach.release").touch()
-            await until(lambda: complete("terminal-b", "terminal-detach"))
+            # Assistant text can precede the terminal lifecycle event. This
+            # next input exercises a new turn, not steering the finishing run.
+            await until(lambda: complete("terminal-b", "terminal-detach")
+                        and latest["terminal-b"]["session"]["status"] == "idle")
             async with SessionClient(url, app["control_token"], "terminal-a") as a:
                 restored = await a.snapshot(sid)
                 assert sum(m.get("text") == "terminal-detach" for m in restored["session"]["messages"]) == 1
                 assert sum(m.get("text") == "completed terminal-detach" for m in restored["session"]["messages"]) == 1
                 assert (gates / "terminal-detach.calls").read_text().splitlines() == ["call"]
-                await a.command(sid, "conversation.send", {"text": "terminal-stop"}, command_id="stop-input")
+                receipt = await a.command(sid, "conversation.send", {"text": "terminal-stop"}, command_id="stop-input")
+                admission = {key: receipt.get(key) for key in ("delivery", "steering")}
+                assert admission == {"delivery": "accepted", "steering": None}, admission
                 await until(lambda: (gates / "terminal-stop.calls").exists())
                 await b.command(sid, "conversation.stop", {}, command_id="stop-run")
                 await until(lambda: sid not in service.runtime.workers)

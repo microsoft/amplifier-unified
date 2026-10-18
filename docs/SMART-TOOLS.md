@@ -178,18 +178,53 @@ The reconnect control preserves the mounted iframe and unfinished input. Reload
 is a separate explicit control because it resets local inputs and reruns the
 authored document's initialization code.
 
+An initialized MCP App receives the SDK's `notifications/tools/list_changed` and
+`notifications/resources/list_changed` when its host binding moves from a
+non-ready state to verified ready. Repeated ready observations do not repeat the
+notifications. Discovery stays limited to the saved grants. A cooperating app
+can refresh its safe reads on that signal; the host never repeats initialization
+input, a prior tool result or a mutation. This does not repair an app that ignores
+the notifications, and it does not make a deliberately selected saved version live.
+
+Agent `smartTools.viewStatus` is passive and scoped to the calling conversation.
+It distinguishes no connected client, an unavailable supplied client, multiple
+connected clients, and a document not selected by the matching client. Persisted
+disconnected clients do not count as live viewers. Without a selected live view,
+the receipt still reports the latest saved source and binding state under
+`savedView`; it does not select a tab, attach a client or connect a server.
+
 Older views lack a saved contract fingerprint. Reconnect returns `review_required`
 with the current definitions for the already-granted action names. After reviewing
 them, the user or authorized agent can supply that exact `review.fingerprint` as
 `reviewedContract`. The binding is checked again before committing. This does not
 grant newly discovered tools or infer a missing historical account identity.
 Legacy views with an attested but unrecorded account require a newly reviewed view.
-This recovery path does not introduce artifact revision history or merge tabs by title.
+This reconnect path does not replace document history or merge tabs by title.
+
+For changed definitions, the human-only **Review tool changes** flow shows a
+bounded comparison with the saved definitions. Older bindings explicitly say
+when the previous definitions are unavailable. Description changes require
+review; added actions remain ungranted. Configuration/account changes and a
+changed app resource identity remain separate blocked cases. An exact review is
+bound to the reviewing client and its selection generation.
+
+**Approve existing actions** keeps the mounted document and unfinished inputs.
+**Open updated live view** additionally requires an explicit input-reset
+acknowledgement, saves current resource HTML as a new version of the same artifact,
+and retains its launch arguments/result and board identity without calling the
+launcher. Other mounted clients preserve their actual old iframe and local input,
+become read-only immediately, and choose **Open live view** when ready. Historical
+selection also exposes that action directly. See the
+[saved MCP contract review contract](clients/mcp-contract-review.md) and
+[October17 qualification](validation/mcp-contract-review-20261017.md).
 
 Local acceptance: `npm --prefix frontend run test:mcp-recovery-browser` uses an
 actual MCP SDK fixture and restarts the host over isolated synthetic state. It
-checks source identity, launch receipts, mutation counts, input preservation and
-changed-schema denial. `AMPLIFIER_TEST_PYTHON` selects the test interpreter.
+checks source identity, launch receipts, mutation counts, input preservation,
+cooperative safe-read recovery, deliberate historical selection and changed-schema
+denial. It also runs once in the extended browser plan after publication or manual
+dispatch. `AMPLIFIER_TEST_PYTHON` selects the test interpreter. See the
+[807–809 qualification and remaining decision](validation/mcp-recovery-807-809.md).
 
 ## Supported protocol profile
 
@@ -261,5 +296,10 @@ replay the launch tool. Reconnect remains an explicit user/agent action.
 
 `frontend/tests/mcp-clients-browser.mjs` exercises independent desktop and mobile-
 sized clients, stale status replies, foreground return and cross-client reconnect.
+The extended browser runner owns it as `mcp-clients`, alongside `mcp-recovery`.
+Its empty-account fixture waits for completed connection discovery and dismisses
+the ordinary setup dialog before testing the saved tool; it does not hide the
+dialog or suppress discovery. Launch completion is read from its exact durable
+operation receipt because the compact client state omits operation collections.
 It uses a synthetic counter server and proves no replay; mobile emulation does
 not substitute for acceptance on a physical phone/browser.

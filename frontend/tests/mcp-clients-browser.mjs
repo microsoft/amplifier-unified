@@ -31,6 +31,29 @@ async function start(port=0){
 }
 async function stop(){if(fixture&&fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');await exited}fixture=null}
 const mutations=async()=>((await readFile(callsPath,'utf8')).trim().split('\n').filter(Boolean)).length;
+const unwrap=raw=>raw?.action==='shell.command'?(raw.args.command||raw.args):raw;
+async function dismissFixtureSetup(page){
+ // This credential-free fixture discovers an empty provider catalog. Finish
+ // that real discovery before dismissing its ordinary setup UI, once per client.
+ await page.evaluate(()=>window.amplifier.dispatch('providers.list',{sessionId:window.amplifier.getState().selectedSessionId}));
+ await expect.poll(()=>page.evaluate(()=>{
+  const state=window.amplifier.getState(),setup=state.setup||{};
+  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
+  const workspace=session?.workspace||state.settings?.workspace;
+  return Boolean(setup.providersLoadedAt&&(setup.providersWorkspace===workspace||!session&&setup.providersLocation?.kind==='managed'));
+ })).toBe(true);
+ const setup=page.locator('.a-settings-experience');await expect(setup).toBeVisible();
+ await expect(setup).toContainText('Connect one AI service to start.');
+ const saved=page.waitForResponse(response=>{
+  if(!response.url().endsWith('/api/actions')||response.request().method()!=='POST')return false;
+  const body=unwrap(response.request().postDataJSON());return body?.action==='view.update'&&body.args?.patch?.panel===null;
+ });
+ await page.locator('.a-settings-overlay').getByRole('button',{name:/^Close (?:settings|panel)$/}).click();
+ const response=await saved;assert.ok(response.ok());const receipt=await response.json();assert.equal(receipt.accepted,true,JSON.stringify(receipt));
+ await expect(setup).toHaveCount(0);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.panel)).toBe(null);
+}
+
 try{
  const url=await start();
  browser=await chromium.launch({headless:true});
@@ -51,11 +74,17 @@ try{
   throw Error('Operation did not finish: '+name);
  };
  await action('session.create');
+ await dismissFixtureSetup(page);
  await action('view.update',{patch:{canvasControlsPinned:true}});
  await operation('smartTools.configure',{id:'recovery',name:'Recovery fixture',command:python,args:[root+'tests/fixtures/canvas_recovery_mcp_server.py',htmlPath,callsPath,modePath]});
  await operation('smartTools.connect',{id:'recovery'});
  const launch=await action('smartTools.call',{id:'recovery',name:'counter_add',arguments:{amount:7}});
- await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(row=>row.id===id&&row.status==='completed'),launch.operationId);
+ // The compact browser frame intentionally omits the operation collection.
+ // Wait on this exact durable receipt before opening its saved result.
+ await expect.poll(async()=>{
+  const response=await page.request.get(url+'/api/smart-tools/operations/'+launch.operationId);
+  assert.ok(response.ok());const row=await response.json();return {id:row.id,status:row.status};
+ },{timeout:15000}).toEqual({id:launch.operationId,status:'completed'});
  await operation('smartTools.open',{id:'recovery',tool:'counter_add',operationId:launch.operationId});
  const frame=page.frameLocator('.a-mcp-app-viewer iframe');
  await expect(frame.locator('body')).toHaveAttribute('data-booted','true');
@@ -70,6 +99,7 @@ try{
  const mobileAction=(name,args={})=>mobile.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await mobileAction('session.select',{id:before.session});
  await mobileAction('canvas.select',{id:before.id});
+ await dismissFixtureSetup(mobile);
  const phoneFrame=mobile.frameLocator('.a-mcp-app-viewer iframe');
  await expect(phoneFrame.locator('body')).toHaveAttribute('data-booted','true');
  await expect(phoneFrame.locator('#count')).toHaveText('7');
@@ -84,6 +114,7 @@ try{
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','error');
  await expect(phoneFrame.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Keep phone input');
  await phoneFrame.locator('body').evaluate(body=>body.dataset.retained='yes');
+ await expect(mobile.locator('.a-settings-experience')).toHaveCount(0);
  await mobile.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
@@ -115,6 +146,7 @@ try{
  await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','error');
  await expect(mobile.locator('.a-mcp-status')).toContainText('Reconnect this tool');
  await mobile.unroute('**/api/canvas/*/status?*');
+ await expect(mobile.locator('.a-settings-experience')).toHaveCount(0);
  await mobile.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
@@ -133,6 +165,7 @@ try{
  await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','error');
  await expect(mobile.locator('.a-mcp-status')).toContainText('Reconnect this tool');
  await mobile.unroute('**/api/canvas/*/tools/call?*');
+ await expect(mobile.locator('.a-settings-experience')).toHaveCount(0);
  await mobile.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
@@ -160,6 +193,7 @@ try{
  });
  await third.goto(url);await third.waitForFunction(()=>window.amplifier?.getState());
  await third.evaluate(([sid,cid])=>window.amplifier.dispatch('session.select',{id:sid}).then(()=>window.amplifier.dispatch('canvas.select',{id:cid})),[before.session,before.id]);
+ await dismissFixtureSetup(third);
  await oldInitial;
  await third.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});document.dispatchEvent(new Event('visibilitychange'))});
  await third.waitForTimeout(30);

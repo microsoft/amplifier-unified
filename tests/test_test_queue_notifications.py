@@ -62,8 +62,11 @@ async def test_observed_outcome_resumes_once_without_claiming_acceptance(
             backend.append((action, dict(args)))
             raise TimeoutError('Lost command acknowledgement')
         result = invoke(config, home, row, action, args)
+        if action == 'job_read' and outcome == 'unknown':
+            result['job'].update(state='unknown', terminal=False)
         if action == 'execute' and outcome == 'failed':
             result['result']['exit_code'] = 1
+            result['job']['state'] = 'failed'
         return result
 
     monkeypatch.setattr(environments, 'invoke', checked)

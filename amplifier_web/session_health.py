@@ -129,13 +129,18 @@ def failure_details(error, error_type=None):
         category, summary = 'provider_selection', 'Choose a replacement AI connection for this chat.'
         guidance = 'Its saved provider connection is no longer available. Open the model selector to choose a connection, model, and reasoning effort. Your history and saved message are kept; choosing does not send it.'
     elif kind == 'AmbiguousBundleReferenceError' or 'ambiguousbundlereferenceerror:' in text:
+        kind = 'AmbiguousBundleReferenceError'
         category, summary = 'bundle_configuration', 'The bundle ID casing matches more than one registration.'
         guidance = 'Choose an exact registered bundle ID. No bundle was selected and this attempt did not send your message.'
     elif kind == 'BundleNotFoundError' or 'bundlenotfounderror:' in text:
+        kind = 'BundleNotFoundError'
         category, summary = 'bundle_configuration', 'The selected bundle ID could not be resolved.'
         guidance = 'Choose a registered bundle ID, normally lowercase with dashes. Bundle IDs are not display labels; local paths and URLs retain their exact spelling. Your history and saved message are kept; this attempt did not send it.'
     elif kind in {'BundleLoadError', 'BundleValidationError', 'BundleDependencyError'} or any(
             name + ':' in text for name in ('bundleloaderror', 'bundlevalidationerror', 'bundledependencyerror')):
+        if kind not in {'BundleLoadError', 'BundleValidationError', 'BundleDependencyError'}:
+            kind = next(name for name in ('BundleLoadError', 'BundleValidationError', 'BundleDependencyError')
+                        if name.lower() + ':' in text)
         category, summary = 'bundle_configuration', 'The selected bundle could not be prepared.'
         guidance = 'Inspect the saved startup diagnostic and the bundle configuration before retrying. Your history and saved message are kept; this attempt did not send it.'
     elif 'invalidimageerror:' in text or (('base64' in text or 'image_url' in text or 'screenshot' in text) and any(word in text for word in ('invalid', 'expected', 'malformed', 'missing'))):

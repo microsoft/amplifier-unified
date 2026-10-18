@@ -67,19 +67,28 @@ class ClientViews:
             raise AppError("Choose a valid client ID.")
         return identity
 
-    def attach(self, identity, resume=None, kind="web"):
+    def attach(self, identity, resume=None, kind="web", *, device=None):
         from .service import AppError
         self.validate(identity)
         if kind not in {"web", "tui", "native", "api"}:
             raise AppError("Unsupported client kind.")
         if resume is not None:
             self.validate(resume)
+        if device is not None:
+            for candidate in (identity, resume):
+                if candidate is None:
+                    continue
+                previous = self.records.get(candidate)
+                if (candidate == resume and previous is None) or (previous is not None and previous.get('deviceOwner') != device):
+                    raise AppError("This client belongs to another connection.", 403)
         if identity not in self.records:
             previous = self.records.get(resume)
             if previous:
                 record = copy.deepcopy(previous)
                 if additions := getattr(getattr(self.service, "feedback", None), "additions", None):
                     additions.capture_on_attach(resume, previous, record)
+                if handoffs := getattr(self.service, "handoffs", None):
+                    handoffs.capture_on_attach(resume, previous, record)
             else:
                 shared = self.service._state
                 record = {key: copy.deepcopy(shared.get(key)) for key in LOCAL_KEYS}
@@ -88,7 +97,7 @@ class ClientViews:
                 record["drafts"] = {}
                 record["attachments"] = {}
                 # Preserve pre-client drafts during the first migration only.
-                if not shared.get("clientViewsMigrated"):
+                if device is None and not shared.get("clientViewsMigrated"):
                     for session in shared.get("sessions", []):
                         if session.get("draft"):
                             record["drafts"][session["id"]] = session["draft"]
@@ -100,6 +109,8 @@ class ClientViews:
                 else:
                     record["view"]["draft"] = ""
                     record["view"]["panel"] = None
+            if device is not None:
+                record['deviceOwner'] = device
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
             # A new page mounts its own inline viewers. Copying their leases
             # would retain invisible frames and stale commands from the old tab.
@@ -241,6 +252,8 @@ class ClientViews:
         record = self.record()
         if record is None:
             return snapshot
+        if handoffs := getattr(self.service, "handoffs", None):
+            snapshot["handoffs"] = handoffs.project()
         if feedback := getattr(self.service, "feedback", None):
             snapshot["feedback"] = feedback.followups.project(snapshot.get("feedback", {}))
         snapshot.pop("canvasTabs", None)

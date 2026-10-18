@@ -112,6 +112,54 @@ registration; the launcher separately checks that the app responds.
 
 The first message can take a few minutes while Unified prepares its runtime.
 
+After installation, open **Settings → Updates** to check for and install updates,
+review any failed checks, or choose the automatic check interval. See the
+[update guide](docs/UPDATES.md) for active-work handling and recovery details.
+
+For opt-in, read-only local observations shared with CLI tools, see the
+[status emitter guide](docs/status-emitter.md). Publication is disabled by default.
+
+## Default capabilities
+
+Ordinary conversations compose Unified shell, image generation, Computer Use,
+full Context Intelligence, and Model Routing over the selected root bundle.
+Existing explicit capability lists gain the latter four unless opted out;
+chosen source revisions and list order are retained. Saved snapshot bundles
+are complete plans and do not gain these additions.
+
+Use **Settings → Configured bundles** to disable or remove a default. A retained
+routing-matrix setting does not re-enable a disabled routing behavior. The
+Context Intelligence opt-out removes its analysis/navigation capabilities;
+Unified's existing local capture hook remains.
+
+New Computer Use access is read-only. It targets the **host computer**, not the
+browser's shared screen. Explicit module configuration can enable writes with
+`overrides.tool-computer-use.config.read_only: false`; existing explicit access
+settings remain authoritative. Child sessions cannot widen a parent's desktop
+restrictions.
+
+Context Intelligence forwarding requires explicit destination configuration;
+ambient server credentials alone do not enable it. Explicit routing matrices,
+agent provider choices, and per-delegation model pins take precedence over
+default role routing. When only automatically added routing has no candidate,
+the child inherits the conversation's selected provider, model, and effort
+(retaining that snapshot on resume). If there is no selected model to inherit,
+the delegation fails visibly. Explicit matrices, including an explicitly chosen
+`balanced` matrix or a user-authored override, remain strict, as do unavailable
+provider/model pins and resolver errors. A saved explicit app-behavior list is
+treated as explicit routing when its original intent is ambiguous.
+An effective-plan edit containing `hooks` also makes routing explicit, even if
+the hook values are unchanged. A custom child orchestrator that cannot apply the
+inherited selection fails visibly rather than substituting another model.
+
+For ordinary roots already including the upstream logging behavior, its ambient
+URL/key placeholders alone no longer opt into forwarding; configure a destination
+or explicit scoped legacy URL/key settings. An explicit empty destination map
+still disables forwarding. A named agent's explicit provider/model pin also
+outranks a call's role-based default; pass explicit `provider_preferences` to
+override that pin. Snapshot roots retain their saved composition and prior
+routing lifecycle rather than adopting this ordinary-root policy.
+
 ## Create a dedicated desktop or mobile app
 
 You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.
@@ -139,7 +187,7 @@ amplifier-unified config set bind '["100.64.0.10", "127.0.0.1"]'
 amplifier-unified doctor
 ```
 
-Replace the example origin and Tailscale IP with your host's real addresses. Before opening the remote address, export Unified's public CA on the host, verify its fingerprint with `doctor`, and trust that CA on each device. Do not disable certificate checks.
+Replace the example origin and Tailscale IP with your host's real addresses. Before opening the remote address, export Unified's public CA on the host, verify its fingerprint with `amplifier-unified setup-tls status`, and trust that CA on each device. Do not disable certificate checks.
 
 For the complete setup—including certificate transfer and trust, reverse-proxy limits, and Linux service management—see the [deployment guide](docs/DEPLOYMENT.md).
 

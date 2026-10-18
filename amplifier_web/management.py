@@ -437,7 +437,7 @@ class Management:
         finally:
             if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
 
-    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None):
+    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None):
         if session.get('nativeProject'):
             if session.get('historyReadOnlyReason'):
                 raise ValueError(session['historyReadOnlyReason'])
@@ -450,6 +450,7 @@ class Management:
         if session.get('historyManaged') and not session.get('historyLoaded'):
             await self.service.history.ensure_loaded(session['id'])
         async with self.service.lock:
+            if restart_guard is not None: restart_guard()
             current = self.service._session(session['id'])
             current['historyManaged'] = False
             session.update(copy.deepcopy(current))
@@ -465,7 +466,8 @@ class Management:
                 session.pop('selection', None)
         from .configuration_authority import check_current
         check_current()
-        await self.service.runtime.start(session,self.service.on_runtime_event)
+        await self.service.runtime.start(session,self.service.on_runtime_event,
+            **({'guard': restart_guard} if restart_guard is not None else {}))
 
     async def recover_provider_catalog(self, session, operation, args):
         if operation not in {'configuration.providers', 'configuration.providerModels'}:

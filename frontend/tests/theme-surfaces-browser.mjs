@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {settingsButton} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/theme-surfaces';
 const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/main_refresh_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
@@ -61,7 +62,7 @@ try{
  await page.setViewportSize({width:1440,height:960});await presentation({scheme:'light'});await action('theme.apply',{name:'Aurora',css:aurora.css});
  await page.getByRole('separator',{name:'Resize canvas'}).focus();await page.keyboard.press('ArrowLeft');await assertFits();
  // Exercise user-facing save -> apply -> download -> import -> reload.
- await page.getByRole('button',{name:'Settings',exact:true}).click();await page.locator('[data-settings-section="appearance"]').click();
+ await settingsButton(page).click();await page.locator('[data-settings-section="appearance"]').click();
  await page.getByRole('button',{name:'Save, import & export themes',exact:true}).click();
  await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').fill('My panel theme');
  const custom=aurora.css+'\n#amp-one{--a-panel-gap:13px;--a-panel-radius:17px}';await page.locator('#theme-css').fill(custom);

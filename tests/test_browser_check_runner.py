@@ -218,7 +218,18 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        'diagram-navigation': {'DIAGRAM_EVIDENCE': '{root}/output/browser-checks/diagram-navigation/report.json'},
+        'chat-shortcuts': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/chat-shortcuts'},
+        'automation-hub': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/automation-hub'},
+        'cross-workspace-handoff': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/cross-workspace-handoff'},
+        'peer-attribution': {'AMPLIFIER_TEST_BUILT_STATIC': '1'},
+        'device-pairing': {},
+        'settings-drafts': {},
         'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
+        'standard-ux-connection-controls': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-connection-controls'},
+        'standard-ux-preferences': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-preferences'},
+        'standard-ux-privacy-effects': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-privacy-effects'},
+        'standard-ux-voice-settings': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-voice-settings'},
         'smart-tool-updates': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/smart-tool-updates-artifacts'},
         'archive-feedback': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/archive-feedback'},
         'update-restart': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-restart-artifacts'},
@@ -226,14 +237,27 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
+        'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
+        'mcp-clients': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-clients.png'},
+        'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
+        'execution-observability': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/execution-observability'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
     for row in added:
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
-        assert row['env'] == additions[row['id']]
+        assert row.get('env', {}) == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 73
+    assert len(original) == 65 and len(rows) == 88
+    # Existing scenarios retain their commands; only evidence ownership changes.
+    evidence = {
+        'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
+        'canonical-work': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canonical-work'},
+        'canvas-media': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canvas-media'},
+    }
+    for identity, expected in evidence.items():
+        assert next(row for row in original if row['id'] == identity)['env'] == expected
+    original = [{key: value for key, value in row.items() if key != 'env'} if row['id'] in evidence else row for row in original]
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
@@ -266,7 +290,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     extended_scripts = {row['command'][1] for row in plan['scenarios']}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
-        'conversation-navigation', 'workspace-shortcuts')}
+        'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
+        'cross-workspace-handoff', 'automation-hub', 'settings-drafts')}
     assert source_only <= extended_scripts
     assert not source_only & readiness_scripts
     installed_overlap = {f'tests/{name}-browser.mjs' for name in (
@@ -281,8 +306,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum(f'node {appearance_preview}' in line for _, line in commands) == 1
     # All 108 original scripts, three navigation regressions, confirmed restart,
     # Smart Tool recovery, archive feedback and appearance preview navigation
-    # and sequential keyboard reflow each retain their owning lane.
-    assert len(readiness_scripts | extended_scripts) == 116
+    # and sequential keyboard reflow, saved MCP recovery, device pairing, and media transition
+    # each retain an explicit owning lane; unsaved settings and independent MCP clients now have owners too.
+    assert len(readiness_scripts | extended_scripts) == 131
+    assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
+    assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 
     # The environment journey belongs to coordination, outside these two lanes.
     environment = 'tests/test-environments-browser.mjs'
@@ -301,6 +329,17 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
                and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
                for step in coordination['jobs']['contracts']['steps'])
+
+
+def test_reload_failure_diagnostics_have_retained_scenario_owners():
+    rows = {row['id']: row for row in json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())['scenarios']}
+    for identity in ('canonical-work', 'canvas-media'):
+        assert rows[identity]['env']['AMPLIFIER_TEST_ARTIFACTS'] == '{root}/output/browser-checks/' + identity
+    canvas = (ROOT / 'frontend/tests/canvas-media-browser.mjs').read_text()
+    assert "process.env.AMPLIFIER_TEST_ARTIFACTS" in canvas
+    assert "outputDir+'/failure.json'" in canvas
+    canonical = (ROOT / 'frontend/tests/canonical-work-browser.mjs').read_text()
+    assert "join(outputDir,'failure-groups.json')" in canonical
 
 
 def test_performance_reports_are_distinct_and_uploaded():

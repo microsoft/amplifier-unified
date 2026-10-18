@@ -1,10 +1,12 @@
 import {settingsSections} from '../src/settings-navigation.js';
+// The menu's attention badge adds its own accessible unread-item label.
+// Keep an anchored match so unrelated Settings actions cannot satisfy it.
+export const settingsButton=scope=>scope.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
 export async function openSettingsDialog(page){
  await page.waitForFunction(()=>window.amplifier?.getState());
  if(await page.evaluate(()=>['settings','appearance'].includes(window.amplifier.getState().view?.panel))){await page.locator('.a-settings-experience').waitFor({state:'visible'});return;}
  if(await page.locator('.a-settings-experience').isVisible())return;
- // The menu's attention badge adds its own accessible unread-item label.
- const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
+ const settings=settingsButton(page);
  if(await settings.isVisible()){await settings.click();return;}
  const options=page.getByRole('button',{name:'App options',exact:true});
  try{
@@ -17,7 +19,7 @@ export async function openSettingsDialog(page){
   if(await page.locator('.a-settings-experience').isVisible())return;
   throw error;
  }
- await page.getByRole('group',{name:'App options',exact:true}).getByRole('button',{name:/^Settings(?: \d+ unread items)?$/}).click();
+ await settingsButton(page.getByRole('group',{name:'App options',exact:true})).click();
 }
 export async function openSettingsPage(page,destination){
  await openSettingsDialog(page);

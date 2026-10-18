@@ -71,14 +71,16 @@ class TerminalDevices:
         return {'id': device_id, 'token': token}
 
     def identify(self, token):
-        if not re.fullmatch(r'amt_[a-f0-9]{32}\.[A-Za-z0-9_-]{64}', token):
+        if not re.fullmatch(r'(?:amt|amc)_[a-f0-9]{32}\.[A-Za-z0-9_-]{64}', token):
             return None
         identity = token[4:].split('.')[0]
         row = self.read()['devices'].get(identity)
-        return identity if row and hmac.compare_digest(row['digest'], digest(token)) else None
+        # Distinct token families keep restricted credentials fail-closed on older hosts.
+        expected_scope = 'companion-v1' if token.startswith('amc_') else None
+        return identity if row and row.get('scope') == expected_scope and hmac.compare_digest(row['digest'], digest(token)) else None
 
     def listing(self):
-        return [{k: row[k] for k in ('id', 'name', 'createdAt', 'setupId', 'setupExpiresAt') if k in row}
+        return [{k: row[k] for k in ('id', 'name', 'createdAt', 'setupId', 'setupExpiresAt', 'scope') if k in row}
                 for row in self.read()['devices'].values()]
 
     def revoke(self, identity):

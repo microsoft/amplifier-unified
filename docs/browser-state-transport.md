@@ -118,6 +118,14 @@ owner's status. Workspace highlighting follows the current chat/workspace route,
 not a remembered workspace browsing location from a different route.
 
 The server reuses immutable resource values while semantic dependencies match.
+Completed built-in resource envelopes also reuse their page/context assembly
+when the current bound client's effective views, selection scope, descriptor,
+semantic generations, committed global epochs, recent limits and resource budget
+are unchanged. Effective views include initial preferences and selected resident
+chat scope; a composition revision alone is not a view revision. Pending or
+failed reads keep their completion/retry path, and custom modules retain their
+existing snapshot contract. This reuse neither delays canonical writes nor
+changes the returned resource revisions.
 Workspace explorer and shortcut aggregates have a separate directory generation:
 root membership, placement, stable recency, activity and notice/read facts can
 change them; chat titles and child/internal progress cannot. Native membership

@@ -82,7 +82,13 @@ def project(app, row, request):
         changes.update(environmentState='removed' if result['status'] == 'absent' else result['status'],
                        backendIdentity=result['observation']['backendIdentity'])
         if result['status'] == 'absent':
-            changes['status'] = 'retired'
+            if row.get('preparationPending'):
+                # Guest absence does not prove the owned dependency image or
+                # interrupted builder was removed. Keep its cleanup reachable.
+                changes.update(environmentState='not-started', guestRemoved=True,
+                               reason='The test guest is absent. Its owned dependency preparation still needs cleanup.')
+            else:
+                changes['status'] = 'retired'
     return owner.save(app.data_dir, row, **changes)
 
 

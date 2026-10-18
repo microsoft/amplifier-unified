@@ -2,6 +2,95 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.176",
+      "title": "Review tool changes and manage scheduled work",
+      "changes": [
+        "Saved interactive tool views can compare changed actions and explicitly adopt an updated document. Other open views keep their unfinished input and saved version.",
+        "Automation provides a paged overview of scheduled work and its owning chats. Review and resume future new-task runs after configuration changes while preserving uncertain earlier outcomes and Stop decisions.",
+        "Hold Alt+Shift to reveal numbered shortcuts for the first nine displayed chats, then press a number to switch through the existing draft and unsaved-view safeguards.",
+        "Diagrams expose fit, zoom and layout controls directly, improve default readability and keep authored source and styling intact.",
+        "A failed provider account no longer blocks an explicitly selected healthy account. Unavailable selections remain visible and are never silently replaced with another account.",
+        "An optional local status interface lets other tools observe active conversations, tools and plan progress without reading transcripts. Unified and an optional CLI hook share the same redacted, read-only format.",
+        "Navigation reuses unchanged, completed sidebar results during unrelated activity. Background history queries also encode their inputs in bounded batches, reducing repeated bookkeeping without changing saved content.",
+        "Recent Work details recover correctly when a refresh is superseded or a temporary source error clears, while preserving the receipt that identifies the displayed history.",
+        "Returning to the browser keeps explicitly closed connection settings closed while still refreshing available connections."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.175",
+      "title": "Keep Chat info controls steady while usage loads",
+      "changes": [
+        "Chat info keeps its controls in place while usage arrives or refreshes, so a late response cannot move a control out from under your click. Usage details remain available below the chat controls.",
+        "Browser checks now exercise delayed usage and workspace-starter responses, including clicks while usage is arriving.",
+        "Feedback corrections use reviewed comments and separately reviewed attachments, preserving the original report and later maintainer edits."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.174",
+      "title": "Start requested chats directly and keep question cards stable",
+      "changes": [
+        "An explicit request to create and start an independent chat in another existing workspace now runs directly, without another confirmation. Suggestions that have not been authorized still offer a review.",
+        "Direct starts preserve one saved chat and initial-message identity through lost responses, retries and reloads. Current selections, drafts and file permissions remain intact.",
+        "Fixed duplicate question cards after rerenders and reloads. Browser smoke coverage now checks question cards alongside chat handoffs, as well as direct-start recovery."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.173",
+      "title": "Review and start a chat in another workspace",
+      "changes": [
+        "Ask Amplifier to prepare an independent chat in an existing folder, review its destination and exact opening message, then choose Create and start. Your current chat and draft remain in place until you choose Open chat.",
+        "Reviewed chat handoffs preserve one saved creation and message identity across retries. Changed destinations or settings require a fresh review, and interrupted or uncertain work is inspected without automatic replay.",
+        "Visible Work timers no longer send redundant view reports to the host. Smoke coverage now includes the complete handoff journey, narrow screens, two independent clients and lost acknowledgements, plus Activity checks with both empty and populated inboxes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.172",
+      "title": "Keep conversations concise and make work easier to inspect",
+      "changes": [
+        "Incoming messages from other chats appear as compact expandable exchanges. Exact copying, source attribution and links to the message remain available.",
+        "Amplifier can acknowledge a human message with a clearly attributed reaction. Your reactions remain separate and can be changed independently.",
+        "Execution metrics have independent step, work-summary and conversation controls, selected-field copy and download, and an optional usage snapshot that refreshes only when requested. Unavailable telemetry stays explicitly unavailable.",
+        "Feedback corrections offer a private comparison of the original report, the previous read, the latest GitHub text and your proposed correction before confirmation. Corrections preserve original issue text and maintainer edits; original-text editing remains a GitHub handoff.",
+        "Isolated workspace checks can prepare locked Python and browser dependencies and keep durable job receipts through reconnects. Workspace controls verify available Docker or Incus setup and retain cancellation, recovery and cleanup evidence.",
+        "Expanded smoke coverage exercises compact peer messages, independent reactions, execution preferences and reviewed feedback. Post-release fixture fixes improve selectors, storage timing and handling of legitimate release notices."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.171",
+      "title": "Recover conversations and clarify setup",
+      "changes": [
+        "Changing a conversation bundle uses a fresh worker process, preserves saved history and model choices, and restores the previous configuration if the new bundle cannot start. Stopping the conversation prevents a queued configuration change from restarting it.",
+        "Media previews wait for conversation configuration to settle and recover automatically from temporary changes. Saved tool views report connection status accurately and receive verified reconnection updates without replaying work.",
+        "Bundle startup errors retain useful diagnostic categories. Setup and service status distinguish a responding host from an unverified public address; certificate guidance and expected listener errors are clearer.",
+        "Ordinary file searches follow the same read permissions as file reading, including inherited restrictions. Interrupted checkout handoffs retain their recovery state until the new execution folder is durably confirmed.",
+        "Computer Use, Context Intelligence and Model Routing join the ordinary default capabilities, preserving explicit opt-outs, source revisions and model choices. Desktop restrictions remain effective through nested and resumed workers; Context Intelligence forwarding requires explicit configuration.",
+        "Expanded smoke and integration coverage exercises bundle changes, media recovery, onboarding diagnostics, saved tool views, Stories workflows and capability permissions."
+      ],
+      "notices": [
+        {
+          "id": "ordinary-default-capabilities",
+          "title": "Additional capabilities for ordinary conversations",
+          "detail": "Ordinary conversations now include Computer Use, Context Intelligence and Model Routing unless explicitly disabled. Newly introduced Computer Use is read-only and targets the server computer. External Context Intelligence forwarding remains off until configured. Saved snapshot bundles retain their existing composition.",
+          "action": "Review or disable capabilities in Settings \u2192 Configured bundles. Existing explicit access settings and provider/model choices remain authoritative."
+        }
+      ]
+    },
+    {
+      "version": "0.20.170",
+      "title": "Approve and revoke companion connections",
+      "changes": [
+        "Approve compatible companion apps by confirming a matching code in the browser. Each approved device receives separate credentials with access limited to its permitted chat operations.",
+        "Manage approved devices at /devices. Revocation blocks queued operations before acceptance while allowing already accepted work to finish.",
+        "Companion identities and private client state remain isolated across devices and server restarts. Expanded security and browser checks cover approval, restricted access and revocation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.169",
       "title": "Reduce repeated updates and clarify saved worker permissions",
       "changes": [

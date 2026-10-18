@@ -556,6 +556,7 @@ async function standalone(){
  await page.waitForFunction(()=>window.amplifier.getState().canvas.view?.engine==='neato',null,{timeout:timeout(4000)});await settled(1,false);
  await page.waitForFunction(old=>document.querySelector('[data-canvas-view="primary"] .a-diagram-stage img')?.src!==old,oldSVG,{timeout:timeout(15000)});
  const fresh=receipt.reports.slice(reportAt);assert.ok(fresh.some(r=>r.args.args.status==='pending')&&fresh.some(r=>r.args.args.status==='ready'));
+ await page.getByText(/^Node details ·/).click();
  await page.getByRole('combobox',{name:'Inspect graph node',exact:true}).selectOption('a');
  await page.locator('.a-node-inspector dl').waitFor();assert.match(await page.locator('.a-node-inspector dl').innerText(),/DOT_LEFT_SENTINEL/);
  receipt.standalone.push({behavior:'Graphviz layout/node inspection',engine:'neato',node:'a',freshReports:fresh,svgChanged:true});

@@ -4,6 +4,8 @@ import {request,download,clientUrl} from './api';
 import {providerRecordExport} from './provider-record-export';
 import {readDetail} from './detail-read';
 import {UsageDetails} from './usage-details.jsx';
+import {useShellContext} from './shell/runtime';
+import {selectedMetrics,metricsVisible} from './execution-observability.js';
 import {detailLinks,elapsedLabel,isRunning} from './timeline-data';
 import {textValue,record} from './execution-content.js';
 import {settingsPatch} from './settings-navigation';
@@ -71,11 +73,12 @@ export function ToolContent({node,action,input,output,error}){
 
 const requestLabels={message_count:'Messages',tool_count:'Tools',has_instructions:'Instructions',has_system:'System message',reasoning_enabled:'Reasoning enabled',thinking_enabled:'Thinking enabled',thinking_budget:'Thinking budget',background_mode:'Background mode',stream:'Streaming',max_tokens:'Maximum tokens',max_output_tokens:'Maximum output tokens',temperature:'Temperature',top_p:'Top P',parallel_tool_calls:'Parallel tool calls',tool_choice:'Tool choice',purpose:'Purpose',reasoning_effort:'Reasoning effort'};
 export function ModelContent({node,error,now,act}){
+ const presentation=useShellContext()?.composition?.presentation||{},showElapsed=metricsVisible(presentation,'step')&&selectedMetrics(presentation).includes('elapsedSeconds');
  const formatTime=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'long'}):null;
- const facts=[['Provider',node.provider],['Model',node.model],['Status',node.status||node.phase],['Started',formatTime(node.startedAt)],['Ended',formatTime(node.endedAt)],['Elapsed',elapsedLabel(node,now)],...Object.entries(node.requestInfo||{}).map(([key,value])=>[requestLabels[key]||key,typeof value==='boolean'?(value?'Yes':'No'):value])].filter(([,value])=>value!=null&&value!=='');
+ const facts=[['Provider',node.provider],['Model',node.model],['Status',node.status||node.phase],['Started',formatTime(node.startedAt)],['Ended',formatTime(node.endedAt)],['Elapsed',showElapsed?elapsedLabel(node,now):null],...Object.entries(node.requestInfo||{}).map(([key,value])=>[requestLabels[key]||key,typeof value==='boolean'?(value?'Yes':'No'):value])].filter(([,value])=>value!=null&&value!=='');
 
  return <><dl className="a-execution-model-facts">{facts.map(([label,value])=><React.Fragment key={label}><dt>{label}</dt><dd>{String(value)}</dd></React.Fragment>)}</dl>
-  <UsageDetails usage={node.usage} label="Model call usage" costLabel="Call cost (USD)"/>
+  <UsageDetails usage={node.usage} scope="step" record={{...node,calls:1}} observedAt={now} label="Model call usage" costLabel="Call cost (USD)"/>
   <ExecutionBlock label="Error" text={error.value} loading={error.incomplete}/><FieldStatus label="Error" field={error}/>
   <small>Provider recordings may contain summaries instead of full payloads.</small>
   {['request','response'].map(field=><ModelPayload key={field+':'+(node[field+'Detail']?.digest||'')} node={node} field={field} act={act}/>)}

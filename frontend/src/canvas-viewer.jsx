@@ -66,7 +66,7 @@ function DiagramView({kind,source,canvas,act,part,embedded}){
    worker.onmessage=e=>complete(e.data);worker.onerror=e=>complete({error:e.message||'Graph renderer failed'});
    worker.postMessage({source,engine:view.engine||'dot'});
   }else{
-   mermaidPromise ||= import('mermaid').then(({default:m})=>{m.initialize({startOnLoad:false,securityLevel:'strict',maxTextSize:50000,maxEdges:500,suppressErrorRendering:true,theme:'default',flowchart:{htmlLabels:false},htmlLabels:false});return m});
+   mermaidPromise ||= import('mermaid').then(({default:m})=>{m.initialize({startOnLoad:false,securityLevel:'strict',maxTextSize:50000,maxEdges:500,suppressErrorRendering:true,theme:'base',themeVariables:{primaryColor:'#f3f2ff',primaryTextColor:'#24213e',primaryBorderColor:'#aaa1df',lineColor:'#8981b5',secondaryColor:'#eff6ff',tertiaryColor:'#f3f4f6',fontFamily:'Arial, sans-serif',fontSize:'14px'},flowchart:{htmlLabels:false},htmlLabels:false});return m});
    mermaidPromise.then(m=>m.render(`canvas${id}`,source)).then(({svg})=>complete({svg})).catch(e=>complete({error:e.message||String(e)}));
   }
   return()=>{active=false;clearTimeout(timer);worker?.terminate()};
@@ -75,15 +75,16 @@ function DiagramView({kind,source,canvas,act,part,embedded}){
  const set=patch=>viewAction(canvas,act,patch),selected=result.nodes?.find(n=>n.name===view.node);
  const fit=natural&&navigation.size.width?Math.min(navigation.size.width/natural.width,navigation.size.height/natural.height):null;
  return <div className={`a-diagram ${embedded?'embedded':''}`}>
-  {!embedded&&<CanvasControl><div className="a-canvas-toolbar">
+  {!embedded&&<div className="a-canvas-toolbar a-diagram-toolbar" role="group" aria-label="Diagram view">
    <button type="button" className="a-icon" aria-label="Zoom out" data-action="canvas.view" onClick={()=>navigation.zoom(1/1.2)}><ZoomOut/></button><span>{Math.round(zoom*100)}%</span>
    <button type="button" className="a-icon" aria-label="Zoom in" data-action="canvas.view" onClick={()=>navigation.zoom(1.2)}><ZoomIn/></button>
    <button type="button" className="a-soft" data-action="canvas.view" onClick={navigation.fit}><Maximize/>Fit</button>
-   {kind==='dot'&&<select aria-label="Graph layout" data-action="canvas.view" value={view.engine||'dot'} onChange={e=>set({engine:e.target.value,node:''})}>{['dot','neato','fdp','sfdp','circo','twopi'].map(engine=><option key={engine}>{engine}</option>)}</select>}
-  </div></CanvasControl>}
+   {kind==='dot'&&<select aria-label="Graph layout" data-action="canvas.view" value={view.engine||'dot'} onChange={e=>set({engine:e.target.value,node:''})}>{[['dot','Flow'],['neato','Network'],['fdp','Spread'],['sfdp','Large network'],['circo','Circular'],['twopi','Radial']].map(([engine,label])=><option key={engine} value={engine}>{label}</option>)}</select>}
+   <span className="a-diagram-hint">Drag to pan · Scroll to zoom</span>
+  </div>}
   {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{result.error}</span></div>:uri?<div ref={navigation.ref} className="a-diagram-stage" tabIndex={0} aria-label={embedded?'Diagram. Scroll to explore; arrow keys scroll.':'Diagram. Drag to pan; scroll to zoom. Arrow keys move; plus and minus zoom; zero fits.'} {...navigation.events}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} onLoad={event=>setNatural({width:event.currentTarget.naturalWidth,height:event.currentTarget.naturalHeight})} style={embedded?undefined:{width:fit?natural.width*fit:undefined,height:fit?natural.height*fit:undefined,visibility:fit?'visible':'hidden',transform:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
   {navigation.error&&<p role="status">{navigation.error}</p>}
-  {!embedded&&result.nodes?.length>0&&<div className="a-node-inspector"><label>Inspect a node<select aria-label="Inspect graph node" data-action="canvas.view" value={view.node||''} onChange={e=>set({node:e.target.value})}><option value="">Choose a node…</option>{result.nodes.map(n=><option key={n.name} value={n.name}>{n.name}</option>)}</select></label>{selected&&<dl>{Object.entries(selected).map(([key,value])=><React.Fragment key={key}><dt>{key}</dt><dd>{typeof value==='object'?JSON.stringify(value):String(value)}</dd></React.Fragment>)}</dl>}</div>}
+  {!embedded&&result.nodes?.length>0&&<details className="a-node-inspector"><summary>Node details · {result.nodes.length}</summary><label>Inspect a node<select aria-label="Inspect graph node" data-action="canvas.view" value={view.node||''} onChange={e=>set({node:e.target.value})}><option value="">Choose a node…</option>{result.nodes.map(n=><option key={n.name} value={n.name}>{n.label&&n.label!=='\\N'?n.label+' ('+n.name+')':n.name}</option>)}</select></label>{selected&&<dl>{Object.entries(selected).map(([key,value])=><React.Fragment key={key}><dt>{key}</dt><dd>{typeof value==='object'?JSON.stringify(value):String(value)}</dd></React.Fragment>)}</dl>}</details>}
  </div>;
 }
 function CanvasMarkdown({canvas,act}){

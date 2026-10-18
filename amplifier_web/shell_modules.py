@@ -66,6 +66,12 @@ COMPOSITION = {'type': 'object', 'additionalProperties': False, 'required': ['in
     'presentation': {'type': 'object', 'additionalProperties': False, 'properties': {
         'scheme': {'enum': ['light', 'dark', 'system']}, 'layout': {'enum': ['balanced', 'conversation', 'work']},
         'executionDetail': {'enum': ['minimal', 'standard', 'detailed']},
+        'executionVisibility': {'type': 'object', 'additionalProperties': False, 'properties': {
+            scope: {'type': 'boolean'} for scope in ('step', 'turn', 'conversation')}},
+        'executionMetrics': {'type': 'array', 'uniqueItems': True, 'maxItems': 9, 'items': {'enum': [
+            'elapsedSeconds', 'grossInputTokens', 'outputTokens', 'grossTotalTokens',
+            'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'costUsd', 'calls']}},
+        'conversationStatus': {'type': 'boolean'},
         'interfaceDetail': {'enum': ['minimal', 'standard', 'detailed']},
         'collapseInterimReplies': {'type': 'boolean'},
         'planPlacement': {'enum': ['composer', 'inline', 'active', 'overview']},

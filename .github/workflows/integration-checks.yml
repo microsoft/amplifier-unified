@@ -118,6 +118,9 @@ jobs:
           ref: d71bb9522c6983c18e803aa43a96bd37dec75d32
           path: .ci/filesystem-bundle
           persist-credentials: false
+      - name: Prepare actual search backend
+        if: matrix.lane == 'native'
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Execute owned cases; missing prerequisites or skips fail
         env:
           LANE: ${{ matrix.lane }}

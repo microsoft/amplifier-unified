@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amplifier-status-emitter"
+version = "0.1.0"
+description = "Standalone read-only local Amplifier status publisher, consumer and optional hook"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+amplifier-status = "amplifier_status.cli:main"
+
+[project.entry-points."amplifier.modules"]
+hooks-status-emitter = "amplifier_status.hook:mount"
+
+[tool.setuptools]
+packages = ["amplifier_status"]
+package-dir = {"amplifier_status" = "."}
