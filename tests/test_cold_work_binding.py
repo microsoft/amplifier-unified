@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import asyncio
 import copy
 import json
+import sys
 import time
 
 import pytest
@@ -45,7 +46,7 @@ async def source(tmp_path, monkeypatch):
         session['execution']['turns'].append({'id': identity, 'phase': 'completed',
             'anchorMessageId': identity + '-user', 'startedAt': at, 'endedAt': at + 10})
 
-    def call(identity, turn_id='turn'):
+    def call(identity, turn_id='turn', *, body_metadata=None):
         if not any(t['id'] == turn_id for t in session['execution']['turns']):
             turn(turn_id)
         interim = {'id': identity + '-interim-' + str(len(calls)), 'role': 'assistant',
@@ -58,7 +59,7 @@ async def source(tmp_path, monkeypatch):
         refs = []
         for event, fields in [('tool:pre', {'tool_input': body}), ('tool:post', {'result': result})]:
             data = {'session_id': 'root', 'tool_call_id': identity, 'tool_name': 'read_file',
-                    'timestamp': time.time(), **fields}
+                    'timestamp': time.time(), **fields, **(body_metadata or {})}
             refs.append(append_event(workspace, 'root', event, data))
             observer.hook('root', event, data)
             row = emitted.pop()
@@ -85,6 +86,8 @@ async def test_real_emitter_index_attests_complete_root_tool_pairs(source):
     assert page['bindingCoverage'] == {'status': 'complete-root', 'bound': 1, 'unassociated': 0}
     bound = page['_boundWork'][0]
     assert bound['turnId'] == 'turn' and bound['toolCallId'] == call
+    assert bound['rootSessionId'] == bound['sessionId'] == 'root'
+    assert all('rootSessionId' not in row for row in page['items'])
     assert bound['bindingProvenance'] == 'host-diagnostics-receipt'
     assert bound['sourceOccurrenceIds'] and bound['id'] in bound['sourceOccurrenceIds']
     assert len(page['items']) == 4  # Original pre/post and host receipt records retained.
@@ -192,6 +195,8 @@ async def test_real_model_lifecycle_receipts_bind_without_inventing_payloads(sou
     assert len(page['_boundWork']) == 1
     model = page['_boundWork'][0]
     assert model['kind'] == 'llm' and model['turnId'] == 'turn'
+    assert model['rootSessionId'] == model['sessionId'] == 'root'
+    assert all('rootSessionId' not in row for row in page['items'])
     assert model['provider'] == 'fixture' and model['model'] == 'local'
     assert model['phase'] == 'completed' and model['bindingProvenance'] == 'host-diagnostics-receipt'
     assert not model['_eventFields']  # Lifecycle evidence cannot manufacture raw provider bodies.
@@ -223,6 +228,7 @@ async def test_page_groups_route_original_fields_and_keep_final_outside(source):
         for group, call in zip(groups, source.calls):
             node = owner.nodes('root', group['id'])['items'][0]
             assert node['toolCallId'] == call[0] and node['turnId'] == 'turn'
+            assert node['rootSessionId'] == node['sessionId'] == 'root'
             assert node['inputDetail']['id'] == node['id']
             reply = await owner.read_text('root', node['inputDetail'])
             assert reply['value']
@@ -481,7 +487,7 @@ async def test_real_persisted_projection_and_new_window_owner_preserve_proven_gr
 
 
 @pytest.mark.asyncio
-async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(source, authenticated_client):
+async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(source, authenticated_client, monkeypatch):
     from amplifier_web.server import create_app
     from amplifier_web.session_projection import stored_execution
     source.call('one')
@@ -508,14 +514,21 @@ async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(sourc
         stream = await client.ws_connect('/api/events/ws?transport=delta-v1')
         initial = await stream.receive_json(timeout=5)
         assert initial['event'] == 'state'
-        response = await client.get('/api/conversation/detail', params={'sessionId': 'root', 'part': 'groups'})
-        assert response.status == 200, await response.text()
+        trace = _ColdReadTrace(service.event_log_view.windows, 'root')
+        with monkeypatch.context() as observation:
+            trace.install(observation)
+            try:
+                response = await client.get('/api/conversation/detail', params={'sessionId': 'root', 'part': 'groups'})
+            finally:
+                trace.emit()
+        assert response.status == 200, {'body': await response.text(), 'fence': trace.evidence}
         page = await response.json()
         group = next(g for g in page['items'] if g.get('bindingProvenance'))
         response = await client.get('/api/conversation/detail', params={
             'sessionId': 'root', 'part': 'nodes', 'group': group['id'], 'revision': group['detailRevision']})
         assert response.status == 200, await response.text()
         node = (await response.json())['items'][0]
+        assert node['rootSessionId'] == node['sessionId'] == 'root'
         reference = node['outputDetail']
         chunks, offset = [], 0
         while True:
@@ -538,3 +551,211 @@ async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(sourc
                 await stream.close()
         finally:
             await client.close()
+
+
+class _ColdReadTrace:
+    """Test-only first-read facts; never retries, changes fences or reads bodies."""
+    def __init__(self, windows, identity):
+        self.windows, self.identity = windows, identity
+        self.evidence = {'records': [], 'dropped': 0, 'observationFailures': 0}
+
+    def _append(self, record):
+        records = self.evidence['records']
+        if len(records) == 24:
+            records.pop(0)
+            self.evidence['dropped'] += 1
+        records.append(record)
+
+    def _record(self, factory):
+        try:
+            self._append(factory())
+        except Exception:
+            # Observation failure cannot replace the original result/exception.
+            self.evidence['observationFailures'] += 1
+
+    def emit(self, write=print):
+        try:
+            write('COLD-FIRST-READ-FENCE', json.dumps(self.evidence, sort_keys=True))
+        except Exception:
+            self.evidence['observationFailures'] += 1
+
+    def _facts(self, owner, source, fence, outcome):
+        from amplifier_web.work_windows import IDENTITY_FIELDS
+        windows, identity = self.windows, self.identity
+        service = windows.service
+        resident = service._state.get('sessions', [])
+        rows = [row for row in resident[:8] if dict.get(row, 'id') == identity]
+        changed = [key for key in IDENTITY_FIELDS
+                   if (key in owner) != (key in source) or dict.get(owner, key) != source.get(key)]
+        clients = service.clients.records
+        return {'stage': 'check-current', 'outcome': outcome,
+                'expectedEpoch': fence, 'actualEpoch': windows.epochs.get(identity),
+                'windowClosed': windows.closed, 'serviceClosed': service.closed,
+                'residentLookupComplete': len(resident) <= 8,
+                'matchingResidentCount': len(rows),
+                'originalOwnerResident': any(row is owner for row in rows),
+                'sourceChangedFields': changed,
+                'stateRevision': service._state.get('revision'),
+                'selectedWebConnected': any(
+                    clients.get(client, {}).get('kind') == 'web'
+                    and clients.get(client, {}).get('selectedSessionId') == identity
+                    for client in service.queue_clients.values())}
+
+    def install(self, patch):
+        original = self.windows._check_current
+        def checked(identity, owner, source, fence):
+            try:
+                result = original(identity, owner, source, fence)
+            except BaseException:
+                if identity == self.identity:
+                    self._record(lambda: self._facts(owner, source, fence, 'raised'))
+                raise
+            if identity == self.identity:
+                self._record(lambda: self._facts(owner, source, fence, 'returned'))
+            return result
+        patch.setattr(self.windows, '_check_current', checked)
+        for name in ('invalidate', 'retain_interest'):
+            method = getattr(self.windows, name)
+            def observed(*args, _method=method, _name=name, **kwargs):
+                before = self.windows.epochs.get(self.identity)
+                try:
+                    return _method(*args, **kwargs)
+                finally:
+                    if before != self.windows.epochs.get(self.identity):
+                        self._record(lambda: {'stage': _name, 'beforeEpoch': before,
+                            'afterEpoch': self.windows.epochs.get(self.identity),
+                            'caller': self._caller()})
+            patch.setattr(self.windows, name, observed)
+
+    @staticmethod
+    def _caller():
+        # Fixed source locations only, not exception text, locals or raw stacks.
+        allowed = {'service.py': {'_save', '_publish', '_publish_progress', 'on_runtime_event'},
+                   'event_log_view.py': {'loop', 'invalidate'}}
+        frame = sys._getframe(1)
+        fallback = 'other'
+        try:
+            for _ in range(8):
+                if frame is None:
+                    break
+                name = frame.f_code.co_filename.rsplit('/', 1)[-1]
+                method = frame.f_code.co_name
+                if method in allowed.get(name, set()):
+                    if name == 'service.py':
+                        return name + ':' + method
+                    fallback = name + ':' + method
+                frame = frame.f_back
+            return fallback
+        finally:
+            del frame
+
+
+@pytest.mark.parametrize('mode', ['returned', 'raised', 'observation-failed'])
+def test_cold_read_trace_preserves_original_once_and_bounds_evidence(monkeypatch, mode):
+    owner = {'id': 'root', 'workspace': 'synthetic-private-marker'}
+    service = SimpleNamespace(_state={'sessions': [owner], 'revision': 1}, closed=False,
+        clients=SimpleNamespace(records={}), queue_clients={})
+    failure, result, calls = ValueError('not-exported'), object(), []
+    def original(*args):
+        calls.append(args)
+        if mode != 'returned':
+            raise failure
+        return result
+    windows = SimpleNamespace(service=service, epochs={'root': 2}, closed=False,
+        _check_current=original)
+    mutations = []
+    def mutate(values):
+        mutations.append(values)
+        windows.epochs['root'] += 1
+        if mode != 'returned':
+            raise failure
+        return result
+    windows.invalidate = windows.retain_interest = mutate
+    trace = _ColdReadTrace(windows, 'root')
+    if mode == 'observation-failed':
+        monkeypatch.setattr(trace, '_append', lambda record: (_ for _ in ()).throw(OSError('not-exported')))
+    trace.install(monkeypatch)
+    args = ('root', owner, dict(owner), 1)
+    if mode == 'returned':
+        assert windows._check_current(*args) is result
+    else:
+        with pytest.raises(ValueError) as error:
+            windows._check_current(*args)
+        assert error.value is failure
+    assert calls == [args]
+    if mode == 'observation-failed':
+        assert trace.evidence['observationFailures'] == 1 and not trace.evidence['records']
+    else:
+        record = trace.evidence['records'][0]
+        assert record['expectedEpoch'] == 1 and record['actualEpoch'] == 2
+        assert record['originalOwnerResident'] and record['sourceChangedFields'] == []
+        for _ in range(30):
+            trace._record(lambda: record)
+        assert len(trace.evidence['records']) == 24 and trace.evidence['dropped'] == 7
+    values = {'root'}
+    for method in (windows.invalidate, windows.retain_interest):
+        if mode == 'returned':
+            assert method(values) is result
+        else:
+            with pytest.raises(ValueError) as error:
+                method(values)
+            assert error.value is failure
+    assert len(mutations) == 2 and all(value is values for value in mutations)
+    assert windows.epochs['root'] == 4  # Observation did not undo either mutation.
+    encoded = json.dumps(trace.evidence)
+    assert 'synthetic-private-marker' not in encoded and 'not-exported' not in encoded
+    failures = trace.evidence['observationFailures']
+    trace.emit(write=lambda *args: (_ for _ in ()).throw(OSError('not-exported')))
+    assert trace.evidence['observationFailures'] == failures + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('indexed', [True, False])
+async def test_raw_root_metadata_cannot_replace_attested_root(source, indexed):
+    source.call('one', body_metadata={'rootSessionId': 'forged-root'})
+    await source.diagnostics.flush()
+    if not indexed:
+        with source.diagnostics._db() as db:
+            db.execute('DELETE FROM records')
+    page = await source.page()
+    assert all('rootSessionId' not in row for row in page['items'])
+    if indexed:
+        assert len(page['_boundWork']) == 1
+        assert page['_boundWork'][0]['rootSessionId'] == 'root'
+    else:
+        assert not page['_boundWork']
+
+
+@pytest.mark.asyncio
+async def test_attested_native_root_and_public_detail_routing_stay_distinct(source):
+    source.session.update(id='public-root', nativeIdentity='root', runtimeSessionId='root')
+    source.service._session = lambda identity, hydrate=False: source.session if identity == 'public-root' else None
+    source.call('one')
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        page = await owner.read('public-root')
+        group = next(row for row in page['items'] if row.get('bindingProvenance'))
+        node = owner.nodes('public-root', group['id'])['items'][0]
+        assert node['sessionId'] == node['rootSessionId'] == 'root'
+        assert node['inputDetail']['sessionId'] == node['outputDetail']['sessionId'] == 'public-root'
+        raw = owner.observations('public-root', page['evidence']['group'], page['evidence']['revision'])
+        assert all('rootSessionId' not in row for row in raw['items'])
+        chunks, offset = [], 0
+        while True:
+            value = await owner.read_text('public-root', {**node['inputDetail'], 'offset': offset, 'limit': 4096})
+            assert len(value['value']) <= 4096
+            chunks.append(value['value'])
+            offset = value['nextOffset']
+            if offset is None:
+                break
+        assert json.loads(''.join(chunks)) == source.calls[0][2]
+    finally:
+        await owner.close()
