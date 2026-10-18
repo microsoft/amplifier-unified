@@ -171,6 +171,16 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
         'tests/fixtures/status_emitter_probe.py': 'status-installed',
         'tests/fixtures/status_package_probe.py': 'status-installed',
         'tests/test_default_desktop_safety.py': 'default-desktop-safety',
+        'tests/test_browser_auth.py::test_installed_pwa_launch': 'browser-installed',
+        **{'tests/test_durable_guest_jobs.py::test_' + name: 'root-guest' for name in (
+            'lost_response_repeated_identity_and_fresh_observer_do_not_replay',
+            'cancel_is_prompt_and_terminal_requires_actual_exit',
+            'timeout_is_enforced_in_guest_and_output_is_bounded',
+            'worker_cannot_modify_supervisor_receipts_and_profile_environment_survives',
+            'two_roots_execute_independently_and_cannot_adopt_identity',
+            'dead_supervisor_is_unknown_and_same_request_never_restarts',
+            'crash_after_reservation_does_not_launch_on_observe_or_repeat',
+            'background_pipe_inheritance_does_not_hold_finished_check_until_deadline')},
     }
     assert {row['node']: row['owner'] for row in records} == expected
     assert len(records) == len(expected)
@@ -252,3 +262,22 @@ def test_native_search_owner_prepares_actual_ripgrep():
                  if step.get('name') == 'Prepare actual search backend')
     assert setup['if'] == "matrix.lane == 'native'"
     assert 'apt-get install -y ripgrep' in setup['run']
+
+
+def test_root_and_installed_pwa_have_separate_fixed_manual_routes(tmp_path):
+    coverage = checks.manifest()
+    root = coverage['lanes']['root-guest']
+    assert root['mode'] == 'manual' and root['runner'] == 'owned-container'
+    assert root['command'] == ['python', 'scripts/qualify_default_installed.py', 'run', '--root-guest']
+    assert len(root['selectors']) == len(set(root['selectors'])) == 8
+    pwa = coverage['lanes']['browser-installed']
+    assert pwa['mode'] == 'manual' and pwa['selectors'] == [
+        'tests/test_browser_auth.py::test_installed_pwa_launch']
+    assert pwa['qualificationCommand'] == [
+        'python', 'scripts/qualify_default_installed.py', 'run', '--installed-pwa']
+    assert not {'root-guest', 'browser-installed'} & {row['lane'] for row in checks.select_lanes()}
+    assert {'root-guest', 'browser-installed'} <= {
+        row['lane'] for row in checks.select_lanes(['scripts/qualify_default_installed.py'], include_manual=True)}
+    with pytest.raises(ValueError, match='explicit qualification runner'):
+        checks.run_lane('root-guest', 'python', tmp_path / 'not-a-host-root-run')
+    assert not (tmp_path / 'not-a-host-root-run').exists()

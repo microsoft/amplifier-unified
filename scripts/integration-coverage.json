@@ -164,6 +164,12 @@
     "browser-installed": {
       "runner": "desktop",
       "mode": "manual",
+      "qualificationCommand": [
+        "python",
+        "scripts/qualify_default_installed.py",
+        "run",
+        "--installed-pwa"
+      ],
       "selectors": [
         "tests/test_browser_auth.py::test_installed_pwa_launch"
       ],
@@ -172,8 +178,33 @@
         "amplifier_web/server*.py",
         "amplifier_web/static/pwa*",
         "frontend/src/pwa*",
-        "tests/test_browser_auth.py"
+        "tests/test_browser_auth.py",
+        "scripts/qualify_default_installed.py",
+        "scripts/integration_clients.py",
+        ".github/workflows/default-installed.yml"
       ]
+    },
+    "root-guest": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "command": ["python", "scripts/qualify_default_installed.py", "run", "--root-guest"],
+      "selectors": [
+        "tests/test_durable_guest_jobs.py::test_lost_response_repeated_identity_and_fresh_observer_do_not_replay",
+        "tests/test_durable_guest_jobs.py::test_cancel_is_prompt_and_terminal_requires_actual_exit",
+        "tests/test_durable_guest_jobs.py::test_timeout_is_enforced_in_guest_and_output_is_bounded",
+        "tests/test_durable_guest_jobs.py::test_worker_cannot_modify_supervisor_receipts_and_profile_environment_survives",
+        "tests/test_durable_guest_jobs.py::test_two_roots_execute_independently_and_cannot_adopt_identity",
+        "tests/test_durable_guest_jobs.py::test_dead_supervisor_is_unknown_and_same_request_never_restarts",
+        "tests/test_durable_guest_jobs.py::test_crash_after_reservation_does_not_launch_on_observe_or_repeat",
+        "tests/test_durable_guest_jobs.py::test_background_pipe_inheritance_does_not_hold_finished_check_until_deadline"
+      ],
+      "paths": [
+        "amplifier_web/test_job_guest.py",
+        "tests/test_durable_guest_jobs.py",
+        "scripts/qualify_default_installed.py",
+        ".github/workflows/default-installed.yml"
+      ],
+      "prerequisite": "Explicit owned Linux container with root supervisor, only SETUID/SETGID/KILL, actual /usr/bin/python3 UID-65534 workloads, private receipts and noneditable candidate wheel. All eight exact cases, source/dependency identity and owned cleanup must pass."
     },
     "cli-interop": {
       "runner": "ubuntu-latest",
@@ -972,6 +1003,69 @@
       "owner": "default-desktop-safety",
       "prerequisite": "UNIFIED_BEHAVIOR_REPOS in the owned installed-wheel environment with exact prepared sources and matching packages; run the separate --desktop-safety qualification, not the IC-13 baseline. Missing prerequisites or skipped cases fail the owner.",
       "introducedBy": "Installed desktop safety continuation"
+    },
+    {
+      "node": "tests/test_browser_auth.py::test_installed_pwa_launch",
+      "kind": "test_case",
+      "owner": "browser-installed",
+      "prerequisite": "Explicit unprivileged installed-wheel container, private Xvfb display, lock-matched Playwright/Chromium; real install/login/launch/relaunch/uninstall, zero skips and bounded evidence before teardown.",
+      "introducedBy": "Installed PWA qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_lost_response_repeated_identity_and_fresh_observer_do_not_replay",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_cancel_is_prompt_and_terminal_requires_actual_exit",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_timeout_is_enforced_in_guest_and_output_is_bounded",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_worker_cannot_modify_supervisor_receipts_and_profile_environment_survives",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_two_roots_execute_independently_and_cannot_adopt_identity",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_dead_supervisor_is_unknown_and_same_request_never_restarts",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_crash_after_reservation_does_not_launch_on_observe_or_repeat",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_background_pipe_inheritance_does_not_hold_finished_check_until_deadline",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
     }
   ]
 }

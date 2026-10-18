@@ -143,8 +143,8 @@ def test_workflow_is_manual_and_bridge_does_not_change_normal_matrix():
     assert private['with']['ref'] == '${{ steps.pins.outputs.loop }}'
     bridge = yaml.load((ROOT / '.github/workflows/integration-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert bridge['on']['workflow_dispatch']['inputs']['default_installed']['default'] == 'false'
-    assert bridge['jobs']['default-installed']['if'] == "github.event_name == 'workflow_dispatch' && inputs.default_installed"
-    assert bridge['jobs']['plan']['if'] == "github.event_name != 'workflow_dispatch' || !inputs.default_installed"
+    assert bridge['jobs']['default-installed']['if'] == "github.event_name == 'workflow_dispatch' && (inputs.default_installed || inputs.root_guest || inputs.installed_pwa)"
+    assert bridge['jobs']['plan']['if'] == "github.event_name != 'workflow_dispatch' || !(inputs.default_installed || inputs.root_guest || inputs.installed_pwa)"
     assert bridge['jobs']['default-installed']['uses'] == './.github/workflows/default-installed.yml'
     assert bridge['on']['workflow_dispatch']['inputs']['desktop_safety']['default'] == 'false'
     assert bridge['jobs']['default-installed']['with']['desktop_safety'] == '${{ inputs.desktop_safety }}'
@@ -266,3 +266,264 @@ def test_failed_preserved_group_does_not_erase_remote_discriminator(monkeypatch,
     assert report['passed'] is False and report['baselineExecuted'] is False
     assert not report['groups']['preserved-22']['passed']
     assert report['groups']['remote-defaults']['passed']
+
+
+@pytest.mark.parametrize('flags,expected', [
+    ({}, 'ic13'), ({'desktop_safety': True}, 'desktop-safety'),
+    ({'root_guest': True}, 'root-guest'), ({'installed_pwa': True}, 'installed-pwa'),
+    ({'root_guest': True, 'installed_pwa': True}, None),
+    ({'desktop_safety': True, 'root_guest': True}, None),
+    ({'desktop_safety': True, 'installed_pwa': True}, None),
+])
+def test_fixed_stages_are_explicit_and_mutually_exclusive(flags, expected):
+    if expected is None:
+        with pytest.raises(ValueError, match='only one'):
+            adapter.selected_stage(**flags)
+    else:
+        assert adapter.selected_stage(**flags) == expected
+
+
+def fixed_junit(path, stage):
+    file, names = adapter.FIXED_CASES[stage]
+    root = ET.Element('testsuite')
+    for name in names:
+        ET.SubElement(root, 'testcase', classname='tests.' + file.removesuffix('.py'), name=name)
+    ET.ElementTree(root).write(path)
+    return root
+
+
+@pytest.mark.parametrize('stage', ['root-guest', 'installed-pwa'])
+@pytest.mark.parametrize('change', ['none', 'missing', 'duplicate', 'extra', 'parameter', 'wrong-module',
+                                    'skipped', 'error', 'failure', 'counter', 'exit'])
+def test_fixed_stage_requires_exact_successful_identities(tmp_path, stage, change):
+    path = tmp_path / 'junit.xml'
+    root = fixed_junit(path, stage)
+    if change == 'missing':
+        root.remove(root[-1])
+    elif change == 'duplicate':
+        root.append(ET.fromstring(ET.tostring(root[-1])))
+    elif change == 'extra':
+        ET.SubElement(root, 'testcase', classname=root[0].get('classname'), name='test_other')
+    elif change == 'parameter':
+        root[-1].set('name', root[-1].get('name') + '[unexpected]')
+    elif change == 'wrong-module':
+        root[-1].set('classname', 'other.' + root[-1].get('classname'))
+    elif change in {'skipped', 'error', 'failure'}:
+        ET.SubElement(root[-1], change)
+    elif change == 'counter':
+        root.set('skipped', '1')
+    ET.ElementTree(root).write(path)
+    if change in {'missing', 'duplicate', 'extra', 'parameter', 'wrong-module'}:
+        with pytest.raises(ValueError, match='identities'):
+            adapter.fixed_result(path, stage, 0)
+    else:
+        result = adapter.fixed_result(path, stage, 1 if change == 'exit' else 0)
+        assert result['passed'] is (change == 'none')
+        assert len(result['cases']) == (8 if stage == 'root-guest' else 1)
+
+
+def test_container_default_options_remain_unprivileged_and_unchanged():
+    expected = ['--network=none', '--user=65532:65532', '--cap-drop=ALL',
+                '--security-opt=no-new-privileges', '--cpus=2', '--memory=4g',
+                '--pids-limit=256', '--read-only']
+    for folder in ('home', 'tmp', 'run', 'cache', 'evidence'):
+        expected += ['--tmpfs', '/opt/defaults/' + folder + ':rw,uid=65532,gid=65532,mode=0700,size=512m']
+    assert adapter.test_container_options('ic13') == expected
+    assert adapter.test_container_options('desktop-safety') == expected
+    root = adapter.test_container_options('root-guest')
+    assert '--user=0:0' in root
+    assert {v for v in root if v.startswith('--cap-add=')} == {
+        '--cap-add=KILL', '--cap-add=SETUID', '--cap-add=SETGID'}
+    assert '/opt/defaults/tmp:rw,uid=0,gid=0,mode=0755,size=512m' in root
+    assert '/opt/defaults/evidence:rw,uid=0,gid=0,mode=0700,size=512m' in root
+    pwa = adapter.test_container_options('installed-pwa')
+    assert pwa == expected + ['--tmpfs', '/tmp:rw,uid=0,gid=0,mode=1777,size=512m']
+    assert not any('privileged' in v or 'pid=host' in v or v == '--mount' for v in root + pwa)
+
+
+@pytest.mark.parametrize('stage', ['ic13', 'desktop-safety', 'root-guest', 'installed-pwa'])
+@pytest.mark.parametrize('change', ['none', 'privileged', 'host-pid', 'capability', 'bind', 'mount', 'user'])
+def test_actual_container_inspection_refuses_widened_stage(stage, change):
+    root = stage == 'root-guest'
+    mounts = [str(adapter.GUEST / name) for name in ('home', 'tmp', 'run', 'cache', 'evidence')]
+    if stage == 'installed-pwa':
+        mounts.append('/tmp')
+    host = {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False, 'Binds': None,
+            'PidMode': '', 'CapDrop': ['ALL'], 'CapAdd': ['SETUID', 'SETGID', 'KILL'] if root else None,
+            'Memory': 4 * 1024 ** 3, 'NanoCpus': 2 * 10 ** 9, 'PidsLimit': 256,
+            'SecurityOpt': ['no-new-privileges'], 'Tmpfs': {}}
+    info = {'HostConfig': host, 'Config': {'User': '0:0' if root else '65532:65532'},
+            'Mounts': [{'Type': 'tmpfs', 'Destination': path} for path in mounts]}
+    if change == 'privileged':
+        host['Privileged'] = True
+    elif change == 'host-pid':
+        host['PidMode'] = 'host'
+    elif change == 'capability':
+        host['CapAdd'] = [*(host['CapAdd'] or []), 'SYS_ADMIN']
+    elif change == 'bind':
+        host['Binds'] = ['/private:/private']
+    elif change == 'mount':
+        info['Mounts'][0]['Type'] = 'bind'
+    elif change == 'user':
+        info['Config']['User'] = '65534:65534'
+    if change == 'none':
+        assert adapter.verify_test_isolation(info, stage)['NetworkMode'] == 'none'
+    else:
+        with pytest.raises(ValueError, match='isolation'):
+            adapter.verify_test_isolation(info, stage)
+
+
+@pytest.mark.parametrize('change', ['none', 'missing', 'duplicate', 'symlink', 'oversized', 'bad-json', 'bad-png'])
+def test_pwa_retention_is_bounded_and_never_copies_private_profile(tmp_path, change):
+    base, evidence = tmp_path / 'tests', tmp_path / 'evidence'
+    base.mkdir()
+    evidence.mkdir()
+    (base / 'browser-profile').mkdir()
+    (base / 'browser-profile/cookies').write_text('synthetic-private-must-not-export')
+    data = {key: {} for key in ('browser', 'os', 'window', 'requests', 'nativeDragging', 'physicalAndroid', 'macOS')}
+    result = base / 'installed-pwa.json'
+    result.write_text(json.dumps(data))
+    png = base / 'installed-pwa.png'
+    png.write_bytes(b'\x89PNG\r\n\x1a\nIEND\xaeB`\x82')
+    if change == 'missing':
+        result.unlink()
+    elif change == 'duplicate':
+        (base / 'other').mkdir()
+        (base / 'other/installed-pwa.json').write_text(json.dumps(data))
+    elif change == 'symlink':
+        result.unlink()
+        result.symlink_to(base / 'browser-profile/cookies')
+    elif change == 'oversized':
+        result.write_bytes(b'x' * (1024 * 1024 + 1))
+    elif change == 'bad-json':
+        result.write_text('{"cookies":"unexpected"}')
+    elif change == 'bad-png':
+        png.write_bytes(b'partial')
+    if change in {'none', 'missing'}:
+        report = adapter.retain_pwa_artifacts(base, evidence)
+        assert report['missing'] == (['installed-pwa.json'] if change == 'missing' else [])
+        assert {row['name'] for row in report['retained']} == (
+            {'installed-pwa.png'} if change == 'missing' else {'installed-pwa.json', 'installed-pwa.png'})
+    else:
+        with pytest.raises(ValueError):
+            adapter.retain_pwa_artifacts(base, evidence)
+    assert not (evidence / 'browser-profile').exists()
+
+
+@pytest.mark.parametrize('guard_rejects', [False, True])
+def test_failed_fixed_stage_preserves_raw_result_and_outer_attestation(monkeypatch, tmp_path, guard_rejects):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    monkeypatch.setattr(adapter, 'in_container', lambda: True)
+    monkeypatch.setattr(adapter.os, 'getuid', lambda: 0)
+    for name in ('prepared-evidence', 'evidence', 'run', 'tmp'):
+        (tmp_path / name).mkdir()
+    def command(argv, **kwargs):
+        if 'check' in argv:
+            receipt = json.loads((tmp_path / 'evidence/fixed-stage-result.json').read_text())
+            assert receipt['exitCode'] == 0 and receipt['cases'][0]['outcome'] == 'skipped'
+            assert receipt['passed'] is False
+            if guard_rejects:
+                raise subprocess.CalledProcessError(1, argv)
+    monkeypatch.setattr(adapter, 'command', command)
+    monkeypatch.setattr(adapter, 'root_guest_preflight', lambda env: {'fixture': True})
+
+    def run(argv, **kwargs):
+        path = tmp_path / 'evidence/junit.xml'
+        xml = fixed_junit(path, 'root-guest')
+        ET.SubElement(xml[0], 'skipped')
+        ET.ElementTree(xml).write(path)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(adapter.subprocess, 'run', run)
+    error = subprocess.CalledProcessError if guard_rejects else ValueError
+    with pytest.raises(error):
+        adapter.guest_test(root_guest=True)
+    assert not json.loads((tmp_path / 'evidence/result.json').read_text())['passed']
+    assert json.loads((tmp_path / 'evidence/result.json').read_text())['attestation']
+    fixed = json.loads((tmp_path / 'evidence/fixed-stage-result.json').read_text())
+    assert fixed['passed'] is False and fixed['exitCode'] == 0
+    assert len(fixed['cases']) == 8 and fixed['cases'][0]['outcome'] == 'skipped'
+    assert ET.parse(tmp_path / 'evidence/junit.xml').find('.//skipped') is not None
+
+
+def test_pwa_uninstall_failure_still_closes_context_without_hiding_failure():
+    import ast
+    import asyncio
+    from unittest.mock import AsyncMock
+    tree = ast.parse((ROOT / 'tests/test_browser_auth.py').read_text())
+    test = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'test_installed_pwa_launch')
+    cleanup = next(n.finalbody for n in ast.walk(test) if isinstance(n, ast.Try) and n.finalbody
+                   and 'PWA.uninstall' in ast.unparse(n.finalbody))
+    function = ast.AsyncFunctionDef(name='cleanup', args=ast.arguments(
+        posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]), body=cleanup, decorator_list=[])
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    context = type('Context', (), {'close': AsyncMock()})()
+    cdp = type('CDP', (), {'send': AsyncMock(side_effect=RuntimeError('synthetic uninstall failure'))})()
+    namespace = {'installed': True, 'cdp': cdp, 'context': context, 'origin': 'http://127.0.0.1:12345'}
+    exec(compile(module, '<actual-pwa-cleanup>', 'exec'), namespace)
+    with pytest.raises(RuntimeError, match='synthetic uninstall failure'):
+        asyncio.run(namespace['cleanup']())
+    context.close.assert_awaited_once()
+
+
+def test_fixed_stage_workflow_guards_and_preparation_are_scoped():
+    workflow = yaml.load((ROOT / '.github/workflows/default-installed.yml').read_text(), Loader=yaml.BaseLoader)
+    bridge = yaml.load((ROOT / '.github/workflows/integration-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    for name in ('root_guest', 'installed_pwa'):
+        assert workflow['on']['workflow_dispatch']['inputs'][name]['default'] == 'false'
+        assert workflow['on']['workflow_call']['inputs'][name]['default'] == 'false'
+        assert bridge['on']['workflow_dispatch']['inputs'][name]['default'] == 'false'
+        assert bridge['jobs']['default-installed']['with'][name] == '${{ inputs.' + name + ' }}'
+    job = workflow['jobs']['default-installed']
+    assert job['timeout-minutes'] == '30'
+    steps = job['steps']
+    guard = next(i for i, s in enumerate(steps) if s.get('name') == 'Reject conflicting fixed stages before preparation')
+    private = next(i for i, s in enumerate(steps) if s.get('with', {}).get('repository') == 'microsoft/amplifier-module-loop-live')
+    assert guard < private
+    assert 'exit 1' in steps[guard]['run']
+    source = (ROOT / 'scripts/qualify_default_installed.py').read_text()
+    assert "client_helpers().browser_prepare_commands" in source and "'--lane', 'browser-installed'" in source
+    assert "timeout=300" in source and "timeout=420" in source
+    assert "Preparation must stop before tests" in source
+    assert "snapshot['wheels']" in source and "snapshot['browsers']" in source and "snapshot['system']" in source
+
+
+def test_pwa_sbin_path_is_preparation_only(monkeypatch):
+    monkeypatch.setenv('PRIVATE_TOKEN', 'synthetic-must-not-leak')
+    original = adapter.clean_env()
+    prepared = adapter.pwa_preparation_environment(original)
+    assert '/usr/sbin' in prepared['PATH'].split(':') and '/sbin' in prepared['PATH'].split(':')
+    assert prepared['PLAYWRIGHT_BROWSERS_PATH'] == str(adapter.GUEST / 'browsers')
+    assert original == adapter.clean_env()
+    assert '/usr/sbin' not in original['PATH'].split(':') and 'PRIVATE_TOKEN' not in prepared
+
+
+def test_root_evidence_copy_cannot_widen_receipt_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    prepared, evidence = tmp_path / 'prepared-evidence', tmp_path / 'evidence'
+    prepared.mkdir(mode=0o755)
+    prepared.chmod(0o755)
+    (prepared / 'receipt.json').write_text('{"prepared":true}')
+    evidence.mkdir(mode=0o700)
+    adapter.copy_prepared_evidence(evidence, 'root-guest')
+    assert evidence.stat().st_mode & 0o777 == 0o700
+    assert (evidence / 'receipt.json').read_bytes() == (prepared / 'receipt.json').read_bytes()
+
+
+def test_pwa_preflight_records_effective_environment_and_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    (tmp_path / 'candidate/frontend').mkdir(parents=True)
+    (tmp_path / 'candidate/frontend/package-lock.json').write_text(json.dumps({
+        'packages': {'node_modules/playwright': {'version': '1.63.0'}}}))
+    python = tmp_path / '.venv/bin/python'
+    original = {'actual_interpreter': str(python), 'interpreter': '/unused/env/bin/python',
+                'environment': {'PLAYWRIGHT_BROWSERS_PATH': '/unused/browsers', 'HOME': '/unused/home'},
+                'prerequisites': {'playwright_version': '1.63.0', 'chromium': str(tmp_path / 'browsers/chromium/chrome')}}
+    env = {'PLAYWRIGHT_BROWSERS_PATH': str(tmp_path / 'browsers'), 'HOME': str(tmp_path / 'home'),
+           'DISPLAY': ':99', 'XDG_RUNTIME_DIR': str(tmp_path / 'run'), 'PRIVATE_TOKEN': 'not-retained'}
+    actual = adapter.pwa_preflight_receipt(original, env, python)
+    assert actual['interpreter'] == str(python)
+    assert actual['environment'] == {k: v for k, v in env.items() if k != 'PRIVATE_TOKEN'}
+    actual['prerequisites']['playwright_version'] = '0.0.0'
+    with pytest.raises(ValueError, match='lock-matched'):
+        adapter.pwa_preflight_receipt(actual, env, python)

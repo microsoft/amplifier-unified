@@ -127,6 +127,54 @@ For installed-PWA acceptance, use `integration_clients.py prepare` and
 interpreter/environment to `integration_checks.py run --lane browser-installed`.
 A headless substitute does not satisfy this owner.
 
+The existing installed-wheel adapter also provides two **separate opt-in**
+hosted stages. They do not join the automatic matrix or change IC-13/desktop
+defaults. On an explicitly reviewed candidate, select **one**:
+
+```sh
+gh workflow run integration-checks.yml --repo microsoft/amplifier-unified \
+  --ref REVIEWED_CANDIDATE_REF -f root_guest=true
+# Or, separately:
+gh workflow run integration-checks.yml --repo microsoft/amplifier-unified \
+  --ref REVIEWED_CANDIDATE_REF -f installed_pwa=true
+```
+
+The reusable/direct `default-installed.yml` accepts the same flags; the fixed
+adapter arguments are `--root-guest` and `--installed-pwa`. Conflicting stages
+fail before preparation. This is a route definition, **not a qualification
+result or permission to dispatch**.
+
+The root owner runs all eight unchanged `test_durable_guest_jobs.py` cases in
+an offline, read-only, private-PID container. Only SETUID, SETGID and KILL are
+added after dropping all capabilities. The Python 3.13 supervisor remains
+root; workloads use actual `/usr/bin/python3` as UID 65534. Temporary ancestors
+are traversable, but supervisor controls and receipts stay private. Preflight
+must demonstrate the UID transition, `/proc` identity reads, cross-UID
+termination and denied workload access to private control storage. This never
+runs pytest as root on the host.
+
+The existing `browser-installed` owner retains its single unchanged behavior
+case. Its adapter stage uses an unprivileged container, a private Xvfb display,
+and Python Playwright/Chromium matched to the frontend lock. Browser preparation
+is reused without running `uv sync` or replacing the noneditable candidate
+installation. The real headed CDP install, login, launch, relaunch and uninstall
+remain required; overlay assertions stay conditional on the browser's reported
+overlay. A failed uninstall still closes the browser context and still fails.
+Only the bounded synthetic `installed-pwa.png` and `installed-pwa.json` are copied
+from pytest temporary storage before teardown, never the profile, cookies or
+app state. This is Linux headed-browser evidence, not physical-device, macOS,
+native-control or dragging acceptance.
+
+Both stages require exactly eight or one unique named JUnit cases, respectively,
+with no extras, skips, failures or errors; nonzero exit or unresolved cleanup
+cannot pass. They retain the existing two-CPU, 4-GiB, 256-PID and workflow limits,
+one running owned container at a time, exact source/wheel/dependency identity
+before and after, and live-tmpfs evidence transfer before removal. The new
+stages additionally attest wheel files, system prerequisites and browser files.
+Missing binaries or unsupported display/CDP behavior fail visibly; do not
+substitute headless execution or widen privileges. Shared base-image cache is
+retained and is not counted as owned teardown.
+
 For profiling, prepare a native environment with
 `integration_native.py prepare --profiling-source file:///clean/library ...` and run
 `integration_checks.py run --lane profiling` in that environment. The library

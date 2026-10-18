@@ -6,9 +6,23 @@ on:
         description: Run the separate fixed 22+3 desktop proof instead of the IC-13 baseline
         type: boolean
         default: false
+      root_guest:
+        description: Run only the eight isolated Linux UID-separated guest cases
+        type: boolean
+        default: false
+      installed_pwa:
+        description: Run only the headed installed-PWA case in a private display
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       desktop_safety:
+        type: boolean
+        default: false
+      root_guest:
+        type: boolean
+        default: false
+      installed_pwa:
         type: boolean
         default: false
     secrets:
@@ -24,6 +38,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Reject conflicting fixed stages before preparation
+        shell: bash
+        env:
+          DESKTOP_SAFETY: ${{ inputs.desktop_safety }}
+          ROOT_GUEST: ${{ inputs.root_guest }}
+          INSTALLED_PWA: ${{ inputs.installed_pwa }}
+        run: |
+          selected=0
+          for choice in "$DESKTOP_SAFETY" "$ROOT_GUEST" "$INSTALLED_PWA"; do
+            if [[ "$choice" == true ]]; then selected=$((selected + 1)); fi
+          done
+          if (( selected > 1 )); then echo "Select one fixed stage" >&2; exit 1; fi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -51,10 +77,14 @@ jobs:
         shell: bash
         env:
           DESKTOP_SAFETY: ${{ inputs.desktop_safety }}
+          ROOT_GUEST: ${{ inputs.root_guest }}
+          INSTALLED_PWA: ${{ inputs.installed_pwa }}
         run: |
           set -o pipefail
           extra=()
           if [[ "$DESKTOP_SAFETY" == true ]]; then extra+=(--desktop-safety); fi
+          if [[ "$ROOT_GUEST" == true ]]; then extra+=(--root-guest); fi
+          if [[ "$INSTALLED_PWA" == true ]]; then extra+=(--installed-pwa); fi
           python scripts/qualify_default_installed.py run \
             --loop-source "$GITHUB_WORKSPACE/.ci/default-loop" \
             --work "$RUNNER_TEMP/default-installed-inputs" \

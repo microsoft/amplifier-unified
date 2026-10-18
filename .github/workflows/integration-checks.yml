@@ -11,6 +11,14 @@ on:
         description: With default_installed, run only the separate 22+3 desktop safety proof
         type: boolean
         default: false
+      root_guest:
+        description: Run only the manual isolated-root guest owner
+        type: boolean
+        default: false
+      installed_pwa:
+        description: Run only the manual headed installed-PWA owner
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -23,14 +31,16 @@ permissions:
   contents: read
 jobs:
   default-installed:
-    if: github.event_name == 'workflow_dispatch' && inputs.default_installed
+    if: github.event_name == 'workflow_dispatch' && (inputs.default_installed || inputs.root_guest || inputs.installed_pwa)
     uses: ./.github/workflows/default-installed.yml
     with:
       desktop_safety: ${{ inputs.desktop_safety }}
+      root_guest: ${{ inputs.root_guest }}
+      installed_pwa: ${{ inputs.installed_pwa }}
     secrets:
       LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
   plan:
-    if: github.event_name != 'workflow_dispatch' || !inputs.default_installed
+    if: github.event_name != 'workflow_dispatch' || !(inputs.default_installed || inputs.root_guest || inputs.installed_pwa)
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
