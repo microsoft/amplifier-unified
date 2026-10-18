@@ -2,6 +2,12 @@ name: Owned integration checks
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      checks:
+        description: Fixed check set (producer evidence is not product acceptance)
+        type: choice
+        default: all
+        options: [all, native-producer]
   workflow_call:
     inputs:
       revision:
@@ -32,6 +38,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          CHECKS: ${{ inputs.checks }}
         run: |
           python - <<'PY'
           import json, os, re, subprocess
@@ -42,7 +49,9 @@ jobs:
               assert all(re.fullmatch(r'[0-9a-f]{40}', value) for value in (base, head))
               Path('changed-paths.txt').write_bytes(subprocess.check_output(['git', 'diff', '--name-only', base + '...' + head]))
               args += ['--changed', 'changed-paths.txt']
-          matrix = json.loads(subprocess.check_output(args, text=True))
+          matrix = ({'include': [{'lane': 'native', 'os': 'ubuntu-latest'}]}
+                    if os.environ['EVENT'] == 'workflow_dispatch' and os.environ['CHECKS'] == 'native-producer'
+                    else json.loads(subprocess.check_output(args, text=True)))
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('matrix=' + json.dumps(matrix) + '\n')
               output.write('selected=' + str(len(matrix['include'])) + '\n')
@@ -81,8 +90,10 @@ jobs:
       - name: Resolve the declared runtime revision
         id: runtime
         if: contains(fromJSON('["native","cli-interop"]'), matrix.lane)
+        env:
+          PRODUCER_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.checks == 'native-producer' }}
         run: |
-          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+          python -c 'import os,tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + ("08de4d442fde0210c4c89f7628c17846c5dfd67b" if os.environ["PRODUCER_CHECK"] == "true" else p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"]))' >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         if: contains(fromJSON('["native","cli-interop"]'), matrix.lane)
         with:
@@ -122,9 +133,78 @@ jobs:
         if: matrix.lane == 'native'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Execute owned cases; missing prerequisites or skips fail
+        if: github.event_name != 'workflow_dispatch' || inputs.checks != 'native-producer'
         env:
           LANE: ${{ matrix.lane }}
         run: python scripts/run_owned_integration.py --lane "$LANE" --work "$RUNNER_TEMP/integration" --output "$GITHUB_WORKSPACE/output/integration"
+      - name: Inspect actual producer and registered-web persistence
+        if: github.event_name == 'workflow_dispatch' && inputs.checks == 'native-producer'
+        run: |
+          python - <<'PY'
+          import json, os, shutil, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import integration_native
+          from integration_checks import ROOT, source_identity, verify_junit
+          work = Path(os.environ['RUNNER_TEMP']) / 'integration'
+          output = ROOT / 'output/integration'
+          output.mkdir(parents=True, exist_ok=True)
+          selectors = [
+              'tests/test_live_terminal_runtime.py::test_terminal_clients_follow_detach_reconnect_and_stop_real_worker',
+              'tests/test_live_terminal_runtime.py::test_regular_work_details_real_producer_and_service_reopen',
+          ]
+          result = {'check': 'native-producer', 'phase': 'setup', 'passed': False,
+                    'productAcceptance': False, 'selectors': selectors, **source_identity()}
+          try:
+              expected = '08de4d442fde0210c4c89f7628c17846c5dfd67b'
+              actual = subprocess.check_output(['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'], text=True).strip()
+              if actual != expected:
+                  raise ValueError('Producer check requires the admitted loop-live revision')
+              # Extend only this manual preparation with a version constraint
+              # and the actual local capture writer. The library distribution
+              # alone does not install its hook module. Ordinary lanes retain
+              # integration_native's unmodified declarations.
+              integration_native.EXTRA_DEPENDENCIES += (
+                  'amplifier-core==2.0.2',
+                  'amplifier-module-hook-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2#subdirectory=modules/hook-context-intelligence',
+              )
+              prepared = integration_native.prepare(ROOT, work, None, 'uv', sys.executable,
+                                                    loop_source=ROOT / '.ci/loop-live')
+              for name in ('preparation.json', 'pyproject.toml', 'uv.lock'):
+                  shutil.copyfile(work / name, output / name)
+              python = prepared['python']
+              # Exact Core is a prerequisite, not a skip or permission to change
+              # the declared dependency graph after the receipt was captured.
+              subprocess.run([python, '-I', '-c',
+                  'import importlib.metadata as m; '
+                  'import amplifier_module_loop_live, amplifier_module_loop_streaming, '
+                  'amplifier_module_context_simple, amplifier_module_hook_context_intelligence; '
+                  'assert m.version("amplifier-core") == "2.0.2", "Expected Core2.0.2"; '
+                  'assert m.version("amplifier-bundle-context-intelligence"), "Missing capture"'],
+                  check=True)
+              env = {**os.environ, **json.loads(Path(prepared['environment']).read_text()),
+                     'UNIFIED_PRODUCER_EVIDENCE': str(output / 'producer.json'),
+                     'UNIFIED_RUN_PRODUCER_CHECK': '1',
+                     'UNIFIED_PRODUCER_PREPARATION': str(output / 'preparation.json')}
+              result['phase'] = 'check'
+              completed = subprocess.run([python, '-m', 'pytest', *selectors, '-q', '--tb=short',
+                  '--junitxml=' + str(output / 'junit.xml')], cwd=ROOT, env=env)
+              result['exitCode'] = completed.returncode
+              result['sourceUnchanged'] = source_identity() == {
+                  key: result[key] for key in ('baseRevision', 'testedSourceDigest')}
+              if not result['sourceUnchanged']:
+                  raise ValueError('Producer check source changed')
+              result['tests'] = verify_junit(output / 'junit.xml', selectors)
+              if completed.returncode:
+                  raise ValueError('Producer check failed')
+              result.update(phase='complete', passed=True)
+          except Exception as error:
+              result['error'] = f'{type(error).__name__}: {error}'
+          finally:
+              (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result))
+          raise SystemExit(0 if result['passed'] else 1)
+          PY
       - name: Retain results and source identities, never private state
         if: always()
         uses: actions/upload-artifact@v4
