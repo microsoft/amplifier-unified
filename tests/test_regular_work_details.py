@@ -1068,9 +1068,10 @@ async def test_stale_proof_sync_removes_refs_with_new_versions_without_restartin
 @pytest.mark.parametrize("mutation", [
     "source", "index", "epoch", "entry-eviction", "proof-eviction", "resident-identity",
 ])
+@pytest.mark.parametrize("reopen", [False, True], ids=["resident", "cold"])
 async def test_public_field_refuses_dependency_changes_after_real_model_await(
-        authenticated_client, tmp_path, mutation):
-    async with _scenario(authenticated_client, tmp_path, 0, False) as fixture:
+        authenticated_client, tmp_path, mutation, reopen):
+    async with _scenario(authenticated_client, tmp_path, 0, reopen) as fixture:
         service, client, calls, sid, _, interim_id, _ = fixture
         await service.diagnostics.flush()
         group = await _current_group(client, sid, interim_id)
@@ -1101,13 +1102,16 @@ async def test_public_field_refuses_dependency_changes_after_real_model_await(
                 elif mutation == "epoch":
                     windows.invalidate({sid})
                 elif mutation == "entry-eviction":
-                    removed = windows.live_pages.groups.pop((BROWSER_ID, sid, group["id"]))
+                    entries = windows._cold_reads if reopen else windows.live_pages.groups
+                    removed = entries.pop((BROWSER_ID, sid, group["id"]))
                     assert original["id"] in removed["ids"]
                 elif mutation == "proof-eviction":
                     support = windows._root_proofs[sid]["pages"][0][0]
                     assert windows.pages.pop(support)
                 else:
-                    target = next(row for row in session["execution"]["nodes"]
+                    available = (windows._page(sid, group["id"])["_boundNodes"][group["id"]]
+                                 if reopen else session["execution"]["nodes"])
+                    target = next(row for row in available
                                   if row["id"] == original["id"])
                     target["parentId"] = "changed-after-field-await"
                 model.release.set()
