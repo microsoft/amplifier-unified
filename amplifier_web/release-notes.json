@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.177",
+      "title": "Keep saved Work details and conversation responses current",
+      "changes": [
+        "Saved Work details now notify a newly connected browser when they become ready, including the interval before sidebar registration completes. This prevents a stale loading view after reconnecting or reloading a chat.",
+        "Internal completion checks keep their generated verification text out of the conversation response. Their recorded activity and usage remain available without adding a misleading interrupted reply."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.176",
       "title": "Review tool changes and manage scheduled work",
       "changes": [

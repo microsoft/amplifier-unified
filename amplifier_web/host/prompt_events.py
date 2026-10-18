@@ -29,10 +29,18 @@ def install(coordinator):
                 response = ''.join(block.get('text', '') for block in response
                                    if isinstance(block, dict) and block.get('type') in {'text', 'output_text'})
             current['completed'] = True
-            await coordinator.hooks.emit('prompt:complete', {
-                'session_id': coordinator.session_id, 'prompt': current.get('prompt', ''),
-                'response': response,
-            })
+            # Completion hooks may ask the mounted provider to evaluate the
+            # response. Their output is auxiliary, while usage stays observable.
+            from ..execution_events import CALL_PURPOSE
+            token = CALL_PURPOSE.set({**(CALL_PURPOSE.get() or {}),
+                'label': 'Completion hook', 'purpose': 'prompt_completion'})
+            try:
+                await coordinator.hooks.emit('prompt:complete', {
+                    'session_id': coordinator.session_id, 'prompt': current.get('prompt', ''),
+                    'response': response,
+                })
+            finally:
+                CALL_PURPOSE.reset(token)
         return HookResult()
 
     for event in ('prompt:submit', 'prompt:complete', 'orchestrator:complete'):
