@@ -418,6 +418,24 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
         '--plan frontend/tests/browser-checks.json --output output/browser-checks --budget-seconds 1500')
     assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
         i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@v5')
+    contracts = [s for s in steps if s.get('name') == 'Verify fixed APP004 qualification contracts']
+    assert len(contracts) == 1
+    contract = contracts[0]
+    assert contract['if'] == '${{ inputs.app004_qualification }}'
+    assert contract['run'].splitlines() == [
+        'set -o pipefail',
+        'uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py '
+        'tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml '
+        '2>&1 | tee output/browser-checks/app004-contracts.log',
+    ]
+    before = steps[:steps.index(contract)]
+    assert any(s.get('uses') == 'actions/setup-node@v4' for s in before)
+    assert any(s.get('run') == 'npm ci --prefix frontend' for s in before)
+    assert any(s.get('run') == 'uv sync --locked --group dev --group artifacts' for s in before)
+    assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
+    next_step = steps[steps.index(contract) + 1]
+    assert next_step['name'] == 'Run all extended browser scenarios serially'
+    assert 'if' not in next_step  # Implicit success gate leaves initialized rows unrun on failure.
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
     assert not any('continue-on-error' in step for step in steps)
     diagnostics = steps[-1]
