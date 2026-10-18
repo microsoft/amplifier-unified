@@ -505,3 +505,126 @@ async def test_http_native_continuation_is_explicit_and_never_replaces_saved_mes
     text = await (await client.get('/api/conversation/detail', params=first['items'][-1]['textDetail'])).json()
     assert text['value'] == 'native-139' + 'x' * 5000
     assert json.dumps(session['messages']) == canonical
+
+
+def test_work_notice_recipients_include_only_selected_observed_web_clients(tmp_path):
+    from contextvars import ContextVar
+    from amplifier_web.event_log_view import EventLogView
+    current = ContextVar('notification-client', default='current')
+    records = {
+        name: {'kind': kind, 'selectedSessionId': selected}
+        for name, kind, selected in [
+            ('registered', 'web', 's'), ('connected', 'web', 's'),
+            ('current', 'web', 's'), ('unrelated', 'web', 'other'),
+            ('terminal', 'tui', 's'), ('dormant', 'web', 's')]
+    }
+    notified = []
+    service = SimpleNamespace(data_dir=tmp_path,
+        clients=SimpleNamespace(records=records, current=current),
+        queue_clients={'a': 'connected', 'b': 'unrelated', 'c': 'terminal'},
+        shell=SimpleNamespace(resources=SimpleNamespace(clients={'registered', 'unrelated'}),
+                              notify=notified.append))
+    EventLogView(service)._notify_work('s')
+    assert sorted(notified) == ['connected', 'current', 'registered']
+
+
+@pytest.mark.asyncio
+async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registration(
+        authenticated_client, tmp_path, monkeypatch):
+    """Real WS/HTTP clients: legacy notification leaves a stale outer frame."""
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    _, source, _, _ = fixture(tmp_path, monkeypatch, count=140)
+    app = await create_app(tmp_path / 'notification-http', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False, preload_providers=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Selected fixture'})
+    selected = service._session()
+    sid = selected['id']
+    selected.update({key: value for key, value in source.items() if key != 'id'})
+    await service.dispatch('session.create', {'title': 'Unrelated fixture'})
+    other_sid = service._session()['id']
+    for identity, selection in [('notice-web', sid), ('unrelated-web', other_sid)]:
+        service.clients.attach(identity, kind='web')
+        with service.clients.bind(identity):
+            await service.dispatch('session.select', {'id': selection})
+    windows = service.event_log_view.windows
+    projector = FakeProjector(service.data_dir)
+    projector.gate = asyncio.Event()
+    windows.projector = projector
+    original_notice = service.event_log_view._notify_work
+    def legacy_notice(identity):
+        # Negative control reproduces the old recipient set, never forces state.
+        for client_id in tuple(service.shell.resources.clients):
+            record = service.clients.records.get(client_id, {})
+            if record.get('kind') == 'web' and record.get('selectedSessionId') == identity:
+                service.shell.notify(client_id)
+    monkeypatch.setattr(service.event_log_view, '_notify_work', legacy_notice)
+    client = await authenticated_client(app)
+    sockets, read = [], None
+    try:
+        for identity in ['notice-web', 'unrelated-web']:
+            socket = await client.ws_connect('/api/events/ws?transport=delta-v1&clientId=' + identity)
+            sockets.append(socket)
+            initial = await socket.receive_json(timeout=5)
+            assert initial['event'] == 'state'
+            assert initial['data']['client']['id'] == identity
+            assert not service.shell.resources.registered(identity)
+        # A real requested physical page waits at the projector boundary. Only
+        # its completion may set ready; no status injection or broad publish.
+        read = windows.request(sid)
+        assert read is not None
+        async with asyncio.timeout(5):
+            while not any(inputs['session']['id'] == sid for inputs in projector.inputs):
+                await asyncio.sleep(0)
+        response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
+        assert response.status == 200, await response.text()
+        before = await response.json()
+        before_session = next(row for row in before['sessions'] if row['id'] == sid)
+        assert before_session['workProjection']['current'] is False
+        cached_before = service._client_snapshots['notice-web']
+        projector.gate.set()
+        await asyncio.wait_for(asyncio.shield(read), timeout=5)
+        assert windows.status[sid]['current'] is True and windows.status[sid]['status'] == 'ready'
+        # No await between stale-frame evidence and the corrected notification:
+        # background state publications cannot manufacture this discriminator.
+        with service.clients.bind('notice-web'):
+            stale = service.browser_state()
+        assert stale is cached_before
+        stale_session = next(row for row in stale['sessions'] if row['id'] == sid)
+        assert stale_session['workProjection']['current'] is False
+        with service.clients.bind('unrelated-web'):
+            unrelated = service.browser_state()
+        unrelated_token = service.shell.change_token('unrelated-web')
+        selected_token = service.shell.change_token('notice-web')
+        monkeypatch.setattr(service.event_log_view, '_notify_work', original_notice)
+        original_notice(sid)
+        assert 'notice-web' not in service._client_snapshots
+        assert service.shell.change_token('notice-web') != selected_token
+        assert service._client_snapshots['unrelated-web'] is unrelated
+        assert service.shell.change_token('unrelated-web') == unrelated_token
+        with service.clients.bind('notice-web'):
+            current = service.browser_state()
+        projected = next(row for row in current['sessions'] if row['id'] == sid)
+        assert projected['workProjection']['status'] == 'ready'
+        assert projected['workProjection']['current'] is True
+        assert projected['workProjection']['receipt'] == windows.status[sid]['receipt']
+        response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
+        assert response.status == 200, await response.text()
+        external = await response.json()
+        projected = next(row for row in external['sessions'] if row['id'] == sid)
+        assert projected['workProjection']['status'] == 'ready' and projected['workProjection']['current']
+        assert not service.shell.resources.registered('notice-web')
+        print('WORK-NOTIFICATION-CONTROL', {'legacyExternalCurrent': False, 'internalCurrent': True,
+              'correctedExternalCurrent': True, 'unrelatedCacheAndTokenUnchanged': True})
+    finally:
+        projector.gate.set()
+        if read is not None:
+            if not read.done():
+                read.cancel()
+            await asyncio.gather(read, return_exceptions=True)
+        try:
+            for socket in sockets:
+                await socket.close()
+        finally:
+            await client.close()
