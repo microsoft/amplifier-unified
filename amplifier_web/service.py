@@ -99,7 +99,11 @@ ACTION_DEFINITIONS = {
     "session.draft": ("Open configurable new-chat setup without creating a conversation or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. The user must submit the first message to create this chat; an agent cannot finish this through raw session.create. For an authorized task in the caller's inherited workspace, use coordination.create instead. For an explicitly user-requested independent chat and opening brief in another existing folder, use session.handoff.start without a second confirmation; use session.handoff.propose for suggestions.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
     "session.create": ("Create a conversation through the human UI or host-managed creation flow. Direct agent calls are refused, including after session.draft; coordination.create commissions a task in the caller's inherited workspace, not an independent chat in another folder. session.handoff.start creates and delivers an explicitly user-requested independent chat directly; session.handoff.propose reserves human review for suggestions; session.handoff.read inspects its durable outcome without replay. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Reviewed inheritance does not copy history, tasks or running work; select:false preserves the view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.plans": ("Read current plan progress and recorded trajectory for up to 50 chats without selecting them. Include items for at most one chat to inspect its todo list.", schema({"ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":True,"items":string(200)},"includeItems":{"type":"boolean"}},["ids"])),
-    "session.select": ("Select a conversation without preparing a runtime", schema({"id": string(100)})),
+    "session.select": ("Select a conversation without preparing a runtime. A saved chatReference proof is UI-only and revalidated before the ordinary navigation guards.", schema({"id": string(100), "chatReference": schema({
+        "id": string(100), "version": {"type": "integer", "minimum": 1},
+        "sourceSessionId": string(200), "messageId": string(200),
+        "expectedRevision": {"type": "integer", "minimum": 1}},
+        ["id", "version", "sourceSessionId", "messageId", "expectedRevision"])}, ["id"])),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count and lifetime", schema({"patch": {
         "type": "object", "properties": {
@@ -1756,11 +1760,11 @@ class AppService:
                     scope = native_project(exact)
             try:
                 target = self.directory.resolve(args[target_key], scope,
-                                                include_hidden_workspaces=action == 'session.select')
+                                                include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
                 if target is None:
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
-                                                    include_hidden_workspaces=action == 'session.select')
+                                                    include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             if scope and target is None:
@@ -1829,10 +1833,13 @@ class AppService:
                 or args.get('clientId', client_id) != client_id
                 or self.clients.record().get('kind') != 'web'):
             raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
+        if action == 'session.select' and 'chatReference' in args and (
+                origin != 'ui' or client_id is None or self.clients.record().get('kind') != 'web'):
+            raise AppError('A chat reference opens only from its originating browser.', 403)
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
-        if resolved_target is not None and action != 'session.titlePreview':
+        if resolved_target is not None and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -1871,7 +1878,7 @@ class AppService:
                 raise AppError("Profiling requires the running host adapter.", 503)
             return await host.dispatch(action, args, command_id)
         transfer_sid = None
-        if action in {'outputs.attach', 'outputs.attachMedia', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
+        if action in {'outputs.attach', 'outputs.attachMedia', 'outputs.attachChatReference', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
                       'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
                       'worker.spawn', 'worker.message', 'worker.steer', 'question.answer', 'operations.submit', 'operations.write'}:
             transfer_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
@@ -2219,9 +2226,11 @@ class AppService:
                 source = copy.deepcopy(self._session(args['sessionId']))
                 artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
             try:
+                chat_references = await self.outputs.chat_references.export_references(source['id'])
                 rows = await asyncio.to_thread(messages, self.data_dir, source)
                 prepared_share = (source, snapshot(self.data_dir, source, artifacts,
-                    resolver=self.peer_attribution.resolve, message_rows=rows)[0])
+                    resolver=self.peer_attribution.resolve, message_rows=rows,
+                    chat_references=chat_references)[0])
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
         if action == 'session.export' and args.get('format', 'json') != 'markdown' and any(key in args for key in ('scope', 'fromMessageId', 'throughMessageId', 'minimal', 'includeExecution', 'includeConversationId', 'includeTimestamps', 'includeReferenceIds')):
@@ -2243,9 +2252,11 @@ class AppService:
             # Native storage may be slow. Freeze the host-owned portion first,
             # then let navigation and runtime events continue during the read.
             try:
+                chat_references = await self.outputs.chat_references.export_references(source['id'])
                 rows = await asyncio.to_thread(messages, self.data_dir, source)
                 prepared_export = (source, snapshot(self.data_dir, source, artifacts, args,
-                    resolver=self.peer_attribution.resolve, message_rows=rows))
+                    resolver=self.peer_attribution.resolve, message_rows=rows,
+                    chat_references=chat_references))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
         retained_file = None
@@ -2284,8 +2295,31 @@ class AppService:
                     raise ValueError('The saved assistant identity changed while opening Canvas.')
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
+        chat_reference_proof = None
+        if action == 'session.select' and 'chatReference' in args:
+            try:
+                chat_reference_proof = await self.outputs.chat_references.preflight(args, origin)
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from None
+        copy_references = []
+        if action == 'message.copy':
+            try:
+                copy_references = await self.outputs.chat_references.export_references(
+                    args['sessionId'], args['messageId'])
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from None
         pending = []
         async with self.lock:
+            if chat_reference_proof is not None:
+                try:
+                    self.outputs.chat_references.guard(args, origin, chat_reference_proof)
+                except (ValueError, KeyError) as exc:
+                    raise AppError(str(exc), 409) from None
+                # Call the same sidebar guard even for a same-ID click/replay.
+                # Its own same-scope preservation rules remain authoritative.
+                self.canvas_views.guard_transition(action, args)
+                if resolved_target is not None:
+                    self._admit_session(resolved_target)
             if action == 'canvas.openGif':
                 try:
                     current = self.outputs.media.guard(args, proof=gif_proof)
@@ -2794,7 +2828,10 @@ class AppService:
                     raise AppError('This message is no longer available.',404)
                 identity = str(uuid.uuid4())
                 self.state['view']['messageCopy'] = {**args,'requestId':identity,'status':'pending'}
-                effects.append({'type':'message.copy',**args,'requestId':identity})
+                from .conversation_export import chat_reference_lines
+                fallback = '\n\n'.join(chat_reference_lines(copy_references, message))
+                effects.append({'type':'message.copy',**args,'requestId':identity,
+                                **({'chatReferenceText':fallback} if fallback else {})})
             elif action == 'message.copyResult':
                 result = self.state['view'].get('messageCopy',{})
                 if result.get('requestId') == args['requestId']:

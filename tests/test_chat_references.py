@@ -1,10 +1,11 @@
-"""APP-004 test-first contract; unexecuted until isolated checks are admitted.
+"""APP-004 behavior contract; original29 proved missing-feature RED in hosted CI.
 
 Public action spellings are implementation hypotheses, not approved architecture.
 Every refusal test first proves the feature exists through a successful attach.
 Missing implementation must fail, never xfail/skip or pass as a refusal.
 """
 import asyncio
+import json
 from copy import deepcopy
 
 import pytest
@@ -320,3 +321,263 @@ async def test_renamed_archived_target_opens_exact_id_without_restore(reference_
     assert app.clients.records["one"]["selectedSessionId"] == args["targetSessionId"]
     assert app.state["conversationOrganization"]["archived"] == archived
     assert effects(app) == [[], [], [], []]
+
+
+async def test_reference_metadata_is_current_bounded_and_message_owned(reference_app):
+    app, args, _ = reference_app
+    record = await attach(app, args)
+    read = {"sessionId": args["sessionId"], "messageId": args["messageId"]}
+    result = await command(app, "outputs.chatReferences", read)
+    item = result["result"]["items"][0]
+    assert item["id"] == record["id"] and item["messageId"] == args["messageId"]
+    assert item["available"] and item["workspace"] and not result["result"]["overflow"]
+    await app.dispatch("session.rename", {"id": args["targetSessionId"], "title": "Current destination"})
+    await app.dispatch("session.archive", {"id": args["targetSessionId"]})
+    current = (await command(app, "outputs.chatReferences", read))["result"]["items"][0]
+    assert current["title"] == "Current destination" and current["archived"]
+    assert current["id"] == item["id"] and current["revision"] == item["revision"]
+    with pytest.raises(AppError):
+        await command(app, "outputs.chatReferences", {**read, "messageId": "not-an-assistant"})
+    await app.dispatch("outputs.unlink", {"sessionId": args["sessionId"], "id": record["id"],
+                                          "expectedRevision": record["revision"]})
+    assert (await command(app, "outputs.chatReferences", read))["result"]["items"] == []
+
+
+@pytest.mark.parametrize("defect", ["missing", "worker", "foreign-host", "changed-source"])
+async def test_changed_reference_fails_closed_without_substitute(reference_app, defect):
+    app, args, _ = reference_app
+    record = await attach(app, args)
+    assert (await command(app, "session.select", click(args, record)))["accepted"]
+    await command(app, "session.select", {"id": args["sessionId"]})
+    if defect == "missing":
+        preview = (await app.dispatch("session.deletePreview", {"id": args["targetSessionId"]}))["result"]
+        await app.dispatch("session.delete", {"id": args["targetSessionId"],
+                                              "confirmationToken": preview["confirmationToken"]})
+        async with asyncio.timeout(5):
+            while app.tasks:
+                await asyncio.gather(*list(app.tasks))
+        assert app.directory.resolve(args["targetSessionId"]) is None
+    elif defect == "worker":
+        app._session(args["targetSessionId"])["sessionKind"] = "worker"
+    elif defect == "foreign-host":
+        stored = app.outputs.record(args["sessionId"], record["id"])
+        stored["target"]["reference"]["hostId"] = "different-host"
+        app.db.execute("UPDATE output_records SET value=? WHERE id=?", (json.dumps(stored), record["id"]))
+    else:
+        source = app._session(args["sessionId"])
+        next(m for m in source["messages"] if m["id"] == args["messageId"])["text"] = "Different saved body"
+    before = deepcopy(app.clients.records)
+    before_effects = effects(app)
+    with pytest.raises(AppError):
+        await command(app, "session.select", click(args, record))
+    assert app.clients.records == before
+    assert effects(app) == before_effects
+
+
+async def test_same_chat_reference_still_uses_sidebar_guard_and_view_transition(reference_app, monkeypatch):
+    app, args, _ = reference_app
+    args = {**args, "targetSessionId": args["sessionId"]}
+    record = await attach(app, args)
+    await command(app, "view.update", {"patch": {"workSurface": "workspaces"}})
+    calls = []
+    original = app.canvas_views.guard_transition
+    def guard(action, values):
+        calls.append((action, deepcopy(values)))
+        return original(action, values)
+    monkeypatch.setattr(app.canvas_views, "guard_transition", guard)
+    result = await command(app, "session.select", click(args, record))
+    assert result["accepted"] and result["effects"] == []
+    assert any(action == "session.select" and values == click(args, record) for action, values in calls)
+    assert app.clients.records["one"]["view"]["workSurface"] == "chat"
+
+
+async def test_reference_copy_export_escapes_labels_and_keeps_range_boundary(reference_app):
+    app, args, _ = reference_app
+    await app.dispatch("session.rename", {"id": args["targetSessionId"],
+        "title": "[Do not execute](javascript:alert(1)) <button> https://example.invalid"})
+    await attach(app, args)
+    result = await command(app, "message.copy", {"sessionId": args["sessionId"], "messageId": args["messageId"]})
+    fallback = next(e["chatReferenceText"] for e in result["effects"] if e["type"] == "message.copy")
+    assert fallback.startswith("Chat reference: ")
+    assert "<button>" not in fallback and "(javascript:" not in fallback
+    assert args["targetSessionId"] not in fallback and "TARGET_ONLY_TRANSCRIPT_SENTINEL" not in fallback
+    await app.on_runtime_event("assistant.message", {"sessionId": args["sessionId"], "text": "Later reply"})
+    mid = app._session(args["sessionId"])["messages"][-1]["id"]
+    receipt = await app.dispatch("session.export", {"id": args["sessionId"], "format": "markdown",
+        "destination": "none", "scope": "range", "fromMessageId": mid, "throughMessageId": mid})
+    assert "Chat reference:" not in exported(app, receipt)
+
+
+async def test_reference_browser_origin_not_supplied_by_payload(reference_app):
+    app, args, _ = reference_app
+    record = await attach(app, args)
+    app.clients.attach("terminal-client", kind="tui")
+    with pytest.raises(AppError):
+        await command(app, "session.select", click(args, record), client="terminal-client")
+    with pytest.raises(AppError):
+        await command(app, "session.select", {**click(args, record), "clientId": "one"})
+
+
+@pytest.mark.parametrize("cold", [False, True])
+async def test_reference_canonical_authoring_can_be_opened_through_verified_alias(reference_app, monkeypatch, cold):
+    app, args, _ = reference_app
+    source, _, _, directory, canonical = cold_alias_corpus(app, native_message_id=False)
+    record = await attach(app, {**args, "messageId": canonical})
+    original = (directory / "transcript.jsonl").read_bytes()
+    if cold:
+        app._state["selectedSessionId"] = None
+        for client in app.clients.records.values():
+            client["selectedSessionId"] = None
+        monkeypatch.setattr(app.cold_display, "RECENT_LIMIT", 0)
+        assert source["id"] in app.cold_display.retire(force=True)
+        app.clients.records["one"]["selectedSessionId"] = source["id"]
+        assert not dict.__contains__(source, "messages")
+    alias_args = {**args, "messageId": "saved-web-assistant"}
+    listed = await command(app, "outputs.chatReferences",
+                           {"sessionId": args["sessionId"], "messageId": alias_args["messageId"]},
+                           include_state=False)
+    assert listed["result"]["items"][0]["id"] == record["id"]
+    assert listed["result"]["items"][0]["messageId"] == alias_args["messageId"]
+    if cold:
+        assert not dict.__contains__(source, "messages")
+    assert (await command(app, "session.select", click(alias_args, record)))["accepted"]
+    assert (directory / "transcript.jsonl").read_bytes() == original
+
+
+async def test_event_reference_survives_real_canonical_binding_and_cold_reopen(reference_app, monkeypatch):
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.automatic_history import read_transcript, merge_web_history, directory
+    app, args, _ = reference_app
+    record = await attach(app, args)
+    source = app._session(args["sessionId"])
+    saved = next(m for m in source["messages"] if m["id"] == args["messageId"])
+    assert "nativeIndex" not in saved
+    corpus = [{"role": "user" if i % 2 == 0 else "assistant",
+               "content": saved["text"] if i == 1 else f"Body {i} " + ("retained " * 300)}
+              for i in range(240)]
+    store = SessionStore.for_app(app.data_dir, source["workspace"])
+    store.save(source["id"], corpus, {"bundle_name": source["bundle"],
+               "working_dir": source["workspace"]}, preserve_system=True)
+    source.update(nativeProject=project_slug(source["workspace"]), nativeIdentity=source["id"],
+                  runtimeSessionId=source["id"], historyManaged=False, status="idle")
+    page = read_transcript(source, limit=300)
+    merge_web_history(source, page["messages"])
+    source["nativeRevision"] = page["revision"]
+    assert next(m for m in source["messages"] if m["id"] == args["messageId"])["nativeIndex"] == 1
+    read = {"sessionId": source["id"], "messageId": args["messageId"]}
+    assert (await command(app, "outputs.chatReferences", read))["result"]["items"][0]["id"] == record["id"]
+    raw = (directory(source) / "transcript.jsonl").read_bytes()
+    app._state["selectedSessionId"] = None
+    for client in app.clients.records.values():
+        client["selectedSessionId"] = None
+    monkeypatch.setattr(app.cold_display, "RECENT_LIMIT", 0)
+    assert source["id"] in app.cold_display.retire(force=True)
+    markers = deepcopy(dict.get(source, "_coldFields"))
+    app.clients.records["one"]["selectedSessionId"] = source["id"]
+    listed = await command(app, "outputs.chatReferences", read, include_state=False)
+    assert listed["result"]["items"][0]["id"] == record["id"]
+    assert not dict.__contains__(source, "messages") and dict.get(source, "_coldFields") == markers
+    home, workspace = app.data_dir, source["workspace"]
+    await app.close()
+    reopened = AppService(home, workspace=workspace, runtime=NoExecution())
+    try:
+        reopened.clients.attach("reopened-reference", resume="one", kind="web")
+        assert (await command(reopened, "outputs.chatReferences", read,
+                              client="reopened-reference"))["result"]["items"][0]["id"] == record["id"]
+        export = await reopened.dispatch("session.export", {"id": source["id"], "format": "markdown",
+                                             "destination": "none", "includeReferenceIds": False})
+        assert "Chat reference: Investigation destination" in exported(reopened, export)
+        assert (await command(reopened, "session.select", click(args, record),
+                              client="reopened-reference"))["accepted"]
+        assert (directory(source) / "transcript.jsonl").read_bytes() == raw
+    finally:
+        await reopened.close()
+
+
+async def test_changed_source_does_not_export_or_copy_a_stale_reference(reference_app):
+    app, args, _ = reference_app
+    await attach(app, args)
+    source = app._session(args["sessionId"])
+    next(m for m in source["messages"] if m["id"] == args["messageId"])["text"] = "Changed reply"
+    copied = await command(app, "message.copy", {"sessionId": source["id"], "messageId": args["messageId"]})
+    assert all("chatReferenceText" not in effect for effect in copied["effects"])
+    receipt = await app.dispatch("session.export", {"id": source["id"], "format": "markdown", "destination": "none"})
+    assert "Changed reply" in exported(app, receipt)
+    assert "Chat reference:" not in exported(app, receipt)
+
+
+async def test_portable_reference_is_retained_inert_until_fresh_attachment(reference_app):
+    from amplifier_web.portability_data import capture, install_outputs
+    app, args, _ = reference_app
+    source, _, _, _, canonical = canonical_corpus(app)
+    source["selection"] = {"provider": "synthetic", "model": "synthetic"}
+    args = {**args, "messageId": canonical}
+    record = await attach(app, args)
+    payload = capture(app, source)
+    install_outputs(app, payload)
+    saved = (await app.dispatch("outputs.read",
+                               {"sessionId": source["id"], "id": record["id"]}))["result"]
+    assert not saved["linked"] and not saved["available"]
+    assert saved["revision"] == record["revision"] + 1
+    with pytest.raises(AppError):
+        await command(app, "session.select", click(args, saved))
+    with pytest.raises(AppError):
+        await app.dispatch("outputs.relink", {"sessionId": source["id"], "id": saved["id"],
+                                              "expectedRevision": saved["revision"]})
+    fresh = await attach(app, args)
+    assert fresh["id"] != record["id"]
+    assert (await command(app, "session.select", click(args, fresh)))["accepted"]
+    assert effects(app) == [[], [], [], []]
+
+
+async def test_reference_rejects_canonical_rewrite_during_binding_worker(reference_app, monkeypatch):
+    from amplifier_web import chat_references
+    app, args, _ = reference_app
+    source, corpus, store, _, canonical = canonical_corpus(app)
+    args = {**args, "messageId": canonical}
+    record = await attach(app, args)
+    original = chat_references.qualified_bindings
+    def rewrite(proof):
+        bindings = original(proof)
+        changed = deepcopy(corpus)
+        changed[1]["content"] = "Canonical source changed during reference qualification"
+        store.save(source["id"], changed, {"bundle_name": source["bundle"],
+                   "working_dir": source["workspace"]}, preserve_system=True)
+        return bindings
+    monkeypatch.setattr(chat_references, "qualified_bindings", rewrite)
+    before = deepcopy(app.clients.records)
+    with pytest.raises(AppError, match="changed"):
+        await command(app, "session.select", click(args, record))
+    assert app.clients.records == before
+
+
+async def test_alias_origin_reference_exports_when_only_canonical_source_remains(reference_app):
+    from amplifier_web.automatic_history import read_transcript
+    app, args, _ = reference_app
+    source, _, _, _, canonical = cold_alias_corpus(app, native_message_id=False)
+    record = await attach(app, {**args, "messageId": "saved-web-assistant"})
+    page = read_transcript(source, limit=300)
+    source.update(messages=page["messages"], historyManaged=True, nativeRevision=page["revision"])
+    assert all(m["id"] != "saved-web-assistant" for m in source["messages"])
+    assert (await command(app, "outputs.chatReferences",
+                           {"sessionId": source["id"], "messageId": canonical}))["result"]["items"][0]["id"] == record["id"]
+    receipt = await app.dispatch("session.export", {"id": source["id"], "format": "markdown", "destination": "none"})
+    assert "Chat reference: Investigation destination" in exported(app, receipt)
+
+
+async def test_target_native_alias_requires_exact_project_and_never_substitutes(reference_app):
+    app, args, other = reference_app
+    await attach(app, args)
+    first, second = app._session(args["targetSessionId"]), app._session(other)
+    first.update(nativeIdentity="shared-native-reference", nativeProject="first-project")
+    second.update(nativeIdentity="shared-native-reference", nativeProject="second-project")
+    ambiguous = {**args, "targetSessionId": "shared-native-reference"}
+    with pytest.raises(AppError, match="more than one"):
+        await app.dispatch("outputs.attachChatReference", ambiguous)
+    record = await attach(app, {**ambiguous, "targetNativeProject": "first-project"})
+    assert record["targetSessionId"] == first["id"]
+    with pytest.raises(AppError):
+        await command(app, "session.select", click({**args, "targetSessionId": other}, record))
+    assert (await command(app, "session.select", click(args, record)))["accepted"]
+    assert app.clients.records["one"]["selectedSessionId"] == first["id"]

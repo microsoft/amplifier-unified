@@ -125,6 +125,7 @@ try{
   await page.unroute('**/api/actions',holdDraft);
  }
  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+ await expect(page.locator(`[data-part="messages"][data-session-id="${target}"]`)).toBeFocused();
  assert.deepEqual(await marker(page),before);
  assert.equal(context.pages().length,2,'Click must not open a tab/window');
  assert.equal(additionalPages,0,'Even a short-lived popup must be detected');
@@ -173,6 +174,7 @@ try{
  await guard.getByRole('button',{name:'Keep settings open',exact:true}).click();
  assert.equal((await authoritative(page)).selectedSessionId,source);
  await expect(providerId).toHaveValue('unsaved-reference-fixture');
+ await expect(card()).toBeFocused();
  // Compare ordinary selection: same dialog, same cancel, no discard.
  const pendingSelection=act(page,'session.select',{id:target});
  await expect(guard).toBeVisible();
@@ -207,6 +209,60 @@ try{
  const reloaded=await marker(page);assert.notEqual(reloaded.document,before.document);
  await card().click();await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
  assert.deepEqual(await marker(page),reloaded);
+ await act(page,'session.select',{id:source});
+ await act(page,'session.rename',{id:target,title:'Renamed investigation destination'});
+ const renamed=sourceArticle.getByRole('button',{name:/^Open chat.*Renamed investigation destination/});
+ await expect(renamed).toBeVisible();
+ await renamed.click();await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+ await act(page,'session.select',{id:source});
+ // Queue an earlier reference behind an existing dirty-report barrier, then a
+ // newer ordinary selection. The older card must not overtake that intent.
+ let releaseBarrier,barrierHeld=false;
+ const barrier=new Promise(resolve=>{releaseBarrier=resolve});
+ const holdBarrier=async route=>{
+  const body=route.request().postDataJSON();
+  if(body.action==='canvas.views.dirty'){barrierHeld=true;await barrier}
+  await route.continue();
+ };
+ await act(page,'canvas.show',{kind:'markdown',title:'Navigation order',content:'# Safe'});
+ const orderView=(await act(page,'canvas.views.inspect')).result.views.find(v=>v.viewId==='primary');
+ await page.route('**/api/actions',holdBarrier);
+ const pendingBarrier=act(page,'canvas.views.dirty',{...Object.fromEntries(
+  ['viewId','resourceId','resourceRevision','generation'].map(key=>[key,orderView[key]])),dirty:false});
+ try{
+  await expect.poll(()=>barrierHeld).toBe(true);
+  const beforePosts=posts.length;
+  await renamed.click();
+  const newer=page.evaluate(id=>{
+   const result=window.amplifier.dispatch('session.select',{id});
+   window.__referenceLaterSelectionStarted=true;
+   return result;
+  },other);
+  await page.waitForFunction(()=>window.__referenceLaterSelectionStarted===true);
+  releaseBarrier();await pendingBarrier;await newer;
+  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(other);
+  assert.equal(posts.slice(beforePosts).filter(row=>row.action==='session.select'&&row.args?.chatReference).length,0);
+ }finally{releaseBarrier();await page.unroute('**/api/actions',holdBarrier)}
+ await act(page,'session.select',{id:source});
+ await act(page,'canvas.close');
+ let uncertainPosts=0;
+ const loseReference=async route=>{
+  const body=route.request().postDataJSON();
+  if(body.action==='session.select'&&body.args.chatReference){
+   uncertainPosts++;await route.abort('failed');return;
+  }
+  await route.continue();
+ };
+ await page.route('**/api/actions',loseReference);
+ try{
+  await renamed.click();
+  await expect(sourceArticle.getByRole('alert')).toContainText('connection');
+  await expect(renamed).not.toHaveAttribute('aria-busy','true');
+  await renamed.click();
+  await expect(sourceArticle.getByRole('alert')).toContainText('will not be replayed');
+  assert.equal(uncertainPosts,1,'Unknown navigation is not retried by another click');
+  assert.equal((await authoritative(page)).selectedSessionId,source);
+ }finally{await page.unroute('**/api/actions',loseReference)}
  await assertNoExecution();assert.deepEqual(errors,[]);assert.equal(additionalPages,0);
  console.log('Chat-reference source-browser checks passed: exact same-document selection, client isolation, draft/attachment retention, Canvas/Settings guards, keyboard/mobile and saved reload.');
 }catch(error){
