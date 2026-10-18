@@ -97,3 +97,27 @@ test('deferred summaries keep completed work placement without loading any nodes
  assert.equal(grouped.turns.length,1);assert.equal(grouped.turns[0].detailRevision,'v1');assert.equal(grouped.turns[0].nodeCounts.tools,25);
  assert.deepEqual(grouped.nodes,[]);assert.equal(grouped.detailsDeferred,true);assert.equal(grouped.sessionId,'chat');
 });
+
+test('page-backed groups retain actual turn ownership, exact detail identity and message gaps',async()=>{
+ const {conversationWorkRows}=await import('../src/timeline-data.js');
+ const {foldInterimRows}=await import('../src/interim-replies.js');
+ const response={version:1,status:'completed',phase:'interim',generationId:'g',inputIds:['t'],finalMessageIds:['final']};
+ const entries=[{id:'user',role:'user',inputId:'t',createdAt:1},
+  {id:'first',role:'assistant',inputId:'t',generationId:'g',text:'First',createdAt:2,response},
+  {id:'second',role:'assistant',inputId:'t',generationId:'g',text:'Second',createdAt:4,response},
+  {id:'final',role:'assistant',inputId:'t',generationId:'g',createdAt:8,response:{...response,phase:'final'}}];
+ const segments=['first','second'].map((anchor,i)=>({id:`event-window:receipt:bound:${i}`,
+  detailGroup:`event-window:receipt:bound:${i}`,turnId:'t',anchorMessageId:anchor,
+  phase:'completed',startedAt:3+i*2,endedAt:3.5+i*2,partialWindow:true,
+  bindingProvenance:'host-diagnostics-receipt',detailRevision:'receipt'}));
+ const split=splitWork(entries,{sessionId:'s',detailsDeferred:true,nodes:[],
+  turns:[{id:'t',phase:'completed',anchorMessageId:'user'}],segments});
+ assert.deepEqual(split.turns.map(t=>t.originalTurnId),['t','t']);
+ assert.deepEqual(split.turns.map(t=>t.id),segments.map(s=>s.id));
+ const placement=turnPlacements(entries,split);
+ assert.deepEqual(placement.before,[]);
+ const rows=foldInterimRows(conversationWorkRows(entries,placement),split,true);
+ assert.deepEqual(rows.find(r=>r.interim).items.map(x=>x.message?.id||x.turnId),
+  ['first',segments[0].id,'second',segments[1].id]);
+ assert.equal(rows.at(-1).message.id,'final');
+});

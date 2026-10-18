@@ -8,6 +8,7 @@ import asyncio
 from collections import OrderedDict
 from copy import deepcopy
 import hashlib
+import math
 import secrets
 import sys
 import time
@@ -208,10 +209,12 @@ class WorkWindows:
         if _initial and prior is not None and self.pages.get(prior, {}).get('source') == source:
             matches = await asyncio.to_thread(self._matches, source, self.pages.get(prior, {}).get('revisions'))
             self._check_current(identity, owner, source, fence)
-            if matches:
+            if matches and self._binding_current(self.pages[prior]):
                 if prior not in self.pages or self.current.get(identity) != prior:
                     raise _SupersededRead('The requested conversation changed. Open it again.')
                 current = self.status.get(identity)
+                self.pages[prior]['_bindingFence'] = fence
+                self._prepare_bound_groups(self.pages[prior], owner)
                 receipt = self.pages[prior]['receipt']
                 if not current or not current.get('current') or current.get('receipt') != receipt:
                     self._state(identity, {'status': 'ready', 'current': True, 'receipt': receipt})
@@ -236,9 +239,17 @@ class WorkWindows:
                 self.retry_at[identity] = time.monotonic() + 1
                 self._state(identity, {'status': 'retrying', 'current': False, 'reason': 'source_changed'})
             raise ValueError('Saved work changed while it was read. Refresh this window.')
-        page = {**page, 'sessionId': identity, 'source': source}
+        page = {**page, 'sessionId': identity, 'source': source, '_bindingFence': fence}
+        if not self._binding_current(page):
+            raise _SupersededRead('Saved work ownership changed while it was read.')
+        # Index-only commits can change binding while capture bytes stay equal.
+        # Keep the accepted page identity/revision sensitive to that dependency.
+        if page.get('_bindingRevision') is not None:
+            page['generation'] = hashlib.sha256(
+                repr((page['generation'], page['_bindingRevision'])).encode()).hexdigest()
         group = 'event-window:' + page['generation']
         page['group'] = group
+        self._prepare_bound_groups(page, owner)
         self.pages.pop(group, None)
         self.pages[group] = page
         while len(self.pages) > MAX_PAGES:
@@ -276,16 +287,97 @@ class WorkWindows:
             actual = None
         return revisions[0][1] == actual
 
+    def _binding_current(self, page):
+        from .event_window import binding_revision
+        # Old/no-source pages have no binding dependency and cannot place work.
+        return ('_bindingRevision' not in page or
+                page['_bindingRevision'] == binding_revision(self.service.data_dir))
+
+    def _bound_current(self, page):
+        return (page.get('_bindingRevision') is not None
+                and self.epochs.get(page['sessionId']) == page.get('_bindingFence')
+                and self._binding_current(page)
+                and self._matches(page['source'], page.get('revisions')))
+
     @staticmethod
-    def _groups(page):
+    def _prepare_bound_groups(page, owner):
+        """Place proved root calls only against already resident host facts.
+
+        Never hydrate a cold record, infer a turn from time, or duplicate live
+        steps. Off-page/ambiguous placement stays in the existing saved window.
+        """
+        from .cold_display import raw
+        resident = raw(owner)
+        tree = resident.get('execution', {})
+        page['_boundGroups'], page['_boundNodes'], page['_boundTurns'] = {}, {}, {}
+        used = set()
+        turns = tree.get('turns', [])[-20:]
+        messages = resident.get('messages', [])[-100:]
+        # This increment is cold-only. Live ordinary refs are a separate promise.
+        if any(row.get('liveObservation') for row in tree.get('nodes', [])[-100:]):
+            page['_unassociatedIds'] = {row['id'] for row in page['items']}
+            return
+        for original in page.get('_boundWork', []):
+            candidates = [t for t in turns if t.get('id') == original['turnId']
+                          and t.get('phase') == 'completed']
+            if len(candidates) != 1:
+                continue
+            turn = candidates[0]
+            scoped = [m for m in messages if m.get('inputId') == turn['id']
+                      or turn['id'] in (m.get('response') or {}).get('inputIds', [])]
+            users = [m for m in scoped if m.get('role') == 'user'
+                     and m.get('id') == turn.get('anchorMessageId')]
+            if len(users) != 1 or not scoped:
+                continue
+            def known(message):
+                value = message.get('createdAt')
+                return (message.get('timestampKnown') is not False
+                        and type(value) in (int, float) and math.isfinite(value))
+            if not all(known(m) for m in scoped):
+                continue
+            times = [m['createdAt'] for m in scoped]
+            if len(set(times)) != len(times):
+                continue
+            preceding = [m for m in scoped if m['createdAt'] <= original['startedAt']]
+            if not preceding:
+                continue
+            anchor = max(preceding, key=lambda m: m['createdAt'])
+            if ((anchor.get('response') or {}).get('phase') == 'final'
+                    or anchor['createdAt'] < users[0]['createdAt']):
+                continue
+            logical = turn['id'] + '@' + anchor['id']
+            group = page['group'] + ':bound:' + hashlib.sha256(logical.encode()).hexdigest()[:24]
+            node = {**original, 'anchorMessageId': anchor['id']}
+            page['_boundNodes'].setdefault(group, []).append(node)
+            used.update(node['sourceOccurrenceIds'])
+            page['_boundTurns'][turn['id']] = {key: turn[key] for key in
+                ('id', 'phase', 'anchorMessageId', 'startedAt', 'endedAt') if key in turn}
+            page['_boundGroups'][group] = {'id': group, 'detailGroup': group,
+                'turnId': turn['id'], 'anchorMessageId': anchor['id'], 'phase': 'completed',
+                'bindingProvenance': 'host-diagnostics-receipt',
+                'placementProvenance': 'timestamp-within-proven-turn',
+                'partialWindow': True, 'nodeCounts': None, 'aggregateUsage': None,
+                'detailRevision': page['generation'], 'coverage': page['coverage']}
+        for group, rows in page['_boundNodes'].items():
+            page['_boundGroups'][group].update(
+                startedAt=min(row['startedAt'] for row in rows),
+                endedAt=max(row['endedAt'] for row in rows))
+        page['_unassociatedIds'] = {row['id'] for row in page['items']} - used
+
+    @staticmethod
+    def _groups(page, *, bindings=True):
         identity = page['group']
         coverage = page.get('coverage', {})
         group = {'id': identity, 'turnId': identity, 'anchorMessageId': None,
             'observationWindow': True, 'phase': 'recorded', 'label': 'Recent saved work',
             'nodeCounts': None, 'aggregateUsage': None, 'detailRevision': page['generation'],
-            'coverage': coverage}
-        return {'items': [group] if page['items'] or page.get('unavailableRanges') else [],
-            'turns': [{'id': identity, 'phase': 'recorded', 'observationWindow': True}],
+            'coverage': coverage, 'bindingCoverage': page.get('bindingCoverage')}
+        separate = bool((page.get('_unassociatedIds', page['items']) if bindings else page['items'])
+                        or page.get('unavailableRanges'))
+        return {'items': [*([group] if separate else []),
+                         *(page.get('_boundGroups', {}).values() if bindings else [])],
+            'turns': [*([{'id': identity, 'phase': 'recorded', 'observationWindow': True}] if separate else []),
+                      *(page.get('_boundTurns', {}).values() if bindings else [])],
             'mode': 'cursor', 'offset': None, 'total': None, 'before': page.get('before'),
             'hasEarlier': page.get('before') is not None, 'revision': page['generation'],
             'windowKey': page['windowKey'], 'coverage': coverage,
@@ -311,7 +403,10 @@ class WorkWindows:
         rebound = page is not None and page['source'] != source_identity(session)
         if rebound:
             page = None
-        groups = self._groups(page) if page else {'items': [], 'turns': [], 'mode': 'cursor',
+        # Snapshots do no source/index IO. Published invalidation hides binding;
+        # explicit node/field reads also recheck physical source/index stamps.
+        bindings = page is not None and self.epochs.get(session['id']) == page.get('_bindingFence')
+        groups = self._groups(page, bindings=bindings) if page else {'items': [], 'turns': [], 'mode': 'cursor',
             'offset': None, 'total': None, 'before': None, 'hasEarlier': False,
             'coverage': {'kind': 'event-window', 'historyComplete': False}}
         from .browser_detail import page as detail_page
@@ -333,15 +428,21 @@ class WorkWindows:
                              'segments': [*live['items'], *groups['items']],
                              'detailsDeferred': True},
                 'executionWindow': {'part': 'groups', **{key: value for key, value in groups.items() if key not in {'items', 'turns'}}},
+                'workBindingCoverage': ({'status': page.get('bindingCoverage', {}).get('status', 'unverified'),
+                    'placedGroups': len(page.get('_boundGroups', {})) if bindings else 0,
+                    'unassociated': len(page.get('_unassociatedIds', page['items']) if bindings else page['items'])} if page else None),
                 'workProjection': self.status.get(session['id'], {'status': 'loading', 'current': False})
                     if not rebound else {'status': 'loading', 'current': False}}
 
     def _page(self, identity, group):
         owner = self._owner(identity)  # Current canonical authority, not cache presence.
-        page = self.pages.get(group)
+        page = self.pages.get(group) or next((value for value in self.pages.values()
+                                            if group in value.get('_boundGroups', {})), None)
         if page is None or page['sessionId'] != identity or source_identity(owner) != page['source']:
             raise ValueError('This saved work window expired. Open the recent window again.')
-        self.pages.move_to_end(group)
+        if group in page.get('_boundGroups', {}) and not self._bound_current(page):
+            raise ValueError('This saved work binding expired. Reopen its Work window.')
+        self.pages.move_to_end(page['group'])
         return page
 
     def nodes(self, identity, group, *, revision=None, known=None):
@@ -349,22 +450,33 @@ class WorkWindows:
         if revision is not None and revision != page['generation']:
             raise ValueError('This saved work window changed. Open it again.')
         items = []
-        for original in page['items']:
+        bound = group in page.get('_boundGroups', {})
+        current_binding = self._bound_current(page)
+        unassociated = page.get('_unassociatedIds', {r['id'] for r in page['items']})
+        selected = page['_boundNodes'][group] if bound else [
+            row for row in page['items'] if not current_binding or row['id'] in unassociated]
+        for original in selected:
             row = {key: deepcopy(value) for key, value in original.items() if key != '_eventFields'}
-            row.update(turnId=group, detailVersion=page['generation'], observationWindow=True)
+            row.update(turnId=original['turnId'] if bound else group, detailVersion=page['generation'],
+                       observationWindow=not bound)
             for field in ('input', 'output', 'error', 'request', 'response'):
                 if field + 'Detail' in row:
                     row[field + 'Detail'].update(sessionId=identity, windowKey=group)
             if known is None or known.get(row['id']) != row['detailVersion']:
                 items.append(row)
-        return {'items': items, 'order': [row['id'] for row in page['items']],
-                'offset': 0, 'total': len(page['items']), 'before': None,
+        return {'items': items, 'order': [row['id'] for row in selected],
+                'offset': 0, 'total': len(selected), 'before': None,
                 'group': group, 'revision': page['generation'], 'coverage': page['coverage']}
 
     async def read_text(self, identity, args):
         owner = self._owner(identity)
         page = self._page(owner['id'], args.get('windowKey'))
-        row = next((row for row in page['items'] if row['id'] == args.get('id')), None)
+        group = args.get('windowKey')
+        bound = group in page.get('_boundGroups', {})
+        fence = self.epochs.get(identity)
+        mapping = page.get('_boundNodes', {}).get(group)
+        selected = page.get('_boundNodes', {}).get(group, page['items'])
+        row = next((row for row in selected if row['id'] == args.get('id')), None)
         field = args.get('field')
         reference = (row or {}).get('_eventFields', {}).get(field)
         detail = (row or {}).get(str(field) + 'Detail', {})
@@ -374,7 +486,10 @@ class WorkWindows:
             'reference': reference, 'offset': int(args.get('offset', 0)),
             'limit': min(16384, max(1, int(args.get('limit', 16000))))}, key=owner['id'] + ':field:' + row['id'])
         if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
-                or source_identity(owner) != page['source']):
+                or source_identity(owner) != page['source']
+                or bound and (self.epochs.get(identity) != fence
+                    or page.get('_boundNodes', {}).get(group) is not mapping
+                    or not self._bound_current(page))):
             raise ValueError('This saved field expired.')
         if result.get('status') != 'complete':
             raise ValueError('This saved field changed. Reopen its Work window.')

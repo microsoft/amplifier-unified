@@ -5,7 +5,8 @@ from .history_projection_worker import run, MEMORY_LIMIT
 
 class WindowModel:
     def __init__(self, cache_home):
-        pass
+        # The transport's host-owned home, never a client-supplied database path.
+        self.cache_home = cache_home
 
     def project(self, inputs, *, check_budget):
         from .event_window import read_window, read_field, StaleWindow
@@ -13,7 +14,7 @@ class WindowModel:
             if inputs.get('operation') == 'window':
                 page = read_window(inputs['session'], window_key=inputs['windowKey'],
                     cursor_key=bytes.fromhex(inputs['cursorKey']), before=inputs.get('before'),
-                    check_budget=check_budget)
+                    check_budget=check_budget, cache_home=self.cache_home)
                 return {'status': 'complete', 'page': page}
             if inputs.get('operation') == 'field':
                 value = read_field(inputs['session'], inputs['reference'],

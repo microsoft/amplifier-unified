@@ -127,6 +127,28 @@ try{
  await expect(group).toHaveCount(0);
  const finalState=await control({op:'patch'});
  assert.equal(finalState.runtimeSends,0,'presentation never sends model input');
+ // A cold display projection must render work BETWEEN progress messages, not
+ // merely verify body APIs while leaving every step in Recent saved work.
+ const cold=await control({op:'interim-cold-bound'});
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),cold.id);
+ await expect(page.getByText('Cold final answer',{exact:true})).toBeVisible();
+ await openSettingsPage(page,'appearance');await toggle.check();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ const coldGroup=page.locator('[data-interim-group]');
+ await expect(coldGroup).toHaveCount(1);
+ const coldHeader=coldGroup.locator('button.a-execution-turn-line').first();
+ if(await coldHeader.getAttribute('aria-expanded')!=='true')await coldHeader.click();
+ await expect(coldGroup.locator('[data-kind="tool"]')).toHaveCount(2);
+ await expect(coldGroup.locator('[data-kind="llm"]')).toHaveCount(2);
+ const coldOrder=await coldGroup.locator('[data-message-id],[data-kind="tool"],[data-kind="llm"]')
+  .evaluateAll(nodes=>nodes.map(node=>node.dataset.kind||node.querySelector('p')?.textContent));
+ assert.deepEqual(coldOrder,['Cold progress 1','tool','llm','Cold progress 2','tool','llm']);
+ assert.equal(await coldGroup.getByText('Cold final answer',{exact:true}).count(),0);
+ for(const tool of await coldGroup.locator('[data-kind="tool"]').all())
+  await tool.locator('button.a-execution-action-line').click();
+ await expect(coldGroup).toContainText('COLD-BODY-1-END');
+ await expect(coldGroup).toContainText('COLD-BODY-2-END');
+ assert.equal(cold.runtimeSends,0);
  assert.deepEqual(errors,[]);
  console.log('PASS: off/on/rejected save, final-only, expand/copy/reveal, export equality, reload/Everything, two-client isolation, active/error, focus/scroll deferral, media once/in order, mobile, zero model sends.');
 }catch(error){

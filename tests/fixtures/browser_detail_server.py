@@ -143,6 +143,59 @@ async def main():
                 service.state['updates'].update(args.get('updates', {}))
                 service.state['view'].update(args.get('view',{}))
                 for sid,patch in args.get('sessions',{}).items(): service._session(sid).update(patch)
+            elif op=='interim-cold-bound':
+                # Presentation falsifier using the actual observer/diagnostic
+                # emitter and storage projection. This is not a native-producer
+                # or service-restart substitute; those are separate gates.
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.runtime import normalize_event
+                from amplifier_web.session_files import append_event
+                from amplifier_web.session_projection import stored_execution
+                await service.dispatch('session.create', {'title': 'Cold bound work', 'workspace': str(alpha)})
+                row = service._session()
+                sid = row['id']
+                input_id, generation = 'cold-input', 'cold-generation'
+                service._message(row, 'user', 'Keep the work between replies.', inputId=input_id)
+                ensure_turn(row, input_id)
+                await service.on_runtime_event('runtime.generation', {'sessionId': sid, 'rootSessionId': sid,
+                    'event': 'generation.started', 'generation_id': generation, 'input_ids': [input_id]})
+                emitted = []
+                observer = ExecutionEvents(sid, emitted.append)
+                observer.lifecycle({'type': 'input.delivered', 'input_id': input_id})
+                for index in (1, 2):
+                    await service.on_runtime_event('assistant.message', {'sessionId': sid,
+                        'inputId': input_id, 'generationId': generation, 'text': f'Cold progress {index}',
+                        'runtimeMessage': {'sequence': index}, 'createdAt': time.time(), 'timestampKnown': True})
+                    for name, data in (
+                        ('tool:pre', {'tool_input': {'file_path': f'cold-{index}.txt'}}),
+                        ('tool:post', {'result': {'success': True, 'output': f'COLD-BODY-{index}-END'}}),
+                        ('llm:request', {'provider': 'fixture', 'model': 'cold-model'}),
+                        ('llm:response', {'provider': 'fixture', 'model': 'cold-model',
+                                          'usage': {'input_tokens': 1, 'output_tokens': 1}}),
+                    ):
+                        fields = {'session_id': sid, 'timestamp': time.time(), **data}
+                        if name.startswith('tool:'):
+                            fields.update(tool_call_id=f'cold-call-{index}', tool_name='read_file')
+                            append_event(alpha, sid, name, fields)
+                        observer.hook(sid, name, fields)
+                        for event in emitted:
+                            kind, payload = normalize_event(event, sid)
+                            await service.on_runtime_event(kind, payload)
+                        emitted.clear()
+                await service.on_runtime_event('assistant.message', {'sessionId': sid,
+                    'inputId': input_id, 'generationId': generation, 'text': 'Cold final answer',
+                    'runtimeMessage': {'sequence': 3}, 'createdAt': time.time(), 'timestampKnown': True})
+                await service.on_runtime_event('runtime.generation', {'sessionId': sid, 'rootSessionId': sid,
+                    'event': 'generation.finished', 'generation_id': generation, 'input_ids': [input_id],
+                    'active_job_ids': [], 'text': 'Cold final answer',
+                    'finalMessageRefs': {'version': 1, 'generationId': generation, 'sequences': [3]}})
+                await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
+                await service.diagnostics.flush()
+                row['execution'] = stored_execution(row['execution'])
+                assert not row['execution']['nodes']
+                service._publish()
+                return web.json_response({'id': sid, 'runtimeSends': service.runtime.sends})
             elif op=='interim-start':
                 row=service._session(aid);now=time.time()-10
                 row.update(status='working',messages=[],execution={'nodes':[],'turns':[]},generations=[],workers=[])

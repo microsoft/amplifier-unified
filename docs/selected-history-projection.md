@@ -64,6 +64,38 @@ continue to use their existing host-owned facts, never these display pages.
 Exact expanded fields resolve only retained private references through the
 current canonical source owner; clients cannot supply paths or signing keys.
 
+### Scoped cold binding candidate (qualification pending)
+
+Cold root work can additionally use the **existing host diagnostic index** as
+provenance for metadata-only lifecycle records. The worker receives its fixed
+host cache home through process construction, never an HTTP database path. A
+bounded unique-ID lookup must match the indexed event, stream, session, workspace
+and exact source path/offset/length/hash/event-ID receipt. JSONL `id`, `turnId` or
+`app` fields alone are not authority. Missing, suppressed, expired or unhashed
+receipts remain unassociated; capture policy and recording are unchanged.
+
+The initial implementation qualifies only a whole root source fitting one
+existing bounded page with no malformed records, gaps or partial tail. An older
+page reaching offset zero does not qualify. Tools need one canonical pre/end
+pair and one attested host pre/end pair, consistent root ownership and revisions;
+reused IDs, conflicting aliases and cross-source candidates refuse binding.
+Model lifecycle rows use their own attested pair, without inventing provider
+payloads. This does not implement cross-page invocation reconstruction.
+
+Placement also requires the completed host turn and unambiguous message times
+already resident in the requested window. Time places work only within that
+proven turn, never identifies a turn. Page-backed subgroup IDs keep the existing
+`event-window:` route; original input/turn IDs and raw occurrence IDs remain
+distinct from the accepted page. Full fields still use the bounded field reader.
+Source/index (including WAL) changes or invalidation expire bound reads. Snapshot
+rendering does not perform source/index IO or hydrate cold execution.
+
+Unproven/off-page work remains in Recent saved work with explicit placement
+coverage. This candidate does not repair live ordinary references, generic
+stale-field failures, arbitrarily large legacy histories, or capture flag policy.
+The focused emitter/index, negative, HTTP and rendered-order checks must pass
+before this candidate is described as qualified; source inspection is not proof.
+
 The host checks owner/source identity and the published fence before accepting a
 page. A rebind hides the previous owner's rows immediately. Same-source retained
 rows can remain readable while explicitly noncurrent. Selection departure,

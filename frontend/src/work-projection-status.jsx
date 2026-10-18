@@ -3,6 +3,11 @@ import {LoaderCircle} from 'lucide-react';
 
 export function WorkProjectionStatus({session}){
  const progress=session?.workProjection;
+ const binding=session?.workBindingCoverage;
+ if(progress?.status==='ready'&&binding?.unassociated>0)return <p className="a-session-history" data-part="work-binding-status">
+  {binding.status==='partial-source'?'Earlier or incomplete work has not been assigned to a turn.':'Some saved work has no verified turn placement.'}
+  {' '}It remains available under Recent saved work.
+ </p>;
  if(!progress||progress.status==='ready')return null;
  const retrying=progress.status==='retrying',unavailable=progress.status==='unavailable';
  if(!retrying&&!unavailable&&progress.status!=='loading')return null;
