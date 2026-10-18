@@ -10,6 +10,7 @@ import json
 import re
 
 from .host.config import expand_environment
+from .provider_failure_diagnostics import ProviderConfigurationError, diagnose
 
 _ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}\Z")
 
@@ -103,7 +104,7 @@ async def provider_config_schema(module_id, *, config=None, environment=None):
 def materialize_provider_config(config, schema, *, environment=None):
     """Expand provider config strictly, blanking only declared optional nonsecrets."""
     if not isinstance(config, dict):
-        raise ValueError("Provider configuration must be a mapping")
+        raise ProviderConfigurationError("Provider configuration must be a mapping", category='configuration')
     fields = _schema_fields(schema)
     result = copy.deepcopy(config)
     values = environment
@@ -114,10 +115,14 @@ def materialize_provider_config(config, schema, *, environment=None):
                 and _environment_value(values, match.group(1)) is None):
             result[name] = ""
         else:
-            result[name] = expand_environment(value, environment=values)
+            try:
+                result[name] = expand_environment(value, environment=values)
+            except ValueError as exc:
+                raise ProviderConfigurationError(str(exc), category='missing_environment') from exc
     for field in fields.values():
         if field["required"] is True and field["field_type"] == "secret" and not result.get(field["id"]):
-            raise ValueError("provider_environment.required_secret:" + field["id"])
+            raise ProviderConfigurationError("provider_environment.required_secret:" + field["id"],
+                                             category='missing_credential')
     return result
 
 
@@ -155,11 +160,12 @@ async def materialize_bundle_providers(bundle, prepared, *, environment=None, sc
                 raise schema
             reason = "provider_configuration_failed"
             row["config"] = materialize_provider_config(row.get("config", {}), schema, environment=environment)
-        except Exception:
+        except Exception as exc:
             if isolation is not None:
-                isolation.record(row, reason)
+                isolation.record(row, reason, error=exc)
             failures.append({"module": row["module"], "type": "provider", "reason_code": reason,
-                             "instance_id": row.get("instance_id") or row.get("id")})
+                             "instance_id": row.get("instance_id") or row.get("id"),
+                             "diagnostic": diagnose(exc, stage='schema' if reason == 'provider_schema_failed' else 'configuration')})
     if failures and isolation is None:
         raise ConfiguredModuleError(failures) from None
     bundle.providers, bundle.agents = root["providers"], root["agents"]

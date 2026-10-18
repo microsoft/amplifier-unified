@@ -1,4 +1,5 @@
 import {isRunning} from './timeline-data.js';
+import {isVoiceWorkMessage} from './voice-work-message.js';
 
 // These are host-qualified presentation facts, not a last-bubble heuristic.
 export function interimResponse(message){
@@ -19,7 +20,9 @@ export function foldInterimRows(rows,data,enabled,{deferred=new Set(),revealId=n
    response.inputIds?.includes(turn.originalTurnId||turn.id);
  });
  for(const row of rows){
-  const response=row.kind==='message'&&interimResponse(row.message);
+  // Voice work already has its own attributed disclosure. Do not bury it in
+  // another generic work group or change the primary spoken reply.
+  const response=row.kind==='message'&&!isVoiceWorkMessage(row.message)&&interimResponse(row.message);
   if(response&&!deferred.has(response.generationId)){
    if(!group||group.generationId!==response.generationId){
     const previous=result.at(-1),work=previous?.kind==='work'&&!previous.interim&&compatible(previous.items,response)?result.pop():null;

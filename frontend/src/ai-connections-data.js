@@ -1,13 +1,7 @@
 import providerSources from '../../amplifier_web/provider_sources.json' with {type:'json'};
-// Everyday choices; module IDs match amplifier-app-cli's canonical providers.
-export const aiServices=[
- {module:'provider-github-copilot',name:'GitHub Copilot Subscription',description:'Use your GitHub Copilot subscription.',auth:'token'},
- {module:'provider-openai-chatgpt',name:'ChatGPT Subscription',description:'Sign in with your ChatGPT account.',auth:'signin'},
- {module:'provider-openai',name:'OpenAI API',description:'Use an API key. API billing is separate from ChatGPT.',auth:'key'},
- {module:'provider-anthropic',name:'Anthropic API',description:'Connect with your Anthropic API key.',auth:'key'},
- {module:'provider-gemini',name:'Google Gemini API',description:'Connect with your Gemini API key.',auth:'key'},
- {module:'provider-chat-completions',name:'OpenAI Compatible API',description:'Connect a local model or another compatible service.',auth:'optional-key'},
-];
+import services from '../../amplifier_web/ai_services.json' with {type:'json'};
+// Shared with the semantic Settings actions on the host.
+export const aiServices=services;
 // Canonical known modules in microsoft/amplifier-app-cli/provider_sources.py.
 const providerLabels=[...aiServices,
  {module:'provider-azure-openai',name:'Azure OpenAI'},

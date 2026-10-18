@@ -1,6 +1,6 @@
 import {WorkspaceWork} from './workspace-work';
 import {ArchiveButton} from './archive-feedback.jsx';
-import {WorkspaceConfiguration} from './workspace-configuration';
+import {WorkspaceConfiguration,WorkspaceSettingsBoundary} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
@@ -105,7 +105,7 @@ export function WorkspaceFiles({workspace,state,act}){
 }
 function WorkBrowser({host,workspaceHost,state,act}){
  const model=useNavigationController(host,'chats'),workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),now=useActivityClock(),nav=useContext(WorkNavigationContext);
- const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=surface!=='chat';
+ const surface=workSurface(state),workspace=state.workspaces?.find(row=>row.id===state.view.workWorkspaceId)||workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=surface!=='chat';
  const workspacePending=surface==='workspace'&&(workspaceModel.state.navigationWorkspacePending||model.state.navigationWorkspacePending);
  const setTab=tab=>act('view.update',{patch:{workWorkspaceTab:tab}});
  const view=surface==='chats'?{...model.view,...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,navChatScope:'all'}:{...model.view,navChatScope:'workspace'};
@@ -129,7 +129,7 @@ function WorkBrowser({host,workspaceHost,state,act}){
 export function WorkSurface({shell,state,act}){
  const chats=shell.composition.instances.find(row=>row.package==='builtin.chats'),workspaces=shell.composition.instances.find(row=>row.package==='builtin.workspaces');
  if(!chats)return <div className="a-work-browser"><p>Your custom navigation is available in the sidebar. This browser uses the standard Chats component.</p><a href="?shell=recovery">Open with standard navigation</a></div>;
- return <div className="a-work-browser-host" hidden={workSurface(state)==='chat'}><WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/></div>;
+ return <WorkspaceSettingsBoundary state={state} act={act}>{visible=><div className="a-work-browser-host" hidden={workSurface(visible)==='chat'}><WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={visible} act={act}/></div>}</WorkspaceSettingsBoundary>;
 }
 
 // Live controls stay outside the conversation, which is hidden during browsing.

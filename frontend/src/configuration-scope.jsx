@@ -25,7 +25,7 @@ export function ConfigurationBoundary({state,act,target={kind:'global'},children
  const saved=state.view?.configurationDrafts||{},drafts=saved[key]||{};
  const view={...state.view};if(target.kind==='workspace')for(const name of editorKeys)view[name]=drafts[name];
  const dispatch=(action,args={})=>{
-  if(/^(providers|routing|modules|sources)\./.test(action)){
+  if(/^(providers|routing|modules|sources)\./.test(action)||['settings.connection.start','settings.connection.select'].includes(action)){
    const {sessionId,workspace,location,nativeProject,...values}=args;
    return act(action,{...values,scope:target.kind==='global'?'global':values.scope==='project'?'project':'local',configurationTarget:target});
   }
@@ -37,5 +37,5 @@ export function ConfigurationBoundary({state,act,target={kind:'global'},children
   }
   return act(action,args);
  };
- return <ConfigurationContext.Provider value={target}>{children({state:{...state,view,actionStatus:Object.fromEntries(Object.entries(state.actionStatus||{}).filter(([action,op])=>!/^(providers|routing|modules|sources)\./.test(action)||JSON.stringify(op.configurationTarget)===identity)),setup:{...cache.current.setup,operations:Object.fromEntries(Object.entries(state.setup?.operations||{}).filter(([,op])=>JSON.stringify(op.configurationTarget)===identity).map(([name,op])=>[name.split('\n').at(-1),op]))},registry:cache.current.registry||{}},session:null,act:dispatch})}</ConfigurationContext.Provider>;
+ return <ConfigurationContext.Provider value={target}>{children({state:{...state,view,actionStatus:Object.fromEntries(Object.entries(state.actionStatus||{}).filter(([action,op])=>!(/^(providers|routing|modules|sources)\./.test(action)||['settings.connection.start','settings.connection.select'].includes(action))||JSON.stringify(op.configurationTarget)===identity)),setup:{...cache.current.setup,operations:Object.fromEntries(Object.entries(state.setup?.operations||{}).filter(([,op])=>JSON.stringify(op.configurationTarget)===identity).map(([name,op])=>[name.split('\n').at(-1),op]))},registry:cache.current.registry||{}},session:null,act:dispatch})}</ConfigurationContext.Provider>;
 }

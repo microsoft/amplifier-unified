@@ -111,19 +111,29 @@ class ProviderIsolation:
         # Private exact configuration identity, never sent to diagnostics.
         return json.dumps(spec, sort_keys=True, default=str)
 
-    def record(self, spec, reason):
+    def record(self, spec, reason, *, error=None, diagnostic=None):
         failure = {"module": spec["module"], "type": "provider", "instance_id": identity(spec),
                    "reason_code": reason}
+        from .provider_failure_diagnostics import diagnose, safe_diagnostic
+        stages = {'provider_preparation_failed': 'preparation', 'provider_schema_failed': 'schema',
+                  'provider_configuration_failed': 'configuration', 'provider_mount_failed': 'mount'}
+        if error is not None and reason in stages:
+            diagnostic = diagnose(error, stage=stages[reason])
+        diagnostic = safe_diagnostic(diagnostic)
+        if diagnostic is not None:
+            failure['diagnostic'] = diagnostic
         self.failures[self.key(spec)] = failure
         return failure
 
     async def preparation_failed(self, failure):
         spec = failure.provider_spec
-        self.preparation[(spec["module"], spec.get("source"))] = "provider_preparation_failed"
+        from .provider_failure_diagnostics import diagnose
+        self.preparation[(spec["module"], spec.get("source"))] = diagnose(
+            getattr(failure, 'error', None), stage='preparation')
 
     def failure(self, spec):
-        reason = self.preparation.get((spec["module"], spec.get("source")))
-        return self.record(spec, reason) if reason else self.failures.get(self.key(spec))
+        diagnostic = self.preparation.get((spec["module"], spec.get("source")))
+        return self.record(spec, 'provider_preparation_failed', diagnostic=diagnostic) if diagnostic else self.failures.get(self.key(spec))
 
     async def before_initialize(self, session):
         coordinator = session.coordinator
@@ -132,7 +142,7 @@ class ProviderIsolation:
             if failure:
                 raise ProviderUnavailable([failure])
         async def load_failed(_, spec, error):
-            failure = self.failure(spec) or self.record(spec, "provider_mount_failed")
+            failure = self.failure(spec) or self.record(spec, "provider_mount_failed", error=error)
             await coordinator.mount("providers", UnavailableProvider(spec, failure), name=identity(spec))
         coordinator.register_capability("provider.before_load", before_load)
         coordinator.register_capability("provider.load_failure", load_failed)

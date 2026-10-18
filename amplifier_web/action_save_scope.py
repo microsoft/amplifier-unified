@@ -71,6 +71,8 @@ def scope(service, action, args, *, previous_session=None):
         return set(), COMMON | {'updates'}
     if action.startswith('feedback.'):
         return set(), COMMON | {'feedback'}
+    if action in {'settings.open', 'settings.close', 'settings.connection.start', 'settings.connection.select', 'settings.connection.services'}:
+        return set(), COMMON | {'canvasTabs'}
     if action.startswith('canvas.'):
         return set(), COMMON | {'canvasTabs'}
     if action.startswith('smartTools.'):

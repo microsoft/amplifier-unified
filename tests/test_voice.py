@@ -257,7 +257,8 @@ async def test_missing_start_session_does_not_retarget_selected_session():
 
 async def test_delegation_includes_role_labelled_voice_reference():
     service=Service()
-    service.state['sessions'][0]['messages']=[{'role':'assistant','text':'We could review the checkout flow.','via':'call'}]
+    service.state['sessions'][0]['messages']=[{'role':'assistant','text':'We could review the checkout flow.',
+        'via':'call','voiceId':'live','voiceItemId':'offer'}]
     service.result.set()
     call=VoiceCall(VoiceService(service),'main');call.id='live'
     await call.execute('Yes, do that.','d1')
@@ -269,7 +270,8 @@ async def test_forwarded_correction_keeps_original_request_and_existing_session(
     service=Service();service.result.set()
     service.state['selectedSessionId']='other'
     service.state['sessions'][0]['messages']=[
-        {'role':'assistant','text':'Earlier suggested plan, not a new instruction.','via':'call'}]
+        {'role':'assistant','text':'Earlier suggested plan, not a new instruction.','via':'call',
+         'voiceId':'live','voiceItemId':'offer'}]
     call=VoiceCall(VoiceService(service),'main');call.id='live'
     request='Tell Amplifier to change the delivery color to orange. Delegate this update to Amplifier.'
     await call.execute(request,'correction')

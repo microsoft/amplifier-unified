@@ -1,9 +1,28 @@
 import React from 'react';
+import {createPortal} from 'react-dom';
 import {ConfigurationBoundary} from './configuration-scope';
 import {AIConnections} from './ai-connections';
 import {ProviderSettings,RoutingSettings} from './setup';
 import {RegistrySettings} from './registry';
 import {SettingsPageContext} from './settings-ui';
+import {SettingsDraftProvider,useSettingsDrafts,useGuardedSettingsDraft} from './settings-drafts';
+
+function GuardedWorkspaceSettings({state,act,children}){
+ const defaults={workSurface:'chat',workWorkspaceId:null,workWorkspaceTab:'chats',workWorkspaceSettings:null,panel:null,settingsCanvas:false};
+ const requested=Object.fromEntries(Object.entries(defaults).map(([key,value])=>[key,state.view?.[key]??value]));
+ const view=useGuardedSettingsDraft(requested,JSON.stringify(requested),patch=>act('view.update',{patch}));
+ return children({...state,view:{...state.view,...view}});
+}
+
+// This owner stays mounted above workspace/tab navigation, preserving private
+// inputs while an external navigation request waits for the user's decision.
+export function WorkspaceSettingsBoundary({state,act,children}){
+ const drafts=useSettingsDrafts();
+ return <SettingsDraftProvider value={drafts.context}>
+  <GuardedWorkspaceSettings state={state} act={act}>{children}</GuardedWorkspaceSettings>
+  {drafts.dialog&&createPortal(drafts.dialog,document.getElementById('amp-one'))}
+ </SettingsDraftProvider>;
+}
 
 export function WorkspaceConfiguration({workspace,state,act}){
  const page=state.view?.workWorkspaceSettings;

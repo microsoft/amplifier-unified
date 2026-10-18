@@ -28,11 +28,13 @@ def settle_stream(session):
     """Preserve interrupted display text without claiming a completed response."""
     text = session.pop('streaming', None)
     identity = session.pop('streamingId', None)
+    input_id = session.pop('streamingInputId', None)
     if text:
         session.setdefault('messages', []).append({
-            'id': str(uuid.uuid4()), 'role': 'assistant', 'text': '[Interrupted response]\n\n' + text, 'via': 'chat',
+            'id': str(uuid.uuid4()), 'role': 'assistant', 'text': '[Interrupted response]\n\n' + text, 'via': 'call' if str(input_id or '').startswith('voice:') else 'chat',
             'source': 'interrupted-stream', 'partial': True, 'createdAt': time.time(),
             **({'streamId': identity} if identity else {}),
+            **({'inputId': input_id} if input_id else {}),
         })
 
 
@@ -371,6 +373,9 @@ for theme_action in ('theme.apply', 'theme.preview'):
 from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
 ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
 
+from .settings_actions import definitions as settings_definitions, ACTIONS as SETTINGS_ACTIONS, NAVIGATION_ACTIONS as SETTINGS_NAVIGATION
+ACTION_DEFINITIONS.update(settings_definitions(schema, string))
+
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
 # Domain entries only defer to their existing ownership/provenance checks.
@@ -390,10 +395,12 @@ for _access, _actions in {
         "coordination.intent",
     },
     "presentation": {
+        *SETTINGS_NAVIGATION,
         "session.select", "session.pin", "session.markUnread", "session.archive", "session.restore", "session.rename",
         "workspace.archive", "workspace.restore", "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
     },
     "peer_read": {
+        "settings.connection.services",
         "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
@@ -1882,6 +1889,10 @@ class AppService:
                 # under the mutation lock without changing its queue ordering.
                 try: transfer_context = self.portability.write_context(transfer_sid)
                 except ValueError as exc: raise AppError(str(exc), 409) from exc
+        if action == 'settings.connection.services':
+            from .settings_actions import services
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [],
+                    'result': {'services': services(), 'kind': 'supported-services', 'savedConnections': False}}
         if action in {'voice.configuration','voice.configure','voice.preview'}:
             from .voice_settings import dispatch as voice_settings_dispatch
             from .voice import VoiceError
@@ -2362,7 +2373,7 @@ class AppService:
             if action in {'workspace.pin', 'workspace.pinOrder', 'navigation.pinOrder'}:
                 from .workspace_navigation import update_pins
                 return update_pins(self, action, args, command_id, fingerprint, origin, include_state=include_state)
-            if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:
+            if (action == 'view.update' or action in SETTINGS_NAVIGATION) and origin == 'agent' and caller_session_id and client_id is not None:
                 from .agent_canvas import target
                 target(self, caller_session_id, client_id, required=True, connected_only=True)
             if action == 'view.update' and client_id is not None:
@@ -2406,7 +2417,10 @@ class AppService:
             self.clients.remember_canvas()
             effects = []
             diagnostic_result = None
-            if action in LIBRARY_ACTIONS:
+            if action in SETTINGS_ACTIONS:
+                from .settings_actions import command as settings_command
+                diagnostic_result = settings_command(self, action, args, pending, command_id)
+            elif action in LIBRARY_ACTIONS:
                 try:
                     diagnostic_result = self.conversation_library.perform(action, args, prepared_share)
                 except ValueError as exc:
@@ -4266,12 +4280,14 @@ class AppService:
                 from .assistant_messages import duplicate
                 original = next((m for m in reversed(session["messages"]) if m.get("inputId") == payload.get("inputId") and m["role"] == "user"), {})
                 generation_id = payload.get("generationId")
+                matching_stream = not session.get('streamingInputId') or session['streamingInputId'] == payload.get('inputId')
                 repeated = duplicate(session["messages"], payload)
                 if not repeated:
-                    self._message(session, "assistant", payload.get("text", ""), "observation" if payload.get("observation_id") else "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if session.get("streamingId") else {}), **{key: payload[key] for key in ("runtimeMessage", "createdAt", "timestampKnown", "observation_id") if key in payload})
-                if not repeated or session.get("streaming") == payload.get("text"):
+                    self._message(session, "assistant", payload.get("text", ""), "observation" if payload.get("observation_id") else "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if matching_stream and session.get("streamingId") else {}), **{key: payload[key] for key in ("runtimeMessage", "createdAt", "timestampKnown", "observation_id") if key in payload})
+                if matching_stream and (not repeated or session.get("streaming") == payload.get("text")):
                     session.pop("streaming", None)
                     session.pop("streamingId", None)
+                    session.pop("streamingInputId", None)
                 # Transport may deliver completion before its saved message.
                 terminal = next((event for event in reversed(session.get("generations", []))
                                  if event.get("generation_id") == generation_id
@@ -4280,6 +4296,11 @@ class AppService:
                     from .response_completion import apply as apply_response_completion
                     apply_response_completion(session, terminal)
             elif kind == "assistant.delta":
+                input_id = payload.get("inputId")
+                if session.get("streamingInputId") and input_id and session["streamingInputId"] != input_id:
+                    settle_stream(session)
+                if input_id:
+                    session["streamingInputId"] = input_id
                 session.setdefault("streamingId", str(uuid.uuid4()))
                 session["streaming"] = session.get("streaming", "") + payload.get("text", payload.get("delta", ""))
             elif kind == "worker.updated":
@@ -4559,6 +4580,7 @@ class AppService:
             return read_actions(self.get_actions(), args)
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
+            receipt_mode = args.get('responseMode') == 'receipt'
             action_args=copy.deepcopy(args.get('args',{}))
             # Resolve native aliases before the existing caller-ownership checks;
             # aliases never authorize a different conversation.
@@ -4645,7 +4667,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4657,10 +4679,10 @@ class AppService:
                 from .collaboration import BINDING
                 token = self.observations.input_bindings.set((BINDING.get() or {}).get('_inputBindings', []))
                 try:
-                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id, include_state=not receipt_mode)
                 finally:
                     self.observations.input_bindings.reset(token)
-            elif args['action'] == 'view.update' or args['action'].startswith('computer.visual.'):
+            elif args['action'] == 'view.update' or args['action'] in SETTINGS_NAVIGATION or args['action'].startswith('computer.visual.'):
                 if args['action'].startswith('computer.visual.'):
                     visual_origin(action_args.get('clientId'))
                 elif input_origin is not None and not action_args.get('clientId') and input_origin['clientId'] is None:
@@ -4670,7 +4692,7 @@ class AppService:
                 requested_client = action_args.get('clientId', input_origin['clientId'] if input_origin is not None else None)
                 canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
-                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id, include_state=not receipt_mode)
             elif args['action'] in {'session.exportDeliver', 'feedback.excerpt.stage'}:
                 from .agent_canvas import target
                 requested = action_args.pop('clientId', input_origin['clientId'] if input_origin is not None else None)
@@ -4678,14 +4700,14 @@ class AppService:
                 if canvas_client is None:
                     raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
                 with self.clients.bind(canvas_client):
-                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id, include_state=not receipt_mode)
             elif args['action'] in {'canvas.openFile', 'canvas.openAttachment', 'canvas.reference', 'message.reply', 'message.replyClear', 'message.reveal'}:
                 from .agent_canvas import target
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True, connected_only=args['action'] in MESSAGE_INTERACTIONS)[0]
                 with self.clients.bind(canvas_client):
-                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id, include_state=not receipt_mode)
             elif args['action'] == 'smartTools.viewStatus':
-                result = await self.dispatch(args['action'], action_args, origin='agent', caller_session_id=session_id)
+                result = await self.dispatch(args['action'], action_args, origin='agent', caller_session_id=session_id, include_state=not receipt_mode)
                 canvas_client = result['result'].get('clientId')
             elif args['action'] in {'canvas.select', 'smartTools.reconnectView', 'smartTools.reviewView'}:
                 from .agent_canvas import selection_target
@@ -4693,17 +4715,21 @@ class AppService:
                 if canvas_client is not None:
                     action_args['clientId'] = canvas_client
                 with self.clients.bind(canvas_client):
-                    result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id)
+                    result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not receipt_mode)
             elif input_origin is not None and 'clientId' in action_args and (
                     args['action'].startswith(('canvas.views.', 'canvas.apps.'))
                     or args['action'] in {'canvas.visibility', 'theme.preview', 'theme.revert'}):
                 # An explicit Canvas target is independent of screen consent.
                 canvas_client = action_args['clientId']
                 with self.clients.bind(canvas_client):
-                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id, include_state=not receipt_mode)
             else:
-                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt))
+                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (receipt_mode or compact_smart_tool or compact_domain_receipt))
             await self._flush_pending_progress()
+            if receipt_mode:
+                from .agent_receipts import compact_receipt
+                return compact_receipt(result, action=args['action'], session_id=session_id,
+                    revision=self.state['revision'], client_id=canvas_client, command_id=args.get('id'))
             if compact_domain_receipt:
                 # The exact domain receipt already carries admission, correlation
                 # and result evidence. Repeating the app overview on each tool

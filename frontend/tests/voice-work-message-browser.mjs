@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {mkdir} from 'node:fs/promises';
+import {chromium,expect} from '@playwright/test';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/voice_work_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+let browser;
+try{
+ const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),30000);fixture.once('exit',()=>{clearTimeout(timer);reject(Error('Fixture exited'))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data.url)}}catch{}})});
+ browser=await chromium.launch({headless:true});
+ const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const row=id=>page.locator(`[data-message-id="${id}"]`),summary=row('backend-result').getByRole('button',{name:/Amplifier result/});
+ await expect(summary).toHaveAttribute('aria-expanded','false');
+ await expect(row('backend-result')).not.toHaveClass(/a-assistant/);
+ await expect(row('backend-result')).not.toContainText('The requested change is complete.');
+ await expect(row('backend-update').getByRole('button',{name:/Amplifier work update/})).toBeVisible();
+ await expect(row('spoken-result')).toContainText('The requested change is complete.');
+ await expect(row('spoken-result')).toHaveClass(/a-assistant/);
+ await expect(row('typed-result')).toContainText('The ordinary typed answer remains visible.');
+ await expect(row('unknown-origin')).toContainText('A retained answer with unknown provenance.');
+ await summary.focus();await page.keyboard.press('Enter');
+ await expect(summary).toHaveAttribute('aria-expanded','true');
+ await expect(row('backend-result').locator('strong')).toHaveText('The requested change is complete.');
+ await expect(row('backend-result')).not.toContainText('via call');
+ await row('backend-result').getByRole('button',{name:'Copy message as Markdown'}).click();
+ await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe('**The requested change is complete.**');
+ await page.reload();await expect(summary).toHaveAttribute('aria-expanded','false');
+ const inspect=()=>page.evaluate(async()=>await(await fetch('/fixture/voice-work')).json());
+ const before=await inspect();
+ await page.evaluate(sessionId=>window.amplifier.dispatch('message.reveal',{sessionId,messageId:'backend-result'}),before.sessionId);
+ await expect(summary).toHaveAttribute('aria-expanded','true');
+ await expect(row('backend-result')).toBeFocused();
+ await summary.click();await expect(summary).toHaveAttribute('aria-expanded','false');
+ await page.setViewportSize({width:390,height:844});await summary.focus();await page.keyboard.press('Space');
+ await expect(summary).toHaveAttribute('aria-expanded','true');
+ await expect(row('backend-result').locator('strong')).toBeVisible();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ if(process.env.EVIDENCE_DIR){await mkdir(process.env.EVIDENCE_DIR,{recursive:true});await page.screenshot({path:process.env.EVIDENCE_DIR+'/voice-work-mobile.png'});}
+ const after=await inspect();assert.equal(after.historyUnchanged,true);assert.equal(after.runtimeSends,0);assert.deepEqual(errors,[]);
+ console.log('PASS: attributed backend update/result, one primary spoken reply, typed/unknown messages retained, keyboard expand, rich details/copy, exact reveal, reload, mobile, unchanged history and zero model sends.');
+}finally{await browser?.close();fixture.kill('SIGTERM');}

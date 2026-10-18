@@ -12,7 +12,7 @@ REMEDIATION = {
     'invalid_module_metadata': 'Check the declared module type and metadata.',
     'validation_failed': 'Check the module contract and its required dependencies.',
     'provider_preparation_failed': 'Check this connection’s configured module source and dependencies.',
-    'provider_mount_failed': 'Check this connection’s configuration and credentials; its provider could not start.',
+    'provider_mount_failed': 'Check this connection’s provider startup diagnostic; its provider could not start.',
     'provider_schema_failed': 'Check this provider’s saved endpoint and installed module. Its configuration fields could not be read.',
     'provider_configuration_failed': 'Check this provider’s saved configuration and required credentials.',
     'unknown': 'The module could not be loaded. Check its configuration and dependencies.',
@@ -33,6 +33,12 @@ def safe_failures(values):
         instance=row.get('instance_id')
         if isinstance(instance,str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',instance):
             safe['instance_id']=instance
+        if kind == 'provider':
+            from .provider_failure_diagnostics import guidance, safe_diagnostic
+            diagnostic = safe_diagnostic(row.get('diagnostic'))
+            if diagnostic is not None:
+                safe['diagnostic'] = diagnostic
+                safe['guidance'] = guidance(diagnostic) or safe['guidance']
         result.append(safe)
     return result
 

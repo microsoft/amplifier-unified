@@ -4,7 +4,7 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {SettingsDraftProvider,useSettingsDraft,useSettingsDrafts,useGuardedSettingsPanel}=await server.ssrLoadModule('/src/settings-drafts.jsx');
+const {SettingsDraftProvider,useSettingsDraft,useSettingsDrafts,useGuardedSettingsPanel,useGuardedSettingsDraft}=await server.ssrLoadModule('/src/settings-drafts.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const handlers=new Map();globalThis.window={addEventListener:(key,fn)=>handlers.set(key,fn),removeEventListener:key=>handlers.delete(key)};
 test.after(()=>server.close());
@@ -44,4 +44,19 @@ test('incoming shared panel changes retain the editor until confirmed, including
  await renderAct(async()=>root.update(React.createElement(Panel,{requested:'settings'})));
  dirty=false;await renderAct(async()=>root.update(React.createElement(Panel,{requested:null})));
  assert.equal(visible,null);await renderAct(async()=>root.unmount());
+});
+
+test('approved editor survives the discard reset until the selected target is restored',async()=>{
+ let root,visible,finish,restore;const restored=[];
+ const registry={hasUnsaved:()=>true,confirmClose:()=>new Promise(resolve=>{finish=resolve})};
+ function Editor({requested}){visible=useGuardedSettingsDraft(requested,requested.id,value=>{restored.push(value);return new Promise(resolve=>{restore=resolve})});return null}
+ const render=requested=>React.createElement(SettingsDraftProvider,{value:registry},React.createElement(Editor,{requested}));
+ try{
+  await renderAct(async()=>{root=create(render({id:'old'}))});
+  await renderAct(async()=>root.update(render({id:'new'})));assert.equal(visible.id,'old');
+  await renderAct(async()=>finish(true));assert.equal(visible.id,'new');
+  const initialFinish=finish;
+  await renderAct(async()=>root.update(render({id:'reset-old'})));assert.equal(visible.id,'new');assert.equal(finish,initialFinish,'discard reset must not prompt twice');
+  await renderAct(async()=>{root.update(render({id:'new'}));restore()});assert.equal(visible.id,'new');assert.deepEqual(restored,[{id:'new'}]);
+ }finally{await renderAct(async()=>root?.unmount())}
 });

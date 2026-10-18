@@ -15,6 +15,13 @@ explicit account selection still works. The host does not guess a provider's
 constructor default or use that guess to silently choose a different account.
 Safe diagnostics identify the instance and preparation phase without raw errors
 or secrets. Stored settings and native history are not rewritten to remove it.
+Provider failures also retain a bounded diagnostic with the observed preparation,
+schema, configuration or mount stage, an allowlisted cause category and exception
+type, and an HTTP error status when the exception supplies one. Local missing
+environment references and missing required credentials are distinct from provider
+authentication rejection. Generic exception prose is not classified or retained;
+unknown causes remain unknown. These facts survive worker reports and failure
+persistence without publishing messages, endpoints, configuration or credentials.
 
 Core owns provider mount-table rollback, including overwritten and removed slots,
 before host recovery is called. This does not reverse arbitrary external effects
