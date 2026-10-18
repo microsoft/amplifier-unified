@@ -18,6 +18,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/chat_reference_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page,exit,primaryFailure;
 const secondaryFailures=[],routeTrace=[],errors=[];
+const captures=[];
 const identityBoundary={id:'app004-same-document',attempted:false};
 const negativeReload=process.env.CHAT_REFERENCE_NEGATIVE_RELOAD==='1';
 const pendingActions=[];
@@ -84,11 +85,40 @@ try{
  assert.equal(attached.accepted,true,'The real host must accept the typed reference; never inject a record');
  identityBoundary.attachmentAccepted=true;
  const card=()=>sourceArticle.getByRole('button',{name:/^Open (?:archived )?chat.*Investigation destination/});
+ async function cardGeometry(control){
+  if(!await control.isVisible())return null;
+  return control.evaluate(node=>{
+   const box=node.getBoundingClientRect(),hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);
+   if(!node.contains(hit)||box.width<=0||box.height<44||box.x<0||box.y<0||
+      box.right>innerWidth||box.bottom>innerHeight)return null;
+   return {x:box.x,y:box.y,width:box.width,height:box.height};
+  });
+ }
+ async function captureCard(name){
+  const record={name,sourceSessionId:source,messageId:message,status:'pending'};
+  captures.push(record);
+  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(source);
+  await expect(sourceArticle).toBeVisible();await expect(card()).toBeVisible();
+  await card().scrollIntoViewIfNeeded();
+  let previous,stable=0;
+  await expect.poll(async()=>{
+   const box=await cardGeometry(card()),key=JSON.stringify(box);
+   stable=box&&key===previous?stable+1:0;previous=key;
+   return stable>=2;
+  },{timeout:15000,intervals:[50,100,100]}).toBe(true);
+  record.before={box:await cardGeometry(card()),marker:await marker(page),selected:await selected(page)};
+  assert.ok(record.before.box);assert.equal(record.before.selected,source);
+  await page.screenshot({path:join(evidence,name)});
+  // A disappearing or covered card fails this checkpoint; never certify the image.
+  record.after={box:await cardGeometry(card()),marker:await marker(page),selected:await selected(page)};
+  assert.ok(record.after.box);assert.deepEqual(record.after,record.before);
+  record.status='verified-boundary';
+ }
  await expect(card()).toBeVisible();
  identityBoundary.cardVisible=true;
  identityBoundary.targetSessionId=target;
  assert.equal(await selected(page),source,'Publication must not navigate');
- await page.screenshot({path:join(evidence,'card-wide.png')});
+ await captureCard('card-wide.png');
 
  async function assertNoExecution(){
   const after=await inspect();
@@ -103,7 +133,7 @@ try{
   name:'reference-note.txt',mimeType:'text/plain',buffer:Buffer.from('Exact fixture attachment'),
  });
  await page.getByRole('button',{name:'Remove reference-note.txt'}).waitFor();
- let releaseDraft,draftHeld=false;
+ let releaseDraft,draftHeld=false,reloadCompleted;
  const draftGate=new Promise(resolve=>{releaseDraft=resolve});
  const holdDraft=async route=>{
   const request=route.request(),body=request.method()==='POST'?request.postDataJSON():{};
@@ -128,9 +158,16 @@ try{
   await expect.poll(()=>draftHeld).toBe(true);
   assert.notEqual((await authoritative(page)).view.draft,'Source draft before debounced save');
   identityBoundary.draftHeld=true;
+  if(negativeReload)reloadCompleted=observe(page.waitForURL(
+   value=>value.origin===new URL(url).origin&&value.searchParams.get('chat')===target,
+   {waitUntil:'domcontentloaded',timeout:15000}));
   await card().click();
   identityBoundary.clickCompleted=true;
  });
+ if(negativeReload){
+  await resultOf(reloadCompleted);
+  await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id,null,{timeout:15000});
+ }
  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
  identityBoundary.selectedSessionId=(await authoritative(page)).selectedSessionId;
  // Keep the deliberately forced reload control's first discriminating failure
@@ -217,7 +254,7 @@ try{
  await card().focus();await card().press('Space');
  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
  await act(page,'session.select',{id:source});
- await page.screenshot({path:join(evidence,'card-mobile.png')});
+ await captureCard('card-mobile.png');
  // Reload is explicit here, not part of card activation. Its saved association survives.
  await page.reload();await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  await expect(card()).toBeVisible();
@@ -227,6 +264,8 @@ try{
  await card().click();await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
  assert.deepEqual(await marker(page),reloaded);
  await act(page,'session.select',{id:source});
+ // This race needs two genuinely visible surfaces, unlike the mobile Canvas overlay.
+ await page.setViewportSize({width:1440,height:1000});
  await act(page,'session.rename',{id:target,title:'Renamed investigation destination'});
  const renamed=sourceArticle.getByRole('button',{name:/^Open chat.*Renamed investigation destination/});
  await expect(renamed).toBeVisible();
@@ -242,6 +281,11 @@ try{
   await route.continue();
  };
  await act(page,'canvas.show',{kind:'markdown',title:'Navigation order',content:'# Safe'});
+ await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(source);
+ await expect(sourceArticle).toBeVisible();await expect(renamed).toBeVisible();
+ await expect(page.locator('[data-part="canvas"]')).toBeVisible();
+ await expect(page.locator('[data-part="workspace"][data-pane-layout]')).toHaveAttribute('data-narrow','false');
+ await expect(page.locator('[data-part="workspace"][data-pane-layout]')).toHaveAttribute('data-canvas-overlay','false');
  const orderView=(await act(page,'canvas.views.inspect')).result.views.find(v=>v.viewId==='primary');
  await withActionRoute(page,{label:'navigation-barrier',handle:holdBarrier,release:releaseBarrier,trace:routeTrace},async()=>{
  const pendingBarrier=observe(act(page,'canvas.views.dirty',{...Object.fromEntries(
@@ -318,7 +362,7 @@ try{
   ...(error instanceof AggregateError?{errors:error.errors.map(child=>({name:child.name,message:child.message,stack:child.stack}))}:{})}:null;
  try{await writeFile(join(evidence,'outcome.json'),JSON.stringify({
   primary:describe(primaryFailure),secondary:secondaryFailures.map(describe),fixtureExit:exit??null,
-  negativeReload,qualificationToken:process.env.APP004_QUALIFICATION_TOKEN??null,identityBoundary,browserErrors:errors,
+  negativeReload,qualificationToken:process.env.APP004_QUALIFICATION_TOKEN??null,identityBoundary,browserErrors:errors,captures,
  },null,2)+'\n')}catch(error){secondaryFailures.push(error)}
 }
 const failure=combinedFailure(primaryFailure,secondaryFailures);
