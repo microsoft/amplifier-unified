@@ -16,9 +16,9 @@ if(!evidence)throw Error('Set CHAT_REFERENCE_EVIDENCE_DIR inside the owned test 
 await mkdir(evidence,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/chat_reference_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,page,exit,primaryFailure;
+let browser,page,exit,primaryFailure,recordCaptureLayout;
 const secondaryFailures=[],routeTrace=[],errors=[];
-const captures=[];
+const captures=[],captureLayout=[];
 const identityBoundary={id:'app004-same-document',attempted:false};
 const negativeReload=process.env.CHAT_REFERENCE_NEGATIVE_RELOAD==='1';
 const pendingActions=[];
@@ -94,6 +94,67 @@ try{
    return {x:box.x,y:box.y,width:box.width,height:box.height};
   });
  }
+ // One bounded read per named boundary; no page text, input values, response
+ // bodies, arbitrary selectors, observers, polling or layout writes.
+ recordCaptureLayout=async(phase,name)=>{
+  const row={phase,name};captureLayout.push(row);
+  try{
+   assert.ok(captureLayout.length<=6,'At most two capture pairs and one failure pair');
+   row.facts=await bounded(page.evaluate(({source,message})=>{
+    const scalar=value=>typeof value==='string'&&value.length<=200?value:null;
+    const number=value=>Number.isFinite(value)?value:null;
+    const state=window.amplifier?.getState();
+    const session=state?.sessions?.find(row=>row.id===source);
+    const pane=document.querySelector(`[data-part="messages"][data-session-id="${CSS.escape(source)}"]`);
+    const article=pane?.querySelector(`[data-message-id="${CSS.escape(message)}"]`);
+    const button=article?.querySelector('.a-chat-reference-button');
+    const geometry=node=>{
+     if(!node)return {present:false};
+     const box=node.getBoundingClientRect(),style=getComputedStyle(node);
+     return {present:true,box:{x:box.x,y:box.y,width:box.width,height:box.height},
+      cssVisible:node.getClientRects().length>0&&style.visibility==='visible'&&
+       style.display!=='none'&&Number(style.opacity)>0,
+      hiddenAncestor:!!node.closest('[hidden],[inert],[aria-hidden="true"]'),
+      scrollTop:node.scrollTop,scrollLeft:node.scrollLeft,scrollHeight:node.scrollHeight,
+      clientHeight:node.clientHeight,scrollWidth:node.scrollWidth,clientWidth:node.clientWidth};
+    };
+    const projection=value=>({status:scalar(value?.status),
+     current:typeof value?.current==='boolean'?value.current:null,
+     generation:number(value?.receipt?.generation),sourceCount:number(value?.receipt?.sourceCount)});
+    const raw=pane?.getAttribute('data-work-projection');
+    let renderedProjection={present:raw!=null,validJSON:false};
+    if(raw&&raw.length<=1024){
+     try{renderedProjection={present:true,validJSON:true,...projection(JSON.parse(raw))}}
+     catch{/* Malformed observation stays explicit; no raw attribute is retained. */}
+    }
+    const vv=window.visualViewport,scrolling=document.scrollingElement;
+    const layout=document.querySelector('[data-part="workspace"][data-pane-layout]');
+    return {
+     sampledAt:performance.now(),
+     identity:{document:scalar(window.__chatReferenceDocument),timeOrigin:performance.timeOrigin,
+      client:scalar(state?.client?.id),selectedSessionId:scalar(state?.selectedSessionId),
+      sourceSelected:state?.selectedSessionId===source,paneSessionId:scalar(pane?.dataset.sessionId)},
+     viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY,devicePixelRatio,
+      visual:vv?{offsetTop:vv.offsetTop,offsetLeft:vv.offsetLeft,pageTop:vv.pageTop,
+       pageLeft:vv.pageLeft,width:vv.width,height:vv.height,scale:vv.scale}:null},
+     document:{readyState:document.readyState,scroll:geometry(scrolling),
+      fontStatus:document.fonts?.status??null,fontCount:document.fonts?.size??null},
+     view:{workSurface:scalar(state?.view?.workSurface),canvasOpen:state?.canvas?.open===true,
+      canvasFocused:state?.view?.canvasFocused===true,narrow:scalar(layout?.dataset.narrow),
+      canvasOverlay:scalar(layout?.dataset.canvasOverlay),
+      messagesBusy:scalar(pane?.getAttribute('aria-busy')),
+      historyLoading:typeof session?.historyLoading==='boolean'?session.historyLoading:null,
+      projection:projection(session?.workProjection),renderedProjection},
+     elements:{messages:geometry(pane),status:geometry(pane?.querySelector('[data-part="work-projection-status"]')),
+      detailControls:geometry(pane?.querySelector(':scope > .a-session-history')),article:geometry(article),
+      card:geometry(button),composer:geometry(document.querySelector('[data-part="composer"]'))},
+    };
+   },{source,message}),2000,`Capture layout observation timed out: ${phase}`);
+  }catch(error){
+   row.error={name:error.name,message:error.message};
+   secondaryFailures.push(error); // Diagnostic failure cannot hide or replace the primary assertion.
+  }
+ };
  async function captureCard(name){
   const record={name,sourceSessionId:source,messageId:message,status:'pending'};
   captures.push(record);
@@ -108,9 +169,11 @@ try{
   },{timeout:15000,intervals:[50,100,100]}).toBe(true);
   record.before={box:await cardGeometry(card()),marker:await marker(page),selected:await selected(page)};
   assert.ok(record.before.box);assert.equal(record.before.selected,source);
+  await recordCaptureLayout('before-capture',name);
   await page.screenshot({path:join(evidence,name)});
   // A disappearing or covered card fails this checkpoint; never certify the image.
   record.after={box:await cardGeometry(card()),marker:await marker(page),selected:await selected(page)};
+  await recordCaptureLayout('after-capture',name);
   assert.ok(record.after.box);assert.deepEqual(record.after,record.before);
   record.status='verified-boundary';
  }
@@ -332,10 +395,14 @@ try{
 }catch(error){
  primaryFailure=error;
  if(page&&!page.isClosed()){
+  if(recordCaptureLayout)await recordCaptureLayout('failure-before-frame','failure.png');
   try{await page.screenshot({path:join(evidence,'failure.png')})}
   catch(captureError){secondaryFailures.push(captureError)}
+  if(recordCaptureLayout)await recordCaptureLayout('failure-after-frame','failure.png');
  }
 }finally{
+ try{await writeFile(join(evidence,'capture-layout.json'),JSON.stringify({schemaVersion:1,samples:captureLayout},null,2)+'\n')}
+ catch(error){secondaryFailures.push(error)}
  try{await browser?.close()}catch(error){secondaryFailures.push(error)}
  try{
   const results=await bounded(Promise.all(pendingActions),10000,'Pending browser actions did not settle');
