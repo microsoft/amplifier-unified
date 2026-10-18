@@ -892,13 +892,27 @@ class Worker:
                         "accepted": False, "supported": False, "effect": "none",
                         "reason": "No active native owner is available for anchored steering."}})
                     return
-                await self.acquire_for_mutation()
+                placement_control = op == 'control' and data.get('operation') == 'configuration.patchPlacement.bind'
+                if placement_control:
+                    # A parked worker may remount while acquiring its writer.
+                    # Preserve controls during that preparation too, not only
+                    # after acquisition or the explicit replacement startup.
+                    if self.parked:
+                        if not isinstance(self.start_config, dict):
+                            raise ValueError('The parked placement owner has no verified startup binding.')
+                        self.start_config['_preserveConfiguration'] = True
+                    if self.controls:
+                        self.controls.preserve_configuration = True
+                try:
+                    await self.acquire_for_mutation()
+                finally:
+                    if isinstance(self.start_config, dict):
+                        self.start_config.pop('_preserveConfiguration', None)
                 if self.controls:
                     # Placement controls and their settled checkpoint preserve
                     # unrelated saved controls. The next ordinary mutation
                     # resumes normal persistence; observations never change it.
-                    self.controls.preserve_configuration = (
-                        op == 'control' and data.get('operation') == 'configuration.patchPlacement.bind')
+                    self.controls.preserve_configuration = placement_control
                 token = self.bind_activation()
                 detached_cancel = memory_control or naming_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
                 if detached_cancel:
