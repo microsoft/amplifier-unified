@@ -1,7 +1,16 @@
 name: Installed default capability qualification
 on:
   workflow_dispatch:
+    inputs:
+      desktop_safety:
+        description: Run the separate fixed 22+3 desktop proof instead of the IC-13 baseline
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      desktop_safety:
+        type: boolean
+        default: false
     secrets:
       LOOP_LIVE_CI_READ_KEY:
         required: true
@@ -40,12 +49,16 @@ jobs:
           persist-credentials: false
       - name: Run the manual installed-wheel owner, never the live host runtime
         shell: bash
+        env:
+          DESKTOP_SAFETY: ${{ inputs.desktop_safety }}
         run: |
           set -o pipefail
+          extra=()
+          if [[ "$DESKTOP_SAFETY" == true ]]; then extra+=(--desktop-safety); fi
           python scripts/qualify_default_installed.py run \
             --loop-source "$GITHUB_WORKSPACE/.ci/default-loop" \
             --work "$RUNNER_TEMP/default-installed-inputs" \
-            --output "$RUNNER_TEMP/default-installed-evidence" \
+            --output "$RUNNER_TEMP/default-installed-evidence" "${extra[@]}" \
             2>&1 | tee "$RUNNER_TEMP/default-installed-adapter.log"
       - name: Retain finite evidence, not private checkout or runtime state
         if: always()

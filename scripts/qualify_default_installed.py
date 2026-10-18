@@ -27,6 +27,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from email.parser import Parser
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,18 @@ GUEST = Path('/opt/defaults')
 LABEL = 'org.amplifier.default-installed'
 SUITES = ('test_default_behaviors_integration.py', 'test_default_runtime_safety.py',
           'test_default_mount_runtime.py', 'test_default_routing_runtime.py')
+DESKTOP_CASES = {
+    'preserved-22': {
+        'test_expanded_desktop_restriction_survives_child_alias': 8,
+        'test_resume_preserves_saved_desktop_ceiling_and_history': 6,
+        'test_runtime_desktop_ceiling_controls': 4,
+        'test_runtime_inherited_desktop_ceiling_survives_representation': 4,
+    },
+    'remote-defaults': {
+        'test_runtime_remote_implicit_restriction_cannot_be_disabled_by_child': 2,
+        'test_runtime_remote_explicit_write_opt_in_control': 1,
+    },
+}
 
 
 def require(condition, message):
@@ -335,7 +348,52 @@ def guest_attest():
         save(before, snapshot)
 
 
-def guest_test():
+def desktop_result(path, group, exit_code):
+    """Count the fixed safety discriminators separately, retaining failed cases."""
+    expected = DESKTOP_CASES[group]
+    root = ET.parse(path).getroot()
+    cases = list(root.iter('testcase'))
+    rows, counts, identities = [], {}, set()
+    for case in cases:
+        name = case.get('name', '')
+        function = name.split('[', 1)[0]
+        require(case.get('classname') == 'tests.test_default_desktop_safety'
+                and function in expected and name not in identities, 'Unexpected or duplicate desktop selector')
+        identities.add(name)
+        counts[function] = counts.get(function, 0) + 1
+        outcome = next((kind for kind in ('error', 'failure', 'skipped') if case.find(kind) is not None), 'passed')
+        rows.append({'name': name, 'outcome': outcome})
+    require(counts == expected, 'Missing desktop cases: ' + repr(counts))
+    clean = not any(n.tag in {'error', 'failure', 'skipped'} for n in root.iter())
+    clean = clean and all(not int(suite.get(key, '0')) for suite in root.iter('testsuite')
+                          for key in ('errors', 'failures', 'skipped'))
+    return {'group': group, 'exitCode': exit_code, 'passed': exit_code == 0 and clean, 'cases': rows}
+
+
+def run_desktop_safety(python, env, evidence):
+    """Fixed optional continuation; never reruns or inflates the IC-13 baseline."""
+    report = {'baselineExecuted': False, 'groups': {}, 'passed': False}
+    for group, functions in DESKTOP_CASES.items():
+        junit = evidence / ('desktop-' + group + '.xml')
+        require(not junit.exists(), 'Existing desktop evidence; reconcile, never replay')
+        try:
+            test = subprocess.run([str(python), '-I', '-B', '-m', 'pytest', '-c', '/dev/null',
+                '-o', 'asyncio_mode=auto', '--import-mode=prepend', '--rootdir=' + str(GUEST / 'qualification'),
+                '-p', 'pytest_asyncio.plugin', '-p', 'pytest_aiohttp.plugin', '-p', 'no:cacheprovider',
+                '--basetemp=' + str(GUEST / 'tmp' / group), '--junitxml=' + str(junit), '-q', '-s', '-rA',
+                *(str(GUEST / 'qualification/tests/test_default_desktop_safety.py') + '::' + name
+                  for name in functions)], env=env, cwd=GUEST / 'run', stdin=subprocess.DEVNULL, timeout=120)
+            report['groups'][group] = desktop_result(junit, group, test.returncode)
+        except (subprocess.TimeoutExpired, OSError, ValueError, ET.ParseError) as error:
+            report['groups'][group] = {'passed': False, 'error': type(error).__name__ + ': ' + str(error)}
+        finally:
+            save(evidence / 'desktop-safety-result.json', report)
+    report['passed'] = all(row['passed'] for row in report['groups'].values())
+    save(evidence / 'desktop-safety-result.json', report)
+    require(report['passed'], 'Desktop safety check failed or incomplete; see separate group evidence')
+
+
+def guest_test(desktop_safety=False):
     require(in_container() and os.getuid() == 65532, 'Unprivileged owned test container required')
     env = clean_env()
     env.update(UNIFIED_RUNTIME_PYTHON=str(GUEST / '.venv/bin/python'),
@@ -347,7 +405,8 @@ def guest_test():
     shutil.copytree(GUEST / 'prepared-evidence', evidence, dirs_exist_ok=True)
     junit = evidence / 'junit.xml'
     require(not junit.exists(), 'Existing result; reconcile, never replay')
-    result = {'passed': False, 'adapterExit': None, 'testExit': None, 'checkExit': None, 'attestation': False}
+    result = {'passed': False, 'adapterExit': None, 'testExit': None, 'checkExit': None, 'attestation': False,
+              'stage': 'desktop-safety' if desktop_safety else 'ic13', 'baselineExecuted': not desktop_safety}
     try:
         command([python, '-I', __file__, 'guest-attest'], env=env)
         command([python, '-I', '-B', '-m', 'pytest', '--noconftest', '--import-mode=importlib',
@@ -357,6 +416,10 @@ def guest_test():
                  GUEST / 'candidate/tests/test_default_installed_adapter.py'],
                 env=env, cwd=GUEST / 'run')
         result['adapterExit'] = 0
+        if desktop_safety:
+            run_desktop_safety(python, env, evidence)
+            result['passed'] = True
+            return  # finally still attests and saves; no IC-13 execution/count change.
         test = subprocess.run([str(python), '-I', '-B', '-m', 'pytest', '-c', '/dev/null',
             '-o', 'asyncio_mode=auto', '--import-mode=prepend', '--rootdir=' + str(GUEST / 'qualification'),
             '-p', 'pytest_asyncio.plugin', '-p', 'pytest_aiohttp.plugin', '-p', 'no:cacheprovider',
@@ -399,7 +462,7 @@ def checked_checkout(root, revision=None):
     return head
 
 
-def hosted_run(work, output, loop_source):
+def hosted_run(work, output, loop_source, desktop_safety=False):
     require(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted',
             'This manual adapter requires an ordinary GitHub-hosted runner; it cannot provision a host')
     require(sys.platform == 'linux', 'Linux hosted runner required')
@@ -420,6 +483,7 @@ def hosted_run(work, output, loop_source):
     output.mkdir(parents=True)
     operation = uuid.uuid4().hex
     state = {'operation': operation, 'candidate': revision, 'phase': 'source', 'passed': False,
+             'stage': 'desktop-safety' if desktop_safety else 'ic13',
              'containers': [], 'image': None, 'cleanup': 'not_started', 'effects': []}
     uncertain = False
 
@@ -498,7 +562,8 @@ def hosted_run(work, output, loop_source):
                        *(arg for folder in ('home', 'tmp', 'run', 'cache', 'evidence')
                          for arg in ('--tmpfs', str(GUEST / folder) + ':rw,uid=65532,gid=65532,mode=0700,size=512m')),
                        image, 'sh', '-c',
-                       '/opt/defaults/.venv/bin/python -I /opt/defaults/candidate/scripts/qualify_default_installed.py guest-test; '
+                       '/opt/defaults/.venv/bin/python -I /opt/defaults/candidate/scripts/qualify_default_installed.py guest-test'
+                       + (' --desktop-safety' if desktop_safety else '') + '; '
                        'code=$?; printf "%s\\n" "$code" > /opt/defaults/evidence/exit-code.tmp; '
                        'mv /opt/defaults/evidence/exit-code.tmp /opt/defaults/evidence/exit-code; exec sleep infinity'])
         state['containers'].append(test)
@@ -586,12 +651,17 @@ def main():
     parser.add_argument('--work', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--loop-source', type=Path)
+    parser.add_argument('--desktop-safety', action='store_true',
+                        help='Run only the separate fixed 22+3 desktop proof, not the IC-13 baseline')
     args = parser.parse_args()
     if args.command == 'run':
         require(args.work and args.output and args.loop_source, 'run requires --work, --output and --loop-source')
-        hosted_run(args.work.resolve(), args.output.resolve(), args.loop_source.resolve())
+        hosted_run(args.work.resolve(), args.output.resolve(), args.loop_source.resolve(), args.desktop_safety)
+    elif args.command == 'guest-test':
+        guest_test(args.desktop_safety)
     else:
-        {'guest-prepare': guest_prepare, 'guest-attest': guest_attest, 'guest-test': guest_test}[args.command]()
+        require(not args.desktop_safety, '--desktop-safety applies only to run/guest-test')
+        {'guest-prepare': guest_prepare, 'guest-attest': guest_attest}[args.command]()
 
 
 if __name__ == '__main__':

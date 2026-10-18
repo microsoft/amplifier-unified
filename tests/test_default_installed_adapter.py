@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
+import xml.etree.ElementTree as ET
 import zipfile
 
 import pytest
@@ -145,6 +146,9 @@ def test_workflow_is_manual_and_bridge_does_not_change_normal_matrix():
     assert bridge['jobs']['default-installed']['if'] == "github.event_name == 'workflow_dispatch' && inputs.default_installed"
     assert bridge['jobs']['plan']['if'] == "github.event_name != 'workflow_dispatch' || !inputs.default_installed"
     assert bridge['jobs']['default-installed']['uses'] == './.github/workflows/default-installed.yml'
+    assert bridge['on']['workflow_dispatch']['inputs']['desktop_safety']['default'] == 'false'
+    assert bridge['jobs']['default-installed']['with']['desktop_safety'] == '${{ inputs.desktop_safety }}'
+    assert workflow['on']['workflow_call']['inputs']['desktop_safety']['default'] == 'false'
 
 
 @pytest.mark.parametrize('name,kind', [('../escape', 'file'), ('link', 'link'), ('/absolute', 'file')])
@@ -186,3 +190,79 @@ def test_container_execution_contract_keeps_evidence_until_collection():
     assert "test + ':' + str(GUEST / 'evidence')" not in source
     assert source.index("state['preparationEvidenceRetained'] = True") < source.index("effect(['docker', 'stop'")
     assert "except (subprocess.TimeoutExpired, KeyboardInterrupt, SystemExit, OSError):" in source
+
+
+def desktop_junit(path, group, bad=None):
+    root = ET.Element('testsuite')
+    for name, count in adapter.DESKTOP_CASES[group].items():
+        for index in range(count):
+            case = ET.SubElement(root, 'testcase', classname='tests.test_default_desktop_safety',
+                                 name=f'{name}[{index}]')
+    if bad:
+        ET.SubElement(case, bad)
+    ET.ElementTree(root).write(path)
+    return root
+
+
+@pytest.mark.parametrize('bad', [None, 'failure', 'skipped'])
+def test_desktop_group_keeps_original_count_and_failed_verdict(tmp_path, bad):
+    path = tmp_path / 'junit.xml'
+    desktop_junit(path, 'preserved-22', bad)
+    report = adapter.desktop_result(path, 'preserved-22', 0)
+    assert len(report['cases']) == 22
+    assert report['passed'] is (bad is None)
+    if bad:
+        assert report['cases'][-1]['outcome'] == bad
+
+
+@pytest.mark.parametrize('change', ['missing', 'duplicate'])
+def test_desktop_group_requires_every_unique_case(tmp_path, change):
+    path = tmp_path / 'junit.xml'
+    root = desktop_junit(path, 'remote-defaults')
+    if change == 'missing':
+        root.remove(root[-1])
+    else:
+        root.append(ET.fromstring(ET.tostring(root[-1])))
+    ET.ElementTree(root).write(path)
+    with pytest.raises(ValueError, match='Missing desktop|duplicate'):
+        adapter.desktop_result(path, 'remote-defaults', 0)
+
+
+def test_desktop_only_does_not_rerun_baseline(monkeypatch, tmp_path):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    monkeypatch.setattr(adapter, 'in_container', lambda: True)
+    monkeypatch.setattr(adapter.os, 'getuid', lambda: 65532)
+    (tmp_path / 'prepared-evidence').mkdir()
+    (tmp_path / 'evidence').mkdir()
+    (tmp_path / 'run').mkdir()
+    monkeypatch.setattr(adapter, 'command', lambda *a, **k: None)
+    monkeypatch.setattr(adapter.subprocess, 'run', lambda *a, **k: pytest.fail('No baseline subprocess'))
+    calls = []
+    monkeypatch.setattr(adapter, 'run_desktop_safety', lambda *a: calls.append(a))
+    adapter.guest_test(desktop_safety=True)
+    result = json.loads((tmp_path / 'evidence/result.json').read_text())
+    assert len(calls) == 1 and result['passed'] and result['attestation']
+    assert result['stage'] == 'desktop-safety' and result['baselineExecuted'] is False
+    assert result['testExit'] is result['checkExit'] is None
+    assert not (tmp_path / 'evidence/junit.xml').exists()
+
+
+def test_failed_preserved_group_does_not_erase_remote_discriminator(monkeypatch, tmp_path):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    calls = []
+
+    def run(argv, **kwargs):
+        junit = Path(next(a for a in argv if a.startswith('--junitxml=')).split('=', 1)[1])
+        group = 'preserved-22' if 'preserved-22' in str(junit) else 'remote-defaults'
+        calls.append(group)
+        desktop_junit(junit, group, 'failure' if group == 'preserved-22' else None)
+        return subprocess.CompletedProcess(argv, 1 if group == 'preserved-22' else 0)
+
+    monkeypatch.setattr(adapter.subprocess, 'run', run)
+    with pytest.raises(ValueError, match='Desktop safety check failed'):
+        adapter.run_desktop_safety(Path('/synthetic/python'), {}, tmp_path)
+    report = json.loads((tmp_path / 'desktop-safety-result.json').read_text())
+    assert calls == ['preserved-22', 'remote-defaults']
+    assert report['passed'] is False and report['baselineExecuted'] is False
+    assert not report['groups']['preserved-22']['passed']
+    assert report['groups']['remote-defaults']['passed']
