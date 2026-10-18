@@ -85,7 +85,7 @@ def require_normal_cleanup(report, parent):
     assert report['writerAvailableAfterClose'] is True
 
 
-@pytest.mark.parametrize('variant', ['cold','parked','parked-remount','when-idle','skip-preservation'])
+@pytest.mark.parametrize('variant', ['cold','parked','parked-remount','when-idle','skip-preservation','retired-control'])
 async def test_production_patch_placement_lifecycle(tmp_path, variant):
     fixture = Path(__file__).parent / 'fixtures/patch_placement_native_probe.py'
     root = tmp_path / variant
@@ -117,7 +117,20 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
     mutant = variant=='skip-preservation'
     assert all(s['mutant'] is mutant for s in report['workerSources'])
     assert all((s['originalConstructorSha256']!=s['executedConstructorSha256']) is mutant for s in report['workerSources'])
-    if mutant:
+    if variant == 'retired-control':
+        proof = report['retiredControl']
+        assert process.returncode == 0, (output/'stderr.log').read_text()[-3000:]
+        assert report['controlHashBefore'] == report['controlHashAfter']
+        assert proof['controlHashBeforeRestart'] == proof['controlHashAfterRestart']
+        assert proof['oldReturncode'] == 0 and proof['oldPid'] != proof['newPid']
+        assert proof['attemptWorkerPid'] == proof['oldPid']
+        assert proof['guardPresent'] and proof['writerAvailableAfterRetirement']
+        assert proof['writerAvailableAfterRefusal'] and proof['originalRecordPreserved'] and proof['noReplay']
+        assert report['state']['effect'] == 'unknown' and report['attempts'] == 1
+        assert proof['effectRead']['nativeEffect'] == 'unconfirmed'
+        assert 'Native evidence is absent' in proof['reconcileRefusal']
+        assert 'retired-start-preserved-original-unknown-held' in report['stages']
+    elif mutant:
         assert process.returncode != 0, 'Skipped preservation escaped the same byte oracle'
         assert report['negativeWitness']=='real-startup-preservation-skipped'
         assert report['controlHashBefore']!=report['controlHashAfter']
@@ -301,3 +314,69 @@ async def test_explicit_rebind_requires_authenticated_terminal_none(boundary, ev
         assert 'configuration.patchPlacement.bind' not in commands
     assert b.runtime.calls == calls_before
     assert b.runtime.controls.state_path().read_bytes() == controls_before
+
+
+@pytest.mark.parametrize(('op', 'operation', 'preserved'), [
+    ('control', 'configuration.patchPlacement.bind', True),
+    ('control', 'configuration.apply', False),
+    ('control', 'tool.invoke', False),
+    ('send', '', False), ('retry', '', False), ('resume', '', False)])
+async def test_retired_request_preservation_is_exactly_placement(monkeypatch, op, operation, preserved):
+    from amplifier_web.runtime import RuntimeManager
+    manager = RuntimeManager()
+    session = {'id':'retired-fixture'}
+    async def emit(*args): pass
+    manager._retired[session['id']] = (session, emit)
+    seen, checks = [], []
+    def guard(): checks.append('authority')
+    class StartupObserved(Exception): pass
+    async def start(saved, callback, **kwargs):
+        seen.append((saved, callback, kwargs))
+        raise StartupObserved()  # No process or transport needed for forwarding contract.
+    monkeypatch.setattr(manager, '_start_locked', start)
+    try:
+        # A caller-supplied lookalike must not opt ordinary operations into
+        # preservation. The host decision uses only the exact operation.
+        with pytest.raises(StartupObserved):
+            await manager._request(session['id'], op, guard=guard,
+                **({'operation':operation, 'arguments':{'preserve_configuration':True,
+                    '_preserveConfiguration':True}} if op == 'control' else {}))
+        assert len(seen) == 1 and seen[0][:2] == (session, emit) and checks
+        assert seen[0][2] == {'guard':guard, **({'preserve_configuration':True} if preserved else {})}
+    finally:
+        await manager.close()
+
+
+@pytest.mark.parametrize('boundary', ['missing-guard','revoked-before-start','revoked-after-start'])
+async def test_retired_placement_requires_original_host_guard(monkeypatch, boundary):
+    from amplifier_web.runtime import RuntimeManager
+    manager = RuntimeManager()
+    async def emit(*args): pass
+    manager._retired['retired-fixture'] = ({'id':'retired-fixture'}, emit)
+    starts, admissions, checks = [], [], []
+    def guard():
+        checks.append('check')
+        if boundary == 'revoked-before-start' or len(checks) > 1:
+            raise ValueError('Synthetic original authority revoked')
+    async def start(*args, **kwargs): starts.append(kwargs)
+    async def admit(*args, **kwargs):
+        admissions.append(True)
+        raise AssertionError('Denied placement reached native dispatch')
+    monkeypatch.setattr(manager, '_admit', admit)
+    if boundary != 'missing-guard':
+        monkeypatch.setattr(manager, '_start_locked', start)
+    else:
+        def no_preparation(*args, **kwargs):
+            raise AssertionError('Unguarded placement reached startup preparation')
+        monkeypatch.setattr(manager, '_check_execution', no_preparation)
+    try:
+        match = 'retained host operation guard' if boundary == 'missing-guard' else 'original authority revoked'
+        with pytest.raises(ValueError, match=match):
+            await manager.control('retired-fixture', 'configuration.patchPlacement.bind',
+                {}, **({'guard':guard} if boundary != 'missing-guard' else {}))
+        assert not admissions
+        assert len(starts) == (1 if boundary == 'revoked-after-start' else 0)
+        if starts:
+            assert starts[0] == {'guard':guard, 'preserve_configuration':True}
+    finally:
+        await manager.close()
