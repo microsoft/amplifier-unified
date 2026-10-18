@@ -656,7 +656,7 @@ class Management:
                     # does not become permission to run under an uncertain mount.
                     self.settle_configuration_fence(session, operation)
                     self.service._publish_changes(sessions={identity})
-                    if not session['configurationBusy']:
+                    if not session.get('configurationBusy'):
                         self.background(self.service.collaboration.drain(identity))
 
     async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None):
