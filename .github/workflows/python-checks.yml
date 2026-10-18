@@ -45,7 +45,7 @@ jobs:
           suites = {
               'full': [],
               'inline-chat-card': ['tests/test_chat_references.py'],
-              'queued-configuration': ['tests/test_queued_configuration_boundary.py'],
+              'queued-configuration': ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py'],
               'security-redaction': ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py'],
           }
           selection = os.environ['CHECK_SUITE']

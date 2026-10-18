@@ -1751,3 +1751,310 @@ async def test_nonterminal_none_receipt_never_releases_interrupted_operation(bou
     with pytest.raises(AppError, match="not terminal"):
         await recovery(boundary, "reconcile")
     assert operation(boundary) == current and boundary.owner["configurationBusy"]
+
+
+async def wait_native_probe_exit(process, cleanup_recorded_workers, report):
+    """This probe's timeout path must reap its handle even if worker identity refuses."""
+    primary = None
+    errors = report["cleanupErrors"]
+
+    def failed(stage, exc):
+        errors.append({"stage": stage, "type": type(exc).__name__, "message": str(exc)})
+
+    try:
+        await asyncio.wait_for(process.wait(), 240)
+    except BaseException as exc:
+        primary = exc
+        report["primaryFailure"] = {"type": type(exc).__name__, "message": str(exc)}
+    finally:
+        try:
+            if process.returncode is None:
+                try:
+                    report["probeSignals"].append("SIGTERM")
+                    process.terminate()  # Probe handler cancels once and owns normal cleanup.
+                    await asyncio.wait_for(process.wait(), 65)
+                except BaseException as exc:
+                    failed("probe-grace", exc)
+            try:
+                # Workers have independent sessions. Identity validation may
+                # refuse, but cannot prevent cleanup of our directly owned handle.
+                await cleanup_recorded_workers()
+            except BaseException as exc:
+                failed("recorded-workers", exc)
+        finally:
+            if process.returncode is None:
+                try:
+                    report["probeSignals"].append("SIGKILL")
+                    process.kill()
+                except BaseException as exc:
+                    failed("probe-kill", exc)
+                finally:
+                    try:
+                        await asyncio.wait_for(process.wait(), 5)
+                    except BaseException as exc:
+                        failed("probe-reap", exc)
+            report["returncode"] = process.returncode
+    if primary is not None:
+        for error in errors:
+            primary.add_note("Cleanup: " + json.dumps(error))
+        raise primary
+    assert not errors, errors
+    assert process.returncode is not None, "Owned probe exit remains unconfirmed."
+
+
+def require_no_child_cleanup_fallback(report):
+    assert not report["cleanupFallbackSignals"], (
+        "Child fallback cleanup occurred; this cannot qualify normal native cleanup.",
+        report["cleanupFallbackSignals"])
+
+
+@pytest.mark.parametrize("variant", ["original", "skip-save-regression"])
+async def test_real_native_recovery_and_deliberately_regressed_save_witness(tmp_path, variant):
+    """No importorskip: the admitted fixed workflow owns native prerequisites."""
+    import os
+    from pathlib import Path
+    import signal
+    import sys
+    fixture = Path(__file__).parent / "fixtures/queued_configuration_native_probe.py"
+    root = tmp_path / variant
+    command = [sys.executable, "-u", str(fixture), str(root)]
+    mutant = variant == "skip-save-regression"
+    if mutant:
+        command.append("--skip-save")
+    # Retain finite structured proof and logs in the existing workflow artifact.
+    # No homes, provider scenario, grants, native transcript or receipt keys.
+    output = (Path(os.environ["GITHUB_WORKSPACE"]) / "output/python-checks"
+        if os.environ.get("GITHUB_ACTIONS") == "true" else tmp_path) / ("native-recovery-" + variant)
+    output.mkdir(parents=True, exist_ok=False)
+    fallback = []
+    async def cleanup_recorded_workers():
+        # Only this probe's exact PID/start-tick/argv/group identities may be
+        # signalled. Missing or reused identities are never guessed.
+        for path in root.glob("worker-source-*.json"):
+            row = json.loads(path.read_text())
+            assert row["probePid"] == process.pid
+            pid = row["pid"]
+            def alive():
+                try:
+                    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+                    assert fields[19] == row["startTicks"], "PID was reused; never signal it."
+                    if fields[0] == "Z":
+                        return False
+                    args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                    assert str(root).encode() in args and b"--worker" in args
+                    assert row["processGroup"] == os.getpgid(pid) == pid
+                    return True
+                except FileNotFoundError:
+                    return False
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                if not alive():
+                    break
+                fallback.append({"pid": pid, "startTicks": row["startTicks"], "signal": sig.name})
+                try:
+                    os.killpg(pid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    async with asyncio.timeout(6):
+                        while alive():
+                            await asyncio.sleep(.05)
+                except TimeoutError:
+                    continue
+            assert not alive(), "Exact owned worker termination remains unconfirmed."
+
+    with (output / "stdout.log").open("wb") as stdout_file, (output / "stderr.log").open("wb") as stderr_file:
+        process = await asyncio.create_subprocess_exec(*command, stdout=stdout_file, stderr=stderr_file)
+        cleanup_report = {"probePid": process.pid, "fallbackSignals": fallback,
+                          "probeSignals": [], "cleanupErrors": []}
+        try:
+            await wait_native_probe_exit(process, cleanup_recorded_workers, cleanup_report)
+        finally:
+            # Partial evidence survives timeout/cancellation, not just a passing
+            # probe. Missing evidence is a failing prerequisite, never success.
+            try:
+                if (root / "evidence.json").exists():
+                    (output / "evidence.json").write_bytes((root / "evidence.json").read_bytes())
+            finally:
+                (output / "parent-cleanup.json").write_text(json.dumps(cleanup_report, indent=2) + "\n")
+    stderr = (output / "stderr.log").read_bytes()
+    assert not fallback, "Fallback cleanup occurred; this cannot qualify normal native cleanup."
+    evidence_path = root / "evidence.json"
+    assert evidence_path.is_file(), stderr.decode(errors="replace")[-3000:]
+    report = json.loads(evidence_path.read_text())
+    (output / "evidence.json").write_text(json.dumps(report, indent=2) + "\n")
+    require_no_child_cleanup_fallback(report)  # Applies to both original and save-skipping variant.
+    assert report["prewriteRefusal"] and report["originalAuthorityPreserved"]
+    assert report["resumedSaveAcknowledged"] and report["actualWorkerRemounted"]
+    assert report["attempts"] == 2 and report["noRecoveryProviderCalls"]
+    assert len(report["processes"]) == 2
+    assert all(row["returncode"] is not None for row in report["processes"])
+    assert not report["cleanupErrors"] and report["runtimeRowsAfterClose"] == 0
+    assert report["heldWriterControl"] and report["writerAvailableAfterClose"] is True
+    assert len(report["workerSources"]) == 2
+    assert all(row["mutant"] is mutant for row in report["workerSources"])
+    assert all((row["originalFunction"] != row["executedFunction"]) is mutant
+        for row in report["workerSources"])
+    if mutant:
+        assert process.returncode != 0, "Deliberately skipped product save escaped the same acceptance oracle."
+        assert report["negativeWitness"] == "resumed_save_skipped_loaded_plan_mismatch"
+        assert report["state"]["phase"] == "error" and report["state"]["effect"] == "saved_not_mounted"
+        assert "Native recovery did not mount the original requested plan" in stderr.decode()
+    else:
+        assert process.returncode == 0, stderr.decode(errors="replace")[-3000:]
+        assert report["mountedPlanVerified"] and report["nextInputUsable"]
+        assert report["originalInputCount"] == report["originalToolResultCount"] == 1
+        assert report["duplicateResumePassive"] and report["writerReleasedWhileParked"]
+
+
+@pytest.mark.parametrize("exit_signal", ["SIGTERM", "SIGKILL"])
+async def test_child_fallback_signals_are_retained_and_cannot_qualify(monkeypatch, exit_signal):
+    from fixtures import queued_configuration_native_probe as fixture
+    signals = []
+    process = SimpleNamespace(pid=731001, returncode=None)
+
+    def send(pid, signum):
+        assert pid == process.pid
+        signals.append(signum.name)
+        if signum.name == exit_signal:
+            process.returncode = -int(signum)
+
+    async def wait():
+        if process.returncode is None:
+            raise TimeoutError("Synthetic worker did not exit after TERM.")
+        return process.returncode
+
+    process.wait = wait
+    monkeypatch.setattr(fixture.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(fixture.os, "killpg", send)  # Never signal a real process in this control.
+    report = {"cleanupFallbackSignals": []}
+    await fixture.confirm_process_exit(process, report["cleanupFallbackSignals"])
+    expected = ["SIGTERM"] if exit_signal == "SIGTERM" else ["SIGTERM", "SIGKILL"]
+    assert signals == expected
+    assert [row["signal"] for row in report["cleanupFallbackSignals"]] == expected
+    assert all(row["outcome"] == "sent" for row in report["cleanupFallbackSignals"])
+    assert report["cleanupFallbackSignals"][-1]["returncode"] == process.returncode
+    if exit_signal == "SIGKILL":
+        assert report["cleanupFallbackSignals"][0]["wait"] == "timed_out"
+    # Same gate used before either positive or deliberately regressed acceptance.
+    with pytest.raises(AssertionError, match="Child fallback cleanup occurred"):
+        require_no_child_cleanup_fallback(report)
+
+
+@pytest.mark.parametrize("refusal", ["identity-refused", "record-unreadable"])
+@pytest.mark.parametrize("reaped", [True, False])
+async def test_parent_timeout_always_reaps_probe_after_worker_cleanup_refusal(monkeypatch, refusal, reaped):
+    steps, waits = [], []
+    primary = TimeoutError("Synthetic probe deadline.")
+    secondary = (AssertionError("PID was reused; never signal it.") if refusal == "identity-refused"
+                 else OSError("Synthetic worker identity record unreadable."))
+    process = SimpleNamespace(pid=731002, returncode=None)
+
+    async def wait():
+        steps.append("wait")
+        if len(waits) == 1:
+            raise primary
+        if len(waits) == 2:
+            raise TimeoutError("Synthetic grace deadline.")
+        if not reaped:
+            raise TimeoutError("Synthetic kill/reap deadline.")
+        return process.returncode
+
+    def terminate():
+        steps.append("terminate")
+
+    def kill():
+        steps.append("kill-owned-probe")
+        if reaped:
+            process.returncode = -9
+
+    async def workers():
+        steps.append("refuse-unverified-worker")
+        raise secondary  # No unverified PID may be signalled to make cleanup pass.
+
+    original_wait_for = asyncio.wait_for
+
+    async def timed_wait(awaitable, timeout):
+        waits.append(timeout)
+        return await original_wait_for(awaitable, timeout)
+
+    process.wait, process.terminate, process.kill = wait, terminate, kill
+    monkeypatch.setattr(asyncio, "wait_for", timed_wait)
+    report = {"probeSignals": [], "cleanupErrors": []}
+    with pytest.raises(TimeoutError) as caught:
+        await wait_native_probe_exit(process, workers, report)
+    assert caught.value is primary
+    assert waits == [240, 65, 5]
+    assert steps == ["wait", "terminate", "wait", "refuse-unverified-worker", "kill-owned-probe", "wait"]
+    assert report["probeSignals"] == ["SIGTERM", "SIGKILL"]
+    assert report["primaryFailure"] == {"type": "TimeoutError", "message": str(primary)}
+    errors = report["cleanupErrors"]
+    assert errors[1] == {"stage": "recorded-workers", "type": type(secondary).__name__,
+                         "message": str(secondary)}
+    assert [row["stage"] for row in errors] == (["probe-grace", "recorded-workers"] +
+                                               ([] if reaped else ["probe-reap"]))
+    assert len(primary.__notes__) == len(errors)
+    assert report["returncode"] == (-9 if reaped else None)
+
+
+async def test_parent_worker_cleanup_refusal_without_primary_is_not_swallowed():
+    async def wait():
+        return 0
+
+    async def workers():
+        raise AssertionError("Synthetic identity refusal after normal probe exit.")
+
+    process = SimpleNamespace(pid=731003, returncode=0, wait=wait)
+    report = {"probeSignals": [], "cleanupErrors": []}
+    with pytest.raises(AssertionError, match="identity refusal"):
+        await wait_native_probe_exit(process, workers, report)
+    assert report["returncode"] == 0 and not report["probeSignals"]
+    assert "primaryFailure" not in report
+    assert report["cleanupErrors"][0]["stage"] == "recorded-workers"
+
+
+@pytest.mark.parametrize("record_fault", ["malformed", "unreadable"])
+@pytest.mark.parametrize("has_primary", [True, False])
+def test_child_retains_cleanup_evidence_when_worker_record_is_broken(tmp_path, monkeypatch, record_fault, has_primary):
+    from pathlib import Path
+    from fixtures import queued_configuration_native_probe as fixture
+    valid = {"pid": 731004, "probePid": 731005}
+    (tmp_path / "worker-source-good.json").write_text(json.dumps(valid))
+    broken = tmp_path / "worker-source-bad.json"
+    broken.write_text("{malformed")
+    if record_fault == "unreadable":
+        read_text = Path.read_text
+
+        def read(path, *args, **kwargs):
+            if path == broken:
+                raise OSError("Synthetic unreadable worker record.")
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", read)
+    primary = AssertionError("Original native loaded-plan mismatch.") if has_primary else None
+    fallback = [{"pid": 731004, "signal": "SIGTERM", "outcome": "sent"}]
+    report = {"cleanupErrors": ["Earlier cleanup failure."], "cleanupFallbackSignals": fallback,
+              "processes": [{"pid": 731004, "returncode": -15}], "runtimeRowsAfterClose": 0}
+    if primary is not None:
+        report["primaryFailure"] = {"type": type(primary).__name__, "message": str(primary)}
+
+    def finish():
+        try:
+            if primary is not None:
+                raise primary
+        finally:
+            fixture.finish_cleanup_evidence(tmp_path, report, primary)
+
+    with pytest.raises(AssertionError) as caught:
+        finish()
+    if primary is not None:
+        assert caught.value is primary
+        assert "worker-source-bad.json" in primary.__notes__[0]
+        assert "Earlier cleanup failure." in primary.__notes__[0]
+    else:
+        assert "Native cleanup did not complete normally" in str(caught.value)
+    saved = json.loads((tmp_path / "evidence.json").read_text())
+    assert saved == report and saved["workerSources"] == [valid]
+    assert saved["cleanupFallbackSignals"] == fallback
+    assert len(saved["cleanupErrors"]) == 2
+    assert "worker-source-bad.json" in saved["cleanupErrors"][1]
+    assert ("JSONDecodeError" if record_fault == "malformed" else "OSError") in saved["cleanupErrors"][1]

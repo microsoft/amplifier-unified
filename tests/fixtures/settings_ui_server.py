@@ -59,6 +59,71 @@ async def install_tool(self,args):
 SmartToolsManager.catalog=catalog
 SmartToolsManager.inspect=inspect_tool
 SmartToolsManager.install=install_tool
+class RecoveryRuntime(Runtime):
+ def __init__(self):
+  super().__init__();self.calls=[];self.saved={};self.loaded={};self.release=asyncio.Event()
+ async def start(self,session,emit,*,preserve_emit=False,guard=None):
+  if guard:guard()
+  sid=session['id'];self.calls.append({'sessionId':sid,'operation':'start'})
+  if sid in self.saved:
+   await asyncio.wait_for(self.release.wait(),30)
+   if guard:guard()
+   self.loaded[sid]=copy.deepcopy(self.saved[sid])
+  await emit('runtime.status',{'sessionId':sid,'status':'ready'})
+ async def stop(self,sid,*,reason='stopped'):
+  self.calls.append({'sessionId':sid,'operation':'stop'})
+ async def close(self):self.release.set()
+ async def control(self,sid,operation,args,*,guard=None):
+  if guard:guard()
+  self.calls.append({'sessionId':sid,'operation':operation})
+  if operation=='configuration.apply':
+   from amplifier_web.configuration_recovery import receipt_path,seal
+   self.saved[sid]=copy.deepcopy(args['config'])
+   write_private(receipt_path(args['_configurationAttempt']),json.dumps(seal(args['_configurationAttempt'],'saved_not_mounted',terminal=True)))
+   return {'requiresRestart':True,'configuration':copy.deepcopy(self.saved[sid])}
+  if operation=='configuration.inspect':return {'plan':copy.deepcopy(self.loaded.get(sid,PLAN)),'capabilities':{'configuration':True}}
+  return {}
+
+async def add_recovery_fixture(app):
+ from amplifier_web.auth import SESSION_COOKIE,new_session
+ from amplifier_web.configuration_recovery import binding,receipt_path,seal
+ service=app['service'];runtime=service.runtime;originals={};ids={}
+ for label,effect in [('Recoverable owner','none'),('Unknown owner','unknown'),('Saved owner','saved_not_mounted'),('Legacy owner',None)]:
+  session=service._new_session({'title':label,'bundle':'anchors'})
+  service.state['sessions'].append(session);sid=session['id'];ids[label]=sid
+  session['collaborationGeneration']={'id':'completed-fixture-turn','inputIds':['synthetic-input'],'terminal':True}
+  session['configurationBusy']=True
+  if effect is None:
+   session['pendingConfiguration']={'phase':'error','error':'PRIVATE_RECOVERY_SENTINEL'}
+   continue
+  desired=copy.deepcopy(PLAN);desired['tools'][0]['config']['max_bytes']=4096
+  record=service.management.create_configuration_operation(session,desired,'fixture-'+label,None,
+   {'origin':'ui','target':service.management.configuration_target_binding(session)})
+  attempt=binding(record);attempt.update(nativeSessionId=sid,workerPid=None)
+  record['attempts']=[attempt]
+  write_private(service.management.configuration_record_path(sid,record['id']),json.dumps(record))
+  service.management.configuration_transition(session,record['id'],phase='error',stage='dispatching',effect='unknown',attemptId=attempt['attemptId'],error='PRIVATE_RECOVERY_SENTINEL')
+  write_private(receipt_path(attempt),json.dumps(seal(attempt,effect,terminal=True)))
+  session['configurationOperationFence']=record['id']
+  originals[sid]=copy.deepcopy(record['request'])
+ service.state['selectedSessionId']=ids['Recoverable owner'];service._publish()
+ async def cookie(request):
+  response=web.json_response({'ready':True});response.set_cookie(SESSION_COOKIE,new_session(app['session_secret']),httponly=True,samesite='Strict');return response
+ async def observe(request):
+  rows={}
+  for label,sid in ids.items():
+   session=service._session(sid);pending=session.get('pendingConfiguration',{});record=None
+   if pending.get('operationId'):record=service.management.configuration_record(sid,pending['operationId'])
+   rows[label]={'sessionId':sid,'phase':pending.get('phase'),'effect':pending.get('effect'),
+    'requestUnchanged':record is None or record['request']==originals[sid],
+    'attempts':len(record.get('attempts',[])) if record else 0}
+  return web.json_response({'sessions':rows,'calls':runtime.calls,'loadedLimits':{sid:plan['tools'][0]['config']['max_bytes'] for sid,plan in runtime.loaded.items()}})
+ async def release(request):
+  runtime.release.set();return web.json_response({'released':True})
+ app.router.add_post('/fixture/recovery-cookie',cookie)
+ app.router.add_get('/fixture/recovery-observations',observe)
+ app.router.add_post('/fixture/recovery-release',release)
+
 async def main(home):
  os.environ['AMPLIFIER_HOME']=str(home/'native')
  os.environ['AMPLIFIER_WEB_HOME']=str(home);os.environ['AMPLIFIER_UNIFIED_IMPORT_HOME']=str(home/'legacy');os.environ['FIXTURE_KEY']='fixture-private-key'
@@ -66,12 +131,14 @@ async def main(home):
  write_private(Path(os.environ['AMPLIFIER_HOME'])/'settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${FIXTURE_KEY}','default_model':'fixture-model'}} for name in ['one','two','three']]},'routing':{'matrix':'balanced'},'bundle':{'added':{'fixture-root':'foundation:test'}}}))
  matrix={'name':'balanced','roles':{role:{'description':role.title(),'candidates':[{'provider':'one','model':'fixture-model'},{'provider':'two','model':'fallback-model'}]} for role in ['general','fast']}}
  write_private(home/'config/routing/balanced.yaml',yaml.safe_dump(matrix))
- app=await create_app(home,workspace=workspace,runtime=Runtime(),voice=False,background_updates=False)
+ recovery=bool(os.environ.get('SETTINGS_RECOVERY_FIXTURE'))
+ app=await create_app(home,workspace=workspace,runtime=RecoveryRuntime() if recovery else Runtime(),voice=False,background_updates=False)
  # The browser fixture uses a synthetic control credential, never local PAM.
  if 'control_token' in app:
   app['control_token']='fixture-browser-control-token'
   app['allowed_origins']=app['allowed_origins']|{'http://127.0.0.1:8957','http://127.0.0.1:8958'}
  service=app['service'];await service.dispatch('session.create',{'title':'Settings test','workspace':str(workspace),'bundle':'anchors'})
+ if recovery:await add_recovery_fixture(app)
  async def agent_view(request):
   payload=await request.json()
   result=await service.app_bridge('dispatch',{'action':'view.update','args':{'clientId':payload['clientId'],'patch':payload['patch']}},service._session()['id'])
