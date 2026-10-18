@@ -45,6 +45,11 @@ def schema(properties=None, required=None):
     return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
 
 
+def command_fingerprint(action, args, origin, client_id):
+    # One ledger identity for admission and passive receipt retrieval.
+    return hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+
+
 ACTION_DEFINITIONS = {
     "desktop.readiness": ("Inspect the serving host's native observation preflight and already-mounted conversation tools. No activation, capture, permission prompt, worker startup or provider change. Browser account/tab context is reported only when the owning transport exposes it.", schema({"sessionId": string(200)}, [])),
     "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Set verifyImports to probe the six public authoring libraries in isolated child processes. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200), "verifyImports": {"type": "boolean"}}, [])),
@@ -1879,6 +1884,18 @@ class AppService:
                 include_state=include_state, admission_check=admission_check)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
+        if action == 'configuration.patchPlacement.bind' and command_id:
+            from .patch_placement import retained_receipt
+            async with self.lock:
+                if admission_check is not None:
+                    admission_check()
+                try:
+                    retained = retained_receipt(self.management, args, origin, caller_session_id,
+                        command_id, command_fingerprint(action, args, origin, client_id))
+                except (ValueError, OSError, KeyError, TypeError):
+                    raise AppError('The retained patch binding cannot be verified for this root. No effect was admitted.', 409) from None
+            if retained is not None:
+                return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
@@ -2153,7 +2170,7 @@ class AppService:
                     current=self._session(sid)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
-        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        fingerprint = command_fingerprint(action, args, origin, client_id)
         prepared_workspace = None
         prepared_identity = None
         from .managed_chats import is_managed, allocate, creation_identity

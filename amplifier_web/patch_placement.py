@@ -88,14 +88,47 @@ def target(service, session):
         'nativeSessionId': native_id(session), 'executionDirectory': execution['directory']}
 
 
-def caller(service, args, origin, caller_id):
+def caller(service, args, origin, caller_id, *, active=True):
     session = service._session(args['sessionId'])
     if origin not in {'ui', 'user'}:
         source = service.collaboration.source({}, origin, caller_id)
         if source['id'] != session['id']:
             raise ValueError('Patch placement belongs to the calling root only.')
-        service.collaboration.active_binding(source)
+        from .collaboration import PRINCIPAL
+        native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
+        if PRINCIPAL.get() != native:
+            service.collaboration.error('Patch placement requires its authenticated transport root.')
+        if active:
+            service.collaboration.active_binding(source)
     return session
+
+
+def retained_receipt(management, args, origin, caller_id, command_id, request_fingerprint):
+    """Under service.lock: observe the exact receipt, never admit an effect.
+
+    Ending a generation or revoking its write grant does not erase its receipt.
+    The authenticated principal and immutable original request still bind this
+    read. New commands continue through normal generation/authority admission.
+    """
+    service = management.service
+    session = caller(service, args, origin, caller_id, active=False)
+    previous = service.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone()
+    if previous is None:
+        return None
+    if previous[0] != request_fingerprint:
+        from .service import AppError
+        raise AppError('This command ID was already used with different contents.', 409)
+    receipt = json.loads(previous[1])
+    result = receipt['result']
+    record = management.configuration_record(session['id'], result['operationId'])
+    request = record['request']
+    if (result['sessionId'] != session['id'] or result['commandId'] != command_id
+            or request['commandId'] != command_id or request['source'].get('action') != BIND
+            or request['source']['origin'] != origin
+            or request['config']['moduleId'] != args['moduleId']
+            or origin not in {'ui', 'user'} and request['source']['callerSessionId'] != caller_id):
+        raise ValueError('The retained binding receipt does not match its original root and action.')
+    return {**receipt, 'duplicate': True}
 
 
 def choice(session, args, origin):
@@ -164,12 +197,12 @@ def host_saved(service, session, module_id):
 async def read(management, args, origin, caller_id):
     service = management.service
     async with service.lock:
-        session = caller(service, args, origin, caller_id)
+        session = caller(service, args, origin, caller_id, active=False)
         bound = target(service, session)
         plan, row, stamp = host_saved(service, session, args['moduleId'])
     mounted = await observe(service, session, args['moduleId'])
     async with service.lock:
-        session = caller(service, args, origin, caller_id)
+        session = caller(service, args, origin, caller_id, active=False)
         if target(service, session) != bound or host_saved(service, session, args['moduleId'])[2] != stamp:
             raise ValueError('Placement changed during observation; read it again.')
         revision = str(uuid.uuid4())
