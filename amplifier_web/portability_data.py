@@ -318,6 +318,11 @@ def install_outputs(app, value):
         if put(app.db, resource)['$resource'] != key:
             raise ValueError('Output resource identity changed during import')
     for row in value['outputs']:
+        if row.get('kind') == 'chat_reference':
+            # Preserve imported evidence, not source-host navigation authority.
+            # A new validated attachment is the explicit local rebinding path.
+            row = {**row, 'linked': False, 'revision': row.get('revision', 1) + 1,
+                   'referenceImported': True}
         app.db.execute('INSERT OR REPLACE INTO output_records VALUES (?,?,?,?)',
                        (row['id'], row['sessionId'], row['createdAt'], json.dumps(row)))
     for row in value['comments']:

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 
 import pytest
 import yaml
@@ -510,6 +511,91 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     # scenario failure; an unrun/failed build cannot upload the old tracked tree.
     vite = (ROOT / 'frontend/vite.config.js').read_text()
     assert 'emptyOutDir:true' in vite and 'static/build.json' in vite
+
+
+def browser_runner_commands(steps):
+    invocation = r'(?m)^(?:uv run --no-sync )?python scripts/browser_check_runner\.py(?:[ \t]|$)'
+    return [step['run'] for step in steps if re.search(invocation, step.get('run', ''))]
+
+
+def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocations():
+    initialize = 'python scripts/browser_check_runner.py --initialize'
+    execute = 'uv run --no-sync python scripts/browser_check_runner.py --budget-seconds 1500'
+    decoys = [
+        'set -o pipefail\nuv run --no-sync pytest tests/test_browser_check_runner.py tests/test_release_qualification.py',
+        'echo python scripts/browser_check_runner.py',
+        'python scripts/browser_check_runner.py.backup',
+    ]
+    steps = [{'run': text} for text in (initialize, *decoys, execute)]
+    assert browser_runner_commands(steps) == [initialize, execute]
+    # A duplicate remains visible to the caller's exact two-command assertions.
+    assert browser_runner_commands([*steps, {'run': execute}]) == [initialize, execute, execute]
+    joined = initialize + '\n' + execute
+    assert browser_runner_commands([{'run': joined}]) == [joined]
+
+
+def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary'}
+    assert inputs['app004_qualification']['type'] == 'boolean'
+    assert inputs['app004_qualification']['default'] == 'false'
+    assert inputs['mcp_boundary']['type'] == 'boolean'
+    assert inputs['mcp_boundary']['default'] == 'false'
+    assert workflow['on']['workflow_call'] == {
+        'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    job = workflow['jobs']['browser']
+    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    assert job['timeout-minutes'] == '30'
+    mcp = workflow['jobs']['mcp-boundary']
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}"
+    # Both opt-ins must fail visibly before setup, not silently drop APP004.
+    incompatible = mcp['steps'][1]
+    assert incompatible['name'] == 'Reject incompatible browser proof selections'
+    assert incompatible['if'] == '${{ inputs.app004_qualification }}'
+    assert incompatible['run'].splitlines() == [
+        "echo 'MCP boundary and APP004 qualification are separate selections; neither proof was run.'",
+        'exit 1',
+    ]
+    steps = job['steps']
+    commands = browser_runner_commands(steps)
+    assert len(commands) == 2
+    flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
+    assert all(command.count(flag) == 1 for command in commands)
+    # Empty/default selection executes exactly the preexisting plan and budget.
+    assert commands[0].replace(flag, '').strip() == (
+        'python scripts/browser_check_runner.py --plan frontend/tests/browser-checks.json '
+        '--output output/browser-checks --initialize')
+    assert commands[1].replace(flag, '').strip() == (
+        'uv run --no-sync python scripts/browser_check_runner.py '
+        '--plan frontend/tests/browser-checks.json --output output/browser-checks --budget-seconds 1500')
+    assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
+        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@v5')
+    contracts = [s for s in steps if s.get('name') == 'Verify fixed APP004 qualification contracts']
+    assert len(contracts) == 1
+    contract = contracts[0]
+    assert contract['if'] == '${{ inputs.app004_qualification }}'
+    assert contract['run'].splitlines() == [
+        'set -o pipefail',
+        'uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py '
+        'tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml '
+        '2>&1 | tee output/browser-checks/app004-contracts.log',
+    ]
+    before = steps[:steps.index(contract)]
+    assert any(s.get('uses') == 'actions/setup-node@v4' for s in before)
+    assert any(s.get('run') == 'npm ci --prefix frontend' for s in before)
+    assert any(s.get('run') == 'uv sync --locked --group dev --group artifacts' for s in before)
+    assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
+    next_step = steps[steps.index(contract) + 1]
+    assert next_step['name'] == 'Run all extended browser scenarios serially'
+    assert 'if' not in next_step  # Implicit success gate leaves initialized rows unrun on failure.
+    # Opt-in can neither mask a failed step nor bypass the existing always upload.
+    assert not any('continue-on-error' in step for step in steps)
+    diagnostics = steps[-1]
+    assert diagnostics['if'] == 'always()'
+    assert diagnostics['uses'] == 'actions/upload-artifact@v4'
+    assert 'output/browser-checks/' in diagnostics['with']['path']
 
 
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():

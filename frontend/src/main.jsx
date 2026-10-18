@@ -186,11 +186,15 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  const chatReference=action==='session.select'&&args.chatReference;
+  if(chatReference&&meta.chatReferenceIntent!==undefined&&meta.chatReferenceIntent!==archiveRevision.current)
+   return Promise.resolve({accepted:false,superseded:true,error:'A newer navigation kept this chat reference from opening.'});
   if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return Promise.resolve({accepted:false});
-  if(!meta.archiveIsCurrent&&(isNavigationAction(action,args)||action==='session.create'||action==='view.update'&&['panel','workWorkspaceTab'].some(key=>Object.hasOwn(args.patch||{},key))))archiveRevision.current++;
+  if(!meta.archiveIsCurrent&&!(chatReference&&meta.chatReferenceIntent!==undefined)&&(isNavigationAction(action,args)||action==='session.create'||action==='view.update'&&['panel','workWorkspaceTab'].some(key=>Object.hasOwn(args.patch||{},key))))archiveRevision.current++;
+  if(chatReference)meta={...meta,chatReferenceIntent:meta.chatReferenceIntent??archiveRevision.current};
   if(meta.chatLink&&!meta.chatLinkIsCurrent())return Promise.resolve({accepted:false});
   const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
-  if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
+  if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,superseded:!!chatReference&&meta.chatReferenceIntent!==archiveRevision.current,error:'Settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
   const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
@@ -211,8 +215,10 @@ function App(){
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
-  // External links keep the current draft and canvas mounted until acceptance.
-  const navigationToken=selectedId&&!meta.chatLink&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
+  // References, like external links, keep source controls/editors mounted until
+  // acceptance. The same navigation queue and Settings/Canvas guards still own
+  // the transition; rejection must not destroy the control that shows it.
+  const navigationToken=selectedId&&!meta.chatLink&&!chatReference&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
@@ -225,6 +231,9 @@ function App(){
    if(navigation&&dirtyBarrier)await dirtyBarrier;
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
    if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return {accepted:false};
+   if(chatReference&&(meta.chatReferenceIntent!==archiveRevision.current||
+     latest.current?.selectedSessionId!==chatReference.sourceSessionId))
+    return {accepted:false,superseded:true,error:'The view changed. Open the reference from its original reply.'};
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(result.state)acceptState(result.state);
    else await awaitState(result);
@@ -252,9 +261,14 @@ function App(){
     setState(pendingView.current.apply(latest.current));
    }
    if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
+   if(chatReference&&result.accepted===true)requestAnimationFrame(()=>{
+    if(meta.chatReferenceIntent!==archiveRevision.current||latest.current?.selectedSessionId!==args.id)return;
+    const messages=root.current?.querySelector('[data-part="messages"]');
+    if(messages?.dataset.sessionId===args.id){messages.setAttribute('tabindex','-1');messages.focus({preventScroll:true})}
+   });
    if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;
-  }).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});
+  }).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
   queue.current=promise.catch(()=>{});
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;

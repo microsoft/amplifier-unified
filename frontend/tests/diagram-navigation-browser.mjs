@@ -8,11 +8,48 @@ import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 if(process.env.DIAGRAM_EVIDENCE)mkdirSync(dirname(process.env.DIAGRAM_EVIDENCE),{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser;const results=[],errors=[];
+let browser,page,primary;const results=[],errors=[],panFacts=[],secondary=[];
+async function recordPan(kind,phase,assertionImageBox=null){
+ const sample={kind,phase,assertionImageBox};panFacts.push(sample);let timer;
+ try{
+  assert.ok(panFacts.length<=7,'At most three pan boundaries per kind and one failure boundary');
+  sample.facts=await Promise.race([page.evaluate(()=>{
+   const state=window.amplifier?.getState(),canvas=state?.canvas;
+   const view=state?.canvasWorkspace?.views?.find(row=>row.viewId==='primary');
+   const stage=document.querySelector('[data-canvas-view="primary"] .a-diagram-stage');
+   const image=stage?.querySelector('img');
+   const scalar=value=>typeof value==='string'&&value.length<=200?value:null;
+   const number=value=>Number.isFinite(value)?value:null;
+   const rect=node=>{if(!node)return null;const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height}};
+   const style=image?getComputedStyle(image):null;
+   const matrix=style&&style.transform!=='none'?new DOMMatrixReadOnly(style.transform):null;
+   return {at:performance.now(),
+    artifact:{id:scalar(canvas?.id),kind:scalar(canvas?.kind),selectedVersion:number(canvas?.selectedVersion),
+     resourceId:scalar(view?.resourceId),resourceRevision:scalar(view?.resourceRevision),generation:number(view?.generation)},
+    state:{viewStatus:scalar(view?.status),previewStatus:scalar(view?.renderReports?.preview?.status),
+     canvasPreviewStatus:scalar(canvas?.renderReports?.preview?.status),
+     savedPanX:number(view?.view?.panX),savedPanY:number(view?.view?.panY),savedZoom:number(view?.view?.zoom)},
+    stage:{box:rect(stage),clientWidth:stage?.clientWidth??null,clientHeight:stage?.clientHeight??null,
+     scrollLeft:stage?.scrollLeft??null,scrollTop:stage?.scrollTop??null},
+    image:{box:rect(image),complete:image?.complete??null,naturalWidth:image?.naturalWidth??null,
+     naturalHeight:image?.naturalHeight??null,offsetWidth:image?.offsetWidth??null,offsetHeight:image?.offsetHeight??null,
+     cssWidth:scalar(style?.width),cssHeight:scalar(style?.height),visibility:scalar(style?.visibility),
+     transform:scalar(style?.transform),transformOrigin:scalar(style?.transformOrigin),
+     matrix:matrix?{a:matrix.a,b:matrix.b,c:matrix.c,d:matrix.d,e:matrix.e,f:matrix.f}:null},
+    layout:{viewer:rect(stage?.closest('.a-canvas-viewer')),preview:rect(stage?.closest('.a-canvas-preview')),
+     panel:rect(stage?.closest('[data-part="canvas"]')),viewport:{width:innerWidth,height:innerHeight},
+     resultBox:rect(document.querySelector('[data-part="canvas"] .a-canvas-result[role="status"]')),
+     resultPending:document.querySelectorAll('[data-part="canvas"] .a-canvas-result:not(.success):not(.error)').length,
+     resultSuccess:document.querySelectorAll('[data-part="canvas"] .a-canvas-result.success').length,
+     resultError:document.querySelectorAll('[data-part="canvas"] .a-canvas-result.error').length}};
+  }),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Pan diagnostic observation timed out')),2000)})]);
+ }catch(error){sample.error={name:error.name,code:error.code??null};secondary.push(error)}
+ finally{clearTimeout(timer)}
+}
 try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
- const page=await browser.newPage({viewport:{width:1400,height:1100},hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ page=await browser.newPage({viewport:{width:1400,height:1100},hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
  const commands=[];page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const body=request.postDataJSON();commands.push(body)}});
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
@@ -30,8 +67,11 @@ try{
   record(kind,'fit retains complete tall graph',picture.height<=box.height+1&&picture.width<=box.width+1&&picture.height>=box.height*.8,{imageHeight:picture.height});
   const x=box.x+box.width*.65,y=box.y+box.height*.6;
   const before=await img.boundingBox(),requestStart=commands.length;
-  await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+80,y+45,{steps:8});
+  await recordPan(kind,'baseline',before);
+  await page.mouse.move(x,y);await page.mouse.down();await recordPan(kind,'pointer-down');
+  await page.mouse.move(x+80,y+45,{steps:8});
   const during=await img.boundingBox();
+  await recordPan(kind,'during-drag',during);
   record(kind,'pan follows pointer before release',Math.abs((during.x-before.x)-80)<2&&Math.abs((during.y-before.y)-45)<2,{deltaX:during.x-before.x,deltaY:during.y-before.y});
   record(kind,'pan does not send per-move commands',commands.length===requestStart,{commandsDuringDrag:commands.length-requestStart});
   await page.mouse.up();await expect.poll(async()=>Math.round((await saved()).panX||0)).toBe(80);
@@ -112,7 +152,20 @@ try{
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({results,errors}));
  assert.ok(results.every(row=>row.passed),JSON.stringify(results.filter(row=>!row.passed)));
+}catch(error){
+ primary=error;
+ if(page&&!page.isClosed())await recordPan('failure','before-cleanup');
 }finally{
- if(process.env.DIAGRAM_EVIDENCE)writeFileSync(process.env.DIAGRAM_EVIDENCE,JSON.stringify({results,errors},null,2));
- try{await browser?.close()}finally{fixture.kill('SIGTERM')}
+ try{
+  const path=process.env.DIAGRAM_EVIDENCE||root+'output/browser-checks/diagram-navigation/report.json';
+  mkdirSync(dirname(path),{recursive:true});
+  writeFileSync(path,JSON.stringify({results,errors,panFacts,
+   primary:primary?{name:primary.name,code:primary.code??null}:null,
+   diagnosticErrors:secondary.map(error=>({name:error.name,code:error.code??null}))},null,2));
+ }catch(error){secondary.push(error)}
+ try{await browser?.close()}catch(error){secondary.push(error)}
+ try{fixture.kill('SIGTERM')}catch(error){secondary.push(error)}
 }
+if(primary&&secondary.length)throw new AggregateError([primary,...secondary],'Diagram primary failure with diagnostic/cleanup failures',{cause:primary});
+if(primary)throw primary;
+if(secondary.length)throw new AggregateError(secondary,'Diagram diagnostic/cleanup failure');
