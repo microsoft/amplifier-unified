@@ -33,6 +33,7 @@ export function useConversationDetail(source,beforeApply){
  if(current.current?.key!==sourceKey)current.current={key:sourceKey};
  const paging=useRef(null),[frozen,setFrozen]=useState(null);
  const reads=useRef(new Set());
+ const [workRead,setWorkRead]=useState(0);
  // A read belongs to the visible chat. Releasing it never cancels an accepted
  // command. Saved-history paging is a disposable read only.
  useEffect(()=>()=>{for(const token of reads.current)if(token.id===sourceKey)token.abort.abort()},[sourceKey]);
@@ -46,6 +47,17 @@ export function useConversationDetail(source,beforeApply){
  const previous=useRef(source?.messageWindow?.total);
  useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null);setNativeView(null)},[originalSource?.id]);
  useEffect(()=>{setFocused(null);setJumpTarget(null)},[originalSource?.id]);
+ // One explicit selected/latest-view read. State publications and field chunks
+ // never drive proof retries; a refused read remains visible for user reopening.
+ const workDeferred=!!originalSource?.execution?.detailsDeferred;
+ useEffect(()=>{
+  if(!sourceKey||!workDeferred)return;
+  const token={id:sourceKey,abort:new AbortController()};reads.current.add(token);
+  request('/api/conversation/detail?'+new URLSearchParams({sessionId:sourceKey,part:'groups'}),{signal:token.abort.signal})
+   .catch(e=>{if(!token.abort.signal.aborted&&current.current?.key===sourceKey)setError(e.message)})
+   .finally(()=>reads.current.delete(token));
+  return()=>{token.abort.abort();reads.current.delete(token)};
+ },[sourceKey,workDeferred,workRead]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
  const extra=saved?.id===source?.id?saved:null;
  // Browser deltas preserve unchanged branches. Keep that identity through the
@@ -84,7 +96,7 @@ export function useConversationDetail(source,beforeApply){
   }catch(error){if(!token.abort.signal.aborted&&originalId.current===id&&paging.current===token&&isCurrent())setError(error.message);return false}
   finally{finishRead(token);if(paging.current===token){paging.current=null;setBusy('')}}
  }
- function latest(jump=true){paging.current?.abort.abort();paging.current=null;setNativeView(null);setFrozen(null);setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
+ function latest(jump=true){paging.current?.abort.abort();paging.current=null;setNativeView(null);setFrozen(null);setFocused(null);setSaved(null);setError('');setBusy('');setWorkRead(value=>value+1);setJumpTarget(jump?{id:'latest'}:null)}
  async function earlier(part){
   if(paging.current||!session)return;
   const id=session.id,token=beginRead(id);
@@ -132,6 +144,7 @@ export function useConversationDetail(source,beforeApply){
   {!nativeHere&&originalSource?.nativeContinuation?.status==='available'&&<button className="a-link" type="button" disabled={!!busy} onClick={openNativeHistory}>View saved runtime history</button>}
   {hasEarlier&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier()}>{busy?'Loading earlier conversation…':'Load earlier conversation'}</button>}
   {!!gaps&&<p role="status">Some saved records could not be shown in this page. Earlier pages remain available.</p>}
+  {originalSource?.workProjection?.rootProof?.status&&originalSource.workProjection.rootProof.status!=='complete'&&<p role="status">Work association {originalSource.workProjection.rootProof.status}. {originalSource.workProjection.rootProof.status!=='pending'&&<button type="button" className="a-link" onClick={()=>setWorkRead(value=>value+1)}>Open latest work</button>}</p>}
   {busy&&!hasEarlier&&<p role="status">Loading conversation…</p>}{error&&<p role="alert">{error}</p>}
  </>;
 

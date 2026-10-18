@@ -38,7 +38,7 @@ jobs:
         run: |
           mkdir -p ../output/browser-checks
           set -o pipefail
-          node --test tests/work-segments.test.mjs tests/interim-replies.test.mjs tests/interim-cold-oracle.test.mjs 2>&1 | tee ../output/browser-checks/interim-node-controls.tap
+          node --test tests/work-segments.test.mjs tests/interim-replies.test.mjs tests/interim-cold-oracle.test.mjs tests/work-detail-sync.test.mjs tests/conversation-detail.test.mjs 2>&1 | tee ../output/browser-checks/interim-node-controls.tap
       - run: npm run build --prefix frontend
       - name: Install browser dependencies
         working-directory: frontend

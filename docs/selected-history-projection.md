@@ -92,8 +92,8 @@ lifecycle rows use their own attested pair, without inventing provider payloads.
 An explicit host request may additionally call `WorkWindows.prove(session_id)`,
 or the equivalent private latest-read option `read(..., proof=True)`. This is
 not a new public HTTP parameter, a snapshot side effect or a field-read retry.
-The live overlay, cold pagination/sync consumer and frontend still need their
-separate integration. A complete proof alone does not satisfy their acceptance.
+The consumer candidate below connects this prerequisite to selected Work.
+A complete proof alone does not satisfy consumer or rendered acceptance.
 
 Each operation owns one canonical owner/source/window generation and one
 20-second aggregate deadline, including worker waits and aggregation. It asks
@@ -139,9 +139,58 @@ unverified identity and normal exact-source field readability; proof incompleten
 does not delete them. No logging, capture opt-out, index writer, agent read scope
 or historical accounting authority changes.
 
-This source candidate needs focused cumulative-proof and lifecycle execution
-before qualification. The normal live-reference and large-history acceptance
-failures remain open; recent-only success is not behind-tail acceptance.
+At source `59c2eccb7`, the fixed diagnostic executed all181 cases:178 passed and
+three ordinary live/large-history cases failed. All70 new cumulative-proof cases
+passed at the synthetic emitter/index and in-process reader boundary. That is
+not native/subprocess/rendered consumer qualification. The original failures
+remain open until the consumer increment executes its discriminating checks.
+
+### Selected Work consumers (source candidate, unqualified)
+
+The bundled conversation loader issues one explicit latest `groups` read when
+selecting a deferred Work conversation or choosing Return/Open latest work.
+Metadata publications, sync and field requests never start a proof. A latest
+resident node open can also start/join it; a refusal has no automatic loop.
+`read_selected` publishes cold placement only after complete proof. The existing
+raw page cursor reuses retained proof pages, rather than replacing their support.
+
+Live metadata remains untouched. The private overlay compares every terminal
+invocation field against authenticated lifecycle facts: logical ID, kind,
+canonical session/root, turn, parent, revision, phase and exact start/end. Tools
+also require the exact call identity. No call-ID-only association is accepted.
+References identify a client's admitted group/entry/position and a specific proof;
+their versions include reference availability. Sync can therefore replace a row
+without stale references when its proof expires. The canonical read uses the
+existing bounded awaited worker field operation. Client, owner, entry, position,
+lifecycle, digest, proof, source/index and invalidation dependencies are checked
+before and after its await; failure never falls back to a weaker resolver.
+
+Cold ordinary groups use completed resident host turns and existing within-turn
+placement. Their node pages contain at most100 rows, with signed client/owner/
+group/proof/revision/entry cursors. Browser field receipts are separate from raw
+occurrence references. Eight bounded client entries retain IDs/cursors, never
+page bodies or owners; support-page eviction invalidates their references.
+
+The bundled sync protocol sends `paged:true` and at most100 `known` IDs per
+request. Each response covers only that chunk, with complete replacement rows
+for changed IDs. The first revision pins every later chunk. One final
+`nodes&preserve=true&revision=...` read admits the latest100 without discarding
+older admissions and returns the combined window's oldest cursor. The frontend
+publishes only after all chunks and that latest page agree; errors preserve the
+prior view with a visible error, not a partial merge or retry-until-success.
+The live synchronization token covers every admitted physical position plus the
+current tail, not only the latest group summary. A change to an older retained
+row invalidates later chunks/finalization. Later explicit history paging extends
+admission and issues a new token after validating the preceding scope.
+The direct non-browser resident helper retains its previous bounded interface;
+registered browser requests enforce100 IDs. No limits are raised.
+
+The fixed diagnostic adds the resident consumer test file; its full default,
+dependencies, permissions and timeout remain unchanged. The existing browser
+workflow adds only fixed Node consumer/selection tests to its controls, retaining
+the complete maintained browser manifest and build. Both commands remain unrun
+for this consumer source candidate. The original144-call/full-Unicode/ownership/
+no-duplicates assertions remain; only their sync transport is chunked.
 
 Placement also requires the completed host turn and unambiguous message times
 already resident in the requested window. Time places work only within that
@@ -164,8 +213,8 @@ source/owner/page and invalidation-fence checks. Raw availability does not prove
 turn association, and these additions remain unqualified until executed checks pass.
 
 Unproven/off-page work remains in Recent saved work with explicit placement
-coverage. This candidate does not repair live ordinary references, generic
-stale-field failures, arbitrarily large legacy histories, or capture flag policy.
+coverage. The consumer candidate targets ordinary references within the existing
+finite proof contract, not arbitrarily large legacy histories or capture policy.
 The focused emitter/index, negative, HTTP and rendered-order checks must pass
 before this candidate is described as qualified; source inspection is not proof.
 

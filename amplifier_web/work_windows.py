@@ -79,6 +79,7 @@ class WorkWindows:
         self._root_proofs = OrderedDict()
         self._proof_jobs = {}
         self._proof_draining = set()
+        self._cold_reads = OrderedDict()
         from .resident_work_pages import ResidentWorkPages
         self.live_pages = ResidentWorkPages(self)
 
@@ -202,6 +203,9 @@ class WorkWindows:
 
     def retain_interest(self, identities):
         self.live_pages.retain_interest(identities)
+        for key in tuple(self._cold_reads):
+            if key[1] not in identities:
+                self._cold_reads.pop(key, None)
         for identity, proof in tuple(self._root_proofs.items()):
             if identity not in identities:
                 self._expire_proof(proof, 'departed')
@@ -323,6 +327,11 @@ class WorkWindows:
                 page['_bindingRevision'] == binding_revision(self.service.data_dir))
 
     def _bound_current(self, page):
+        proof_id = page.get('_consumerProof') or page.get('_consumerSupport')
+        if proof_id:
+            state = self._proof_state(page['sessionId'], physical=True)
+            if not state or state['id'] != proof_id or state['status'] != 'complete':
+                return False
         return (page.get('_bindingRevision') is not None
                 and self.epochs.get(page['sessionId']) == page.get('_bindingFence')
                 and self._binding_current(page)
@@ -380,6 +389,143 @@ class WorkWindows:
         proof = self._root_proofs[identity]
         page = self.pages[proof['pages'][0][0]]
         return deepcopy(page.get('_rootProofBound', []))
+
+    def live_binding(self, session, row, proof_id=None):
+        """Overlay only a full attested invocation match; never discover history."""
+        state = self._proof_state(session['id'], session, physical=True)
+        if (state is None or state['status'] != 'complete'
+                or proof_id is not None and state['id'] != proof_id):
+            return None, None
+        proof = self._root_proofs[session['id']]
+        pages = [self.pages[group] for group, _, _ in proof['pages']]
+        # These are authenticated, bounded scalar facts retained by the proof,
+        # not JSONL fields promoted to authority by their spelling.
+        terminal = []
+        for page in pages:
+            attested = set(page['_proof']['attestedIds'])
+            terminal.extend(fact for fact in page['_proof']['facts']
+                if fact['id'] in attested and fact['data'].get('id') == row.get('id')
+                and fact['data'].get('phase') in {'completed', 'error'})
+        if len(terminal) != 1:
+            return None, None
+        fact = terminal[0]
+        metadata = fact['data']
+        fields = ('id', 'kind', 'sessionId', 'rootSessionId', 'turnId', 'parentId',
+                  'revision', 'phase', 'startedAt', 'endedAt')
+        if any(key not in row or key not in metadata or type(row[key]) is not type(metadata[key])
+               or row[key] != metadata[key] for key in fields):
+            return None, None
+        if row.get('kind') == 'tool' and (
+                row.get('toolCallId') != metadata.get('tool_call_id')
+                or row['id'] != f"tool:{row['rootSessionId']}:{row.get('toolCallId')}"):
+            return None, None
+        candidates = [bound for bound in pages[0].get('_rootProofBound', [])
+                      if fact['id'] in bound['sourceOccurrenceIds']]
+        if len(candidates) != 1:
+            return None, None
+        return state['id'], deepcopy(candidates[0])
+
+    async def read_proven_field(self, identity, proof_id, bound_id, args):
+        """Read one exact proof-owned field; callers additionally fence their view."""
+        owner = self._owner(identity)
+        proof = self._root_proofs.get(identity)
+        rows = self.proof_nodes(identity, proof_id)
+        matches = [row for row in rows if row['id'] == bound_id]
+        row = matches[0] if len(matches) == 1 else {}
+        field = args.get('field')
+        reference = row.get('_eventFields', {}).get(field)
+        detail = row.get(str(field) + 'Detail', {})
+        if reference is None or args.get('digest') != detail.get('digest'):
+            raise ValueError('This proven Work field is unavailable.')
+        result = await self._worker().project({
+            'operation': 'field', 'session': proof['source'], 'reference': reference,
+            'offset': int(args.get('offset', 0)),
+            'limit': min(16384, max(1, int(args.get('limit', 16000))))},
+            key=identity + ':proof-field:' + proof_id + ':' + bound_id)
+        if self._owner(identity) is not owner or self._root_proofs.get(identity) is not proof:
+            raise ValueError('This proven Work field expired.')
+        current = self.proof_nodes(identity, proof_id)
+        if not any(value == row for value in current):
+            raise ValueError('This proven Work field changed.')
+        if result.get('status') != 'complete':
+            raise ValueError('This proven Work field changed.')
+        value = result['field']
+        return {'value': value['text'], 'nextOffset': value['nextOffset'], 'total': value['total']}
+
+    async def read_selected(self, identity, before=None):
+        """Explicit selected Work read; never called by state/interest/field polling."""
+        owner = self._owner(identity)
+        if before is not None:
+            # Proof pages already own this exact authenticated continuation.
+            # Reuse them rather than replacing support while paging raw evidence.
+            proof = self._root_proofs.get(identity)
+            if proof is not None:
+                self._proof_state(identity, owner, physical=True)
+                for group, object_id, _ in proof['pages']:
+                    page = self.pages.get(group)
+                    if (page is not None and id(page) == object_id
+                            and page['_proof']['requestBefore'] == before):
+                        return self._groups(page, bindings=proof['status'] == 'complete')
+            return await self.read(identity, before=before)
+        prior = self._proof_state(identity, owner, physical=True)
+        # A fresh explicit latest request may reopen superseded support. Passive
+        # requests and field/sync reads cannot take this path or retry a proof.
+        state = await self.prove(identity, reopen=bool(prior and prior['status'] in {'stale', 'incomplete'}))
+        proof = self._root_proofs.get(identity)
+        if state['status'] == 'stale':
+            raise _SupersededRead('The requested conversation changed. Open it again.')
+        if self._owner(identity) is not owner or not proof or proof['id'] != state['id']:
+            raise _SupersededRead('The requested conversation changed. Open it again.')
+        pages = [self.pages[group] for group, _, _ in proof['pages']]
+        if not pages:
+            return {'items': [], 'turns': [], 'mode': 'cursor', 'before': None,
+                    'hasEarlier': False, 'total': None, 'rootProof': state,
+                    'coverage': {'historyComplete': False}, 'unavailableRanges': []}
+        first = pages[0]
+        # Proof-support pages are raw evidence, never a second set of ordinary
+        # page-local groups. Only this selected consumer's cumulative placement
+        # below can expose ordinary calls.
+        if first.get('_consumerProof') != proof['id']:
+            for page in pages:
+                page['_boundGroups'], page['_boundNodes'], page['_boundTurns'] = {}, {}, {}
+                page['_unassociatedIds'] = {row['id'] for row in page['items']}
+                page['_consumerSupport'] = proof['id']
+        if state['status'] == 'complete':
+            if first.get('_consumerProof') != proof['id']:
+                first['_consumerProof'] = proof['id']
+                first['_consumerRevision'] = proof['id']
+                self._prepare_bound_groups(first, owner, bound_work=first.get('_rootProofBound', []))
+                for group in first['_boundGroups'].values():
+                    group['detailRevision'] = proof['id']
+                used = {occurrence for rows in first['_boundNodes'].values()
+                        for row in rows for occurrence in row['sourceOccurrenceIds']}
+                from .cold_display import raw
+                # Exact resident invocation matches suppress duplicate raw work,
+                # but raw evidence remains available through observations().
+                resident_nodes = raw(owner).get('execution', {}).get('nodes', [])
+                for start in range(max(0, len(resident_nodes) - 800), len(resident_nodes), 100):
+                    for row in resident_nodes[start:start + 100]:
+                        _, bound = self.live_binding(owner, row, proof['id'])
+                        if bound is not None:
+                            used.update(bound['sourceOccurrenceIds'])
+                for page in pages:
+                    page['_consumerSupport'] = proof['id']
+                    page['_unassociatedIds'] = {row['id'] for row in page['items']} - used
+        current = self._proof_state(identity, physical=True)
+        if (current is None or current['id'] != state['id'] or current['status'] != state['status']
+                or self._root_proofs.get(identity) is not proof
+                or self._owner(identity) is not owner):
+            raise _SupersededRead('The requested conversation changed. Open it again.')
+        state = current
+        self.current[identity] = first['group']
+        self.generation += 1
+        first['receipt'] = {'hostInstanceId': getattr(self.service, 'instance_id', None),
+            'sessionId': identity, 'generation': self.generation, 'scope': 'root-proof',
+            'windowKey': first['windowKey'], 'historyComplete': False,
+            'proofId': proof['id'], 'itemCount': len(first['items'])}
+        self._state(identity, {'status': 'ready', 'current': True,
+                               'receipt': first['receipt'], 'rootProof': state})
+        return {**self._groups(first, bindings=state['status'] == 'complete'), 'rootProof': state}
 
     async def prove(self, identity, *, reopen=False):
         """One explicit, joinable, <=8-page proof; never entered from polling."""
@@ -562,7 +708,7 @@ class WorkWindows:
             self._notify(identity)
 
     @staticmethod
-    def _prepare_bound_groups(page, owner):
+    def _prepare_bound_groups(page, owner, *, bound_work=None):
         """Place proved root calls only against already resident host facts.
 
         Never hydrate a cold record, infer a turn from time, or duplicate live
@@ -579,7 +725,7 @@ class WorkWindows:
         if any(row.get('liveObservation') for row in tree.get('nodes', [])[-100:]):
             page['_unassociatedIds'] = {row['id'] for row in page['items']}
             return
-        for original in page.get('_boundWork', []):
+        for original in page.get('_boundWork', []) if bound_work is None else bound_work:
             candidates = [t for t in turns if t.get('id') == original['turnId']
                           and t.get('phase') == 'completed']
             if len(candidates) != 1:
@@ -677,12 +823,17 @@ class WorkWindows:
         # Snapshots do no source/index IO. Published invalidation hides binding;
         # explicit node/field reads also recheck physical source/index stamps.
         bindings = page is not None and self.epochs.get(session['id']) == page.get('_bindingFence')
+        if bindings and page.get('_consumerProof'):
+            state = self._proof_state(session['id'], session)
+            bindings = bool(state and state['id'] == page['_consumerProof'] and state['status'] == 'complete')
         groups = self._groups(page, bindings=bindings) if page else {'items': [], 'turns': [], 'mode': 'cursor',
             'offset': None, 'total': None, 'before': None, 'hasEarlier': False,
             'coverage': {'kind': 'event-window', 'historyComplete': False}}
         from .browser_detail import page as detail_page
         live_source = self.live_view(session)
         live = detail_page(live_source, 'groups')
+        live['items'] = [{**row, 'detailRevision': self.live_pages.revision_for(
+            session, row['id'], row['detailRevision'])} for row in live['items']]
         from .cold_display import raw
         if len(raw(session).get('execution', {}).get('nodes', [])) > 100:
             # The tail is display evidence, not a complete current-turn count.
@@ -720,8 +871,11 @@ class WorkWindows:
         self.pages.move_to_end(page['group'])
         return page
 
-    def nodes(self, identity, group, *, revision=None, known=None):
+    def nodes(self, identity, group, *, revision=None, known=None, before=None, paged=False, preserve=False):
         page = self._page(identity, group)
+        if page.get('_consumerProof') and group in page.get('_boundGroups', {}):
+            return self._consumer_nodes(identity, group, page, revision=revision,
+                known=known, before=before, paged=paged, preserve=preserve)
         if revision is not None and revision != page['generation']:
             raise ValueError('This saved work window changed. Open it again.')
         items = []
@@ -730,6 +884,12 @@ class WorkWindows:
         unassociated = page.get('_unassociatedIds', {r['id'] for r in page['items']})
         selected = page['_boundNodes'][group] if bound else [
             row for row in page['items'] if not current_binding or row['id'] in unassociated]
+        if paged and known is not None:
+            if (not isinstance(known, dict) or len(known) > 100
+                    or not all(isinstance(k, str) and isinstance(v, str) for k, v in known.items())
+                    or not set(known) <= {row['id'] for row in selected}):
+                raise ValueError('This bounded Work window expired.')
+            selected = [row for row in selected if row['id'] in known]
         for original in selected:
             row = {key: deepcopy(value) for key, value in original.items() if key != '_eventFields'}
             row.update(turnId=original['turnId'] if bound else group, detailVersion=page['generation'],
@@ -742,6 +902,73 @@ class WorkWindows:
         return {'items': items, 'order': [row['id'] for row in selected],
                 'offset': 0, 'total': len(selected), 'before': None,
                 'group': group, 'revision': page['generation'], 'coverage': page['coverage']}
+
+    def _consumer_nodes(self, identity, group, page, *, revision, known, before, paged, preserve):
+        """Bounded client-owned node pages over the already accepted root proof."""
+        version, proof_id = page['_consumerRevision'], page['_consumerProof']
+        if revision is not None and revision != version:
+            raise ValueError('This Work proof changed. Reopen its latest steps.')
+        client = self.live_pages._client()
+        key = client, identity, group
+        entry = self._cold_reads.get(key)
+        rows = page['_boundNodes'][group]
+        if known is not None:
+            if (not isinstance(known, dict) or len(known) > 100
+                    or not all(isinstance(k, str) and isinstance(v, str) for k, v in known.items())
+                    or entry is None or entry['page'] != id(page)
+                    or entry['proof'] != proof_id or not set(known) <= entry['ids']):
+                raise ValueError('This bounded Work window expired.')
+            selected = [row for row in rows if row['id'] in known]
+            cursor = entry.get('before')
+        else:
+            if before is not None:
+                token = self.live_pages._parse(before)
+                if (entry is None or entry['page'] != id(page) or entry['proof'] != proof_id
+                        or not isinstance(token, dict)
+                        or any(token.get(k) != v for k, v in {
+                            'kind': 'cold-proof-page', 'client': client, 'session': identity,
+                            'group': group, 'revision': version, 'entry': entry['key'],
+                            'fence': self.epochs.get(identity)}.items())):
+                    raise ValueError('This Work cursor expired.')
+                end = token.get('end')
+                if type(end) is not int or not 0 < end <= len(rows):
+                    raise ValueError('This Work cursor expired.')
+            else:
+                end = len(rows)
+                if not preserve or entry is None or entry['page'] != id(page) or entry['proof'] != proof_id:
+                    entry = {'page': id(page), 'proof': proof_id, 'ids': set(),
+                        'key': 'proof-work:' + self.live_pages._token(
+                            [client, identity, group, version, secrets.token_hex(16)])}
+            start = max(0, end - 100)
+            selected = rows[start:end]
+            entry['ids'].update(row['id'] for row in selected)
+            if len(entry['ids']) > 800:
+                raise ValueError('This Work window reached its bounded page limit.')
+            cursor = self.live_pages._token({'kind': 'cold-proof-page', 'client': client,
+                'session': identity, 'group': group, 'revision': version,
+                'entry': entry['key'], 'fence': self.epochs.get(identity), 'end': start}) if start else None
+            if preserve and before is None and 'before' in entry:
+                cursor = entry['before']
+            entry['before'] = cursor
+            self._cold_reads.pop(key, None)
+            self._cold_reads[key] = entry
+            while len(self._cold_reads) > MAX_PAGES:
+                self._cold_reads.popitem(last=False)
+        items = []
+        for original in selected:
+            if known is not None and known.get(original['id']) == version:
+                continue
+            row = {k: deepcopy(v) for k, v in original.items() if k != '_eventFields'}
+            row.update(detailVersion=version, observationWindow=False)
+            for field in ('input', 'output', 'error', 'request', 'response'):
+                if field + 'Detail' in row:
+                    row[field + 'Detail'].update(sessionId=identity, id=row['id'],
+                        windowKey=entry['key'], proofId=proof_id)
+            items.append(row)
+        return {'items': items, 'order': [row['id'] for row in selected],
+                'mode': 'cursor', 'offset': None, 'total': len(rows), 'before': cursor,
+                'hasEarlier': cursor is not None, 'group': group, 'revision': version,
+                'coverage': page['coverage'], 'rootProof': self._proof_state(identity)}
 
     def observations(self, identity, group, revision):
         """Read original occurrences, independently of ordinary Work placement."""
@@ -768,10 +995,14 @@ class WorkWindows:
                 'evidence': self._evidence(page)}
 
     async def read_text(self, identity, args):
+        if str(args.get('windowKey', '')).startswith('proof-work:'):
+            return await self._read_consumer_field(identity, args)
         owner = self._owner(identity)
         page = self._page(owner['id'], args.get('windowKey'))
         group = args.get('windowKey')
         bound = group in page.get('_boundGroups', {})
+        if bound and page.get('_consumerProof'):
+            raise ValueError('Use this browser’s admitted Work field reference.')
         fence = self.epochs.get(identity)
         mapping = page.get('_boundNodes', {}).get(group)
         selected = page.get('_boundNodes', {}).get(group, page['items'])
@@ -796,6 +1027,29 @@ class WorkWindows:
         value = result['field']
         return {'value': value['text'], 'nextOffset': value['nextOffset'], 'total': value['total']}
 
+    async def _read_consumer_field(self, identity, args):
+        client = self.live_pages._client()
+        entries = [(key, entry) for key, entry in self._cold_reads.items()
+                   if key[:2] == (client, identity) and entry['key'] == args.get('windowKey')]
+        if len(entries) != 1:
+            raise ValueError('This Work field window expired.')
+        key, entry = entries[0]
+        page = self._page(identity, key[2])
+        if (id(page) != entry['page'] or args.get('id') not in entry['ids']
+                or args.get('proofId') != entry['proof']):
+            raise ValueError('This Work field window expired.')
+        # The group membership and admitted page are separate from root proof
+        # authority. Both must still exist after the canonical read suspends.
+        row = next((r for r in page['_boundNodes'][key[2]] if r['id'] == args.get('id')), None)
+        if row is None:
+            raise ValueError('This Work field membership expired.')
+        result = await self.read_proven_field(identity, entry['proof'], row['id'], args)
+        if (self.live_pages._client() != client or self._cold_reads.get(key) is not entry
+                or self._page(identity, key[2]) is not page or args['id'] not in entry['ids']
+                or not any(r is row for r in page['_boundNodes'][key[2]])):
+            raise ValueError('This Work field window expired.')
+        return result
+
     async def close(self):
         self.closed = True
         tasks = (*tuple(self.pending.values()), *tuple(self._proof_jobs.values()))
@@ -811,3 +1065,4 @@ class WorkWindows:
         self.pages.clear(); self.current.clear(); self.status.clear()
         self.epochs.clear(); self.retry_at.clear()
         self._root_proofs.clear(); self._proof_jobs.clear(); self._proof_draining.clear()
+        self._cold_reads.clear()

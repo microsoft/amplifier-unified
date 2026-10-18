@@ -169,7 +169,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         windows = service.event_log_view.windows
         if 'field' in request.query:
             if (request.query.get('windowKey') or '').startswith('resident-work:'):
-                return web.json_response(windows.live_pages.read_text(session, dict(request.query)))
+                return web.json_response(await windows.live_pages.read_text(session, dict(request.query)))
             if request.query.get('windowKey'):
                 owner = service.history.windows if request.query.get('part') == 'messages' else windows
                 return web.json_response(await owner.read_text(session['id'], dict(request.query)))
@@ -180,16 +180,20 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 return web.json_response(await service.history.windows.read(session['id'],
                     before=request.query.get('before'), native=request.query.get('native') == 'true'))
             if part == 'groups':
-                return web.json_response(await windows.read(session['id'], before=request.query.get('before')))
+                return web.json_response(await windows.read_selected(session['id'], before=request.query.get('before')))
             if part == 'observations':
                 return web.json_response(windows.observations(session['id'], request.query.get('group'),
                     request.query.get('revision')))
             if part == 'nodes' and (request.query.get('group') or '').startswith('event-window:'):
                 return web.json_response(windows.nodes(session['id'], request.query['group'],
-                    revision=request.query.get('revision')))
+                    revision=request.query.get('revision'), before=request.query.get('before'),
+                    preserve=request.query.get('preserve') == 'true'))
             if part == 'nodes':
+                if request.query.get('before') is None and request.query.get('preserve') != 'true':
+                    await windows.read_selected(session['id'])
                 return web.json_response(windows.live_pages.read(session, request.query.get('group'),
-                    before=request.query.get('before'), revision=request.query.get('revision')))
+                    before=request.query.get('before'), revision=request.query.get('revision'),
+                    preserve=request.query.get('preserve') == 'true'))
         session = service._session(session['id'])
         return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
                                       group=request.query.get('group'), revision=request.query.get('revision'),
@@ -269,15 +273,23 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def conversation_work_sync(request):
         from .browser_detail import sync_work
         args = await request.json()
+        from .work_windows import web_context
+        if web_context(service):
+            known = args.get('known')
+            if not isinstance(known, dict) or len(known) > 100 or not all(
+                    isinstance(k, str) and isinstance(v, str) for k, v in known.items()):
+                raise ValueError('Work versions must map at most100 step IDs to strings.')
         if (args.get('group') or '').startswith('event-window:'):
             known = args.get('known')
             if not isinstance(known, dict) or len(known) > 100 or not all(isinstance(k, str) and isinstance(v, str) for k, v in known.items()):
                 raise ValueError('Work versions must map at most100 step IDs to strings.')
-            return web.json_response(service.event_log_view.windows.nodes(args.get('sessionId'), args['group'], known=known))
+            return web.json_response(service.event_log_view.windows.nodes(args.get('sessionId'), args['group'],
+                known=known, paged=args.get('paged') is True, revision=args.get('revision')))
         session = service._session(args.get('sessionId'), hydrate=False)
-        from .work_windows import web_context
         if web_context(service):
-            return web.json_response(service.event_log_view.windows.live_pages.sync(session, args.get('group'), args.get('known')))
+            return web.json_response(service.event_log_view.windows.live_pages.sync(
+                session, args.get('group'), args.get('known'), paged=args.get('paged') is True,
+                revision=args.get('revision')))
         session = service._session(session['id'])
         return web.json_response(sync_work(session, args.get('group'), args.get('known'),
                                            window_message_id=args.get('windowMessageId')))

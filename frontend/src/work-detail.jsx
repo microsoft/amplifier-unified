@@ -11,6 +11,63 @@ function drain(){
 }
 function read(path,signal,options={}){return new Promise((resolve,reject)=>{waiting.push({path,signal,options,resolve,reject});drain()})}
 
+// Bundled paged sync: each POST returns only an ordered subset of its <=100
+// known IDs and full replacement rows for changed IDs. The first response
+// establishes the revision; later chunks and the final latest GET must match.
+// Nothing mutates the saved snapshot before every response has been validated.
+export async function syncWorkDetail(previous,syncChunk,readLatest){
+ const invalid=()=>{throw new Error('Work details changed or returned an invalid page. Reload the steps to try again.')};
+ const rowsById=(rows,limit)=>{
+  if(!Array.isArray(rows)||rows.length>limit)invalid();
+  const result=new Map();
+  for(const row of rows){
+   if(!row||typeof row.id!=='string'||!row.id||typeof row.detailVersion!=='string'||result.has(row.id))invalid();
+   result.set(row.id,row);
+  }
+  return result;
+ };
+ const original=rowsById(previous.items,Infinity),ordered=[],staged=new Map();
+ let revision;
+ const validate=result=>{
+  if(!result||result.group!==previous.group||typeof result.revision!=='string'||!result.revision
+   ||revision!==undefined&&result.revision!==revision)invalid();
+  revision=result.revision;
+  return rowsById(result.items,100);
+ };
+ for(let start=0;start<Math.max(1,previous.items.length);start+=100){
+  const knownRows=previous.items.slice(start,start+100);
+  const positions=new Map(knownRows.map((row,index)=>[row.id,index]));
+  const result=await syncChunk({paged:true,known:Object.fromEntries(knownRows.map(row=>[row.id,row.detailVersion])),
+   ...(revision===undefined?{}:{revision})});
+  const changed=validate(result);
+  if(!Array.isArray(result.order)||result.order.length>100)invalid();
+  let last=-1;
+  for(const id of result.order){
+   const position=positions.get(id);
+   if(position===undefined||position<=last)invalid();
+   last=position;ordered.push(id);staged.set(id,changed.get(id)||original.get(id));
+  }
+  const retained=new Set(result.order);
+  for(const id of changed.keys())if(!retained.has(id))invalid();
+ }
+ // preserve=true must retain admitted older ranges/field refs and return the
+ // refreshed OLDEST cursor for the combined window, not the latest-page cursor.
+ const latest=await readLatest(revision),latestRows=validate(latest);
+ if(latest.before!==null&&(typeof latest.before!=='string'||!latest.before))invalid();
+ const overlap=[];
+ for(const [id,row] of latestRows){
+  if(original.has(id)&&!staged.has(id))invalid(); // No same-revision resurrection.
+  if(staged.has(id)){
+   if(staged.get(id).detailVersion!==row.detailVersion)invalid();
+   overlap.push(id);
+  }
+ }
+ const suffix=ordered.slice(ordered.length-overlap.length);
+ if(overlap.some((id,index)=>id!==suffix[index]))invalid();
+ const items=[...ordered.filter(id=>!latestRows.has(id)).map(id=>staged.get(id)),...latest.items];
+ return {...previous,...latest,items,order:items.map(row=>row.id)};
+}
+
 export function useWorkDetail(data,turn,open,automatic=false){
  const element=useRef(null),run=useRef(null),[visible,setVisible]=useState(false),[saved,setSaved]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const key=JSON.stringify([data.sessionId,turn.id,turn.windowMessageId]),current=useRef(key);current.current=key;
@@ -37,10 +94,12 @@ export function useWorkDetail(data,turn,open,automatic=false){
     const windowArgs=turn.windowMessageId?{windowMessageId:turn.windowMessageId}:{};
     const args={sessionId:data.sessionId,part:'nodes',group:turn.id,...windowArgs};if(before)args.before=before;
     const sync=previous&&!before;
-    const result=sync?await read('/api/conversation/work-sync',state.abort.signal,{method:'POST',body:{sessionId:data.sessionId,group:turn.id,...windowArgs,known:Object.fromEntries(previous.items.map(row=>[row.id,row.detailVersion]))}}):await read('/api/conversation/detail?'+new URLSearchParams(args),state.abort.signal);
+    const result=sync?await syncWorkDetail(previous,
+     body=>read('/api/conversation/work-sync',state.abort.signal,{method:'POST',body:{sessionId:data.sessionId,group:turn.id,...windowArgs,...body}}),
+     revision=>read('/api/conversation/detail?'+new URLSearchParams({...args,preserve:true,revision}),state.abort.signal)
+    ):await read('/api/conversation/detail?'+new URLSearchParams(args),state.abort.signal);
     if(!live())return;
-    const byId=new Map((previous?.items||[]).map(row=>[row.id,row]));for(const row of result.items)byId.set(row.id,row);
-    const items=sync?result.order.map(id=>byId.get(id)):before?[...result.items,...previous.items.filter(row=>!result.items.some(older=>older.id===row.id))]:result.items;
+    const items=before?[...result.items,...previous.items.filter(row=>!result.items.some(older=>older.id===row.id))]:result.items;
     state.page={key,...result,items};setSaved(state.page);
     if(!before)state.handled=target;
    }catch(e){if(live()){setError(e.message);state.handled=state.wanted}}
