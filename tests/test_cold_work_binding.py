@@ -435,7 +435,8 @@ async def test_raw_evidence_keeps_source_and_after_await_fence(source, change):
             pytest.fail('Raw field completed before its barrier')
         assert barrier in done
         if change == 'source':
-            append_event(source.workspace, 'root', 'tool:post', {'session_id': 'root', 'result': 'later'})
+            append_event(source.workspace, 'root', 'tool:post', {'timestamp': time.time(),
+                'session_id': 'root', 'result': 'later'})
             with pytest.raises(ValueError, match='source changed'):
                 owner.observations('root', evidence['group'], evidence['revision'])
         else:
@@ -500,21 +501,26 @@ async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(sourc
     with service.clients.bind('cold-web'):
         await service.dispatch('session.select', {'id': row['id']})
     client = await authenticated_client(app)
-    client.session.headers['X-Amplifier-Client'] = 'cold-web'
+    stream = None
     try:
+        client.session.headers['X-Amplifier-Client'] = 'cold-web'
+        # Registration alone does not keep selected Work interest alive.
+        stream = await client.ws_connect('/api/events/ws?transport=delta-v1')
+        initial = await stream.receive_json(timeout=5)
+        assert initial['event'] == 'state'
         response = await client.get('/api/conversation/detail', params={'sessionId': 'root', 'part': 'groups'})
-        assert response.status == 200
+        assert response.status == 200, await response.text()
         page = await response.json()
         group = next(g for g in page['items'] if g.get('bindingProvenance'))
         response = await client.get('/api/conversation/detail', params={
             'sessionId': 'root', 'part': 'nodes', 'group': group['id'], 'revision': group['detailRevision']})
-        assert response.status == 200
+        assert response.status == 200, await response.text()
         node = (await response.json())['items'][0]
         reference = node['outputDetail']
         chunks, offset = [], 0
         while True:
             response = await client.get('/api/conversation/detail', params={**reference, 'offset': offset, 'limit': 4096})
-            assert response.status == 200
+            assert response.status == 200, await response.text()
             field = await response.json()
             assert len(field['value']) <= 4096
             chunks.append(field['value'])
@@ -524,7 +530,11 @@ async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(sourc
         assert json.loads(''.join(chunks)) == source.calls[0][3]
         response = await client.post('/api/conversation/work-sync', json={
             'sessionId': 'root', 'group': group['id'], 'known': {node['id']: node['detailVersion']}})
-        assert response.status == 200
+        assert response.status == 200, await response.text()
         assert (await response.json())['order'] == [node['id']]
     finally:
-        await client.close()
+        try:
+            if stream is not None:
+                await stream.close()
+        finally:
+            await client.close()
