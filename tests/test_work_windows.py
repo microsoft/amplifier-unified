@@ -628,3 +628,156 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
                 await socket.close()
         finally:
             await client.close()
+
+
+@pytest.mark.asyncio
+async def test_requested_root_proof_uses_existing_eight_page_budget_and_never_poll_rescans(tmp_path, monkeypatch):
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=576)
+    from amplifier_web.diagnostics import Diagnostics
+    service.state = {'sessions': [session]}
+    service.default_workspace = '/fixture'
+    diagnostics = Diagnostics(service)
+    try:
+        result = await owner.prove('s')
+        assert result['status'] == 'complete' and result['steps'] == 6
+        assert len(owner.pages) == 6 <= 8
+        assert len(owner.projector.inputs) == 6
+        assert all(value['operation'] == 'proof-step' for value in owner.projector.inputs)
+        assert len({value['deadline'] for value in owner.projector.inputs}) == 1
+        for _ in range(5):
+            assert owner.project(session)['workProjection']['rootProof']['status'] == 'complete'
+            assert owner.request('s') is None
+            assert (await owner.prove('s'))['status'] == 'complete'
+        assert len(owner.projector.inputs) == 6
+        assert owner.proof_nodes('s', result['id']) == []  # No manufactured receipt authority.
+        raw = next(iter(owner.pages.values()))
+        assert owner.observations('s', raw['group'], raw['generation'])['items']
+        assert all(row['association'] == 'unverified' for page in owner.pages.values() for row in page['items'])
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+async def test_root_proof_ninth_page_is_incomplete_and_explicit_reopen_is_bounded(tmp_path, monkeypatch):
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=901)
+    from amplifier_web.diagnostics import Diagnostics
+    service.state = {'sessions': [session]}
+    service.default_workspace = '/fixture'
+    diagnostics = Diagnostics(service)
+    try:
+        result = await owner.prove('s')
+        assert result['status'] == 'incomplete' and result['reason'] == 'page-limit'
+        assert result['steps'] == len(owner.projector.inputs) == len(owner.pages) == 8
+        assert owner.request('s') is None
+        assert (await owner.prove('s')) == result
+        assert len(owner.projector.inputs) == 8
+        reopened = await owner.prove('s', reopen=True)
+        assert reopened['id'] != result['id'] and reopened['steps'] == 8
+        assert reopened['status'] == 'incomplete' and len(owner.pages) <= 8
+        assert len(owner.projector.inputs) == 16  # Two distinct explicit finite operations, not a ninth step.
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['source', 'index', 'owner', 'epoch', 'eviction'])
+async def test_root_proof_expires_all_support_after_completed_or_inflight_change(tmp_path, monkeypatch, mutation):
+    owner, session, path, service = fixture(tmp_path, monkeypatch, count=140)
+    from amplifier_web.diagnostics import Diagnostics
+    service.state = {'sessions': [session]}
+    service.default_workspace = '/fixture'
+    diagnostics = Diagnostics(service)
+    try:
+        result = await owner.prove('s')
+        assert result['status'] == 'complete'
+        if mutation == 'source':
+            with path.open('a') as stream:
+                stream.write('{}\n')
+        elif mutation == 'index':
+            with diagnostics._db() as db:
+                db.execute("INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES('new',0,'tools','s','/fixture','tool:post','{}')")
+        elif mutation == 'owner':
+            other = dict(session)
+            service._session = lambda identity, hydrate=False: other
+        elif mutation == 'epoch':
+            owner.invalidate({'s'})
+        else:
+            owner.pages.pop(next(iter(owner.pages)))
+        with pytest.raises(ValueError, match='proof'):
+            owner.proof_nodes('s', result['id'])
+        assert owner.project(session)['workProjection']['rootProof']['status'] == 'stale'
+        before = len(owner.projector.inputs)
+        assert (await owner.prove('s'))['status'] == 'stale'
+        assert owner.request('s') is None
+        assert len(owner.projector.inputs) == before
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+async def test_root_proof_aggregate_deadline_keeps_late_worker_owned_without_publication(tmp_path, monkeypatch):
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=140)
+    from amplifier_web.diagnostics import Diagnostics
+    import amplifier_web.work_windows as windows_module
+    service.state = {'sessions': [session]}
+    service.default_workspace = '/fixture'
+    diagnostics = Diagnostics(service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    project = owner.projector.project
+    async def held(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await project(*args, **kwargs)
+    monkeypatch.setattr(owner.projector, 'project', held)
+    monkeypatch.setattr(windows_module, 'PROOF_SECONDS', .05)
+    task = asyncio.create_task(owner.prove('s'))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        result = await asyncio.wait_for(asyncio.shield(task), 1)
+        assert result['status'] == 'incomplete' and result['reason'] == 'deadline'
+        assert owner._proof_draining and not owner.pages
+        release.set()
+        await asyncio.gather(*tuple(owner._proof_draining), return_exceptions=True)
+        assert not owner.pages
+        assert owner.project(session)['workProjection']['rootProof']['reason'] == 'deadline'
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+async def test_same_root_proof_waiters_join_and_owner_epoch_change_rejects_late_step(tmp_path, monkeypatch):
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=140)
+    from amplifier_web.diagnostics import Diagnostics
+    service.state = {'sessions': [session]}
+    service.default_workspace = '/fixture'
+    diagnostics = Diagnostics(service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = owner.projector.project
+    calls = []
+    async def held(*args, **kwargs):
+        calls.append(args)
+        entered.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(owner.projector, 'project', held)
+    first = asyncio.create_task(owner.prove('s'))
+    second = None
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(owner.prove('s'))
+        owner.invalidate({'s'})
+        release.set()
+        a, b = await asyncio.wait_for(asyncio.gather(first, second), 2)
+        assert a['id'] == b['id'] and a['status'] == b['status'] == 'stale'
+        assert len(calls) == 1 and not owner.pages
+    finally:
+        release.set()
+        await asyncio.gather(*(task for task in (first, second) if task is not None), return_exceptions=True)
+        await owner.close()
+        await diagnostics.close()
