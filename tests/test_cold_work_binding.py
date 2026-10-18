@@ -645,7 +645,7 @@ async def test_obsolete_cold_http_refuses_then_one_current_request_reads_full_wo
         source, authenticated_client, monkeypatch, change):
     async with _ready_cold_web(source, authenticated_client, monkeypatch) as (service, client):
         windows = service.event_log_view.windows
-        original_read, worker = windows.read, windows._worker()
+        original_read, worker = windows.read_selected, windows._worker()
         original_project = worker.project
         original_check = windows._check_current
         foreground = ContextVar('held-cold-http', default=False)
@@ -664,7 +664,7 @@ async def test_obsolete_cold_http_refuses_then_one_current_request_reads_full_wo
                 foreground.reset(token)
         async def held_project(inputs, *, key):
             result = await original_project(inputs, key=key)
-            if foreground.get() and inputs.get('operation') == 'window':
+            if foreground.get() and inputs.get('operation') == 'proof-step':
                 assert result['status'] == 'complete', result.get('reason')
                 evidence.update(epoch=windows.epochs.get('root'),
                                 revision=result['page']['generation'])
@@ -677,7 +677,7 @@ async def test_obsolete_cold_http_refuses_then_one_current_request_reads_full_wo
             return original_check(identity, owner, source_identity, fence)
         pending = barrier = None
         with monkeypatch.context() as observation:
-            observation.setattr(windows, 'read', observed_read)
+            observation.setattr(windows, 'read_selected', observed_read)
             observation.setattr(worker, 'project', held_project)
             observation.setattr(windows, '_check_current', checked)
             try:
@@ -1723,5 +1723,69 @@ async def test_live_binding_requires_whole_attested_invocation_not_call_id(sourc
         else:
             assert (proof_id, bound) == (None, None)
         assert source.session['execution']['nodes'] == original
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_selected_consumer_revalidates_after_preparing_resident_suppression(source, monkeypatch):
+    source.call('one')
+    await source.diagnostics.flush()
+    source.session['execution']['nodes'] = [copy.deepcopy(source.observer.nodes['tool:root:one'])]
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    original, observed = owner.live_binding, []
+    def changing(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if not observed:
+            observed.append(True)
+            append_event(source.workspace, 'root', 'session:metadata', {'timestamp': time.time()})
+        return result
+    monkeypatch.setattr(owner, 'live_binding', changing)
+    try:
+        with pytest.raises(ValueError, match='changed'):
+            await owner.read_selected('root')
+        assert observed and owner._root_proofs['root']['status'] == 'stale'
+        assert not owner.current and not any(page.get('_rootProofBound') for page in owner.pages.values())
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_selected_proof_support_has_one_consumer_group_and_raw_subset_sync(source):
+    for number in range(30):
+        _compact_proof_call(source, str(number))
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        latest = await owner.read_selected('root')
+        assert latest['before']
+        first = owner.pages[latest['evidence']['group']]
+        assert len(first['_boundGroups']) == 1
+        older = await owner.read_selected('root', before=latest['before'])
+        support = owner.pages[older['evidence']['group']]
+        assert support is not first and not support['_boundGroups']
+        assert not any(not g.get('observationWindow') for g in older['items'])
+        owner.invalidate({'root'})  # Raw observations now reappear, still unassociated.
+        rows = owner.nodes('root', first['group'])['items']
+        assert rows
+        subset = {row['id']: 'obsolete' for row in rows[:2]}
+        synced = owner.nodes('root', first['group'], known=subset, paged=True)
+        assert synced['order'] == list(subset)
+        assert [row['id'] for row in synced['items']] == list(subset)
+        assert owner.nodes('root', first['group'], known={}, paged=True)['order'] == []
     finally:
         await owner.close()

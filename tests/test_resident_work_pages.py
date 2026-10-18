@@ -568,6 +568,7 @@ async def test_real_proof_live_refs_sync_and_fence_canonical_reads(canonical_sou
     owner.projector = FakeProjector(source.service.data_dir)
     pages = owner.live_pages
     group = detail_page(owner.live_view(session), 'groups')['items'][0]['id']
+    task, release = None, asyncio.Event()
     try:
         before = pages.read(session, group)
         row = before['items'][0]
@@ -634,4 +635,53 @@ async def test_real_proof_live_refs_sync_and_fence_canonical_reads(canonical_sou
         assert session == original
         assert not any('input' in value or 'output' in value for value in session['execution']['nodes'])
     finally:
+        release.set()
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await owner.close()
+
+
+@pytest.mark.parametrize('boundary', ['next-chunk', 'latest-finalization'])
+def test_paged_revision_pins_older_admitted_rows_not_only_latest_tail(tmp_path, monkeypatch, boundary):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
+    first = owner.live_pages.read(session, 't@user')
+    older = owner.live_pages.read(session, 't@user', before=first['before'])
+    rows = older['items'] + first['items']
+    a = owner.live_pages.sync(session, 't@user',
+        {row['id']: row['detailVersion'] for row in rows[:100]}, paged=True)
+    assert len(a['order']) == 100
+    if boundary == 'latest-finalization':
+        b = owner.live_pages.sync(session, 't@user',
+            {row['id']: row['detailVersion'] for row in rows[100:]},
+            paged=True, revision=a['revision'])
+        assert b['revision'] == a['revision']
+    session['execution']['nodes'][0]['output'] = 'Changed old body, unchanged latest100'
+    with pytest.raises(ValueError, match='changed'):
+        if boundary == 'next-chunk':
+            owner.live_pages.sync(session, 't@user',
+                {row['id']: row['detailVersion'] for row in rows[100:]},
+                paged=True, revision=a['revision'])
+        else:
+            owner.live_pages.read(session, 't@user', preserve=True, revision=a['revision'])
+
+
+def test_paged_sync_append_finalization_and_older_continuation_keep_valid_tokens(tmp_path, monkeypatch):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=250)
+    pages = owner.live_pages
+    first = pages.read(session, 't@user')
+    # Ordinary preserving opens accept the original projection revision too.
+    preserved = pages.read(session, 't@user', preserve=True, revision=first['revision'])
+    assert preserved['before'] == first['before']
+    session['execution']['nodes'].append({**session['execution']['nodes'][-1], 'id': '250'})
+    synced = pages.sync(session, 't@user',
+        {row['id']: row['detailVersion'] for row in first['items']}, paged=True)
+    latest = pages.read(session, 't@user', preserve=True, revision=synced['revision'])
+    assert latest['revision'] == synced['revision']
+    assert latest['items'][-1]['id'] == '250'
+    middle = pages.read(session, 't@user', before=latest['before'], revision=latest['revision'])
+    assert [row['id'] for row in middle['items']] == [str(i) for i in range(50, 150)]
+    oldest = pages.read(session, 't@user', before=middle['before'], revision=middle['revision'])
+    assert [row['id'] for row in oldest['items']] == [str(i) for i in range(50)]
+    assert oldest['before'] is None
