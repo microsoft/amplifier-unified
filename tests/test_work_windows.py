@@ -1132,6 +1132,16 @@ async def test_actual_raw_worker_keeps_unassociated_fields_without_authority(tmp
         assert projected['workProjection']['current'] is True
         assert projected['workBindingCoverage']['status'] == 'authority-unavailable'
         assert owner.projector._process is not None
+        proof = await owner.prove('s')
+        assert proof['status'] != 'complete'
+        assert proof.get('boundCount', 0) == 0
+        with pytest.raises(ValueError, match='proof'):
+            owner.proof_nodes('s', proof['id'])
+        assert owner.live_binding(session, {'id': 'not-an-attested-invocation'}) == (None, None)
+        if authority == 'missing':
+            assert not (service.data_dir / 'diagnostics' / 'events.sqlite3').exists()
+        # Failed association proof is not deletion of separately accepted bytes.
+        assert (await owner.read_text('s', rows[0]['outputDetail']))['value'] == 'value-0'
     finally:
         await owner.close()
 
@@ -1173,6 +1183,34 @@ async def test_unavailable_raw_cache_requires_explicit_read_to_reconsider_author
         await owner.close()
         if diagnostic is not None:
             await diagnostic.close()
+
+
+@pytest.mark.asyncio
+async def test_revoked_valid_dependency_is_not_downgraded_to_unavailable_raw_read(tmp_path, monkeypatch):
+    from amplifier_web.diagnostics import Diagnostics
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=5)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostic = Diagnostics(service)
+    original = owner.projector.project
+    async def revoked(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        page = result['page']
+        assert page['_bindingRevision']['kind'] == 'diagnostics-owner-v1'
+        assert page['bindingCoverage']['status'] == 'complete-root'
+        assert not page['_boundWork'] and len(page['items']) == 5
+        # Revocation of a valid dependency is not unavailable raw authority.
+        with diagnostic._db() as db:
+            db.execute('INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES(?,?,?,?,?,?,?)',
+                       ('changed', 1, 'tools', 's', '/fixture', 'tool:post', '{}'))
+        return result
+    monkeypatch.setattr(owner.projector, 'project', revoked)
+    try:
+        with pytest.raises(ValueError, match='ownership changed'):
+            await owner.read('s')
+        assert not owner.pages and not owner.current
+    finally:
+        await owner.close()
+        await diagnostic.close()
 
 
 @pytest.mark.asyncio
@@ -1511,46 +1549,66 @@ async def test_six_browser_interests_rotate_past_four_active_read_slots(tmp_path
 
 @pytest.mark.asyncio
 async def test_http_work_pages_use_exact_window_cursor_without_hydrating(authenticated_client, tmp_path, monkeypatch):
+    from amplifier_web.automatic_history import AutomaticHistory
     from amplifier_web.server import create_app
+    from test_cold_work_binding import _InitialCatalogCompletion
     from test_service import Runtime
     _, source, path, _ = fixture(tmp_path, monkeypatch)
-    app = await create_app(tmp_path / 'http', workspace=tmp_path, runtime=Runtime(),
-                           voice=False, background_updates=False, preload_providers=False)
-    service = app['service']
-    await service.dispatch('session.create', {})
-    session = service._session()
-    identity = session['id']
-    session.update({key: value for key, value in source.items() if key != 'id'})
-    service.event_log_view.windows.projector = FakeProjector(service.data_dir)
-    service.clients.attach('window-browser')
-    client = await authenticated_client(app)
-    client.session.headers['X-Amplifier-Client'] = 'window-browser'
-    original = service._session
-    calls = []
-    def bounded(identity=None, *, hydrate=True):
-        calls.append(hydrate)
-        assert hydrate is False, 'Ordinary Work page hydrated the authoritative cold graph'
-        return original(identity, hydrate=False)
-    monkeypatch.setattr(service, '_session', bounded)
-    query = {'sessionId': identity, 'part': 'groups'}
-    response = await client.get('/api/conversation/detail', params=query)
-    assert response.status == 200, await response.text()
-    first = await response.json()
-    assert first['mode'] == 'cursor' and first['hasEarlier']
-    older = await (await client.get('/api/conversation/detail', params={**query, 'before': first['before']})).json()
-    assert older['before'] is None and older['total'] is None
-    group = older['items'][0]['id']
-    nodes = await (await client.get('/api/conversation/detail', params={**query, 'part': 'nodes', 'group': group})).json()
-    assert len(nodes['items']) == 40
-    field = nodes['items'][-1]['outputDetail']
-    text = await (await client.get('/api/conversation/detail', params={**field, 'sessionId': identity})).json()
-    assert text['value'] == 'value-39'
-    sync = await (await client.post('/api/conversation/work-sync', json={
-        'sessionId': identity, 'group': group,
-        'known': {row['id']: row['detailVersion'] for row in nodes['items']}})).json()
-    assert sync['items'] == [] and len(sync['order']) == 40
-    assert calls and all(value is False for value in calls)
-    monkeypatch.setattr(service, '_session', original)
+    home = tmp_path / 'http'
+    root_id = '21000000-0000-4000-8000-000000000001'
+    completion = _InitialCatalogCompletion(AutomaticHistory.refresh, home=home, root=root_id)
+    with monkeypatch.context() as observation:
+        async def refresh(owner, *args, **kwargs):
+            return await completion.observe(owner, *args, **kwargs)
+        observation.setattr(AutomaticHistory, 'refresh', refresh)
+        app = await create_app(home, workspace=tmp_path, runtime=Runtime(),
+                               voice=False, background_updates=False, preload_providers=False)
+        service, client = app['service'], None
+        try:
+            # A real fixture root with a known UUID lets the observer name it
+            # before startup; creation does not schedule a second refresh.
+            await service.dispatch('session.create', {'id': root_id})
+            session = service._session()
+            identity = session['id']
+            assert identity == root_id
+            session.update({key: value for key, value in source.items() if key != 'id'})
+            service.event_log_view.windows.projector = FakeProjector(service.data_dir)
+            service.clients.attach('window-browser')
+            client = await authenticated_client(app)
+            client.session.headers['X-Amplifier-Client'] = 'window-browser'
+            # Await only the first scheduled refresh's actual return. Its entry
+            # and completion must both contain this root, before read guarding.
+            await completion.wait(service.history)
+            print('WORK-INITIAL-REFRESH-COMPLETED',
+                  {'entry': completion.entry, 'completion': completion.completion})
+            original = service._session
+            calls = []
+            def bounded(identity=None, *, hydrate=True):
+                calls.append(hydrate)
+                assert hydrate is False, 'Ordinary Work page hydrated the authoritative cold graph'
+                return original(identity, hydrate=False)
+            with monkeypatch.context() as read_guard:
+                read_guard.setattr(service, '_session', bounded)
+                query = {'sessionId': identity, 'part': 'groups'}
+                response = await client.get('/api/conversation/detail', params=query)
+                assert response.status == 200, await response.text()
+                first = await response.json()
+                assert first['mode'] == 'cursor' and first['hasEarlier']
+                older = await (await client.get('/api/conversation/detail', params={**query, 'before': first['before']})).json()
+                assert older['before'] is None and older['total'] is None
+                group = older['items'][0]['id']
+                nodes = await (await client.get('/api/conversation/detail', params={**query, 'part': 'nodes', 'group': group})).json()
+                assert len(nodes['items']) == 40
+                field = nodes['items'][-1]['outputDetail']
+                text = await (await client.get('/api/conversation/detail', params={**field, 'sessionId': identity})).json()
+                assert text['value'] == 'value-39'
+                sync = await (await client.post('/api/conversation/work-sync', json={
+                    'sessionId': identity, 'group': group,
+                    'known': {row['id']: row['detailVersion'] for row in nodes['items']}})).json()
+                assert sync['items'] == [] and len(sync['order']) == 40
+                assert calls and all(value is False for value in calls)
+        finally:
+            await asyncio.wait_for(client.close() if client is not None else service.close(), timeout=10)
 
 
 @pytest.mark.asyncio

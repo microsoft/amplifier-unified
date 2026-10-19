@@ -511,15 +511,15 @@ async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(sourc
 
 class _InitialCatalogCompletion:
     """Observe the first scheduled refresh; never start another refresh."""
-    def __init__(self, refresh, home=None):
+    def __init__(self, refresh, home=None, *, root='root'):
         self.refresh = refresh
         self.home = home
+        self.root = root
         self.owner = None
         self.entry = self.completion = None
         self.finished = asyncio.get_running_loop().create_future()
 
-    @staticmethod
-    def _snapshot(owner):
+    def _snapshot(self, owner):
         service = owner.service
         history = service._state.get('sharedHistory', {})
         phase = (history.get('reconciliation') or {}).get('phase')
@@ -527,7 +527,7 @@ class _InitialCatalogCompletion:
                 'hasIssues': bool(history.get('issues') or history.get('issueCount')),
                 'phase': phase if phase in {'ready', 'complete', 'reconciling', 'recovering'} else 'other',
                 'closed': service.closed,
-                'rootCount': sum(row.get('id') == 'root' for row in service._state.get('sessions', []))}
+                'rootCount': sum(row.get('id') == self.root for row in service._state.get('sessions', []))}
 
     async def observe(self, owner, *args, **kwargs):
         first = self.owner is None and (self.home is None or owner.service.data_dir == self.home)
@@ -807,6 +807,66 @@ async def test_catalog_completion_gate_requires_actual_success_without_extra_ref
         else:
             await completion.wait(owner)
     assert calls == [(owner, False)] * (2 if outcome == 'later-success' else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('root_state', ['present', 'wrong-at-entry', 'wrong-at-completion',
+                                       'wrong-after-completion'])
+async def test_catalog_completion_gate_checks_the_requested_root_at_each_boundary(root_state):
+    identity = 'http-fixture-root'
+    state = {'sharedHistory': {'loading': False, 'error': None},
+             'sessions': [{'id': 'root'}]}
+    if root_state != 'wrong-at-entry':
+        state['sessions'].append({'id': identity})
+    owner = SimpleNamespace(service=SimpleNamespace(_state=state, closed=False))
+    calls, expected = [], object()
+    async def refresh(actual, *, force=False):
+        calls.append((actual, force))
+        if root_state == 'wrong-at-entry':
+            state['sessions'].append({'id': identity})
+        elif root_state == 'wrong-at-completion':
+            state['sessions'] = [{'id': 'root'}]
+        return expected
+    completion = _InitialCatalogCompletion(refresh, root=identity)
+    assert await completion.observe(owner, force=False) is expected
+    assert completion.entry['rootCount'] == (0 if root_state == 'wrong-at-entry' else 1)
+    assert completion.completion['rootCount'] == (0 if root_state == 'wrong-at-completion' else 1)
+    if root_state == 'wrong-after-completion':
+        state['sessions'] = [{'id': 'root'}]
+    if root_state == 'present':
+        await completion.wait(owner)
+    else:
+        with pytest.raises(AssertionError):
+            await completion.wait(owner)
+    assert calls == [(owner, False)]
+
+
+@pytest.mark.asyncio
+async def test_catalog_completion_gate_keeps_first_matching_home_even_when_its_root_is_wrong(tmp_path):
+    identity, home = 'http-fixture-root', tmp_path / 'http'
+    def owner_at(path, root):
+        return SimpleNamespace(service=SimpleNamespace(data_dir=path, closed=False,
+            _state={'sharedHistory': {'loading': False, 'error': None},
+                    'sessions': [{'id': root}]}))
+    other, owner = owner_at(tmp_path / 'other', identity), owner_at(home, 'root')
+    calls, expected = [], object()
+    async def refresh(actual, *, force=False):
+        calls.append((actual, force))
+        return expected
+    completion = _InitialCatalogCompletion(refresh, home=home, root=identity)
+    assert await completion.observe(other, force=True) is expected
+    assert completion.owner is None and not completion.finished.done()
+    assert completion.entry is completion.completion is None
+    assert await completion.observe(owner, force=False) is expected
+    entry, completed = completion.entry, completion.completion
+    assert entry['rootCount'] == completed['rootCount'] == 0
+    owner.service._state['sessions'].append({'id': identity})
+    assert await completion.observe(owner, force=False) is expected
+    assert completion.owner is owner
+    assert completion.entry is entry and completion.completion is completed
+    with pytest.raises(AssertionError):
+        await completion.wait(owner)
+    assert calls == [(other, True), (owner, False), (owner, False)]
 
 
 class _ColdReadTrace:
