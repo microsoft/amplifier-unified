@@ -101,7 +101,8 @@
     "test:markdown-composer-browser": "node tests/markdown-composer-browser.mjs",
     "test:draft-reload-browser": "node tests/draft-reload-browser.mjs",
     "test:draft-discovery-recovery-browser": "node tests/draft-discovery-recovery-browser.mjs",
-    "test:inline-media-transition-browser": "node tests/inline-media-transition-browser.mjs"
+    "test:inline-media-transition-browser": "node tests/inline-media-transition-browser.mjs",
+    "test:shared-work-browser": "node tests/shared-work-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.3.1",

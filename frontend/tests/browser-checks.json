@@ -88,6 +88,7 @@
     {"id": "activity-feedback", "command": ["node", "tests/activity-feedback-browser.mjs"]},
     {"id": "capacity", "command": ["node", "tests/capacity-browser.mjs"]},
     {"id": "coordination", "command": ["node", "tests/coordination-browser.mjs"]},
+    {"id": "shared-work", "command": ["node", "tests/shared-work-browser.mjs"]},
     {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]}
   ]
 }

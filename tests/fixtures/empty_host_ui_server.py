@@ -154,6 +154,9 @@ async def main(home):
 
         app.router.add_post('/fixture/activity', activity)
         app.router.add_post('/fixture/damage', damage)
+    if '--shared-work' in sys.argv:
+        from shared_work_scenario import install
+        await install(app, runtime)
     release_query_gate = lambda: None
     if '--scoped-query-control' in sys.argv:
         # Only this synthetic browser opts in. Target its visible Chats search,
