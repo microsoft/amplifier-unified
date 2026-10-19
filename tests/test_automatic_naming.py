@@ -5,6 +5,7 @@ import json
 import pytest
 
 from test_automatic_history import app_factory, native_session
+from amplifier_web.automatic_history import revision
 from amplifier_web.automatic_naming import AutomaticNaming
 from amplifier_web.naming_backfill import NamingBackfill
 from amplifier_web.naming import read, set_automatic, directory_for
@@ -247,14 +248,27 @@ async def test_deferred_name_waits_for_new_content_and_oversized_input_is_bounde
     assert len(calls) == 1
     session = next(row for row in app.state['sessions'] if row.get('nativeProject'))
     directory = directory_for(app.data_dir, session)
+
+    async def refresh_current_revision():
+        expected_revision = revision(session)
+        assert expected_revision is not None
+        for _ in range(100):
+            await app.history.refresh(force=False)
+            current = app.directory.resolve(session['id'])
+            if current is not None and current.get('nativeRevision') == expected_revision:
+                break
+        assert current is not None
+        assert current.get('nativeRevision') == expected_revision, (
+            'History catalog did not observe the updated transcript revision')
+
     with (directory / 'transcript.jsonl').open('a') as stream:
         stream.write(json.dumps({'role': 'user', 'content': 'Include the revenue breakdown'}) + '\n')
-    await app.history.refresh()
+    await refresh_current_revision()
     await tick(app, naming, clock)
     assert len(calls) == 2
     # Oversized first records never cause a full transcript read or model call.
     (directory / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'x' * (300 * 1024)}) + '\n')
-    await app.history.refresh()
+    await refresh_current_revision()
     await tick(app, naming, clock)
     assert len(calls) == 2
     assert 'no user message' in app.state['namingBackfill']['skipped'][0]['reason'].lower()
