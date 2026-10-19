@@ -893,3 +893,212 @@ async def test_early_common_refusal_never_rewrites_original_unknown(app, backend
     assert reopened.read(row['sessionId'], request['requestId']) == unknown
     with pytest.raises(ValueError, match='not found'):
         reopened.read(row['sessionId'], 'early-new-request')
+
+
+# Proposed public boundary, not an existing API. These additive tests must fail
+# visibly until the bounded read is implemented; do not register it in a fixture
+# or substitute environments.read/reconcile (both can observe/repair resources).
+REMOVAL_READ = 'workspace.environments.removal.read'
+
+
+def require_removal_read_contract():
+    from amplifier_web.service import ACTION_DEFINITIONS
+    assert REMOVAL_READ in ACTION_DEFINITIONS, 'Public passive removal inspection is not implemented'
+    return ACTION_DEFINITIONS[REMOVAL_READ][1]
+
+
+async def removal_read_fixture(app, monkeypatch):
+    """Produce a legacy-shaped UNKNOWN through real public removal admission."""
+    row = (await start(app, 'public-read-start'))['resource']
+    row = (await act(app, 'stop', row, 'public-read-stop'))['resource']
+    entered = []
+    def incomplete(config, home, raw, action, args):
+        entered.append(action)
+        return {'ok': False, 'status': 'unknown',
+                'message': 'SYNTHETIC_PRIVATE_BACKEND_DETAIL',
+                'privateConfig': {'key': 'SYNTHETIC_UNRELATED_SECRET'}}
+    with monkeypatch.context() as fault:
+        fault.setattr(owner, 'invoke', incomplete)
+        failed = await act(app, 'remove', row, 'public-read-original')
+    assert entered == ['remove'] and failed['request']['state'] == 'outcome_unknown'
+    return failed['resource'], failed['request']
+
+
+def removal_read_args(app, row, original):
+    return {**scope(app), 'id': row['id'], 'expectedRevision': row['revision'],
+            'originalRequestId': original['requestId']}
+
+
+def removal_read_snapshot(app, row):
+    folder = Path(row['retention']['path'])
+    return (owner.get(app.data_dir, row['sessionId'], row['id']),
+            app.operations.requests.list(row['sessionId']),
+            {str(p.relative_to(folder)): (p.read_bytes(), p.stat().st_mtime_ns)
+             for p in folder.rglob('*') if p.is_file()})
+
+
+def forbid_removal_read_effects(app, monkeypatch):
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append('unexpected external/configuration/persistence call')
+        raise AssertionError('Passive removal inspection must not probe, repair, persist or prepare')
+    for name in ('invoke', 'configuration', 'resolve_configuration', 'save', 'read'):
+        monkeypatch.setattr(owner, name, forbidden)
+    monkeypatch.setattr(app.operations.requests, 'begin', forbidden)
+    monkeypatch.setattr(app.operations.requests, 'finish', forbidden)
+    monkeypatch.setattr(app.runtime, 'start', forbidden)
+    monkeypatch.setattr(app.runtime, 'control', forbidden)
+    return calls
+
+
+def assert_unverified_removal_read(value, row, original, code='original_binding_unverified'):
+    # No source paths, raw results, settings, archive names or exception strings.
+    assert value == {
+        'version': 1, 'sessionId': row['sessionId'], 'id': row['id'],
+        'revision': row['revision'],
+        'original': {'requestId': original['requestId'], 'state': original['state']},
+        'status': 'held', 'code': code,
+        'executor': 'unobserved', 'physical': 'not_observed',
+        'continuationAvailable': False, 'riskDecisionAvailable': False,
+    }
+    assert len(json.dumps(value).encode()) < 4096
+    assert 'SYNTHETIC_' not in json.dumps(value)
+
+
+def test_public_removal_read_declares_only_host_resolved_identity_and_revision():
+    schema = require_removal_read_contract()
+    assert set(schema['properties']) == {
+        'workspaceId', 'sessionId', 'id', 'expectedRevision', 'originalRequestId'}
+    assert set(schema['required']) == set(schema['properties'])
+    assert schema['additionalProperties'] is False
+
+
+@pytest.mark.parametrize('state', ['active-ungranted', 'terminal', 'stopped', 'revoked'])
+async def test_public_removal_read_is_passive_even_after_generation_or_authority_end(app, backend, monkeypatch, state):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source, peer = app.state['sessions']
+    if state == 'terminal':
+        source['collaborationGeneration']['terminal'] = True
+    elif state == 'stopped':
+        source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    elif state == 'revoked':
+        permission = await grant(app, ['test_environments'], ['session'], identity='read-only-old-grant')
+        await revoke(app, permission)
+    app.state['selectedSessionId'] = peer['id']  # Selection cannot retarget this read.
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    args = removal_read_args(app, row, original)
+    result = await agent(app, source, REMOVAL_READ, args, 'passive-original-read')
+    assert result['accepted'] is True
+    assert_unverified_removal_read(result['result'], row, original)
+    again = await agent(app, source, REMOVAL_READ, args, 'passive-original-read')
+    assert again['result'] == result['result']
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('lookalike', ['stopped-observation', 'archives', 'phase-claim'])
+async def test_public_removal_read_does_not_infer_history_from_current_state_or_files(app, backend, monkeypatch, lookalike):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    if lookalike == 'stopped-observation':
+        observer(monkeypatch, 'stopped')
+        row = (await act(app, 'reconcile', row, 'public-stopped-observation'))['resource']
+        assert row['status'] == 'stopped'
+    else:
+        folder = Path(row['retention']['path'])
+        (folder / 'workspace.tar').write_bytes(b'synthetic immutable export, not proof')
+        (folder / 'artifacts.tar').write_bytes(b'synthetic immutable artifact, not proof')
+        if lookalike == 'phase-claim':
+            (folder / 'removal-failed.json').write_text(json.dumps({
+                'requestId': original['requestId'], 'destroyEffect': 'not_dispatched',
+                'executorTerminal': True, 'verified': True,
+                'privateConfig': 'SYNTHETIC_UNRELATED_SECRET'}))
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    value = await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+    assert_unverified_removal_read(value['result'], row, original)
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('intruder', ['peer', 'child-principal', 'child-root', 'workspace'])
+async def test_public_removal_read_requires_the_exact_transport_root(app, backend, monkeypatch, intruder):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source, peer = app.state['sessions']
+    peer['collaborationGeneration'] = {
+        'id': 'peer-generation', 'inputIds': ['peer-input'], 'terminal': False}
+    args, transport = removal_read_args(app, row, original), {}
+    caller = peer if intruder == 'peer' else source
+    if intruder == 'child-principal':
+        transport['_runtimeSessionId'] = 'synthetic-child-runtime'
+    elif intruder == 'child-root':
+        source['sessionKind'] = 'child'
+    elif intruder == 'workspace':
+        args['workspaceId'] = 'another-workspace'
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+        await agent(app, caller, REMOVAL_READ, args, 'foreign-removal-read', **transport)
+    assert caught.value.status == 403
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('binding', ['missing', 'wrong-resource', 'wrong-action'])
+async def test_public_removal_read_refuses_to_attach_or_reinterpret_original_requests(app, backend, monkeypatch, binding):
+    require_removal_read_contract()
+    from amplifier_web.operation_requests import OperationRequests
+    row, original = await removal_read_fixture(app, monkeypatch)
+    if binding == 'wrong-action':
+        original = app.operations.requests.read(row['sessionId'], 'public-read-start')
+    else:
+        original, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.remove',
+            {'requestId': 'unattached-original'}, {})
+        if binding == 'wrong-resource':
+            original = app.operations.requests.finish(original, 'admitting', resourceId='other-resource')
+        original = OperationRequests(app.operations.requests.journal).read(row['sessionId'], original['requestId'])
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    if binding == 'missing':
+        value = await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+        assert_unverified_removal_read(value['result'], row, original, 'original_binding_missing')
+    else:
+        with pytest.raises(AppError, match='Original removal is not bound to this resource') as caught:
+            await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+        assert caught.value.status == 409
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('refusal', ['stale-revision', 'busy'])
+async def test_public_removal_read_does_not_repair_or_write_when_snapshot_is_unavailable(app, backend, monkeypatch, refusal):
+    require_removal_read_contract()
+    from contextlib import nullcontext
+    row, original = await removal_read_fixture(app, monkeypatch)
+    args = removal_read_args(app, row, original)
+    if refusal == 'stale-revision':
+        observer(monkeypatch, 'stopped')
+        row = (await act(app, 'reconcile', row, 'public-read-advance'))['resource']
+        assert row['revision'] != args['expectedRevision']
+    lock = FileLock(str(app.data_dir / 'workspace-resources' / ('environment-' + row['id'] + '.lock')))
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with lock if refusal == 'busy' else nullcontext():
+        with pytest.raises(AppError, match='Removal inspection changed or is busy') as caught:
+            await app.dispatch(REMOVAL_READ, args, include_state=False)
+    assert caught.value.status == 409
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('extra', [
+    {'path': '/untrusted/archive'}, {'backend': 'different-backend'},
+    {'executorTerminal': True}, {'continue': True}, {'operatorRiskAccepted': True},
+])
+async def test_public_removal_read_accepts_no_caller_proof_path_or_risk_choice(app, backend, monkeypatch, extra):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError, match='Additional properties') as caught:
+        await app.dispatch(REMOVAL_READ, {**removal_read_args(app, row, original), **extra}, include_state=False)
+    assert caught.value.status == 400
+    assert calls == [] and removal_read_snapshot(app, row) == before
