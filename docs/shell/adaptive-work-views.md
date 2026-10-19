@@ -26,7 +26,8 @@ must not initialize a dormant worker or read a transcript. Pending or failed
 resources must not appear as an empty catalog. Scope and query changes discard
 obsolete rows; counts describe the host's query, not a loaded-page estimate.
 
-For you contains required attention and unread responses; Working reports current
+Needs you contains required attention; Ready for you contains unread responses;
+Working reports current
 execution; Pick up again contains other saved conversations. Idle is never called
 finished work. Reviewing a response uses its exact attention fingerprint and does
 not answer a question, approve an action, or declare a project complete. Existing
@@ -50,3 +51,32 @@ Synthetic responses demonstrate interaction, not live-provider quality or latenc
 The user's preferred mix is the design evidence. It is not measured usability
 evidence. Revisit if they cannot find waiting work, if a quiet mode conceals a
 required action, or if project grouping still requires reasoning about folders.
+
+## Trial refinement — 2026-10-19
+
+The user approved a refinement after reviewing their Focus screenshot. The
+observed problem was duplicate navigation and a first decision halfway down the
+screen. Keep the warm typography and independent Appearance/view choices.
+
+- Home owns status filtering, scope and search. The sidebar owns Home, pinned
+  chats, projects and recent chats; its separate search and creation entries are omitted on Home. The single Home
+  creation control uses its current project scope, or starts standalone under All
+  work / On its own. Unavailable scopes cannot silently create somewhere else.
+- Focus uses one reading column. The decision comes before the single status
+  filter row, with a prominent action that opens the original conversation.
+- The header owns returning to the open chat/draft. It does not show a Home
+  back action while already on Home. The shell owns opening/closing Browse.
+- Navigation labels say Projects. Folder-backed workspace ownership, creation,
+  permissions and history contracts are unchanged; this is not logical regrouping.
+- Returning Home chooses the starting view but preserves an explicitly opened or
+  closed desktop sidebar. Narrow navigation closes when choosing Home. Appearance
+  changes and view switches preserve selection, search, draft and saved output.
+- Counts describe chats in the current scope; activity timestamps explicitly say
+  Updated. Typography uses the app's text-size tokens, including small metadata.
+
+Check an ordinary laptop viewport with the sidebar open, as in the user's
+screenshot: the Focus action should fit above the fold, navigation should have
+one aligned label column, and required attention must stay reachable. Verify
+phone/tablet navigation, keyboard focus, enlarged text and dark/forced colors.
+These checks establish usable behavior, not measured user preference. Revisit if
+moving statuses out of the sidebar makes returning to waiting work harder.

@@ -16,3 +16,14 @@ test('late pages cannot answer a new project, search or page',()=>{
  for(const changes of [{workHomeScope:'b'},{workHomeQuery:'offsite'},{workHomePages:{idle:2}}])
   assert.equal(currentWorkPage(data,{workHomeScope:'a',workHomeQuery:'launch',workHomePages:{idle:1},...changes}),false);
 });
+
+test('Home preserves an explicitly opened or closed sidebar independently of appearance',()=>{
+ const pinned=homePatch({interfaceDetail:'minimal'},{},{navPinned:true,navExpanded:false});
+ assert.equal(pinned.navPinned,true);
+ assert.equal(pinned.workHomeView,'focus');
+ const hidden=homePatch({interfaceDetail:'detailed'},{},{navPinned:false,navExpanded:false});
+ assert.equal(hidden.navPinned,false);
+ assert.equal(hidden.workHomeView,'studio');
+ const drawer=homePatch({interfaceDetail:'standard'},{navExpanded:false},{navExpanded:true,navPinned:false});
+ assert.equal(drawer.navExpanded,false);
+});

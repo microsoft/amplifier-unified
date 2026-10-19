@@ -3,9 +3,9 @@ export function startingWorkView(presentation={}){
  return workViews.includes(presentation.workStartView)?presentation.workStartView:
   ({minimal:'focus',standard:'brief',detailed:'studio'}[presentation.interfaceDetail||presentation.executionDetail]||'brief');
 }
-export function homePatch(presentation={},extra={}){
+export function homePatch(presentation={},extra={},view={}){
  return {workSurface:'home',workHomeView:startingWorkView(presentation),workHomeFilter:'all',
-  navExpanded:false,navPinned:(presentation.interfaceDetail||presentation.executionDetail)==='detailed',...extra};
+  navExpanded:view.navExpanded??false,navPinned:view.navPinned??((presentation.interfaceDetail||presentation.executionDetail)==='detailed'),...extra};
 }
 export function currentWorkPage(value,view={}){
  return value?.scope===(view.workHomeScope||'all')&&value?.query===(view.workHomeQuery||'')

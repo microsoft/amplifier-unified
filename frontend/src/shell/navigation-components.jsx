@@ -487,14 +487,14 @@ function QuietSidebar({host,workspaceHost,navigation}){
  return <div className="a-sidebar-navigation a-quiet-sidebar">
   <NavigationEditor model={model} deleteOwner={(model.view.workSurface||'chat')==='chat'}/>
   {!workspaceHost&&<NavigationEditor model={workspaceModel}/>}
-  <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
+  {model.view.workSurface!=='home'&&<button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>}
   {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} quietRefresh resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
-  <SidebarSection id="workspaces" title="Workspaces" model={model} actions={<button type="button" className="a-icon" aria-label="New workspace" onClick={()=>navigation.create()}><Plus/></button>}>
+  <SidebarSection id="workspaces" title="Projects" model={model} actions={<button type="button" className="a-icon" aria-label="New project" onClick={()=>navigation.create()}><Plus/></button>}>
    <NavigationResourceStatus state={workspaceState} quietRefresh resource="workspaceShortcuts" label="workspaces" refresh={workspaceModel.refreshResources}/>
    {(hasNavigationResource(workspaceState,'workspaceShortcuts')||workspaceState.navigationResourceRetained?.workspaceShortcuts)?<WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>:!workspaceState.navigationResourcePending?.workspaceShortcuts&&<p role="status">Loading workspaces…</p>}
-   <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
+   <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All projects<ChevronRight/></button>
   </SidebarSection>
-  <SidebarSection id="recent" title="Recent" model={model} actions={<>
+  <SidebarSection id="recent" title="Recent chats" model={model} actions={<>
    {model.history.loading&&<span className="a-caption" role="status">Finding existing chats…</span>}
    {model.history.error&&<span role="alert">{model.history.error}</span>}
    <button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>
