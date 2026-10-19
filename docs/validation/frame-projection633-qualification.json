@@ -1105,7 +1105,7 @@
   "warningAssessment": {
     "sixWorkerFilter": "Final 455 ms and confirmation 474 ms remain below 500 ms goal, but slower than initial baseline 344 ms. Single-action samples are retained, not relabeled as passes against baseline.",
     "twelveWorkerPreviousPage": "Final 769 ms; confirmation 543 ms; original-code accumulated-fixture control 794 ms. No repeatable candidate-specific regression established.",
-    "twelveWorkerCopiedNavigation": "Initial baseline median 406 ms; final 535 ms; confirmation 544 ms; original-code accumulated-fixture control 513 ms. The fixture/run variation explains most of the warning; the remaining candidate difference is not proven causal by three samples.",
+    "twelveWorkerCopiedNavigation": "Initial baseline median 406 ms; final 535 ms; confirmation 544 ms; original-code accumulated-fixture control 513 ms. The control supports fixture/run variation as a substantial contributor; the remaining candidate difference is not proven causal by three samples.",
     "warmAcknowledgement": "Final three-send p95 at twelve workers 1410 ms; confirmation 1713 ms; original-code control 1407 ms. Do not claim stable tail improvement or that the 300 ms target is met.",
     "streaming": "Twelve-worker p95 baseline 336 ms; final 356 ms; confirmation 385 ms; original-code control 334 ms. The 250 ms target remains unmet; no streaming improvement claimed."
   },
