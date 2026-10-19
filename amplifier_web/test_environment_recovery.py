@@ -15,7 +15,33 @@ from filelock import FileLock
 ACTION = 'workspace.environments.reconcile'
 
 
-def read_removal(app, args, origin, caller):
+def _removal_page(app, sid, rid, offset, limit):
+    """Project only bounded journal scalars, filtering before pagination."""
+    journal = app.operations.requests.journal
+    with journal.lock:
+        rows = journal.db.execute(
+            "SELECT rowid,id,json_extract(value,'$.sessionId'),"
+            "json_extract(value,'$.requestId'),json_extract(value,'$.state'),"
+            "json_type(value,'$.resourceId'),json_extract(value,'$.resourceId') "
+            "FROM operation_requests WHERE session_id=? "
+            "AND json_extract(value,'$.action')='workspace.environments.remove' "
+            "AND (json_extract(value,'$.resourceId')=? OR ("
+            "(COALESCE(json_type(value,'$.resourceId'),'null')!='text' "
+            "OR json_extract(value,'$.resourceId')='') "
+            "AND COALESCE(json_extract(value,'$.state'),'outcome_unknown') NOT IN ('completed','failed'))) "
+            "ORDER BY rowid LIMIT ? OFFSET ?", (sid, rid, limit + 1, offset)).fetchall()
+    items = []
+    for _, identity, root, request, state, resource_type, resource in rows:
+        if (root != sid or request != identity or not isinstance(identity, str)
+                or not identity or len(identity) > 200
+                or state not in ('admitting', 'running', 'completed', 'failed', 'outcome_unknown')):
+            raise ValueError('invalid retained removal metadata')
+        items.append({'originalRequestId': identity, 'state': state,
+                      'binding': 'resource' if resource_type == 'text' and resource == rid else 'unbound'})
+    return rows, items[:limit], offset + limit if len(rows) > limit else None
+
+
+def read_removal(app, args, origin, caller, *, listing=False):
     """Read one retained pair, never infer a historical binding or repair it.
 
     No await or mutation admission occurs here. The existing physical lock and
@@ -101,6 +127,20 @@ def read_removal(app, args, origin, caller):
                     raise AppError('Removal inspection requires the recorded root owner.', 403)
                 if type(row.get('revision')) is not int or row['revision'] != args['expectedRevision']:
                     raise AppError('Removal inspection changed or is busy.', 409)
+                if listing:
+                    offset, limit = args.get('offset', 0), args.get('limit', 20)
+                    if type(offset) is not int or not 0 <= offset <= 2**53-21 or type(limit) is not int or not 1 <= limit <= 20:
+                        raise ValueError('invalid removal page')
+                    snapshot, items, next_offset = _removal_page(app, sid, rid, offset, limit)
+                    result = {'version': 1, 'sessionId': sid, 'id': rid, 'revision': row['revision'],
+                              'items': items, 'nextOffset': next_offset}
+                    if len(json.dumps(result).encode()) > 16384:
+                        raise ValueError('removal page exceeds bound')
+                    if (storage.get(db, sid, rid) != row
+                            or _removal_page(app, sid, rid, offset, limit)[0] != snapshot
+                            or root_binding() != captured):
+                        raise AppError('Removal inspection changed or is busy.', 409)
+                    return result
                 try:
                     original = app.operations.requests.read(sid, args['originalRequestId'])
                 except ValueError:

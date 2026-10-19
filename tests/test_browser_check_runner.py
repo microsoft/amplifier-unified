@@ -244,6 +244,8 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'mcp-clients': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-clients.png'},
         'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
         'execution-observability': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/execution-observability'},
+        'test-environments': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                              'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/test-environments'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
@@ -260,7 +262,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 92
+    assert len(original) == 65 and len(rows) == 93
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -393,15 +395,17 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # and the approval reading-column regression now have owners too. The two
     # recovery additions retain distinct component and full-journey commands;
     # the existing-chat card adds its own browser journey.
-    assert len(readiness_scripts | extended_scripts) == 135
+    assert len(readiness_scripts | extended_scripts) == 136
     assert {'tests/configuration-recovery.test.mjs',
             'tests/configuration-recovery-browser.mjs'} <= extended_scripts - readiness_scripts
     assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 
-    # The environment journey belongs to coordination, outside these two lanes.
+    # Keep coordination's existing direct owner; the extended manifest now also
+    # runs this fixed journey exactly once with its own retained evidence folder.
     environment = 'tests/test-environments-browser.mjs'
-    assert environment not in readiness_scripts | extended_scripts
+    assert environment not in readiness_scripts and environment in extended_scripts
+    assert sum(row['command'] == ['node', environment] for row in plan['scenarios']) == 1
     owners = []
     for path in workflows.glob('*.yml'):
         value = yaml.load(path.read_text(), Loader=yaml.BaseLoader)

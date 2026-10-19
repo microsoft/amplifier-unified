@@ -166,6 +166,78 @@ try{
  assert.deepEqual(final.calls.filter(item=>item.action==='remove').map(item=>item.retentionMode),['full','files'],'Full copy applies only to its confirmed removal; later queued cleanup keeps its default');
  assert.equal(final.workspaceFile,initial.workspaceFile);assert.deepEqual(final.messages,initial.messages);assert.deepEqual(final.runtimeCalls,initial.runtimeCalls);
   await writeFile(output+'/test-environments-browser-report.json',JSON.stringify({passed:true,realHostActionsAndReceipts:true,backend:'controlled Incus capability and transport',docker:false,incusAllocation:false,publicWorkspaceDetailsEntry:true,fullCopyDefaultToggleCancelReset:true,exactRetentionModeAndOwner:true,fullCopyDoesNotChangeNextDefault:true,recoveryUsesRetainedBackend:true,providerCalls:false,lostAckReloadNoReplay:true,peerRequestReplacesStaleResult:true,unknownCommandNotReplayed:true,reconcilePreservesUnknownReceipt:true,cleanupWithUnavailableActiveBackend:true,verifiedRetentionSize:true,artifactRecoveryPreservesOwnerAndLastOperation:true,unknownArtifactExportNeverReplayed:true,stopBeforeRemove:true,removalConfirmation:true,mobileNoOverflow:true,queuedWaitSurvivesReload:true,cancelledWaitNoEffects:true,automaticCheckExportRemoval:true,retainedCheckOutput:true,counts:final.callCounts,controlRequests:controls,backendCalls:final.calls,limits:['Controlled backend transport; no real container allocation, archive verification or provider execution.','Desktop and narrow pointer activation; no new physical-touch or complete keyboard-traversal claim.'],errors},null,2));
+ // Additive passive-inspection journey. Keep the original scenario/report above
+ // intact; all following results come from registered host actions, never mocks.
+ const invokeAction=async(action,args,id)=>{
+  const response=await page.request.post(url+'/api/actions',{data:{action,args,id}});
+  assert.equal(response.status(),200,`${action} must reach its registered handler`);
+  const value=await response.json();assert.equal(value.accepted,true);return value.result;
+ };
+ const scope={workspaceId:initial.workspaceId,sessionId:initial.sessionId};
+ const started=await invokeAction('workspace.environments.start',{...scope,profileId:'linux-python',requestId:'inspection-fixture-start'},'inspection-start-command');
+ let target=started.resource;
+ target=(await invokeAction('workspace.environments.stop',{...scope,id:target.id,expectedRevision:target.revision,requestId:'inspection-fixture-stop'},'inspection-stop-command')).resource;
+ await page.request.post(url+'/fixture/environment-mode',{data:{removeUnknown:true}});
+ const uncertain=await invokeAction('workspace.environments.remove',{...scope,id:target.id,expectedRevision:target.revision,requestId:'inspection-original-remove'},'inspection-remove-command');
+ assert.equal(uncertain.request.state,'outcome_unknown');
+ target=(await invokeAction('workspace.environments.stop',{...scope,id:target.id,expectedRevision:uncertain.resource.revision,requestId:'inspection-later-stop'},'inspection-later-stop-command')).resource;
+ assert.equal(target.lastOperation.requestId,'inspection-later-stop');
+ await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
+ const ownerPanel=panel.locator(`[data-test-environment="${target.id}"]`);
+ await expect(ownerPanel.getByText('Environment: stopped',{exact:true})).toBeVisible();
+ const beforeInspection=await facts(),originalUnknown=beforeInspection.requests.find(r=>r.requestId==='inspection-original-remove');
+ assert.deepEqual(originalUnknown,uncertain.request);
+ const inspectionCalls=[],unexpected=[],responses=[];let lostInspection=false;
+ await page.unroute('**/api/actions');
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(['workspace.environments.removal.list','workspace.environments.removal.read'].includes(body?.action)){
+   inspectionCalls.push(body);
+   if(body.action==='workspace.environments.removal.read'&&!lostInspection){
+    lostInspection=true;
+    const response=await route.fetch();assert.equal(response.status(),200);
+    const value=await response.json();assert.equal(value.accepted,true);
+    responses.push(value.result);await route.abort('connectionreset');return;
+   }
+  }else if(body?.action?.startsWith('workspace.environments.')||body?.action?.startsWith('workspace.tests.'))unexpected.push(body);
+  await route.continue();
+ });
+ await ownerPanel.getByRole('button',{name:'Inspect original removal',exact:true}).click();
+ const originalButton=ownerPanel.getByRole('button',{name:'Read original removal inspection-original-remove',exact:true});
+ await expect(originalButton).toBeVisible();
+ await originalButton.click();
+ await expect(panel.getByRole('alert')).toBeVisible();
+ assert.equal(inspectionCalls.filter(r=>r.action==='workspace.environments.removal.read').length,1);
+ assert.equal(responses.length,1,'lost reply must follow an actual accepted passive result');
+ await originalButton.click(); // Explicit repeat of a read, not replay of an effect.
+ await expect(ownerPanel.getByText('Removal remains held',{exact:false})).toBeVisible();
+ await expect(ownerPanel.getByText('Original request: inspection-original-remove',{exact:false})).toBeVisible();
+ await expect(ownerPanel.getByRole('button',{name:'Continue removal',exact:true})).toHaveCount(0);
+ await expect(ownerPanel.getByRole('button',{name:'Replace removal',exact:true})).toHaveCount(0);
+ assert.equal(inspectionCalls.length,3);
+ assert.equal(inspectionCalls[0].action,'workspace.environments.removal.list');
+ assert.deepEqual(inspectionCalls[0].args,{...scope,id:target.id,expectedRevision:target.revision});
+ for(const call of inspectionCalls.slice(1))assert.deepEqual(call.args,{
+  ...scope,id:target.id,expectedRevision:target.revision,originalRequestId:'inspection-original-remove'});
+ assert.equal(responses[0].status,'held');assert.equal(responses[0].original.requestId,'inspection-original-remove');
+ assert.equal(responses[0].continuationAvailable,false);assert.equal(responses[0].riskDecisionAvailable,false);
+ const afterInspection=await facts();
+ for(const field of ['calls','callCounts','probeCounts','states','resources','requests','runtimeCalls','workspaceFile','messages'])
+  assert.deepEqual(afterInspection[field],beforeInspection[field],`${field} changed during passive inspection`);
+ assert.deepEqual(unexpected,[],'inspection must not refresh, export, reconcile, remove or execute');
+ assert.equal(afterInspection.requests.find(r=>r.requestId==='inspection-original-remove').state,'outcome_unknown');
+ await page.screenshot({path:output+'/removal-inspection-desktop.png'});
+ await page.setViewportSize({width:390,height:844});await ownerPanel.scrollIntoViewIfNeeded();
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Passive held view fits narrow width');
+ await page.screenshot({path:output+'/removal-inspection-mobile.png'});
+ assert.deepEqual(errors,[]);
+ await writeFile(output+'/removal-inspection-browser-report.json',JSON.stringify({
+  passed:true,registeredHostActions:true,originalUnknownPreserved:true,laterStopNotUsedAsOriginal:true,
+  exactDiscoveryAndReadIdentity:true,lostReplyWasAcceptedRead:true,explicitReadRepeatNoEffect:true,
+  noImplicitBackendRefreshOrExport:true,unchangedOwnerAndProbeCounters:true,noPositiveContinuation:true,
+  discovery:inspectionCalls[0],reads:inspectionCalls.slice(1),held:responses[0],before:beforeInspection,after:afterInspection,
+  limits:['Synthetic backend transport, not a real daemon or legacy cleanup.','PR831 artifact control is retained and exercised separately by the preceding journey; inspection never invokes it.']
+ },null,2));
 }catch(error){failure=error;if(page)await page.screenshot({path:output+'/test-environments-failure.png'}).catch(()=>{});throw error}
 finally{
  const cleanup=[];try{await browser?.close()}catch(error){cleanup.push(error)}

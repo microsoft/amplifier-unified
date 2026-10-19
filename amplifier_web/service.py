@@ -468,7 +468,7 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
             schema({'kind': {'const': 'workspace'}, 'workspaceId': string(200)}, ['kind', 'workspaceId']),
         ]}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
-    if (_action != 'workspace.environments.removal.read'
+    if (_action not in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}
             and ('sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS)):
         _spec['properties']['nativeProject'] = string(4000)
 
@@ -1750,7 +1750,7 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
-        if action == 'workspace.environments.removal.read':
+        if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
             try:
@@ -4625,7 +4625,7 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
-            if args['action'] == 'workspace.environments.removal.read':
+            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
                 # Do not infer nativeProject through _session: even hydrate=False
                 # admits cold owners. The read validates the exact transport root.
                 return await self.dispatch(args['action'], action_args, origin='agent',
