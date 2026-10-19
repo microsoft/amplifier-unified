@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -27,6 +28,7 @@ try{
  // State arrives while the conversation DOM is deliberately absent. Effects
  // must attach when the shell is ready even if that state never changes.
  await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+ await showFixtureConversation(page);
  const read=()=>page.evaluate(id=>window.amplifier.getState().attention.items.find(item=>item.id==='completion:'+id)?.read,alpha);
  assert.equal(await read(),false);
  release();await page.unrouteAll({behavior:'wait'});

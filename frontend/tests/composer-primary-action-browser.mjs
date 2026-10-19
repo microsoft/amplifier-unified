@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {clearComposer} from './composer-test-helpers.mjs';
 // Packaged application and real action dispatch, synthetic media/runtime only.
 import {spawn} from 'node:child_process';
@@ -20,7 +21,7 @@ try{
   window.RTCPeerConnection=Peer;window.delayMicrophone=true;
   navigator.mediaDevices.getUserMedia=async()=>{if(window.denyMicrophone)throw new DOMException('Synthetic denial','NotAllowedError');if(window.delayMicrophone)await new Promise(resolve=>window.releaseMicrophone=resolve);return new MediaStream()};
  });
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),primary=page.locator('[data-part="composer-primary-action"]');await composer.waitFor();
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),primary=page.locator('[data-part="composer-primary-action"]');await composer.waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const inspect=()=>page.request.get(url+'/fixture').then(response=>response.json());
  const matches=async(label,action,icon)=>{

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Details inspect a row independently, then dismiss when navigation moves elsewhere.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -23,7 +24,7 @@ try{
  const act=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const recent=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"]');
  const rows=recent.locator('.a-nav-chat[data-session-id]'),details=page.locator('.a-navigation-flyout');
- await page.goto(vite?.resolvedUrls.local[0]||target);await expect(rows).toHaveCount(20);
+ await page.goto(vite?.resolvedUrls.local[0]||target);await showFixtureConversation(page,{navPinned:true});await expect(rows).toHaveCount(20);
  const selected=(await shell()).selectedSessionId;
  const inspected=await rows.evaluateAll((rows,id)=>rows.find(row=>row.dataset.sessionId!==id)?.dataset.sessionId,selected);
  assert.ok(inspected);

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 // Real host/actions and production assets; temporary files, no provider calls.
 import {spawn} from 'node:child_process';
@@ -18,7 +19,7 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  const home=path.dirname((await state()).workspaceDefaults.root),workspaces=[],chats=[];
  for(const name of ['Project A','Project B']){
   const folder=path.join(home,name);await mkdir(folder);await writeFile(path.join(folder,name+'.txt'),name+' contents');

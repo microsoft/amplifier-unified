@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Authored acceptance, not qualification. Only synthetic/public sample bytes.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -248,7 +249,7 @@ async function newClient(options={}){
   await page.goto(boot.url+'/login');
   await page.getByLabel('Username').fill('media-fixture');
   await page.getByLabel('Password').fill('fixture-password');
-  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();await showFixtureConversation(page);
   await expect(page.locator(`[data-message-id="${boot.messageId}"]`)).toBeVisible();
   const selectedAvailability=()=>page.evaluate(()=>{
    const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId)?.linkedMediaAvailable;

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 // Real packaged UI and actions, isolated storage, no model or external feedback.
@@ -21,7 +22,7 @@ try{
  page.setDefaultTimeout(5000);
  const errors=[],calls=[];page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')calls.push(request.postDataJSON())});
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const more=page.getByRole('button',{name:'App options',exact:true}),menu=page.getByRole('group',{name:'App options',exact:true});

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -11,7 +12,7 @@ try{
  const pages=[],errors=[];
  for(let i=0;i<8;i++){
   const page=await context.newPage();pages.push(page);page.on('pageerror',error=>errors.push(error.message));
-  await page.goto(url,{waitUntil:'domcontentloaded'});
+  await page.goto(url,{waitUntil:'domcontentloaded'});await showFixtureConversation(page);
   await page.getByRole('button',{name:'View error details',exact:true}).waitFor({timeout:15000});
   await expect(page.getByText('Connected',{exact:true})).toHaveCount(1);
  }

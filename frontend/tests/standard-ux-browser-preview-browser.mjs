@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Synthetic loopback preview and real public browser viewer; no external website.
 import './composer-test-helpers.mjs';
 import {createServer} from 'node:http';
@@ -18,7 +19,7 @@ try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',data=>{text+=data;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1400,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();await action('session.create');await composer.fill('Keep local preview draft');await page.getByRole('button',{name:'Open canvas',exact:true}).click();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();await action('session.create');await composer.fill('Keep local preview draft');await page.getByRole('button',{name:'Open canvas',exact:true}).click();
  await action('canvas.show',{kind:'browser',title:'Owned local preview',url:local+'/allowed'});
  const panel=page.locator('#workspace-canvas'),frame=panel.frameLocator('iframe');await expect(frame.getByRole('heading',{name:'Exact local preview allowed'})).toBeVisible();await frame.getByRole('button',{name:'Try local control'}).click();await expect(frame.locator('p')).toHaveText('Local click handled');
  assert.equal(await frame.locator('body').evaluate(()=>{try{void parent.document.body;return false}catch{return true}}),true);

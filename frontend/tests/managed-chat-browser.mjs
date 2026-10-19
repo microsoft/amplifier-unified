@@ -20,7 +20,7 @@ try{
  await action('view.update',{patch:{navPinned:true}});
  const initial=await state(),originalWorkspace=initial.settings.workspace,registered=(await inspect()).registeredWorkspaces.map(row=>row.id);
  const folders=path.resolve(originalWorkspace,'../app/chats');
- await expect(page.getByRole('button',{name:'New workspace',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'New project',exact:true})).toHaveCount(0);
  await expect(page.getByLabel('Collection',{exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Browse',exact:true}).click();
  await page.getByRole('button',{name:'New folder',exact:true}).click();

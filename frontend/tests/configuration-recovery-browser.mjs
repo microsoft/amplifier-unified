@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -39,7 +40,7 @@ try{
  const draft='{"uncommitted_recovery_draft":"keep this exact editor text"}';
  await owner.evaluate(({sid,draft})=>window.amplifier.dispatch('view.update',{patch:{moduleEditor:{sessionId:sid,text:draft}}}),{sid,draft});
  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),initial.sessions['Unknown owner'].sessionId);
- await open(owner);await open(other);
+ await showFixtureConversation(owner);await open(owner);await open(other);
  await expect(panel(owner).getByRole('button',{name:'Check saved outcome',exact:true})).toBeEnabled();
  await expect(panel(owner).getByRole('button',{name:'Resume original change',exact:true})).toBeDisabled();
  assert.equal((await observe(owner)).calls.length,0,'Opening recovery must not warm or inspect any runtime.');

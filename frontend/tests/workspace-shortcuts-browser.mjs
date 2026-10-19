@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Manager-run DTU fixture: production assets/actions, synthetic runtime, no model calls.
 // Run from frontend after the manager builds this candidate: node tests/workspace-shortcuts-browser.mjs
 import './composer-test-helpers.mjs';
@@ -27,7 +28,7 @@ try{
   const response=await target.request.get(url+'/api/state',{headers:{'X-Amplifier-Client':clientId}});
   assert.ok(response.ok());return response.json();
  };
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  const expectComposer=async text=>{await expect(composer).toHaveDraft(text);await expect.poll(()=>composer.textContent()).toBe(text)};
  const home=path.dirname((await state()).workspaceDefaults.root),workspaces=[];
  for(const team of ['team-one','team-two']){

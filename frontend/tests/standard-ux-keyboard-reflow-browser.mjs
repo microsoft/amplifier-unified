@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -23,7 +24,7 @@ try{
   const context=await browser.newContext({viewport:{width:1440/zoom,height:1000/zoom},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
   const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
   page.setDefaultTimeout(7000);
-  await page.goto('http://127.0.0.1:'+port);
+  await page.goto('http://127.0.0.1:'+port);await showFixtureConversation(page);
   const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();
   await composer.fill('Preserve keyboard reflow draft '+zoom);
   // Existing composer focus is the starting point. Every subsequent activation

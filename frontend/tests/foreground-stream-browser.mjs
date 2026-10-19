@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Real API/SSE and packaged UI; deterministic transport interruption, no models.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -20,7 +21,7 @@ try {
   window.WebSocket=class extends Native{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){window.fixtureStreams.push(this);if(window.fixtureRejectNext){window.fixtureRejectNext=false;this.addEventListener('open',()=>this.close(),{once:true})}}}};
  });
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await action('session.create');
  await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,draft:'Saved draft'}});

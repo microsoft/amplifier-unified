@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -15,7 +16,7 @@ try{
  await control({op:'patch',sessions:{[alpha]:{execution:{turns:[],nodes}}}});
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers}),errors=[],requests=[];
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private information inspection draft');
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private information inspection draft');
  const original=await control({op:'inspect'}),originalMessages=original.state.sessions.find(row=>row.id===alpha).messages;
  page.on('request',request=>requests.push(new URL(request.url()).pathname));
  await page.getByRole('button',{name:'Chat',exact:true}).click();await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}).click();

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -27,13 +28,13 @@ try{
  const setupAction=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const click=(label,locator)=>evidence.action(label,()=>locator.click());
  const input=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
- const chooser=()=>page.getByRole('dialog',{name:'Choose a workspace',exact:true});
- const openPicker=()=>click('Open the visible workspace chooser',page.getByRole('button',{name:'Choose workspace',exact:true}));
- const closePicker=()=>click('Close workspace chooser',page.getByRole('button',{name:'Close Choose a workspace',exact:true}));
+ const chooser=()=>page.getByRole('dialog',{name:'Choose a project',exact:true});
+ const openPicker=()=>click('Open the visible workspace chooser',page.getByRole('button',{name:'Choose project',exact:true}));
+ const closePicker=()=>click('Close workspace chooser',page.getByRole('button',{name:'Close Choose a project',exact:true}));
  const probe=async(id,workflows,run)=>{const row=await evidence.probe('desktop-pointer.'+id,workflows,async()=>{await run();return {variant:'desktop-pointer',...await evidence.snapshot(page,id,'#amp-one')}});if(row.status!=='passed')throw Error('Dependent checks stopped after '+id)};
  let initial,home,created,existing,workspace,sessionId,peerId;
  await probe('suggestion-and-managed-draft',['create.suggestion','create.draft'],async()=>{
-  await evidence.action('Open the clean app',()=>page.goto(url));await expect(input).toBeEditable();initial=await state();home=path.dirname(initial.workspaceDefaults.root);
+  await evidence.action('Open the clean app',()=>page.goto(url));await showFixtureConversation(page,{navPinned:true});await expect(input).toBeEditable();initial=await state();home=path.dirname(initial.workspaceDefaults.root);
   await click('Choose a starter prompt',page.getByRole('button',{name:/Draft an email/}));await expect(input).not.toHaveDraft('');
   evidence.assertion('Suggestion creates no session',(await state()).sessions.length,0);evidence.assertion('Suggestion sends nothing',(await observation()).sent.length,0);
   await input.fill('Private workspace draft');await expect(page.getByRole('button',{name:/Draft an email/})).toHaveCount(0);
@@ -41,15 +42,15 @@ try{
   await expect(input).toHaveDraft('Private workspace draft');evidence.assertion('Managed placement is explicit',(await state()).view.newSessionDraft.location.kind,'managed');
  });
  await probe('create-and-duplicate',['create.workspace-new'],async()=>{
-  await openPicker();await click('Start workspace creation',chooser().getByRole('button',{name:'New workspace',exact:true}));
-  let form=page.getByRole('form',{name:'Create workspace',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Audit project');
+  await openPicker();await click('Start workspace creation',chooser().getByRole('button',{name:'New project',exact:true}));
+  let form=page.getByRole('form',{name:'Create project',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Audit project');
   await click('Inspect destination before creation',form.getByText('More options',{exact:true}));
   evidence.assertion('Creation exposes exact default parent',await form.getByRole('textbox',{name:'Create in',exact:true}).getAttribute('placeholder'),initial.workspaceDefaults.root);
-  await click('Create the requested workspace',form.getByRole('button',{name:'Create workspace',exact:true}));await expect(chooser()).toHaveCount(0);
+  await click('Create the requested workspace',form.getByRole('button',{name:'Create project',exact:true}));await expect(chooser()).toHaveCount(0);
   created=path.join(initial.workspaceDefaults.root,'audit-project');await expect.poll(async()=>(await state()).view.newSessionDraft.workspace).toBe(created);
   await expect(input).toHaveDraft('Private workspace draft');evidence.assertion('One workspace registration',(await observation()).registeredWorkspaces.filter(row=>row.path===created).length,1);
   await writeFile(path.join(created,'sentinel.txt'),'Preserve existing bytes');
-  await openPicker();await click('Try the same new workspace name',chooser().getByRole('button',{name:'New workspace',exact:true}));form=page.getByRole('form',{name:'Create workspace',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Audit project');await click('Resolve duplicate destination',form.getByRole('button',{name:'Create workspace',exact:true}));
+  await openPicker();await click('Try the same new workspace name',chooser().getByRole('button',{name:'New project',exact:true}));form=page.getByRole('form',{name:'Create project',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Audit project');await click('Resolve duplicate destination',form.getByRole('button',{name:'Create project',exact:true}));
   await expect(form.getByRole('status')).toContainText(created);await click('Open existing workspace explicitly',form.getByRole('button',{name:'Open workspace',exact:true}));await expect(chooser()).toHaveCount(0);
   evidence.assertion('Duplicate creates no second registration',(await observation()).registeredWorkspaces.filter(row=>row.path===created).length,1);evidence.assertion('Duplicate preserves original file',await readFile(path.join(created,'sentinel.txt'),'utf8'),'Preserve existing bytes');
  });
@@ -65,9 +66,9 @@ try{
  });
  await probe('creation-lost-ack',['create.workspace-fault'],async()=>{
   let lost=false;await page.route('**/api/actions',async route=>{const command=unwrap(route.request().postDataJSON());if(command?.action==='workspace.create'&&!lost){lost=true;await route.fetch();return route.fulfill({status:503,json:{error:'Synthetic lost acknowledgement after creation'}})}return route.continue()});
-  await openPicker();await click('Start loss-recovery workspace',chooser().getByRole('button',{name:'New workspace',exact:true}));const form=page.getByRole('form',{name:'Create workspace',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Receipt recovery');await click('Create with one lost acknowledgement',form.getByRole('button',{name:'Create workspace',exact:true}));await expect(form.getByRole('alert')).toBeVisible();
+  await openPicker();await click('Start loss-recovery workspace',chooser().getByRole('button',{name:'New project',exact:true}));const form=page.getByRole('form',{name:'Create project',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Receipt recovery');await click('Create with one lost acknowledgement',form.getByRole('button',{name:'Create project',exact:true}));await expect(form.getByRole('alert')).toBeVisible();
   evidence.assertion('First effect happened once',(await observation()).registeredWorkspaces.filter(row=>row.path.endsWith('/receipt-recovery')).length,1);
-  await click('Retry unfinished acknowledgement',form.getByRole('button',{name:'Create workspace',exact:true}));await expect(chooser()).toHaveCount(0);await page.unroute('**/api/actions');
+  await click('Retry unfinished acknowledgement',form.getByRole('button',{name:'Create project',exact:true}));await expect(chooser()).toHaveCount(0);await page.unroute('**/api/actions');
   evidence.assertion('Recovery retains one registration',(await observation()).registeredWorkspaces.filter(row=>row.path.endsWith('/receipt-recovery')).length,1);evidence.assertion('Recovery retains one directory',(await readdir(initial.workspaceDefaults.root)).filter(name=>name==='receipt-recovery').length,1);
   await openPicker();await chooser().getByRole('searchbox',{name:'Find a workspace',exact:true}).fill('Audit project');await click('Restore audited workspace',chooser().getByRole('button',{name:'Audit project · '+created,exact:true}));await expect(chooser()).toHaveCount(0);
  });
@@ -111,7 +112,7 @@ try{
   evidence.assertion('Coordination preserves actual resource',await readFile(path.join(created,'sentinel.txt'),'utf8'),'Preserve existing bytes');evidence.assertion('Selected chat remains unchanged',(await state()).selectedSessionId,sessionId);evidence.assertion('No additional model submissions',(await observation()).sent.length,1);
  });
  await probe('starter-partial-inspect-retry',['create.starter-result'],async()=>{
-  await click('Create workspace from sidebar',page.getByRole('button',{name:'New workspace',exact:true}));const form=page.getByRole('form',{name:'Create workspace',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Retained setup');await form.getByRole('combobox',{name:'Start from…',exact:true}).selectOption({label:'Retained retry fixture'});await click('Create from selected starter',form.getByRole('button',{name:'Create workspace',exact:true}));await expect(form).toHaveCount(0);await expect(surface().getByRole('heading',{name:'Retained setup',exact:true})).toBeVisible();await tab('Details');const readiness=surface().getByRole('region',{name:'Workspace readiness',exact:true});await expect(readiness).toContainText('Some setup steps need attention. Successful work is retained.');await expect(readiness).toContainText('one: ready');await expect(readiness).toContainText('two: failed');
+  await click('Create workspace from sidebar',page.getByRole('button',{name:'New project',exact:true}));const form=page.getByRole('form',{name:'Create project',exact:true});await form.getByLabel('Workspace name',{exact:true}).fill('Retained setup');await form.getByRole('combobox',{name:'Start from…',exact:true}).selectOption({label:'Retained retry fixture'});await click('Create from selected starter',form.getByRole('button',{name:'Create project',exact:true}));await expect(form).toHaveCount(0);await expect(surface().getByRole('heading',{name:'Retained setup',exact:true})).toBeVisible();await tab('Details');const readiness=surface().getByRole('region',{name:'Workspace readiness',exact:true});await expect(readiness).toContainText('Some setup steps need attention. Successful work is retained.');await expect(readiness).toContainText('one: ready');await expect(readiness).toContainText('two: failed');
   const folder=path.join(initial.workspaceDefaults.root,'retained-setup');await writeFile(path.join(folder,'one','source.txt'),'User edit in successful repository');await writeFile(path.join(folder,'AGENTS.md'),'User-owned guidance retained');await writeFile(path.join(home,'..','hold-inspection'),'hold');await click('Inspect retained imports without retrying',readiness.getByRole('button',{name:'Inspect retained imports',exact:true}));await expect.poll(()=>readFile(path.join(home,'..','inspection-entered'),'utf8').catch(()=>null)).toBe('entered');await expect(readiness.getByRole('button',{name:'Retry unfinished setup',exact:true})).toBeDisabled();await writeFile(path.join(home,'..','release-inspection'),'release');await expect(readiness.getByRole('button',{name:'Retry unfinished setup',exact:true})).toBeEnabled();let attempts=(await readFile(path.join(home,'..','import-attempts.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);evidence.assertion('Inspection never clones again',attempts.map(row=>row.repository),['first','second']);await writeFile(path.join(home,'..','allow-second-import'),'ready');await click('Retry only unfinished setup',readiness.getByRole('button',{name:'Retry unfinished setup',exact:true}));await expect(readiness).toContainText('Ready to work');attempts=(await readFile(path.join(home,'..','import-attempts.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);evidence.assertion('Only failed import retried',attempts.map(row=>row.repository),['first','second','second']);evidence.assertion('Successful repository edits retained',await readFile(path.join(folder,'one','source.txt'),'utf8'),'User edit in successful repository');evidence.assertion('Existing guidance retained',await readFile(path.join(folder,'AGENTS.md'),'utf8'),'User-owned guidance retained');evidence.assertion('New repository is populated',await readFile(path.join(folder,'two','source.txt'),'utf8'),'Original second source\n');evidence.assertion('Starter creates no model inputs',(await observation()).sent.length,1);
  });
  await probe('file-open-failure-and-navigation-fence',['workspace.files','workspace.tabs'],async()=>{

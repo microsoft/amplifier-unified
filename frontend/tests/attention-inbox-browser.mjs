@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Real shared actions in a disposable application; no accounts or provider calls.
 import {spawn} from 'node:child_process';
 import {createServer} from 'vite';
@@ -16,7 +17,7 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:920},extraHTTPHeaders:headers});
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  const initial=await control({op:'many',count:13}),sid=initial.alpha,other=initial.beta;
- await page.goto(vite.resolvedUrls.local[0]);
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:true});
  await page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}).click();
  const inbox=page.getByRole('region',{name:'Activity to review',exact:true});await expect(inbox).toBeVisible();
  // A fresh install can have release notices. Review those through the real UI
@@ -51,7 +52,7 @@ try{
  await inbox.getByRole('button',{name:'Mark responses reviewed',exact:true}).click();
  await expect(inbox.getByRole('region',{name:'Finished responses',exact:true})).toHaveCount(0);
  await expect(inbox.getByRole('region',{name:'To review',exact:true}).locator('.a-attention-item')).toHaveCount(3);
- const peer=await context.newPage();await peer.goto(vite.resolvedUrls.local[0]);
+ const peer=await context.newPage();await peer.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(peer,{navPinned:true});
  await peer.waitForFunction(()=>window.amplifier?.getState()?.attention?.unread===3);
  await inbox.getByRole('button',{name:'Mark all reviewed',exact:true}).click();
  await expect(inbox.getByText('All caught up.',{exact:true})).toBeVisible();
