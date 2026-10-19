@@ -54,7 +54,7 @@ def definitions(schema, string):
 def requirement(action, args):
     if action in {'workspace.environments.setup', 'workspace.environments.setup.cleanup'}:
         return 'test_host_setup', 'global'
-    if action in {'workspace.tests.submit', 'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove', 'workspace.environments.reconcile'}:
+    if action in {'workspace.tests.submit', 'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove', 'workspace.environments.reconcile', 'workspace.environments.exportArtifacts'}:
         return 'test_environments', 'session'
     if action in PERSISTENT:
         if 'scope' not in args:

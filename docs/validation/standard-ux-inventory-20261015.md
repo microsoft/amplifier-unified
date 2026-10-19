@@ -639,3 +639,31 @@ A delayed real terminal frame must not be mistaken for settled browser layout.
 Keep the existing zero-folded-group while reading and one-group after the user's
 return-to-latest assertions. [The diagnostic](interim-browser-terminal832.md)
 preserves the forced failing ordering separately; no folding behavior changed.
+
+### Incremental history classification (October 18)
+
+**HISTORY-840** keeps the existing automatic-history classification owner in
+Full Python checks. Change a saved legacy chat's canonical metadata to internal,
+then require bounded reconciliation to hide it from ordinary navigation while
+preserving diagnostic access, purpose, transcript bytes, and restart behavior.
+Exercise both normal discovery and one-step reconciliation without watcher
+notifications; neither path may start or send to a runtime. A bounded refresh
+may return before the changed session is visited, so assert convergence across
+slices instead of assuming one refresh exhausts the catalog. Preserve the exact
+classification, counts, read-only, and unchanged-file assertions. See
+[classification qualification](history-classification840.md). This extends the
+existing Python owner; no additional browser scenario or frozen inventory change.
+
+### Stopped artifact recovery (October 18)
+
+**ARTIFACTS-831** extends the existing `test-environments` browser owner. Recover
+artifact evidence from a stopped environment with its exact owner/revision;
+retain its preceding operation receipt and workspace, and never start, execute
+or remove the guest. An uncertain export must disable replay. Await refresh
+completion and require the export count to remain unchanged through later
+navigation. Real backend acceptance separately creates a workspace over the
+selected retention limit, observes failed removal without deletion, then verifies
+an artifacts-only archive and unchanged stopped guest. Existing retention and
+worker Python owners cover malformed archives, authority and replay boundaries.
+See [qualification and limits](stopped-artifact-recovery831.md). No new browser
+lane or frozen inventory count is added.

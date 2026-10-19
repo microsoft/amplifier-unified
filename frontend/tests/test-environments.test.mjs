@@ -17,6 +17,36 @@ const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join
 const button=(root,label)=>root.root.findAllByType('button').find(node=>text(node)===label);
 const read={action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'a'}};
 
+for(const status of ['stopped','running'])test(`artifact evidence export is ${status==='stopped'?'available':'blocked'} for ${status} work`,async()=>{
+ let root;const calls=[],resource={id:'env',revision:8,status,recovery:{available:true}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?{items:[resource],capability:{status:'unavailable'}}:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  const recover=button(root,'Save artifact evidence');
+  assert.equal(recover.props.disabled,status!=='stopped');
+  if(status==='stopped'){
+   await act(async()=>recover.props.onClick());
+   const mutations=calls.filter(row=>row.action!==read.action);
+   assert.equal(mutations.length,1);
+   assert.equal(mutations[0].action,'workspace.environments.exportArtifacts');
+   assert.equal(mutations[0].args.id,'env');assert.equal(mutations[0].args.expectedRevision,8);
+  }
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('artifacts-only recovery retains the old unknown removal and does not offer replay',async()=>{
+ let root;
+ const resource={id:'env',revision:9,status:'stopped',recovery:{available:true},
+  lastOperation:{state:'outcome_unknown'},lastArtifactExport:{state:'outcome_unknown'},
+  artifactExport:{verified:true,archiveBytes:2048}};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:async()=>accepted({items:[resource]})}))});
+  assert.equal(button(root,'Save artifact evidence').props.disabled,true);
+  assert.match(text(root.toJSON()),/does not include the working folder or authorize removal/);
+  assert.match(text(root.toJSON()),/Last request: outcome unknown/);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 for(const available of [true,false])test(`original environment cleanup remains ${available?'available':'blocked'} when new execution is unavailable`,async()=>{
  let root;const calls=[],resource={id:'env',revision:8,status:'stopped',recovery:{available,reason:'Original connection unavailable'}};
  const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?{items:[resource],capability:{status:'unavailable',reason:'New backend is unavailable'}}:{request:{state:'completed'}})};

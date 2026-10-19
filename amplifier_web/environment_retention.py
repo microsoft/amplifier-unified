@@ -159,13 +159,15 @@ def validate_links(names, links):
             raise ValueError('A symbolic link leaves its retained root.')
 
 
-def filter_incus_stream(stream, destination, identity):
-    """Read one complete plain Incus backup, retaining two verified tar files."""
+def filter_incus_stream(stream, destination, identity, *, selections=SELECTION):
+    """Filter a bounded backup without extracting guest-controlled paths."""
+    if selections not in (SELECTION, ('artifacts',)):
+        raise ValueError('Unsupported retained selection.')
     destination = Path(destination)
     outputs, files, names, links, ancestors, roots = {}, {}, {}, {}, {}, set()
     count = logical = 0
     try:
-        for selection in SELECTION:
+        for selection in selections:
             files[selection] = (destination / (selection + '.tar')).open('xb')
             outputs[selection] = tarfile.open(fileobj=files[selection], mode='w', format=tarfile.PAX_FORMAT)  # noqa: SIM115 - closed before fsync in finally.
             names[selection], links[selection] = {}, {}
@@ -180,7 +182,7 @@ def filter_incus_stream(stream, destination, identity):
                     continue
                 relative = full[len(PREFIX):]
                 selection = relative.split('/')[0]
-                if selection not in SELECTION:
+                if selection not in selections:
                     continue
                 selected = copy.copy(item)
                 selected.name = relative
@@ -205,9 +207,9 @@ def filter_incus_stream(stream, destination, identity):
                 # prior-member cache. Link validation has its own bounded index.
                 outputs[selection].members.clear()
             verified_footer(archive)
-        if roots != set(SELECTION):
-            raise ValueError('The instance export does not contain both selected roots.')
-        for selection in SELECTION:
+        if roots != set(selections):
+            raise ValueError('The instance export does not contain all selected roots.')
+        for selection in selections:
             validate_links(names[selection], links[selection])
     finally:
         for output in outputs.values():
@@ -217,7 +219,27 @@ def filter_incus_stream(stream, destination, identity):
             os.fsync(output.fileno())
             output.close()
     return [{'id': identity, 'source': '/' + selection, 'destination': str(destination / (selection + '.tar'))}
-            for selection in SELECTION]
+            for selection in selections]
+
+
+def verify_artifacts(archives):
+    """Artifacts-only evidence is never a removal or workspace-retention grant."""
+    if len(archives) != 1 or archives[0].get('source') != '/artifacts':
+        raise ValueError('Exactly the artifacts filesystem must be retained.')
+    archive = archives[0]
+    path = Path(archive['destination'])
+    checksum, size = digest(path)
+    if archive.get('sha256') not in {None, checksum} or archive.get('bytes') not in {None, size}:
+        raise ValueError('The exported archive does not match its receipt.')
+    logical = inspect_archive(path, 'artifacts')
+    archive.update(bytes=size, sha256=checksum, logicalBytes=logical, verified=True)
+    result = {'archiveBytes': size, 'logicalBytes': logical, 'format': 'tar',
+              'selection': ['/artifacts'], 'verified': True}
+    with (path.parent / 'artifacts-retention.json').open('x') as output:
+        json.dump(result, output)
+        output.flush()
+        os.fsync(output.fileno())
+    return result
 
 
 def verify_retention(root, archives, mode='files'):

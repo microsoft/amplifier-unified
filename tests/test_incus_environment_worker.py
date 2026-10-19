@@ -62,13 +62,13 @@ def backend(monkeypatch, tmp_path):
         return {'exit_code': 0, 'stdout': output, 'stderr': '', 'truncated': False}
     monkeypatch.setattr(worker, 'cli', cli)
     monkeypatch.setattr(worker, 'incus', incus)
-    def export_selected(config, env, name, destination):
+    def export_selected(config, env, name, destination, *, selections=('workspace', 'artifacts')):
         import tarfile
         calls.append(('incus', ['export', name, '-']))
         if state['export_failed']:
             raise worker.BackendFailure('export_failed', 'fixture')
         result = []
-        for selection in ('workspace', 'artifacts'):
+        for selection in selections:
             path = destination / (selection + '.tar')
             with tarfile.open(path, 'w') as archive:
                 item = tarfile.TarInfo(selection); item.type = tarfile.DIRTYPE; archive.addfile(item)
@@ -76,6 +76,32 @@ def backend(monkeypatch, tmp_path):
         return result
     monkeypatch.setattr(worker, 'export_selected', export_selected)
     return calls, state
+
+
+def test_artifact_recovery_keeps_stopped_instance_and_exports_only_artifacts(tmp_path, backend):
+    calls, state = backend
+    state.update(instance='Stopped', launch='stopped')
+    result = worker.execute_call(payload(tmp_path, 'exportArtifacts'))
+    assert result['ok'] and result['status'] == 'stopped'
+    assert result['artifactExport']['selection'] == ['/artifacts']
+    assert {row['source'] for row in result['archives']} == {'/artifacts'}
+    assert not any(args[0] in {'exec', 'stop', 'destroy', 'launch'} for _, args in calls)
+    assert state['instance'] == 'Stopped' and state['launch'] == 'stopped'
+
+
+@pytest.mark.parametrize('change', ['running', 'foreign', 'failed-export'])
+def test_artifact_recovery_never_runs_or_removes_instance_on_failure(tmp_path, backend, change):
+    calls, state = backend
+    state.update(instance='Stopped', launch='stopped')
+    if change == 'running':
+        state.update(instance='Running', launch='ready')
+    if change == 'foreign':
+        state['owner'] = 'foreign-root'
+    if change == 'failed-export':
+        state['export_failed'] = True
+    result = worker.execute_call(payload(tmp_path, 'exportArtifacts'))
+    assert not result['ok']
+    assert not any(args[0] in {'exec', 'stop', 'destroy', 'launch'} for _, args in calls)
 
 
 def test_identity_is_stable_and_root_bound(tmp_path):
