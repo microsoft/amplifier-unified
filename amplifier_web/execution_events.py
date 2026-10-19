@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 import weakref
+import os
 from .token_usage import with_gross_tokens
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
@@ -58,6 +59,9 @@ class ExecutionEvents:
         self.admission_guard = None
         self.provider_wrappers = {}
         self.streaming_calls = set()
+        # Optional status-only observation of live accepted plans, not a plan
+        # store. Never read logs or retain tool text/arguments for discovery.
+        self.status_plan_inputs = {} if os.environ.get('AMPLIFIER_STATUS_DIR') else None
 
     def publish(self, row):
         # Observe both wrapped and hook-only provider paths. Optional naming or
@@ -325,6 +329,16 @@ class ExecutionEvents:
 
             from .image_generation import observe
             observe(row, event, data)
+            if self.status_plan_inputs is not None and row['label'] == 'todo':
+                from .status_protocol.hook import accepted_plan
+                if event == 'tool:pre':
+                    args = data.get('tool_input') or {}
+                    if isinstance(args, dict) and args.get('action') in {'create', 'update'} and len(self.status_plan_inputs) < 32:
+                        self.status_plan_inputs[key] = accepted_plan({'todos': args.get('todos')})
+                else:
+                    proposed = self.status_plan_inputs.pop(key, None)
+                    row['statusPlan'] = (accepted_plan(data.get('result', data.get('tool_result')), proposed)
+                                         if row['phase'] == 'completed' else None)
             self.calls[key] = row
             self.publish(row)
             if event == 'tool:post' and row['label'] == 'image_generate':

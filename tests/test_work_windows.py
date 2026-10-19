@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -244,6 +245,135 @@ async def test_failed_source_probe_has_visible_retry_without_forever_loading(tmp
     await owner.close()
 
 
+@pytest.mark.asyncio
+async def test_published_invalidation_during_cached_probe_retries_without_false_failure(tmp_path, monkeypatch):
+    owner, session, _, _ = fixture(tmp_path, monkeypatch)
+    await owner.read('s', _initial=True)
+    receipt = dict(owner.status['s']['receipt'])
+    original = json.dumps(session, sort_keys=True)
+    entered, release = threading.Event(), threading.Event()
+    matches = owner._matches
+    def held(*args):
+        entered.set()
+        assert release.wait(5), 'Cached probe was not released'
+        return matches(*args)
+    monkeypatch.setattr(owner, '_matches', held)
+    task = owner.request('s')
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        owner.invalidate({'s'})
+        release.set()
+        assert await task is None
+        assert owner.status['s']['status'] == 'loading'
+        assert owner.status['s']['current'] is False
+        assert 's' not in owner.retry_at
+        monkeypatch.setattr(owner, '_matches', matches)
+        await owner.request('s')
+        assert owner.status['s'] == {'status': 'ready', 'current': True, 'receipt': receipt}
+        assert len(owner.projector.inputs) == 1
+        assert json.dumps(session, sort_keys=True) == original
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [OSError('private source unavailable'), ValueError('invalid source record')])
+async def test_real_cached_probe_failure_backs_off_then_restores_exact_receipt(tmp_path, monkeypatch, error):
+    owner, _, _, _ = fixture(tmp_path, monkeypatch)
+    await owner.read('s', _initial=True)
+    receipt = dict(owner.status['s']['receipt'])
+    matches = owner._matches
+    def broken(*args):
+        raise error
+    monkeypatch.setattr(owner, '_matches', broken)
+    try:
+        await owner.request('s')
+        assert owner.status['s'] == {'status': 'retrying', 'current': False, 'reason': 'worker_failed'}
+        assert owner.request('s') is None
+        monkeypatch.setattr(owner, '_matches', matches)
+        # Advance only this owner's retry deadline; no sleeps or broad clock patch.
+        owner.retry_at['s'] = 0
+        await owner.request('s')
+        assert owner.status['s'] == {'status': 'ready', 'current': True, 'receipt': receipt}
+        assert len(owner.projector.inputs) == 1
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_lookup_failure_before_task_admission_keeps_fixed_retry_status(tmp_path, monkeypatch):
+    from amplifier_web.service import AppError
+    owner, _, _, service = fixture(tmp_path, monkeypatch)
+    task = owner.request('s')
+    def missing(*args, **kwargs):
+        raise AppError('No longer selected', 404)
+    service._session = missing
+    try:
+        assert await task is None
+        assert owner.status['s'] == {'status': 'retrying', 'current': False, 'reason': 'worker_failed'}
+        assert owner.request('s') is None
+        assert not owner.pages and not owner.current
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_latest_replacement_keeps_receipt_for_quiet_reuse(tmp_path, monkeypatch):
+    owner, _, _, _ = fixture(tmp_path, monkeypatch)
+    try:
+        await owner.read('s', _initial=True)
+        previous = dict(owner.status['s']['receipt'])
+        await owner.read('s')  # Explicit latest read replaces the same page group.
+        receipt = dict(owner.status['s']['receipt'])
+        assert receipt['generation'] > previous['generation']
+        assert owner.pages[owner.current['s']]['receipt'] == receipt
+        owner.invalidate({'s'})
+        await owner.read('s', _initial=True)
+        assert owner.status['s'] == {'status': 'ready', 'current': True, 'receipt': receipt}
+        assert len(owner.projector.inputs) == 2
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('replacement', ['owner', 'source', 'epoch'])
+@pytest.mark.parametrize('worker_failure', [False, True])
+async def test_superseded_work_request_cannot_overwrite_newer_status(tmp_path, monkeypatch, replacement, worker_failure):
+    owner, session, _, service = fixture(tmp_path, monkeypatch)
+    entered, release = asyncio.Event(), asyncio.Event()
+    project = owner.projector.project
+    async def held(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        if worker_failure:
+            raise OSError('Late failure from obsolete read')
+        return await project(*args, **kwargs)
+    monkeypatch.setattr(owner.projector, 'project', held)
+    task = owner.request('s')
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        if replacement == 'owner':
+            current = dict(session)
+            service._session = lambda identity, hydrate=False: current
+        elif replacement == 'source':
+            session['nativeIdentity'] = 'replacement'
+        else:
+            owner.invalidate({'s'})
+        newer = {'status': 'loading', 'current': False, 'reason': 'newer-owner-read'}
+        owner._state('s', newer)
+        release.set()
+        assert await task is None
+        assert owner.status['s'] is newer
+        assert 's' not in owner.retry_at
+        assert not owner.pages and not owner.current
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+
+
 def test_failed_or_unretained_request_fences_are_bounded_without_reusing_old_generation(tmp_path, monkeypatch):
     owner, _, _, _ = fixture(tmp_path, monkeypatch)
     original = owner._fence('old')
@@ -375,3 +505,126 @@ async def test_http_native_continuation_is_explicit_and_never_replaces_saved_mes
     text = await (await client.get('/api/conversation/detail', params=first['items'][-1]['textDetail'])).json()
     assert text['value'] == 'native-139' + 'x' * 5000
     assert json.dumps(session['messages']) == canonical
+
+
+def test_work_notice_recipients_include_only_selected_observed_web_clients(tmp_path):
+    from contextvars import ContextVar
+    from amplifier_web.event_log_view import EventLogView
+    current = ContextVar('notification-client', default='current')
+    records = {
+        name: {'kind': kind, 'selectedSessionId': selected}
+        for name, kind, selected in [
+            ('registered', 'web', 's'), ('connected', 'web', 's'),
+            ('current', 'web', 's'), ('unrelated', 'web', 'other'),
+            ('terminal', 'tui', 's'), ('dormant', 'web', 's')]
+    }
+    notified = []
+    service = SimpleNamespace(data_dir=tmp_path,
+        clients=SimpleNamespace(records=records, current=current),
+        queue_clients={'a': 'connected', 'b': 'unrelated', 'c': 'terminal'},
+        shell=SimpleNamespace(resources=SimpleNamespace(clients={'registered', 'unrelated'}),
+                              notify=notified.append))
+    EventLogView(service)._notify_work('s')
+    assert sorted(notified) == ['connected', 'current', 'registered']
+
+
+@pytest.mark.asyncio
+async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registration(
+        authenticated_client, tmp_path, monkeypatch):
+    """Real WS/HTTP clients: legacy notification leaves a stale outer frame."""
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    _, source, _, _ = fixture(tmp_path, monkeypatch, count=140)
+    app = await create_app(tmp_path / 'notification-http', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False, preload_providers=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Selected fixture'})
+    selected = service._session()
+    sid = selected['id']
+    selected.update({key: value for key, value in source.items() if key != 'id'})
+    await service.dispatch('session.create', {'title': 'Unrelated fixture'})
+    other_sid = service._session()['id']
+    for identity, selection in [('notice-web', sid), ('unrelated-web', other_sid)]:
+        service.clients.attach(identity, kind='web')
+        with service.clients.bind(identity):
+            await service.dispatch('session.select', {'id': selection})
+    windows = service.event_log_view.windows
+    projector = FakeProjector(service.data_dir)
+    projector.gate = asyncio.Event()
+    windows.projector = projector
+    original_notice = service.event_log_view._notify_work
+    def legacy_notice(identity):
+        # Negative control reproduces the old recipient set, never forces state.
+        for client_id in tuple(service.shell.resources.clients):
+            record = service.clients.records.get(client_id, {})
+            if record.get('kind') == 'web' and record.get('selectedSessionId') == identity:
+                service.shell.notify(client_id)
+    monkeypatch.setattr(service.event_log_view, '_notify_work', legacy_notice)
+    client = await authenticated_client(app)
+    sockets, read = [], None
+    try:
+        for identity in ['notice-web', 'unrelated-web']:
+            socket = await client.ws_connect('/api/events/ws?transport=delta-v1&clientId=' + identity)
+            sockets.append(socket)
+            initial = await socket.receive_json(timeout=5)
+            assert initial['event'] == 'state'
+            assert initial['data']['client']['id'] == identity
+            assert not service.shell.resources.registered(identity)
+        # A real requested physical page waits at the projector boundary. Only
+        # its completion may set ready; no status injection or broad publish.
+        read = windows.request(sid)
+        assert read is not None
+        async with asyncio.timeout(5):
+            while not any(inputs['session']['id'] == sid for inputs in projector.inputs):
+                await asyncio.sleep(0)
+        response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
+        assert response.status == 200, await response.text()
+        before = await response.json()
+        before_session = next(row for row in before['sessions'] if row['id'] == sid)
+        assert before_session['workProjection']['current'] is False
+        cached_before = service._client_snapshots['notice-web']
+        projector.gate.set()
+        await asyncio.wait_for(asyncio.shield(read), timeout=5)
+        assert windows.status[sid]['current'] is True and windows.status[sid]['status'] == 'ready'
+        # No await between stale-frame evidence and the corrected notification:
+        # background state publications cannot manufacture this discriminator.
+        with service.clients.bind('notice-web'):
+            stale = service.browser_state()
+        assert stale is cached_before
+        stale_session = next(row for row in stale['sessions'] if row['id'] == sid)
+        assert stale_session['workProjection']['current'] is False
+        with service.clients.bind('unrelated-web'):
+            unrelated = service.browser_state()
+        unrelated_token = service.shell.change_token('unrelated-web')
+        selected_token = service.shell.change_token('notice-web')
+        monkeypatch.setattr(service.event_log_view, '_notify_work', original_notice)
+        original_notice(sid)
+        assert 'notice-web' not in service._client_snapshots
+        assert service.shell.change_token('notice-web') != selected_token
+        assert service._client_snapshots['unrelated-web'] is unrelated
+        assert service.shell.change_token('unrelated-web') == unrelated_token
+        with service.clients.bind('notice-web'):
+            current = service.browser_state()
+        projected = next(row for row in current['sessions'] if row['id'] == sid)
+        assert projected['workProjection']['status'] == 'ready'
+        assert projected['workProjection']['current'] is True
+        assert projected['workProjection']['receipt'] == windows.status[sid]['receipt']
+        response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
+        assert response.status == 200, await response.text()
+        external = await response.json()
+        projected = next(row for row in external['sessions'] if row['id'] == sid)
+        assert projected['workProjection']['status'] == 'ready' and projected['workProjection']['current']
+        assert not service.shell.resources.registered('notice-web')
+        print('WORK-NOTIFICATION-CONTROL', {'legacyExternalCurrent': False, 'internalCurrent': True,
+              'correctedExternalCurrent': True, 'unrelatedCacheAndTokenUnchanged': True})
+    finally:
+        projector.gate.set()
+        if read is not None:
+            if not read.done():
+                read.cancel()
+            await asyncio.gather(read, return_exceptions=True)
+        try:
+            for socket in sockets:
+                await socket.close()
+        finally:
+            await client.close()

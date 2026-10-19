@@ -13,6 +13,7 @@ globalThis.document={visibilityState:'visible',addEventListener:(name,fn)=>liste
 globalThis.window={matchMedia:()=>({matches:false,addEventListener(){},removeEventListener(){}})};
 const server=await createServer({resolve:{alias:{'@modelcontextprotocol/ext-apps/app-bridge':fileURLToPath(new URL('./fixtures/mcp-app-bridge-stub.js',import.meta.url))}},server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {McpAppViewer}=await server.ssrLoadModule('/src/mcp-app-viewer.jsx');
+const {McpContractReview}=await server.ssrLoadModule('/src/mcp-contract-review.jsx');
 const {McpAppVisibilityProvider,MCP_VISIBILITY}=await server.ssrLoadModule('/src/mcp-app-lifecycle.jsx');
 test.after(()=>server.close());
 const response=value=>({ok:true,status:200,text:async()=>JSON.stringify(value)});
@@ -184,7 +185,7 @@ test('shared connection recovery notifies an initialized app once without a relo
  }finally{await act(async()=>component.unmount())}
 });
 
-test('historical and denied tool views explain disabled recovery and send no availability notification',async()=>{
+test('historical views omit reconnection and denied views explain disabled recovery without notifications',async()=>{
  for(const status of ['saved_version','contract_changed','account_review_required','configuration_changed']){
   globalThis.fetch=async()=>response({...available,status,canReconnect:false,message:'Review the saved view before using live features.'});
   let component;
@@ -192,9 +193,57 @@ test('historical and denied tool views explain disabled recovery and send no ava
   const bridge=mcpTestBridges.at(-1);
   try{
    await act(async()=>bridge.oninitialized());
-   const button=component.root.findByProps({'aria-label':'Reconnect tool view'});
-   assert.equal(button.props.disabled,true);assert.equal(button.props.title,'Review the saved view before using live features.');
+   if(status==='saved_version'){
+    assert.equal(component.root.findAllByProps({'aria-label':'Reconnect tool view'}).length,0);
+   }else{
+    const button=component.root.findByProps({'aria-label':'Reconnect tool view'});
+    assert.equal(button.props.disabled,true);assert.equal(button.props.title,'Review the saved view before using live features.');
+   }
    assert.equal(bridge.toolListChanges,undefined);assert.equal(bridge.resourceListChanges,undefined);
   }finally{await act(async()=>component.unmount())}
  }
+});
+
+
+test('automatic saved-version pin preserves DOM but changes authority and denies old app calls',async()=>{
+ const frame={contentWindow:{},draft:'unfinished'},initial={id:'pin',open:true,revision:1,resourceRevision:'live',generation:1,renderIdentity:'mounted-live'};
+ let component,canvas=initial;const calls=[];
+ globalThis.fetch=async path=>{calls.push(path);assert.ok(path.includes('/status'));return response({...available,status:canvas.readOnlyVersion?'saved_version':'ready'})};
+ const render=()=>React.createElement(McpAppViewer,{canvas,act:async()=>({})});
+ await act(async()=>{component=create(render(),{createNodeMock:node=>node.type==='iframe'?frame:null})});
+ const bridge=mcpTestBridges.at(-1),count=mcpTestBridges.length,src=frame.src;
+ try{
+  await act(async()=>bridge.oninitialized());
+  canvas={...initial,readOnlyVersion:true,selectedVersion:1,resourceRevision:'historical',generation:2};
+  await act(async()=>component.update(render()));
+  assert.equal(frame.src,src);assert.equal(frame.draft,'unfinished');assert.equal(mcpTestBridges.length,count);
+  assert.ok(calls.at(-1).includes('resourceRevision=historical'));
+  await assert.rejects(bridge.oncalltool({name:'write',arguments:{}}),/read-only/);
+  assert.deepEqual(await bridge.onlisttools(),{tools:[]});
+  assert.equal(bridge.closed,undefined);assert.equal(bridge.toolListChanges,undefined);
+ }finally{await act(async()=>component.unmount())}
+});
+
+test('late approval status refresh cannot mask a newer contract refusal',async()=>{
+ let finish,component,reads=0;
+ const held=new Promise(resolve=>{finish=resolve});
+ let canvas={id:'review-status',open:true,revision:1,resourceRevision:'v1',generation:1,renderIdentity:'retained'};
+ globalThis.fetch=async()=>{
+  reads++;
+  if(reads===2)return held;
+  return response(reads===1?available:{...available,status:'contract_changed',canReconnect:false,bindingRevision:'new-binding',message:'Newer contract requires review'});
+ };
+ const render=()=>React.createElement(McpAppViewer,{canvas,act:async()=>({})});
+ await act(async()=>{component=create(render(),{createNodeMock:node=>node.type==='iframe'?{contentWindow:{}}:null})});
+ try{
+  await act(async()=>mcpTestBridges.at(-1).oninitialized());
+  let pending;await act(async()=>{pending=component.root.findByType(McpContractReview).props.onApplied()});
+  canvas={...canvas,revision:2,resourceRevision:'v2',generation:2};
+  await act(async()=>component.update(render()));
+  assert.equal(reads,3);
+  await act(async()=>{finish(response(available));await pending});
+  const reconnect=component.root.findByProps({'aria-label':'Reconnect tool view'});
+  assert.equal(reconnect.props.disabled,true);
+  assert.equal(reconnect.props.title,'Newer contract requires review');
+ }finally{await act(async()=>component.unmount())}
 });

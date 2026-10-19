@@ -75,7 +75,8 @@ async def mount(coordinator, config=None):
             'context': {'module': 'context-switchfixture', 'source': str(package.parent), 'config': {'max_tokens': budget}}},
             'providers': [{'module': 'provider-fixture', 'source': str(provider.parent), 'config': {'fail': name=='bad'}}]}
         bundle = root/(name+'.yaml'); bundle.write_text(json.dumps(plan)); bundles[name] = str(bundle)
-    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.module_failures import ConfiguredModuleError, REMEDIATION
     from amplifier_web.service import AppService
     from amplifier_web.management import Management
     from amplifier_web.host.storage import SessionStore
@@ -120,8 +121,10 @@ async def mount(coordinator, config=None):
         before = saved_history(store, sid)
         try:
             await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['bad']})
-        except RuntimeStartupError:
-            pass
+        except ConfiguredModuleError as exc:
+            assert exc.failures == [{'module': 'provider-fixture', 'type': 'provider',
+                'instance_id': 'fixture', 'reason_code': 'provider_mount_failed',
+                'guidance': REMEDIATION['provider_mount_failed']}], exc.failures
         else:
             raise AssertionError('Broken replacement was accepted')
         saved, metadata = saved_history(store, sid)
@@ -142,7 +145,8 @@ async def mount(coordinator, config=None):
         print(json.dumps({'reviewed_and_direct_switch':True,'fresh_worker_per_revision':True,
             'previous_worker_reaped_before_spawn':True,
             'same_name_cached_child':True,'history_preserved':True,'model_effort_preserved':True,
-            'old_budget_reset':True,'failed_mount_rolled_back':True,'restored_worker_usable':True,
+            'old_budget_reset':True,'failed_mount_diagnostic':'provider_mount_failed',
+            'failed_mount_rolled_back':True,'restored_worker_usable':True,
             'model_calls':0,'replayed_work':False,'mounts':mounts}))
     finally:
         await app.close()

@@ -78,12 +78,18 @@ def test_exact_bound_client_monotonic_demand_and_scope(owner):
     assert owner.snapshot('one')['instances']['nav']['resources'].keys() == {'context'}
 
 
-def test_quiet_progress_reuses_pages_and_context_without_catalog_or_payload_work(owner):
+def test_quiet_progress_reuses_pages_and_context_without_catalog_or_payload_work(owner, monkeypatch):
     register(owner, ('recentNavigation','sidebarSearch'))
     first = owner.snapshot('one'); old = deepcopy(first)
     calls = list(owner.shell.calls)
     owner.shell.service.state.update(revision=2, execution={'text':'unrelated progress'})
-    assert owner.snapshot('one') is first
+    # Reusing the eventual result is insufficient: the old path still rebuilt
+    # every page key and walked the envelope before discovering equality.
+    with monkeypatch.context() as patch:
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Settled progress rebuilt resource pages')
+        patch.setattr(owner, '_snapshot', forbidden)
+        assert owner.snapshot('one') is first
     assert owner.shell.calls == calls
     assert first == old
     owner.shell.saved['views']['nav'] = {'view': {'navRecentView': {'navFilter':'new'}}}
@@ -92,6 +98,33 @@ def test_quiet_progress_reuses_pages_and_context_without_catalog_or_payload_work
     assert first == old
     assert second['instances']['nav']['resources']['recentNavigation']['value'] is first['instances']['nav']['resources']['recentNavigation']['value']
     assert set(second['instances']['nav']['resources']['context']['value']['attention']['sessions']) == {'recentNavigation','sidebarSearch'}
+
+
+def test_initial_view_preferences_are_part_of_settled_identity(owner):
+    register(owner, ('sidebarSearch',))
+    first = owner.snapshot('one')
+    old = deepcopy(first)
+    bootstrap = owner.bootstrap_key('one')
+    owner.shell.saved['baselineView'].update(navRecentView={'navFilter': 'initial filter'},
+        workspaceDraft={'mode': 'rename', 'id': 'w', 'name': 'unfinished'})
+    changed = owner.snapshot('one')
+    view = changed['instances']['nav']['resources']['context']['value']['view']
+    assert view['navRecentView']['navFilter'] == 'initial filter'
+    assert view['workspaceDraft']['name'] == 'unfinished'
+    assert changed is not first and first == old
+    assert owner.bootstrap_key('one') == bootstrap
+
+
+def test_completed_envelope_rechecks_capacity_and_new_demand(owner, monkeypatch):
+    register(owner)
+    first = owner.snapshot('one')
+    monkeypatch.setattr(resources, 'MAX_TOTAL_BYTES', owner.total_bytes - 1)
+    assert owner.snapshot('one')['error']['code'] == 'shell_resource_limit'
+    monkeypatch.setattr(resources, 'MAX_TOTAL_BYTES', owner.total_bytes + 100000)
+    assert 'error' not in owner.snapshot('one')
+    register(owner, demand=2)
+    assert owner.snapshot('one')['demandId'] == 2
+    assert first['demandId'] == 1
 
 
 def test_scope_mismatch_does_no_projection_until_exact_new_demand(owner):
@@ -231,6 +264,77 @@ async def test_attention_only_saved_changes_refresh_visible_unselected_notices(s
         refreshed = owner.snapshot('resource-attention')
         assert refreshed != errored
         assert refreshed['instances']['chats']['resources']['context']['revision'] > errored['instances']['chats']['resources']['context']['revision']
+
+
+async def test_settled_client_filters_and_unfinished_edits_remain_independent(service):
+    from test_shell_modules import command, settled_resources
+    owner = service.shell.resources
+    for identity in ('filter-one', 'filter-two'):
+        service.clients.attach(identity)
+        with service.clients.bind(identity):
+            owner.register(identity, 1, [], resources.scope_for(service.state))
+    first = await settled_resources(service, 'filter-one')
+    peer = await settled_resources(service, 'filter-two')
+    frozen = deepcopy(peer)
+    await command(service, 'shell.view.update', clientId='filter-one', instanceId='chats',
+        patch={'navFilter': 'alpha', 'workspaceDraft': {'mode': 'rename', 'id': 'one', 'name': 'My unfinished name'}},
+        dirty=True)
+    changed = await settled_resources(service, 'filter-one')
+    context = changed['instances']['chats']['resources']['context']['value']
+    assert context['view']['navFilter'] == 'alpha'
+    assert context['view']['workspaceDraft']['name'] == 'My unfinished name'
+    assert context['viewRevision'] > first['instances']['chats']['resources']['context']['value']['viewRevision']
+    assert await settled_resources(service, 'filter-two') is peer
+    assert peer == frozen
+    service.clients.records['filter-one']['view']['draft'] = 'composer is unrelated'
+    assert await settled_resources(service, 'filter-one') is changed
+
+
+async def test_settled_scope_tracks_selected_resident_admission_without_semantic_change(service):
+    selected = service.state['sessions'][0]
+    selected['location'] = {'kind': 'managed'}
+    service._save_changes(sessions={'alpha', 'beta'}, globals={'workspaces'})
+    service.clients.attach('resident-scope').update(selectedSessionId='alpha', selectedWorkspaceId='one')
+    with service.clients.bind('resident-scope'):
+        owner = service.shell.resources
+        owner.register('resident-scope', 1, [], resources.scope_for(service.state))
+        first = owner.snapshot('resident-scope')
+        assert first['instances']['chats']['resources']['context']['value']['view']['navChatScope'] == 'all'
+        before = service.directory.observation_revision
+        # Like resident retirement, leave the exact durable owner available in
+        # the directory. Selection and canonical navigation facts stay equal.
+        service._state['sessions'] = [row for row in service._state['sessions'] if row['id'] != 'alpha']
+        service.projections.invalidate(state=service._state)
+        assert service.directory.observation_revision == before
+        absent = owner.snapshot('resident-scope')
+        assert absent['instances']['chats']['resources']['context']['value']['view'].get('navChatScope', 'workspace') == 'workspace'
+        service._state['sessions'].append(selected)
+        service.projections.invalidate(state=service._state)
+        assert service.directory.observation_revision == before
+        admitted = owner.snapshot('resident-scope')
+        assert admitted['instances']['chats']['resources']['context']['value']['view']['navChatScope'] == 'all'
+        assert first['instances']['chats']['resources']['context']['value']['view']['navChatScope'] == 'all'
+
+
+async def test_settled_context_observes_committed_workspace_and_shared_history_changes(service):
+    service._save_changes(sessions={'alpha', 'beta'}, globals={'workspaces'})
+    service.clients.attach('workspace-epoch').update(selectedSessionId='alpha', selectedWorkspaceId='one')
+    with service.clients.bind('workspace-epoch'):
+        owner = service.shell.resources
+        owner.register('workspace-epoch', 1, [], resources.scope_for(service.state))
+        first = owner.snapshot('workspace-epoch')
+        old = deepcopy(first)
+        workspace = next(row for row in service.state['workspaces'] if row['id'] == 'one')
+        workspace.update(name='Renamed workspace', path='/changed/canonical/path')
+        service.state['sharedHistory'].update(refreshing=True, issueCount=2)
+        service._save_changes(globals={'workspaces', 'sharedHistory'})
+        changed = owner.snapshot('workspace-epoch')
+        context = changed['instances']['chats']['resources']['context']['value']
+        assert context['workspaces'][0]['name'] == 'Renamed workspace'
+        assert context['workspaces'][0]['path'] == '/changed/canonical/path'
+        assert context['sharedHistory']['refreshing'] is True
+        assert context['sharedHistory']['issueCount'] == 2
+        assert first == old and changed is not first
 
 
 @pytest.mark.parametrize('damage', ['missing', 'corrupt'])

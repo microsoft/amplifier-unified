@@ -1,5 +1,37 @@
 # Standard UX inventory and execution plan
 
+## Completion-hook response follow-up (October 18)
+
+**RESPONSE-833** covers two ordinary answers with an internal completion check
+after each. Keep exactly the two user-facing answers, with no verification JSON
+or false interrupted response. Record all four model calls and their usage.
+Normal streaming must resume after the hook; error/cancellation restores prior
+context, and a background check cannot become another chat's public response.
+
+The six cases in `tests/test_prompt_completion_scope.py` belong to Full Python
+checks. The optional `tests/fixtures/prompt_completion_runtime_probe.py` exercises
+actual Core, loop-live and the canonical shell hook with a deterministic local
+provider. Both controls fail on unchanged main and pass with the scoped fix;
+[the qualification receipt](prompt-completion-scope833-20261018.json) records
+46 focused passes, dependency identities and limits. This adds a regression
+witness without changing the frozen inventory counts or claiming the original
+reporter's Mac configuration, live provider, or browser acceptance.
+
+## Scale follow-up coverage (October 17)
+
+The original inventory and frozen outcome counts remain unchanged. The additive
+[settled navigation checks](settled-shell633-qualification.md) verify fresh
+filters, independent client drafts, canonical directory changes, pending reads,
+explicit retries and cleanup while avoiding redundant completed-result assembly.
+The [bounded encoding checks](batched-projection633-qualification.md) verify exact
+bytes and limits, stop/failure cleanup and concurrent spool reservations. Their
+fixed-input microbenchmark measures encoding only; it is not an app latency claim.
+Both test groups belong to full Python coverage. [Integrated copied-scale browser
+measurements](copied-scale-176.md) retain separate source/runtime identities and
+current versus desired timings; deterministic local workers do not qualify
+live-provider performance. All functional flows passed; warm-send and 12-worker
+streaming targets remain unresolved and #633 stays open.
+
 ## Current follow-up smoke coverage (October 16)
 
 | Case / owner | Current evidence | Desired result and limits |
@@ -522,3 +554,116 @@ and a known update notice, preserving all later retry, cross-client, badge,
 pending-action and mobile assertions. The original fixture fails on the empty
 baseline; the corrected fixture passes both. This is a harness correction, not
 a change to the app's attention behavior or a new duplicate test lane.
+
+### Numbered chat shortcuts and diagram viewing (October 17)
+
+Add `chat-shortcuts` to the extended browser plan: reveal after a held Alt+Shift
+gesture, freeze nine distinct rendered chat identities across live reorder,
+select through the ordinary guarded row, exclude collapsed rows, and leave
+typing, IME, dialogs and browser tab shortcuts untouched. Require zero row
+geometry change and dismissal on Escape, release and blur. Draft retention,
+dirty-view navigation and scoped/narrow cases remain explicit acceptance items.
+The browser proof does not certify native OS input-source bindings.
+
+Promote the existing `diagram-navigation` scenario into the extended plan as its
+sole automatic owner. Preserve its 22 Mermaid/DOT pan, zoom, touch cancellation,
+persistence and narrow-fit checks; add always-visible ordinary controls, authored
+source/style preservation, optional node details and non-overlapping default
+network layout. Current focused result is 25 passing outcome groups, with zero
+page errors. Embedded scrolling remains owned by Public readiness; the special
+installed-package original-artifact harness remains separate. No frozen inventory
+count or 65-scenario migration hash is relabeled by these additive checks.
+
+### Everyday Automation overview and reviewed recovery (October 17)
+
+**AUTO-277-679** is additive ordinary navigation coverage. Its sole source-browser
+owner is `automation-hub` in extended Browser checks, with no change to the frozen
+65-scenario baseline. From navigation, discover a bounded schedule page, inspect
+its owning chat and future occurrence, page/refresh explicitly, and open the
+existing Work & automation controls while preserving the user's draft. Review
+future new-task runs from a failed owner without warming it; require explicit Stop
+acknowledgement; prove one actual due admission after review and checkpoint.
+Unknown prior work, changed authority/configuration and later Stop remain refused.
+See [the checklist, measured results and limits](automation-hub-277-679.md).
+
+### Saved tool contract review (October 17)
+
+The existing MCP recovery browser scenario now owns explicit contract comparison,
+approval of existing action names, optional updated-document adoption and retention
+of another client's unfinished input. Add delayed contract-read success/failure
+after a view revision changes, and delayed approval completion after revision or
+close, to the review lifecycle checklist. Hold the post-approval status read,
+change authority, then release it and verify the newer refusal remains visible.
+The five deterministic frontend checks pass; desired behavior is no obsolete
+review, error or refresh in the newer view.
+The original Studious artifact remains unavailable and is not counted as qualified.
+
+**MCP-REVIEW-09** records the full-run layout regression: optional review added
+43.78125 pixels above a healthy tool. The existing `smart-tools` owner must retain
+its no-gap Canvas geometry assertion. The existing `mcp-recovery` owner also
+checks that required review remains visible with Canvas options closed, while a
+healthy tool exposes optional review only through those options. Existing input
+preservation, denied new actions and explicit document replacement assertions
+remain unchanged. These are added outcomes in the existing owners, not another
+browser lane or a change to the frozen inventory counts.
+
+### Recent Work receipt recovery (October 17)
+
+**WORK-832** adds publication-race and recovery checks to the existing
+`tests/test_work_windows.py` owner in Full Python checks. Hold a cached source
+probe across published invalidation, then require quiet recovery with the exact
+accepted receipt and no false worker failure. Cover owner/source/fence replacement
+with both late success and late failure; neither may overwrite newer status.
+Real source errors must retain retry/backoff, and quiet cache reuse must restore
+the receipt. Include removal before task admission and explicit latest-page
+replacement. The existing `execution-inspection` extended browser scenario remains
+the sole browser owner for a current recent-events receipt, live/terminal Work,
+retry, copy and reload. See [qualification and limits](work-receipt832.md).
+No frozen inventory or 65-scenario migration hash changes.
+
+**WORK-836** adds the reload-before-shell-registration boundary to the existing
+WorkWindows Python owner and `canonical-work` extended-browser acceptance.
+Hold real source revalidation and delay the new document's shell registration;
+after completion, require its current recent-events receipt without an unrelated
+command or view report repairing the cache. Verify selected connected/current
+web readers receive the notice while unrelated, dormant and non-web clients do
+not. The controlled old-source browser fails the unchanged final 15-second
+receipt assertion; the narrow notification correction passes the same sequence.
+Keep historical failures distinct from this controlled cause. See
+[qualification and retained uncertainty](work-readiness836.md).
+
+**INTERIM-832** strengthens the existing extended `interim-replies` owner. Before
+testing long-scrollback completion and the explicit Jump to latest transition,
+require this generation's rendered message and exact completed-response binding.
+A delayed real terminal frame must not be mistaken for settled browser layout.
+Keep the existing zero-folded-group while reading and one-group after the user's
+return-to-latest assertions. [The diagnostic](interim-browser-terminal832.md)
+preserves the forced failing ordering separately; no folding behavior changed.
+
+### Incremental history classification (October 18)
+
+**HISTORY-840** keeps the existing automatic-history classification owner in
+Full Python checks. Change a saved legacy chat's canonical metadata to internal,
+then require bounded reconciliation to hide it from ordinary navigation while
+preserving diagnostic access, purpose, transcript bytes, and restart behavior.
+Exercise both normal discovery and one-step reconciliation without watcher
+notifications; neither path may start or send to a runtime. A bounded refresh
+may return before the changed session is visited, so assert convergence across
+slices instead of assuming one refresh exhausts the catalog. Preserve the exact
+classification, counts, read-only, and unchanged-file assertions. See
+[classification qualification](history-classification840.md). This extends the
+existing Python owner; no additional browser scenario or frozen inventory change.
+
+### Stopped artifact recovery (October 18)
+
+**ARTIFACTS-831** extends the existing `test-environments` browser owner. Recover
+artifact evidence from a stopped environment with its exact owner/revision;
+retain its preceding operation receipt and workspace, and never start, execute
+or remove the guest. An uncertain export must disable replay. Await refresh
+completion and require the export count to remain unchanged through later
+navigation. Real backend acceptance separately creates a workspace over the
+selected retention limit, observes failed removal without deletion, then verifies
+an artifacts-only archive and unchanged stopped guest. Existing retention and
+worker Python owners cover malformed archives, authority and replay boundaries.
+See [qualification and limits](stopped-artifact-recovery831.md). No new browser
+lane or frozen inventory count is added.

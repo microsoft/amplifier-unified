@@ -81,9 +81,9 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
 
 function ResourceView({view,state,dispatch,recovery}){
  const [error,setError]=useState('');
- const canvas=useMemo(()=>state.canvas?{...state.canvas,...(view.app?{app:view.app}:{}),...targetOf(view),view:view.view||state.canvas.view,renderReports:view.renderReports}:null,[state.canvas,view]);
+ const canvas=useMemo(()=>state.canvas?{...state.canvas,...(view.app?{app:view.app}:{}),...targetOf(view),renderIdentity:view.renderIdentity,view:view.view||state.canvas.view,renderReports:view.renderReports}:null,[state.canvas,view]);
  const server=state.smartTools?.servers?.find(row=>row.id===canvas?.mcp?.serverId);
- const connectionKey=JSON.stringify([server?.status,server?.catalogState,server?.catalogRevision,server?.account,server?.accountBinding,canvas?.mcp?.catalogRevision]);
+ const connectionKey=JSON.stringify([server?.status,server?.catalogState,server?.catalogRevision,server?.account,server?.accountBinding,canvas?.mcp?.catalogRevision,canvas?.mcp?.contractFingerprint]);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  return <CanvasViewControls label="Artifact controls"><section className="a-resource-view" data-canvas-view={view.viewId} aria-label="Artifact view">
   <CanvasControl><div className="a-resource-view-controls a-canvas-toolbar">
@@ -97,9 +97,9 @@ function ResourceView({view,state,dispatch,recovery}){
    </select></label>
    {view.filePaths?.absolute&&<details className="a-canvas-file-path"><summary>File path</summary><div><p>On {view.fileReveal?.host?.label||'the app server'}</p><code>{view.filePaths.absolute}</code>{view.fileReveal&&<><p>{view.fileReveal.detail}</p>{view.fileReveal.available?<button type="button" onClick={()=>run('canvas.views.reveal',{...targetOf(view),hostId:view.fileReveal.host.id,instanceId:view.fileReveal.instanceId})}>{view.fileReveal.label} on {view.fileReveal.host.label}</button>:<p>No supported desktop file manager is available on this host.</p>}</>}<button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'absolute'}})}>Copy absolute path</button>{view.filePaths.relative&&<button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'relative'}})}>Copy relative path</button>}</div></details>}
   </div></CanvasControl>
-  {view.selectedVersion!=null&&<p role="status" className="a-renderer-notice">{canvas?.kind==='browser'?'Saved address · Website is live':'Saved version · Read only'}</p>}
+  {view.selectedVersion!=null&&<p role="status" className="a-renderer-notice">{canvas?.kind==='browser'?'Saved address · Website is live':'Saved version · Read only'}{canvas?.kind==='mcp-app'&&<button type="button" className="a-link" onClick={()=>run('canvas.select',{id:view.resourceId})}>Open live view</button>}</p>}
   {error&&<p role="alert" className="a-renderer-notice">{error}</p>}
-  <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId+':'+(view.selectedVersion??'latest')} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery} connectionKey={connectionKey}/>:<p role="status">Loading saved artifact…</p>}</div>
+  <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId+':'+(view.selectedVersion??'latest')} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+(view.renderIdentity||view.resourceRevision+':'+view.generation)} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery} connectionKey={connectionKey}/>:<p role="status">Loading saved artifact…</p>}</div>
  </section></CanvasViewControls>;
 }
 

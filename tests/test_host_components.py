@@ -129,7 +129,7 @@ async def test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances(
                          'config': {'child': True, 'paths': ['child-dir']}}],
                'tools': [{'module': 'tool-sibling', 'source': source(ref='old', module='tool-sibling')}]}
     parent = SimpleNamespace(session_id='parent', coordinator=SimpleNamespace(config=bundle.to_mount_plan(),
-        get=lambda _: None, get_capability=lambda _: str(tmp_path)))
+        get=lambda _: None, get_capability=lambda name: str(tmp_path) if name == 'session.working_dir' else None))
     observed = []
     class StopBeforeModel(Exception): pass
     @dataclass

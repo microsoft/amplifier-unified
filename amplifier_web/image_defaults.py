@@ -16,7 +16,7 @@ def preference(settings, rows):
     return 'automatic'
 
 
-async def apply_defaults(plan, settings, *, class_loader=None):
+async def apply_defaults(plan, settings, *, class_loader=None, check_available=None):
     """Use capability/catalog evidence from installed providers, in priority order.
 
     This runs before provider mounting. Only metadata and model listing occur;
@@ -29,13 +29,15 @@ async def apply_defaults(plan, settings, *, class_loader=None):
     if mode == 'selected':
         return
     for row in rows:
+        if check_available is not None and not check_available(row):
+            continue
         image = row.get('config', {}).get('image_generation')
         if isinstance(image, dict):
             image['enabled'] = False
     if mode == 'off':
         return
     for row in sorted(rows, key=lambda row: row.get('config', {}).get('priority', 100)):
-        if row.get('enabled') is False:
+        if row.get('enabled') is False or (check_available is not None and not check_available(row)):
             continue
         provider = None
         try:
