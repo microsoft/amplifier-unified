@@ -825,9 +825,10 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
             bound = _bind_complete_root(session, path, identity, items, facts, attested, guard)
         if binding_revision(cache_home, session, check_budget=guard) != index_revision:
             raise StaleWindow('The binding index changed during its read')
-        # Complete misses retain a dependency so an index-only commit is
-        # reconsidered. Only private proof pages additionally consult authority
-        # for partial ranges; ordinary partial raw pages remain index-independent.
+        # Complete misses retain an unavailable dependency, not verified absence.
+        # Raw observations remain usable under their independent source receipts;
+        # an explicit later read can reconsider authority. Private proof pages
+        # still require a valid typed dependency and cannot bind None.
         dependency['_bindingRevision'] = index_revision
     if _stamp(path.stat()) != stamp:
         raise StaleWindow('The event source changed during binding')
@@ -835,7 +836,8 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
     page = {'status': 'ready', 'windowKey': window_key,
             '_boundWork': bound,
             **dependency,
-            'bindingCoverage': {'status': 'complete-root' if complete else 'partial-source',
+            'bindingCoverage': {'status': ('authority-unavailable' if complete and index_revision is None
+                                          else 'complete-root' if complete else 'partial-source'),
                                 'bound': len(bound), 'unassociated': len(items) - len(used)},
             'generation': _digest([owner, window_key, stamp, start, end]),
             'items': items, 'coverage': coverage, 'before': cursor,

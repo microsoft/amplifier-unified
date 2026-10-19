@@ -80,6 +80,24 @@ connection teardown and host publication. A writer change still refuses the
 read. Partial raw windows do not consult or depend on the ownership index;
 complete misses retain the dependency so later indexed receipts are reconsidered.
 
+If authority cannot be validated, an ordinary complete raw page retains
+`_bindingRevision: null` and explicitly reports `authority-unavailable`; this is
+an unavailable dependency, not a verified absent-owner token. Only unverified
+observations with no bound rows, groups or proof material can be displayed through
+that path. Their canonical source/owner/epoch and exact field receipts still
+apply. `_binding_current`, `_bound_current` and root-proof validation remain
+false for missing authority; a malformed or revoked typed dependency is not
+downgraded to this exception. Passive reuse preserves the same raw page and does
+not retry authority. A later explicit read can obtain newly valid authority,
+but cannot adopt old proof material under that new token.
+
+The registered HTTP window fixture waits for the first actual scheduled catalog
+refresh to complete for its exact synthetic root, home and history owner before
+asserting the ordinary read journey. This bounded observation does not request
+another refresh, add a WebSocket, sleep, retry a refused read or guarantee global
+quiescence. Root presence at entry and completion, error/loading state, and the
+unchanged source/owner/epoch mutation refusal controls remain required.
+
 The ordinary page path qualifies only a whole root source fitting one existing
 bounded page with no malformed records, gaps or partial tail. An older page
 reaching offset zero does not qualify. Tools need one canonical pre/end pair and

@@ -244,7 +244,12 @@ class WorkWindows:
             self._check_current(identity, owner, source, fence)
             if self.pages.get(prior) is not cached or self.current.get(identity) != prior:
                 raise _SupersededRead('The requested conversation changed. Open it again.')
-            if matches and self._binding_current(cached):
+            # An unavailable dependency never qualifies binding. Passive reuse
+            # keeps only the exact raw page; authority is reconsidered by an
+            # explicit read, not by a forever retrying interest loop.
+            unavailable = cached.get('bindingCoverage', {}).get('status') == 'authority-unavailable'
+            reusable = self._unassociated_only(cached) if unavailable else self._binding_current(cached)
+            if matches and reusable:
                 current = self.status.get(identity)
                 self.pages[prior]['_bindingFence'] = fence
                 self._prepare_bound_groups(self.pages[prior], owner)
@@ -273,7 +278,8 @@ class WorkWindows:
                 self._state(identity, {'status': 'retrying', 'current': False, 'reason': 'source_changed'})
             raise ValueError('Saved work changed while it was read. Refresh this window.')
         page = {**page, 'sessionId': identity, 'source': source, '_bindingFence': fence}
-        if not self._binding_current(page):
+        unavailable = page.get('bindingCoverage', {}).get('status') == 'authority-unavailable'
+        if not (self._unassociated_only(page) if unavailable else self._binding_current(page)):
             raise _SupersededRead('Saved work ownership changed while it was read.')
         # Index-only commits can change binding while capture bytes stay equal.
         # Keep the accepted page identity/revision sensitive to that dependency.
@@ -336,6 +342,29 @@ class WorkWindows:
         return (isinstance(previous, dict) and previous.get('kind') == 'diagnostics-owner-v1'
                 and isinstance(source, dict)
                 and previous == binding_revision(self.service.data_dir, source))
+
+    @staticmethod
+    def _unassociated_only(page):
+        """Raw availability, never authority, for an explicitly unavailable index.
+
+        This exception applies only to ordinary worker observations. Proof pages,
+        typed-but-stale dependencies and any purported binding still use the
+        strict authority checks. Source, owner and await fences are caller-owned.
+        """
+        rows = page.get('items')
+        return ('_bindingRevision' in page and page['_bindingRevision'] is None
+                and page.get('bindingCoverage', {}).get('status') == 'authority-unavailable'
+                and page.get('bindingCoverage', {}).get('bound') == 0
+                and page.get('_boundWork') == []
+                and not any(key in page for key in
+                            ('_proof', '_rootProofId', '_rootProofBound',
+                             '_consumerProof', '_consumerSupport'))
+                and not page.get('_boundGroups') and not page.get('_boundNodes')
+                and not page.get('_boundTurns')
+                and isinstance(rows, list) and len(rows) <= 100
+                and all(isinstance(row, dict) and row.get('observation') is True
+                        and row.get('association') == 'unverified'
+                        and 'turnId' not in row and 'bindingProvenance' not in row for row in rows))
 
     def _bound_current(self, page):
         proof_id = page.get('_consumerProof') or page.get('_consumerSupport')
