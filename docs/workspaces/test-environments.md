@@ -114,9 +114,22 @@ browser tests and real Docker qualification remain separate evidence.
 
 `workspace.environments.finishCleanup` is an explicit continuation of cleanup,
 not a retry of the test. It takes the resource identity and revision, a new stable
-request identity, and `previousRequestId` naming this owner's failed or uncertain
-removal. It uses the retained original backend configuration. The original
-operation receipt, test outcome and partial exports remain unchanged.
+request identity, and `previousRequestId` naming this owner's confirmed failure
+before teardown. The prior receipt must explicitly record no removal effect,
+the preservation or verification phase, and a safe preservation failure code.
+Stopped inventory alone does not qualify. An unresolved removal or cleanup
+executor, including an unbound journal entry, blocks a new destructive identity.
+It uses the retained original backend configuration. The failed operation receipt,
+test outcome and partial exports remain unchanged.
+
+A separate case is a guest whose successful removal is already committed while
+only owned dependency preparation cleanup remains pending. The public `remove`
+or `finishCleanup` action can finish that preparation through the original
+request, not create another guest removal. Both the resource and original journal
+receipt must retain matching guest completion, root/resource/backend/source
+binding and physical identity. Current authority, Stop, revision and owner-lock
+checks still apply. A `guestRemoved` flag without that evidence is insufficient.
+This path updates the original cleanup result and never calls guest removal again.
 
 The backend freshly verifies the stopped owner, saves both complete selected
 filesystems, verifies their bytes and archive structure, rechecks ownership before
@@ -139,6 +152,6 @@ Preservation and teardown have separately retained phase markers. A definitive
 export/verification failure now reports a failed preservation phase with no
 removal attempted, rather than suggesting a test command might still be running.
 For newly queued checks, that known pre-teardown failure admits one separately
-journaled cleanup continuation automatically. A historical unknown operation is
-never automatically replayed. The workspace's **Preserve files and finish cleanup**
+journaled cleanup continuation automatically. An unknown guest removal cannot
+be replayed manually or automatically under a new identity. The workspace's **Preserve files and finish cleanup**
 control and agents use the same action and authority boundary.

@@ -7,6 +7,7 @@
     {"id": "peer-attribution", "command": ["node", "tests/peer-attribution-browser.mjs"], "env": {"AMPLIFIER_TEST_BUILT_STATIC": "1"}},
     {"id": "device-pairing", "command": ["node", "tests/device-pairing-browser.mjs"]},
     {"id": "standard-ux-keyboard-reflow", "command": ["node", "tests/standard-ux-keyboard-reflow-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-keyboard-reflow"}},
+    {"id": "approval-layout", "command": ["node", "tests/approval-layout-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/approval-layout"}},
     {"id": "standard-ux-connection-controls", "command": ["node", "tests/standard-ux-connection-controls-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-connection-controls"}},
     {"id": "standard-ux-preferences", "command": ["node", "tests/standard-ux-preferences-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-preferences"}},
     {"id": "standard-ux-privacy-effects", "command": ["node", "tests/standard-ux-privacy-effects-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-privacy-effects"}},
@@ -26,6 +27,7 @@
     {"id": "empty-host-lost-create", "command": ["node", "tests/empty-host-browser.mjs", "--lost-create"]},
     {"id": "new-chat", "command": ["node", "tests/new-chat-browser.mjs"]},
     {"id": "cross-workspace-handoff", "command": ["node", "tests/cross-workspace-handoff-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/cross-workspace-handoff"}},
+    {"id": "chat-reference", "command": ["node", "tests/chat-reference-browser.mjs"], "env": {"CHAT_REFERENCE_EVIDENCE_DIR": "{root}/output/browser-checks/chat-reference"}},
     {"id": "draft-provider-refresh", "command": ["node", "tests/draft-provider-refresh-browser.mjs"]},
     {"id": "draft-discovery-recovery", "command": ["node", "tests/draft-discovery-recovery-browser.mjs"]},
     {"id": "new-chat-recovery", "command": ["node", "tests/new-chat-recovery-browser.mjs"]},
@@ -39,6 +41,8 @@
     {"id": "publishing", "command": ["node", "tests/publishing-browser.mjs"]},
     {"id": "portability", "command": ["node", "tests/portability-browser.mjs"]},
     {"id": "settings", "command": ["node", "tests/settings-browser.mjs"]},
+    {"id": "configuration-recovery-components", "command": ["node", "--test", "tests/configuration-recovery.test.mjs"]},
+    {"id": "configuration-recovery", "command": ["node", "tests/configuration-recovery-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/configuration-recovery"}},
     {"id": "settings-completeness", "command": ["node", "tests/settings-completeness-browser.mjs"]},
     {"id": "settings-drafts", "command": ["node", "tests/settings-drafts-browser.mjs"]},
     {"id": "settings-collections", "command": ["node", "tests/settings-collections-browser.mjs"]},
@@ -88,6 +92,8 @@
     {"id": "activity-feedback", "command": ["node", "tests/activity-feedback-browser.mjs"]},
     {"id": "capacity", "command": ["node", "tests/capacity-browser.mjs"]},
     {"id": "coordination", "command": ["node", "tests/coordination-browser.mjs"]},
-    {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]}
+    {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]},
+    {"id": "test-environments", "command": ["node", "tests/test-environments-browser.mjs"], "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python", "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/test-environments"}},
+    {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}}
   ]
 }

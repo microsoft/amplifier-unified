@@ -99,8 +99,9 @@ async def test_receipt_precedes_retirement_and_retries_do_not_repeat_save(app,mo
     assert app._session(sid)['configurationBusy'] and app._session(sid)['configurationPending']
     saved=load_saved_state(app.db)
     assert saved['managementResults']['save']['phase']=='ready'
-    with pytest.raises(AppError,match='Applying conversation settings'):
+    with pytest.raises(AppError,match=r'\AApplying or reconciling conversation settings; new input must wait\.\Z') as blocked:
         await app.dispatch('conversation.send',{'sessionId':sid,'text':'Must not run'})
+    assert blocked.value.status == 409
     assert (await dispatch())['duplicate']
     assert app.runtime.stops==[sid]
     app.runtime.finish.set();await settled(app)

@@ -278,6 +278,14 @@ class ClientViews:
             session["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get(session["id"], []))
             if record['kind'] == 'web' and session['id'] == record.get('selectedSessionId'):
                 session['linkedMediaAvailable'] = self.service.outputs.store.has_linked_media(session['id'])
+                linked = self.service.outputs.store.has_linked_chat_references(session['id'])
+                session['linkedChatReferencesAvailable'] = linked
+                if linked:
+                    import json
+                    session['chatReferenceRevision'] = json.dumps([
+                        session.get('chatReferenceVersion', 0),
+                        self.service.directory.navigation_revision,
+                        self.service.directory.workspace_revision])
         return snapshot
 
     def remember_canvas(self, record=None):

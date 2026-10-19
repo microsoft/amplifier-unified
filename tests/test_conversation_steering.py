@@ -144,12 +144,16 @@ async def test_parked_worker_refuses_without_reacquiring(monkeypatch):
 async def test_worker_routes_correction_under_existing_ownership(monkeypatch):
     worker = Worker()
     worker.session, worker.execution, worker.shared_handle = object(), object(), object()
-    worker.controls, worker.runtime, worker.activation = object(), object(), object()
+    worker.controls = SimpleNamespace(preserve_configuration=True)
+    worker.runtime, worker.activation = object(), object()
     worker.acquire_for_mutation = AsyncMock()
     worker.bind_activation = Mock(return_value='token')
     worker.activation_gate = SimpleNamespace(reset=Mock())
     worker.park = AsyncMock()
     async def adapter(controls, runtime, args, activation, stop_epoch):
+        assert controls is worker.controls
+        assert runtime is worker.runtime
+        assert controls.preserve_configuration is False
         assert worker.command_lock.locked()
         assert activation is worker.activation
         assert args['targetGenerationId'] == 'generation'
@@ -162,7 +166,9 @@ async def test_worker_routes_correction_under_existing_ownership(monkeypatch):
     await worker.command({'op': 'control', 'id': 'request', 'operation': 'conversation.steer',
         'arguments': {'inputId': 'correction', 'targetGenerationId': 'generation',
                       'context_binding': {'clientId': 'browser', 'targets': []}}})
+    assert 'error' not in replies[0]
     assert replies[0]['result']['disposition'] == 'queued'
+    assert worker.controls.preserve_configuration is False
     worker.activation_gate.reset.assert_called_once_with('token')
 
 
