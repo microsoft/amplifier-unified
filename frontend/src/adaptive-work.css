@@ -4,7 +4,7 @@
 #amp-one .a-adaptive-home[data-view=focus] .a-home-content{max-width:780px}
 #amp-one .a-adaptive-home[data-view=studio] .a-home-content{max-width:1480px}
 #amp-one .a-adaptive-home button{font:inherit;cursor:pointer}
-#amp-one .a-adaptive-home button:focus-visible,#amp-one .a-adaptive-nav button:focus-visible{outline:2px solid var(--a-accent);outline-offset:3px}
+#amp-one .a-adaptive-home button:focus-visible{outline:2px solid var(--a-accent);outline-offset:3px}
 #amp-one .a-home-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:24px}
 #amp-one .a-home-tools{display:flex;align-items:center;gap:8px}
 #amp-one .a-home-tools button{min-height:38px;gap:7px}
@@ -90,11 +90,6 @@
 #amp-one .a-home-project>svg{width:16px}
 #amp-one .a-home-project button{gap:6px;margin-left:auto;border:0;background:none;color:inherit;font-size:inherit}
 #amp-one .a-home-project button svg{width:14px}
-#amp-one .a-adaptive-nav{padding:4px 0 10px;border-bottom:1px solid var(--a-line);margin-bottom:10px}
-#amp-one .a-adaptive-nav button{display:flex;align-items:center;justify-content:flex-start;gap:12px;width:100%;min-height:40px;border:0;background:none;color:var(--a-muted);font-size:var(--a-text-base,14px);text-align:left;padding:9px 10px;border-radius:7px}
-#amp-one .a-adaptive-nav button svg{width:18px;height:18px;flex:none}
-#amp-one .a-adaptive-nav button:hover,#amp-one .a-adaptive-nav button[aria-current=page]{background:var(--a-soft);color:var(--a-ink)}
-#amp-one .a-adaptive-nav button[aria-current=page]{font-weight:600}
 #amp-one.a-approachable-shell .a-quiet-sidebar :is(.a-nav-chat-label,.a-workspace-label){min-width:0}
 #amp-one.a-approachable-shell .a-quiet-sidebar [data-scroll-title]{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #amp-one.a-approachable-shell .a-quiet-sidebar .a-nav-chat-label>span,#amp-one.a-approachable-shell .a-quiet-sidebar .a-workspace-label{font-size:var(--a-text-base,14px)}
@@ -127,8 +122,8 @@
  #amp-one .a-home-search{padding:0 9px;gap:6px}
  #amp-one .a-nav-slot.is-expanded{width:100%!important;max-width:none!important;inset:0!important;border-radius:0!important}
 }
-@media(pointer:coarse){#amp-one .a-adaptive-home button,#amp-one .a-adaptive-nav button{min-height:44px}}
-@media(forced-colors:active){#amp-one .a-work-card-cta.a-primary{background:ButtonFace;color:ButtonText;border:1px solid ButtonText}#amp-one .a-adaptive-nav button[aria-current=page],#amp-one .a-work-view-switch button[aria-pressed=true]{outline:1px solid Highlight}}
+@media(pointer:coarse){#amp-one .a-adaptive-home button{min-height:44px}}
+@media(forced-colors:active){#amp-one .a-work-card-cta.a-primary{background:ButtonFace;color:ButtonText;border:1px solid ButtonText}#amp-one .a-work-view-switch button[aria-pressed=true]{outline:1px solid Highlight}}
 /* Truncate the actual text box; reveal the full label on hover/keyboard focus. */
 #amp-one.a-approachable-shell .a-quiet-sidebar [data-scroll-title]>span{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #amp-one.a-approachable-shell .a-quiet-sidebar :is(.a-nav-chat-select,.a-workspace-select):is(:hover,:focus-visible) [data-scroll-title]>span{display:inline-block;min-width:100%;max-width:none;overflow:visible}

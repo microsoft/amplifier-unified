@@ -63,7 +63,7 @@ The user approved a refinement after reviewing their Focus screenshot. The
 observed problem was duplicate navigation and a first decision halfway down the
 screen. Keep the warm typography and independent Appearance/view choices.
 
-- Home owns status filtering, scope and search. The sidebar owns Home, pinned
+- Home owns status filtering, scope and search. The sidebar owns pinned
   chats, projects and recent chats; its separate search and creation entries are omitted on Home. The single Home
   creation control uses its current project scope, or starts standalone under All
   work / On its own. Unavailable scopes cannot silently create somewhere else.
@@ -71,7 +71,9 @@ screen. Keep the warm typography and independent Appearance/view choices.
   filter row, with a prominent action that opens the original conversation.
 - The header uses the existing shell navigation, breadcrumbs and chat controls.
   The trial-added Resume and Home back links have been removed at the user’s
-  request. Home is reached from the sidebar; the shell owns opening/closing it.
+  request. Home is now the first breadcrumb in the header, followed by the project
+  and chat when applicable. It stays visible on phones; the current Home page is
+  shown once, without a redundant link. The shell owns opening/closing Browse.
 - Navigation labels say Projects. Folder-backed workspace ownership, creation,
   permissions and history contracts are unchanged; this is not logical regrouping.
 - Returning Home preserves the last view and an explicitly opened or closed
@@ -105,3 +107,10 @@ Main was integrated through `b164044ad` (0.20.181), including configuration
 recovery, saved chat-reference navigation, patch placement recovery, passive
 environment inspection and approval layout fixes. The Home integration extends
 client presentation and resource demand without replacing these owners.
+
+## Home breadcrumb — 2026-10-19
+
+At the user’s request, Home moved from the sidebar to the start of the header
+breadcrumb. The link uses the same remembered Home navigation and preserves
+chat/draft/Canvas state. Phone headers keep Home visible while the existing
+project breadcrumb remains compacted. Removed the old sidebar entry and styles.

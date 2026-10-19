@@ -1,5 +1,5 @@
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {ArrowRight,Search,Plus,SlidersHorizontal,Home,CheckCircle2,Inbox,Folder,X} from 'lucide-react';
+import {ArrowRight,Search,Plus,SlidersHorizontal,CheckCircle2,Inbox,Folder,X} from 'lucide-react';
 import {WorkNavigationContext} from './work-navigation';
 import {useNavigationController} from './shell/navigation-components';
 import {NavigationResourceStatus} from './shell/navigation-resource-status';
@@ -111,9 +111,4 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
    </>}
   </div>
  </div>;
-}
-
-export function AdaptiveNavLinks({state}){
- const nav=useContext(WorkNavigationContext);
- return <nav className="a-adaptive-nav" aria-label="Work navigation"><button type="button" aria-current={state.view?.workSurface==='home'?'page':undefined} onClick={()=>nav.home({navExpanded:false})}><Home/>Home</button></nav>;
 }
