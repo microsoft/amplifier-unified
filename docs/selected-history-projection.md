@@ -501,7 +501,96 @@ joining persistence does **not** resolve later index-revision expiry. The physic
 DB/WAL fence remains intact; the proposed authority contract below is separate
 and not implemented.
 
-## PROPOSED index-authority contract — NOT RATIFIED
+## Owner-scoped index authority — admitted source contract, unqualified
+
+Manager engineering disposition, October 18, 2026, supersedes the unimplemented
+proposal preserved in Git at `e1a94ccb4`. This is a supported-host contract for
+the existing lazy full-field promise, not a new permission or runtime pass.
+
+### Supported lifecycle and writers
+
+The host owns the diagnostics database and schema lifecycle. Out-of-band backup
+restore, copy-over replacement or schema surgery requires both the service and
+history workers stopped and all disposable proofs retired. Protection against
+a privileged actor dropping/recreating triggers or online same-inode rollback
+is not promised. Initialization/migration installs authority atomically before
+rewriting references; authority rebuild or metadata pruning rotates its epoch.
+No live migration is performed as part of this source work.
+
+Metadata lives only in the existing diagnostics database: one validated schema/
+epoch row and owner revisions keyed by exact `(workspace, canonical session)`.
+Triggers advance affected owners in the same transaction as every supported
+`records` INSERT, UPDATE or DELETE, including independent SQL retention,
+migration and managed deletion. UPDATE covers both old/new owners; identical
+values do not advance it. Ignored duplicate `INSERT OR IGNORE` and rollbacks do
+not change authority. Keep `capture_index` duplicate behavior unchanged.
+
+Deletion/reinsertion and owner A→B→A cannot restore an old token. Within an epoch,
+deleted-owner revisions are tombstones. Explicit privacy deletion prunes those
+owner keys only with atomic epoch rotation; bounded maintenance tied to existing
+record limits similarly rotates before removing unrepresented owners. Metadata
+is not an indefinite ledger. Invalid metadata or integer overflow aborts a
+mutation using an explicit trigger error that IGNORE cannot suppress.
+
+REPLACE and conflict-replacing UPDATE are unsupported internal writer forms.
+Do not claim arbitrary-SQL safety or alter duplicate-IGNORE behavior to enforce
+the superseded broader contract. Schema metadata itself is host-maintained.
+
+### Reader dependency and acceptance
+
+Exact receipt authentication remains independent of revision equality: retain
+event/stream/workspace/session and source path/offset/length/hash/event-ID
+comparison, source generation, original owner/epoch and all support-page fences.
+Revision zero is a negative dependency only in a validated schema/epoch.
+
+A private typed dependency includes the trusted DB path/physical identity,
+schema and epoch, exact owner and revision. Readers open a fresh read-only
+snapshot and read that token and bounded receipts together. They validate
+physical file kind/identity before and after opening/query/close and re-read
+authority from a fresh transaction after teardown. No rows may be adopted under
+a different authority token. Unrelated-owner writes, deliveries, capture offsets,
+checkpoints and WAL housekeeping may preserve the token; replacement, unavailable
+or malformed authority fails closed. Physical continuity is checked, not inferred
+from equal counters or a new stamp attached to an old proof.
+
+At the host, the final fresh dependency check is the acceptance/linearization
+point. Commit the already-validated projection synchronously after that check,
+without an intervening await. A later database commit is a later operation, not
+a promise of exclusion through network delivery. Subsequent field chunks must
+freshly reject revoked references. Validate before and after every awaited field
+operation and after any asynchronous source/readiness boundary. Passive state
+and sync do not initiate scans, reproof or writes. All eight-page/four-job/20-second
+and payload bounds remain unchanged.
+
+The implementation must identify its final check at `WorkWindows.read_selected`
+immediately before committing the selected page/receipt; `_prove` and
+`read_proven_field` retain their final validation before returning accepted
+material. Worker attestation has a fresh post-close check. No stale field retry
+or proof regeneration is implicit.
+
+### Required source tests — runtime qualification pending
+
+| Boundary | Required discriminator |
+| --- | --- |
+| INSERT/UPDATE/DELETE and direct SQL | Same-owner change revokes; other-owner change does not; owner changes advance old and new; exact no-op and rollback preserve. Duplicate IGNORE preserves both stored row and token. |
+| Negative dependency and ABA | Missing-owner zero changes on insertion; delete/reinsert and A→B→A cannot reuse a token; overflow/malformed metadata abort even under IGNORE. |
+| Real writers | Legacy migration, capture replacement, retention and managed-deletion SQL participate. Initialization is atomic before reference rewrites. |
+| Privacy and bounds | Managed deletion removes identifiers from revision metadata while rotating epoch. Excess tombstones compact under existing limits, retiring prior tokens atomically. |
+| Continuity | Delivery/capture-offset updates and checkpoint/WAL truncation preserve verified owner authority; DB replacement, schema/epoch loss and unknown file shape refuse. Offline restore retires proofs by contract. |
+| Races | Writes before/during authority query, after query close, before final publication check and during field await reject old material. A commit after the synchronous acceptance point is detected by the next request, not retroactively called exclusion. |
+
+The implementation and authored tests below this contract remain unqualified
+until exact-candidate execution. Existing two behind-tail failures and six
+historical browser failures remain open. This contract does not reinterpret a
+generic index-stamp failure as proven harmless churn.
+
+### Superseded proposal (historical, not an implementation requirement)
+
+The text below records the earlier broader proposal for comparison only. Its
+hostile-schema/online-restore/global-exclusion and duplicate-IGNORE rejection
+requirements are superseded by the supported contract above.
+
+## Historical PROPOSED index-authority contract — superseded
 
 **Contract plan only. No schema, writer or reader change is admitted by this
 section. Retain the existing source and DB/WAL physical fences pending review
