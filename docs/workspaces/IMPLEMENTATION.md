@@ -1298,3 +1298,21 @@ sources, while already active work and retained explicit child ceilings remain
 preserved. Source tests and a provider-free Core/Foundation mount cover this
 behavior; release, installed-worker adoption and the reported provider conversation
 remain separate acceptance steps.
+
+## Idle worker retirement preserves peer admission — 2026-10-19
+
+Retiring a settled worker for memory retention or an updated runtime is process
+maintenance. It leaves the conversation idle and eligible for a new guarded
+peer request, including after host restart. A native `session.closed` event at
+that boundary must not mark the conversation Stopped and require a human relay.
+The host records the maintenance reason before sending the retirement command;
+refusal clears that reason, and an unacknowledged exit remains an explicit error.
+A concurrent user Stop takes precedence even after the retirement acknowledgement.
+
+Regression coverage exercises real subprocess transport, AppService persistence,
+and exact host admission with a scripted native endpoint: a fresh peer request
+after retirement, during retirement, after host restart, and after an explicit
+Stop. New input reaches only a fresh process and only once. Existing messages
+and peer attribution remain intact. These checks make no real-model or deployed
+release claim. No existing stopped/error record is silently reclassified, and
+previously suppressed or unknown requests are not replayed.

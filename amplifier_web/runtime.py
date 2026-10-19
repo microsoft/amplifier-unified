@@ -808,7 +808,7 @@ class RuntimeManager:
                     normalized = normalize_event(data, sid, row["inputId"])
                     if (normalized and normalized[0] == 'runtime.status'
                             and normalized[1].get('status') == 'stopped'
-                            and row.get('stop_reason') in {'configuration', 'shutdown'}):
+                            and row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}):
                         # Closing a process for maintenance is not a user Stop.
                         normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
@@ -1355,7 +1355,7 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        cold = row.get("retiring") or row.get('stop_reason') in {'configuration', 'shutdown'}
+        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if cold else "stopped"})
         if self.workers.get(session_id) is row:
