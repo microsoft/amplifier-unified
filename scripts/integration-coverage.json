@@ -62,7 +62,8 @@
         "tests/test_search_read_policy.py",
         "tests/test_default_capability_policy.py",
         "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip",
-        "tests/fixtures/provider_isolation_native.py"
+        "tests/fixtures/provider_isolation_native.py",
+        "tests/test_voice_status_worker.py::test_voice_status_held_native_worker_never_replays_or_cancels"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -118,7 +119,12 @@
         "amplifier_web/provider_environment.py",
         "amplifier_web/image_defaults.py",
         "tests/test_provider_isolation.py",
-        "tests/fixtures/provider_isolation_native.py"
+        "tests/fixtures/provider_isolation_native.py",
+        "amplifier_web/voice.py",
+        "amplifier_web/voice_status.py",
+        "amplifier_web/resident_activity.py",
+        "tests/test_voice_status_worker.py",
+        "tests/fixtures/voice_status_worker_probe.py"
       ]
     },
     "release-runtime": {
@@ -942,6 +948,13 @@
       "owner": "status-installed",
       "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
       "introducedBy": "#290"
+    },
+    {
+      "node": "tests/test_voice_status_worker.py::test_voice_status_held_native_worker_never_replays_or_cancels",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Installed Core/Foundation/loop-live and local synthetic provider; real worker, no network/audio",
+      "introducedBy": "#36"
     }
   ]
 }

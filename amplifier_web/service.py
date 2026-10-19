@@ -502,6 +502,7 @@ class AppService:
         self.smart_tools = None
         self.smart_canvas = None
         self.queues = set()
+        self.activity_signals = {}  # One-bit resident notifications; no snapshots.
         self.queue_tokens = {}
         self.queue_clients = {}
         self.queue_sessions = {}
@@ -1225,6 +1226,9 @@ class AppService:
             self.handoffs.changed_sources.difference_update(handoff_sources)
         if getattr(self, 'status_emitter', None):
             self.status_emitter.publish(session_ids)
+        for signal, identity in self.activity_signals.items():
+            if session_ids is None or identity in session_ids or global_keys:
+                signal.set()
         if record_only:
             detail_only = self._publish_client_narrow
         published = {}
@@ -1390,6 +1394,16 @@ class AppService:
                           detail_only=getattr(self, '_progress_detail_only', False),
                           record_only=getattr(self, '_progress_record_only', False),
                           global_keys=getattr(self, '_progress_global_keys', set()))
+
+    def subscribe_activity(self, session_id):
+        if len(self.activity_signals) >= 4:
+            raise ValueError("Too many activity observers")
+        signal = asyncio.Event()
+        self.activity_signals[signal] = session_id
+        return signal
+
+    def unsubscribe_activity(self, signal):
+        self.activity_signals.pop(signal, None)
 
     def subscribe(self, session_id=None):
         queue = asyncio.Queue(maxsize=4)
