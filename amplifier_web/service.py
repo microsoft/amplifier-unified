@@ -468,7 +468,8 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
             schema({'kind': {'const': 'workspace'}, 'workspaceId': string(200)}, ['kind', 'workspaceId']),
         ]}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
-    if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
+    if (_action != 'workspace.environments.removal.read'
+            and ('sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS)):
         _spec['properties']['nativeProject'] = string(4000)
 
 

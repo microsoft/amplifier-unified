@@ -1117,10 +1117,10 @@ async def test_public_removal_read_keeps_ledger_lock_and_original_revisions_unch
                 for p in paths]
     ledger_before = metadata()
     connect, opened, prohibited = recovery.sqlite3.connect, [], []
-    def observed_connect(uri, **kwargs):
-        opened.append((uri, kwargs))
-        assert uri.endswith('reservations.sqlite3?mode=ro') and kwargs == {'uri': True, 'timeout': 0}
-        return connect(uri, **kwargs)
+    def observed_connect(database, **kwargs):
+        opened.append((database, kwargs))
+        assert database.endswith('reservations.sqlite3?mode=ro') and kwargs == {'uri': True, 'timeout': 0}
+        return connect(database, **kwargs)
     def forbidden(*args, **kwargs):
         prohibited.append('write-or-phase-scan')
         raise AssertionError('No initializing connection or phase inference is permitted')
@@ -1560,4 +1560,133 @@ async def test_public_removal_read_rejects_project_retarget_before_owner_lookup(
             else:
                 await app.dispatch(REMOVAL_READ, args, include_state=False)
     assert caught.value.status == 400 and looked_up == calls == []
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('form', ['view', 'native'])
+@pytest.mark.parametrize('facts', [
+    'complete', 'zero', 'sessionKind', 'workingDirectory',
+    'executionRevision', 'interruptionRevision', 'null-interruption',
+])
+async def test_removal_owner_save_reopen_preserves_only_explicit_scalar_facts(app, backend, monkeypatch, form, facts):
+    """Exercise the real ordinary save/reference producer, not a fixture serializer."""
+    from contextlib import closing
+    from amplifier_web import session_projection, state_records
+    source, peer = app.state['sessions']
+    source.update(sessionKind='root', runtimeSessionId='synthetic-saved-runtime',
+                  nativeIdentity='synthetic-saved-runtime', nativeProject='synthetic-project',
+                  workingDirectory=source['workspace'], executionRevision=7,
+                  interruptionRevision=3, privateSetting='SYNTHETIC_PRIVATE_BODY_ONLY')
+    if form == 'native':
+        source['historyManaged'] = True
+    row, original = await removal_read_fixture(app, monkeypatch)
+    args = removal_read_args(app, row, original)
+    fields = ('sessionKind', 'workingDirectory', 'executionRevision', 'interruptionRevision')
+    app._save()
+    first, _ = state_records.load_owner(app.db, source['id'])
+    assert {key: first[key] for key in fields} == {key: source[key] for key in fields}
+    if facts == 'zero':
+        source.update(executionRevision=0, interruptionRevision=0)
+    elif facts == 'null-interruption':
+        source['interruptionRevision'] = None
+    elif facts != 'complete':
+        source.pop(facts)
+    # A second ordinary save must neither retain an old omitted scalar nor add
+    # a directory default. Reopen the durable ledger without admission/hydration.
+    app._save()
+    with closing(recovery.sqlite3.connect((app.data_dir / 'app.sqlite3').as_uri() + '?mode=ro',
+                                         uri=True, timeout=0)) as reopened:
+        saved, controls = state_records.load_owner(reopened, source['id'])
+    assert saved == state_records.load_owner(app.db, source['id'])[0]
+    assert {key: saved[key] for key in fields if key in saved} == {
+        key: source[key] for key in fields if key in source}
+    assert 'SYNTHETIC_PRIVATE_BODY_ONLY' not in json.dumps(saved)
+    if form == 'view':
+        assert saved['$view'] == 1 and saved.get('$viewPayload') and '$native' not in saved
+        assert set(saved) == {'id', 'workspace', 'runtimeSessionId', '$view', '$viewPayload'} | {
+            key for key in fields if key in source}
+    else:
+        assert saved['$native'] is True and '$view' not in saved and '$viewPayload' not in saved
+    app._state['sessions'].remove(source)
+    app._state['selectedSessionId'] = peer['id']
+    app.projections.invalidate()
+    assert app.directory.resolve(source['id']) is not None
+    before = removal_read_snapshot(app, row)
+    overlay = [item['id'] for item in app._state['sessions']]
+    changes = app.db.total_changes
+    attempted = []
+    def forbidden(*args, **kwargs):
+        attempted.append('admission-hydration-or-save')
+        raise AssertionError('Inspecting saved scalars must not load the body or admit an owner')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        for name in ('_session', '_admit_session', '_save'):
+            guard.setattr(app, name, forbidden)
+        guard.setattr(app.cold_display, 'hydrate', forbidden)
+        guard.setattr(session_projection, 'hydrate', forbidden)
+        guard.setattr(state_records, 'load_owner', forbidden)
+        if facts in {'complete', 'zero'}:
+            result = await agent(app, source, REMOVAL_READ, args, 'saved-scalars-read',
+                                 _runtimeSessionId=source['runtimeSessionId'])
+            assert_unverified_removal_read(result['result'], row, original)
+        else:
+            with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+                await agent(app, source, REMOVAL_READ, args, 'missing-saved-scalars-read',
+                            _runtimeSessionId=source['runtimeSessionId'])
+            assert caught.value.status == 403
+    assert attempted == calls == [] and app.db.total_changes == changes
+    assert [item['id'] for item in app._state['sessions']] == overlay
+    assert app._state['selectedSessionId'] == peer['id']
+    assert state_records.load_owner(app.db, source['id']) == (saved, controls)
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('form', ['view', 'native'])
+async def test_removal_read_never_backfills_a_preexisting_sparse_owner_reference(app, backend, monkeypatch, form):
+    from amplifier_web import session_projection, state_records
+    source, peer = app.state['sessions']
+    source.update(sessionKind='root', runtimeSessionId='synthetic-legacy-runtime',
+                  nativeIdentity='synthetic-legacy-runtime', workingDirectory=source['workspace'],
+                  executionRevision=7, interruptionRevision=3)
+    if form == 'native':
+        source['historyManaged'] = True
+    row, original = await removal_read_fixture(app, monkeypatch)
+    args = removal_read_args(app, row, original)
+    app._save()
+    saved, controls = state_records.load_owner(app.db, source['id'])
+    # Seed exactly the older private reference shape in this synthetic store.
+    # It is historical test data, not a migration or recovery implementation.
+    omitted = {'interruptionRevision'} if form == 'native' else {
+        'sessionKind', 'workingDirectory', 'executionRevision', 'interruptionRevision'}
+    legacy = {key: value for key, value in saved.items() if key not in omitted}
+    assert legacy != saved
+    app.db.execute("UPDATE state_records SET value=? WHERE kind='session' AND id=?",
+                   (json.dumps(legacy), source['id']))
+    app.db.commit()
+    app._state['sessions'].remove(source)
+    app._state['selectedSessionId'] = peer['id']
+    app.projections.invalidate()
+    metadata = app._session_read_sources([source['id']], tuple(omitted))[0]
+    assert all(key in metadata for key in omitted)  # Summaries still have apparent facts.
+    assert state_records.load_owner(app.db, source['id']) == (legacy, controls)
+    before = removal_read_snapshot(app, row)
+    changes = app.db.total_changes
+    attempts = []
+    def forbidden(*args, **kwargs):
+        attempts.append('backfill-or-hydration')
+        raise AssertionError('Legacy sparse references remain held; never backfill on read')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        for name in ('_session', '_admit_session', '_save'):
+            guard.setattr(app, name, forbidden)
+        guard.setattr(app.cold_display, 'hydrate', forbidden)
+        guard.setattr(session_projection, 'hydrate', forbidden)
+        guard.setattr(state_records, 'load_owner', forbidden)
+        with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+            await agent(app, source, REMOVAL_READ, args, 'legacy-sparse-read',
+                        _runtimeSessionId=source['runtimeSessionId'])
+    assert caught.value.status == 403 and attempts == calls == []
+    assert app.db.total_changes == changes
+    assert state_records.load_owner(app.db, source['id']) == (legacy, controls)
+    assert source['id'] not in [item['id'] for item in app._state['sessions']]
     assert removal_read_snapshot(app, row) == before
