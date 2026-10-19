@@ -1,6 +1,12 @@
 import asyncio
 import json
 import threading
+import hashlib
+import os
+import re
+import sys
+from contextvars import ContextVar
+from functools import wraps
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -8,6 +14,687 @@ import pytest
 
 from amplifier_web.work_windows import WorkWindows
 from amplifier_web.event_window_worker import WindowModel
+
+
+class _WorkFailureObservation:
+    """Test-only, first-reason observations of the unchanged read/persist path.
+
+    No observer calls a resolver, owner accessor, stat, flush or reader. Values
+    come from existing resident scalar facts or original function results.
+    Bodies, paths, cursors, exception text and configuration never enter reports.
+    """
+    reasons = frozenset({
+        'epoch', 'departed', 'owner-unavailable', 'owner-or-epoch',
+        'support-expired', 'source-or-index', 'source-owner-or-fence',
+        'explicit-reopen', 'operation-expired', 'cancelled', 'deadline',
+        'source_changed', 'timeout', 'queue_full', 'closed', 'worker-failed',
+        'missing-proof', 'page-limit', 'index-or-source-unavailable',
+        'incomplete-source', 'proof-failed',
+    })
+    fields = ('id', 'kind', 'sessionId', 'rootSessionId', 'turnId', 'parentId',
+              'revision', 'phase', 'startedAt', 'endedAt')
+    targets = frozenset({'state', 'read', 'shell', 'canvas'})
+
+    def __init__(self):
+        self.request = ContextVar('work-failure-request', default=None)
+        self.window = ContextVar('work-failure-window', default=None)
+        self.records, self.failures, self.seen = [], [], set()
+        self.services, self.flushes, self.persisted = {}, {}, {}
+        self.record_lock = threading.RLock()
+        self.sequence = self.requests = self.observation_errors = self.dropped = 0
+
+    def safe(self, function, *args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except Exception:
+            self.observation_errors = min(10000, self.observation_errors + 1)
+            return None
+
+    @staticmethod
+    def number(value, ceiling=10000):
+        return min(value, ceiling) if type(value) is int and value >= 0 else None
+
+    @staticmethod
+    def proof_id(value):
+        return value if type(value) is str and re.fullmatch('[0-9a-f]{32}', value) else None
+
+    def service_id(self, service):
+        with self.record_lock:
+            key = id(service)
+            if key not in self.services:
+                if len(self.services) >= 4:
+                    return None
+                self.services[key] = len(self.services) + 1
+            return self.services[key]
+
+    @staticmethod
+    def origin():
+        # Fixed source identity only; never retain frame locals or a raw stack.
+        allowed = {
+            ('amplifier_web.work_windows', 'WorkWindows.invalidate'): 'invalidation',
+            ('amplifier_web.work_windows', 'WorkWindows.retain_interest'): 'interest-retirement',
+            ('amplifier_web.work_windows', 'WorkWindows._proof_state'): 'proof-currentness',
+            ('amplifier_web.work_windows', 'WorkWindows._prove'): 'proof-construction',
+            ('amplifier_web.service', 'AppService._publish'): 'publication',
+            ('amplifier_web.service', 'AppService._save'): 'save',
+            ('amplifier_web.automatic_history', 'AutomaticHistory.refresh'): 'history-publication',
+            ('amplifier_web.diagnostics', 'Diagnostics.publish'): 'diagnostic-publication',
+        }
+        frame = sys._getframe(1)
+        found = []
+        try:
+            for _ in range(12):
+                if frame is None:
+                    break
+                label = allowed.get((frame.f_globals.get('__name__'), frame.f_code.co_qualname))
+                if label:
+                    found.append(label)
+                frame = frame.f_back
+            return found[-1] if found else 'other'
+        finally:
+            del frame
+
+    def snapshot(self, windows, identity, *, proof=None, expected_owner=None,
+                 expected_source=None, expected_fence=None):
+        from amplifier_web.work_windows import IDENTITY_FIELDS
+        service = windows.service
+        proof = proof if proof is not None else windows._root_proofs.get(identity)
+        # Direct resident lookup, NOT _session(), which can hydrate or reconcile.
+        owners = dict.get(service._state, 'sessions', [])
+        owner = next((row for row in owners[:16] if dict.get(row, 'id') == identity), None)
+        connected = []
+        for queue, client in tuple(service.queue_clients.items())[:16]:
+            record = service.clients.records.get(client, {}) if client else service._state
+            selected = service.queue_sessions.get(queue) or record.get('selectedSessionId')
+            connected.append(bool(client and record.get('kind') == 'web' and selected == identity))
+        diagnostic = getattr(service, 'diagnostics', None)
+        flush = self.flushes.get(id(diagnostic), {})
+        persisted = self.persisted.get(id(diagnostic), {})
+        pending = diagnostic.pending if diagnostic else ()
+        result = {
+            'service': self.service_id(service), 'ownerPresent': owner is not None,
+            'windowsClosed': bool(windows.closed), 'serviceClosed': bool(service.closed),
+            'epoch': self.number(windows.epochs.get(identity)),
+            'clientConnected': any(connected),
+            'connectionCoverageComplete': len(service.queue_clients) <= 16,
+            'ownerCoverageComplete': len(owners) <= 16,
+            'pendingDiagnostics': self.number(len(diagnostic.pending), 2000) if diagnostic else None,
+            'pendingRootTools': sum(row[3] == identity and row[5] in {'tool:pre', 'tool:post'}
+                                    for row in pending[:2000]),
+            'diagnosticStorageError': bool(diagnostic.storage_error) if diagnostic else None,
+            'diagnosticStorageReady': bool(diagnostic.storage_ready) if diagnostic else None,
+            'flushStarted': self.number(flush.get('started', 0)),
+            'flushReturned': self.number(flush.get('returned', 0)),
+            'flushRaised': self.number(flush.get('raised', 0)),
+            'flushActive': self.number(flush.get('active', 0)),
+            'persistStarted': self.number(persisted.get('started', 0)),
+            'persistReturned': self.number(persisted.get('returned', 0)),
+            'persistRaised': self.number(persisted.get('raised', 0)),
+            'persistActive': self.number(persisted.get('active', 0)),
+        }
+        if expected_owner is not None:
+            result['expectedOwnerMatches'] = owner is expected_owner
+        if expected_source is not None and owner is not None:
+            result['sourceChangedFields'] = [
+                key for key in IDENTITY_FIELDS if dict.get(owner, key) != expected_source.get(key)]
+        if expected_fence is not None:
+            result['expectedEpoch'] = self.number(expected_fence)
+        if proof is None:
+            result['proofStatus'] = 'absent'
+            return result
+        pages = proof.get('pages', ())
+        if len(pages) > 8:
+            result['proofStatus'] = 'invalid-support-size'
+            return result
+        missing = replaced = changed = 0
+        for group, object_id, digest in pages:
+            page = windows.pages.get(group)
+            missing += page is None
+            replaced += page is not None and id(page) != object_id
+            changed += page is not None and page.get('_proof', {}).get('receiptDigest') != digest
+        reason = proof.get('reason')
+        result.update(
+            proofId=self.proof_id(proof.get('id')),
+            proofStatus=proof.get('status') if proof.get('status') in
+                {'pending', 'complete', 'incomplete', 'stale'} else 'unknown',
+            proofReason=reason if reason in self.reasons or reason is None else 'unknown',
+            proofSteps=self.number(proof.get('steps'), 8), supportCount=len(pages),
+            supportMissing=missing, supportReplaced=replaced, supportDigestChanged=changed,
+            proofOwnerMatches=owner is not None and id(owner) == proof.get('owner'),
+            proofEpochMatches=windows.epochs.get(identity) == proof.get('fence'),
+            proofSourceMatches=owner is not None and
+                all(dict.get(owner, key) == proof.get('source', {}).get(key) for key in IDENTITY_FIELDS),
+        )
+        return result
+
+    def record(self, kind, facts, *, first=None):
+        with self.record_lock:
+            if first is not None:
+                if first in self.seen:
+                    return
+                if len(self.seen) >= 32:
+                    self.dropped += 1
+                    return
+                self.seen.add(first)
+            self.sequence += 1
+            row = {'sequence': self.sequence, 'kind': kind, 'request': self.request.get(), **facts}
+            if first is not None:
+                if len(self.failures) < 16:
+                    self.failures.append(row)
+                else:
+                    self.dropped += 1
+            elif len(self.records) < 32:
+                self.records.append(row)
+            else:
+                self.dropped += 1
+
+    def event(self, kind, windows, identity, *, first=None, **facts):
+        self.record(kind, {**self.snapshot(windows, identity), **facts}, first=first)
+
+    def expired(self, windows, proof, reason):
+        identity = next((key for key, value in windows._root_proofs.items() if value is proof), None)
+        if identity is None:
+            return
+        label = reason if reason in self.reasons else 'unknown'
+        self.record('proof-expiring', {**self.snapshot(windows, identity, proof=proof),
+                    'expiryReason': label, 'origin': self.origin()},
+                    first=('expiry', id(windows), self.proof_id(proof.get('id'))))
+
+    def binding(self, windows, session, row, proof_id, result):
+        if row.get('toolCallId') not in self.targets or result[1] is not None:
+            return
+        proof = windows._root_proofs.get(session['id'])
+        key = ('binding', id(windows), self.proof_id(proof.get('id')) if proof else None,
+               row['toolCallId'], (self.request.get() or {}).get('phase'))
+        if key in self.seen:
+            return
+        category, mismatch, attested_count, bound_count = 'proof-unavailable', [], None, None
+        if proof and proof.get('status') == 'complete':
+            if proof_id is not None and proof_id != proof['id']:
+                category = 'proof-identity'
+            else:
+                # Reuse ONLY already authenticated scalar in-memory evidence.
+                # This diagnosis does not call live_binding/proof_nodes again.
+                pages = [windows.pages[group] for group, _, _ in proof['pages']]
+                if len(pages) > 8 or sum(len(p['_proof']['facts']) for p in pages) > 4096:
+                    category = 'observation-budget'
+                else:
+                    terminal = []
+                    for page in pages:
+                        accepted = set(page['_proof']['attestedIds'])
+                        terminal.extend(f for f in page['_proof']['facts']
+                            if f['id'] in accepted and f['data'].get('id') == row.get('id')
+                            and f['data'].get('phase') in {'completed', 'error'})
+                    attested_count = len(terminal)
+                    category = 'missing-attestation' if not terminal else 'ambiguous-attestation'
+                    if len(terminal) == 1:
+                        metadata = terminal[0]['data']
+                        mismatch = [field for field in self.fields
+                            if field not in row or field not in metadata
+                            or type(row[field]) is not type(metadata[field]) or row[field] != metadata[field]]
+                        if mismatch:
+                            category = 'full-identity'
+                        elif (row.get('toolCallId') != metadata.get('tool_call_id') or
+                              row['id'] != f"tool:{row['rootSessionId']}:{row.get('toolCallId')}"):
+                            category, mismatch = 'logical-identity', ['id', 'toolCallId']
+                        else:
+                            bound_count = sum(terminal[0]['id'] in b['sourceOccurrenceIds']
+                                              for b in pages[0].get('_rootProofBound', []))
+                            category = ('missing-bound-call' if not bound_count else
+                                        'ambiguous-bound-call' if bound_count > 1 else 'unclassified')
+        self.event('binding-refused', windows, session['id'], first=key,
+                   category=category, call=row['toolCallId'], mismatchFields=mismatch,
+                   attestedCount=attested_count, boundCount=bound_count)
+
+    def request_context(self, request):
+        if request.path != '/api/conversation/detail':
+            return None
+        query = request.query
+        part, field = query.get('part'), query.get('field')
+        self.requests += 1
+        phase = ('field-' + field if field in {'input', 'output', 'request', 'response', 'error'}
+                 else part if part in {'groups', 'nodes', 'messages', 'observations'} else 'other')
+        return {'number': self.number(self.requests), 'phase': phase,
+                   'earlier': 'before' in query, 'hasGroup': 'group' in query,
+                   'offset': self.number(int(query['offset'])) if
+                       len(query.get('offset', '')) <= 9 and query.get('offset', '').isdigit() else None}
+
+    async def handle_http(self, request, handler):
+        context = self.safe(self.request_context, request)
+        if context is None:
+            return await handler(request)
+        phase = context['phase']
+        token = self.request.set(context)
+        try:
+            response = await handler(request)  # Exactly once; never read/replace its body.
+        except BaseException:
+            self.safe(self.record, 'http-raised', {}, first=('http-raised', phase))
+            raise
+        else:
+            self.safe(self.record, 'http-returned', {'status': response.status},
+                      first=('http-refused', phase) if response.status >= 400 else None)
+            return response
+        finally:
+            self.request.reset(token)
+
+    def install(self, patch, module):
+        from amplifier_web import server
+        from amplifier_web.diagnostics import Diagnostics
+        from aiohttp import web
+        original_create = server.create_app
+        @wraps(original_create)
+        async def created(*args, **kwargs):
+            app = await original_create(*args, **kwargs)
+            # No await, producer change, or readiness action is inserted here.
+            @web.middleware
+            async def middleware(request, handler):
+                return await self.handle_http(request, handler)
+            self.safe(app.middlewares.append, middleware)
+            return app
+        patch.setattr(server, 'create_app', created)
+        if getattr(module, 'create_app', None) is original_create:
+            patch.setattr(module, 'create_app', created)
+
+        def scoped(windows):
+            return hasattr(windows.service, '_state')  # Ignore the helper's unrelated SimpleNamespace.
+
+        for name in ('read_selected', 'read_proven_field'):
+            original = getattr(WorkWindows, name)
+            def wrap_async(original, name):
+                @wraps(original)
+                async def observed(windows, identity, *args, **kwargs):
+                    if not scoped(windows):
+                        return await original(windows, identity, *args, **kwargs)
+                    token = self.window.set((windows, identity))
+                    self.safe(self.event, name + '-entered', windows, identity)
+                    try:
+                        result = await original(windows, identity, *args, **kwargs)
+                    except BaseException:
+                        self.safe(self.event, name + '-raised', windows, identity,
+                                  first=(name, id(windows), (self.request.get() or {}).get('phase')))
+                        raise
+                    else:
+                        self.safe(self.event, name + '-returned', windows, identity)
+                        return result
+                    finally:
+                        self.window.reset(token)
+                return observed
+            patch.setattr(WorkWindows, name, wrap_async(original, name))
+
+        original_state = WorkWindows._proof_state
+        @wraps(original_state)
+        def state(windows, identity, *args, **kwargs):
+            if not scoped(windows):
+                return original_state(windows, identity, *args, **kwargs)
+            token = self.window.set((windows, identity))
+            try:
+                return original_state(windows, identity, *args, **kwargs)
+            finally:
+                self.window.reset(token)
+        patch.setattr(WorkWindows, '_proof_state', state)
+
+        original_expire = WorkWindows._expire_proof
+        @wraps(original_expire)
+        def expire(windows, proof, reason):
+            if scoped(windows):
+                self.safe(self.expired, windows, proof, reason)  # Before the original clears bound rows.
+            return original_expire(windows, proof, reason)
+        patch.setattr(WorkWindows, '_expire_proof', expire)
+
+        original_binding = WorkWindows.live_binding
+        @wraps(original_binding)
+        def binding(windows, *args, **kwargs):
+            result = original_binding(windows, *args, **kwargs)
+            if scoped(windows):
+                def evidence():
+                    session = args[0] if args else kwargs['session']
+                    row = args[1] if len(args) > 1 else kwargs['row']
+                    proof_id = args[2] if len(args) > 2 else kwargs.get('proof_id')
+                    self.binding(windows, session, row, proof_id, result)
+                self.safe(evidence)
+            return result
+        patch.setattr(WorkWindows, 'live_binding', binding)
+
+        original_check = WorkWindows._check_current
+        @wraps(original_check)
+        def current(windows, identity, owner, source, fence):
+            try:
+                return original_check(windows, identity, owner, source, fence)
+            except BaseException:
+                if scoped(windows):
+                    def evidence():
+                        self.record('read-currentness-refused',
+                            self.snapshot(windows, identity, expected_owner=owner,
+                                          expected_source=source, expected_fence=fence),
+                            first=('read-currentness', id(windows)))
+                    self.safe(evidence)
+                raise
+        patch.setattr(WorkWindows, '_check_current', current)
+
+        original_matches = WorkWindows._matches
+        def matches(*args, **kwargs):
+            result = original_matches(*args, **kwargs)
+            context = self.window.get()
+            if result is False and context:
+                windows, identity = context
+                self.safe(self.event, 'source-stamp-mismatch', windows, identity,
+                          first=('source-stamp', id(windows)))
+            return result
+        patch.setattr(WorkWindows, '_matches', staticmethod(matches))
+        original_index = WorkWindows._binding_current
+        def index(windows, page):
+            result = original_index(windows, page)
+            if result is False and scoped(windows):
+                self.safe(self.event, 'index-stamp-mismatch', windows, page['sessionId'],
+                          first=('index-stamp', id(windows)))
+            return result
+        patch.setattr(WorkWindows, '_binding_current', index)
+
+        original_flush = Diagnostics._flush
+        @wraps(original_flush)
+        async def flush(diagnostics, *args, **kwargs):
+            def boundary(phase):
+                if id(diagnostics) not in self.flushes and len(self.flushes) >= 4:
+                    self.dropped += 1
+                    return
+                counters = self.flushes.setdefault(id(diagnostics),
+                    {'started': 0, 'returned': 0, 'raised': 0, 'active': 0})
+                counters[phase] += 1
+                counters['active'] += 1 if phase == 'started' else -1
+                self.record('diagnostic-flush-' + phase, {
+                    'service': self.service_id(diagnostics.service),
+                    'pending': self.number(len(diagnostics.pending), 2000),
+                    'storageError': bool(diagnostics.storage_error),
+                    'storageReady': bool(diagnostics.storage_ready),
+                    **{k: self.number(v) for k, v in counters.items()}})
+            self.safe(boundary, 'started')  # Existing lock is already held, no new flush.
+            try:
+                result = await original_flush(diagnostics, *args, **kwargs)
+            except BaseException:
+                self.safe(boundary, 'raised')
+                raise
+            else:
+                self.safe(boundary, 'returned')
+                return result
+        patch.setattr(Diagnostics, '_flush', flush)
+
+        original_persist = Diagnostics._persist
+        @wraps(original_persist)
+        def persist(diagnostics, items, cfg):
+            def boundary(phase):
+                with self.record_lock:
+                    if id(diagnostics) not in self.persisted and len(self.persisted) >= 4:
+                        self.dropped += 1
+                        return
+                    counters = self.persisted.setdefault(id(diagnostics),
+                        {'started': 0, 'returned': 0, 'raised': 0, 'active': 0})
+                    counters[phase] += 1
+                    counters['active'] += 1 if phase == 'started' else -1
+                    self.record('diagnostic-persist-' + phase, {
+                        'service': self.service_id(diagnostics.service),
+                        'items': self.number(len(items), 2000),
+                        'toolItems': sum(row[5] in {'tool:pre', 'tool:post'} for row in items[:2000]),
+                        'stopping': bool(diagnostics.stopping),
+                        **{key: self.number(value) for key, value in counters.items()}})
+            self.safe(boundary, 'started')
+            try:
+                result = original_persist(diagnostics, items, cfg)
+            except BaseException:
+                self.safe(boundary, 'raised')
+                raise
+            else:
+                self.safe(boundary, 'returned')
+                return result
+        patch.setattr(Diagnostics, '_persist', persist)
+
+    def emit(self, case, directory=None, *, writer=None):
+        def persist():
+            record = {'case': case, 'records': self.records, 'firstFailures': self.failures,
+                      'observationErrors': self.observation_errors, 'dropped': self.dropped,
+                      'limits': {'records': 32, 'firstFailures': 16, 'bytes': 65536},
+                      'meaning': 'Test observation only; original acceptance verdict unchanged.'}
+            encoded = json.dumps(record, ensure_ascii=True)
+            while len(encoded.encode()) > 65536 and record['records']:
+                record['records'] = record['records'][:-1]
+                record['dropped'] += 1
+                encoded = json.dumps(record, ensure_ascii=True)
+            if len(encoded.encode()) > 65536:
+                raise ValueError('Bounded observation overflow')
+            if writer is not None:
+                writer(encoded)
+            elif directory:
+                destination = Path(directory)
+                destination.mkdir(parents=True, exist_ok=True)
+                name = 'work-lifetime-' + hashlib.sha256(case.encode()).hexdigest()[:16] + '.json'
+                with (destination / name).open('x', encoding='utf-8') as stream:
+                    stream.write(encoded + '\n')
+            print('WORK-FIRST-FAILURE', encoded)
+        self.safe(persist)
+        if self.observation_errors:
+            self.safe(print, 'WORK-FIRST-FAILURE-OBSERVATION-GAP',
+                      {'count': self.observation_errors})
+
+
+@pytest.fixture(autouse=True)
+def work_failure_observation(request, monkeypatch):
+    """Observe only the five currently failing cases plus their existing recent control."""
+    selected = {
+        'test_regular_work_details_observer_and_service_reopen',
+        'test_http_work_pages_use_exact_window_cursor_without_hydrating',
+        'test_http_live_steps_offer_older_page_and_sync_preserves_126',
+    }
+    if getattr(request.node, 'originalname', None) not in selected:
+        yield None
+        return
+    trace = _WorkFailureObservation()
+    trace.install(monkeypatch, request.module)
+    try:
+        yield trace
+    finally:
+        # No cleanup here is conditional on the diagnostic writer. Existing
+        # client/service fixture teardown remains owned by pytest, unchanged.
+        trace.emit(request.node.name, os.environ.get('UNIFIED_COLD_BINDING_DIAGNOSTIC_DIR'))
+
+
+def _observation_subject():
+    row = {'id': 'root', 'workspace': 'private-path-marker'}
+    diagnostic = SimpleNamespace(pending=[], storage_error=False, storage_ready=True, stopping=False)
+    service = SimpleNamespace(_state={'sessions': [row]}, closed=False, diagnostics=diagnostic,
+        queue_clients={'queue': 'browser'}, queue_sessions={},
+        clients=SimpleNamespace(records={'browser': {'kind': 'web', 'selectedSessionId': 'root'}}))
+    diagnostic.service = service
+    windows = SimpleNamespace(service=service, _root_proofs={}, pages={}, epochs={'root': 1}, closed=False)
+    return windows, row, diagnostic
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method', ['read_selected', 'read_proven_field', '_flush'])
+@pytest.mark.parametrize('outcome', ['returned', 'raised', 'cancelled', 'observer-error'])
+async def test_failure_observer_async_preserves_original_once(monkeypatch, method, outcome):
+    from amplifier_web.diagnostics import Diagnostics
+    trace = _WorkFailureObservation()
+    windows, _, diagnostic = _observation_subject()
+    target = Diagnostics if method == '_flush' else WorkWindows
+    subject = diagnostic if method == '_flush' else windows
+    calls, value = [], object()
+    failure = asyncio.CancelledError() if outcome == 'cancelled' else ValueError('private-error')
+    args = () if method == '_flush' else ('root',)
+    kwargs = {'sentinel': object()}
+    async def original(*actual_args, **actual_kwargs):
+        calls.append((actual_args, actual_kwargs))
+        if outcome in {'raised', 'cancelled'}:
+            raise failure
+        return value
+    monkeypatch.setattr(target, method, original)
+    trace.install(monkeypatch, SimpleNamespace())
+    if outcome == 'observer-error':
+        def broken(*args, **kwargs):
+            raise OSError('private-observation-error')
+        monkeypatch.setattr(trace, 'record', broken)
+    if outcome in {'raised', 'cancelled'}:
+        with pytest.raises(type(failure)) as caught:
+            await getattr(target, method)(subject, *args, **kwargs)
+        assert caught.value is failure
+    else:
+        assert await getattr(target, method)(subject, *args, **kwargs) is value
+    assert calls == [((subject, *args), kwargs)]
+    assert trace.window.get() is None
+    if outcome == 'observer-error':
+        assert trace.observation_errors > 0
+
+
+@pytest.mark.parametrize('method', ['_expire_proof', 'live_binding', '_persist'])
+@pytest.mark.parametrize('outcome', ['returned', 'raised', 'observer-error'])
+def test_failure_observer_sync_preserves_arguments_result_and_primary_exception(monkeypatch, method, outcome):
+    from amplifier_web.diagnostics import Diagnostics
+    trace = _WorkFailureObservation()
+    windows, row, diagnostic = _observation_subject()
+    proof = {'id': 'a' * 32, 'status': 'complete', 'reason': None, 'steps': 0,
+             'pages': [], 'owner': id(row), 'source': dict(row), 'fence': 1}
+    windows._root_proofs['root'] = proof
+    node = {'toolCallId': 'state'}
+    target = Diagnostics if method == '_persist' else WorkWindows
+    subject = diagnostic if method == '_persist' else windows
+    arguments = {'_expire_proof': ((proof, 'epoch'), {}),
+                 'live_binding': ((row, node), {'proof_id': None}),
+                 '_persist': (([], {'private-config-marker': True}), {})}
+    args, kwargs = arguments[method]
+    calls, value, failure = [], (None, None), ValueError('private-primary')
+    def original(*actual_args, **actual_kwargs):
+        calls.append((actual_args, actual_kwargs))
+        if outcome == 'raised':
+            raise failure
+        return value
+    monkeypatch.setattr(target, method, original)
+    trace.install(monkeypatch, SimpleNamespace())
+    if outcome == 'observer-error':
+        def broken(*args, **kwargs):
+            raise OSError('private-observation-error')
+        monkeypatch.setattr(trace, 'record', broken)
+    if outcome == 'raised':
+        with pytest.raises(ValueError) as caught:
+            getattr(target, method)(subject, *args, **kwargs)
+        assert caught.value is failure
+    else:
+        assert getattr(target, method)(subject, *args, **kwargs) is value
+    assert calls == [((subject, *args), kwargs)]
+    encoded = json.dumps([trace.records, trace.failures])
+    assert 'private-' not in encoded
+    if outcome == 'observer-error':
+        assert trace.observation_errors > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['returned', 'raised', 'context-error', 'record-error'])
+async def test_failure_observer_http_does_not_replace_handler_or_payload(monkeypatch, outcome):
+    trace = _WorkFailureObservation()
+    request = SimpleNamespace(path='/api/conversation/detail',
+        query={'part': 'nodes', 'field': 'output', 'offset': '4096',
+               'group': 'private-group', 'id': 'private-id', 'digest': 'private-digest'})
+    response = SimpleNamespace(status=400)
+    calls, failure = [], ValueError('private-exception')
+    async def handler(actual):
+        calls.append(actual)
+        if outcome == 'raised':
+            raise failure
+        return response
+    if outcome in {'context-error', 'record-error'}:
+        def broken(*args, **kwargs):
+            raise OSError('private-observer-error')
+        monkeypatch.setattr(trace, 'request_context' if outcome == 'context-error' else 'record', broken)
+    if outcome == 'raised':
+        with pytest.raises(ValueError) as caught:
+            await trace.handle_http(request, handler)
+        assert caught.value is failure
+    else:
+        assert await trace.handle_http(request, handler) is response
+    assert calls == [request] and trace.request.get() is None
+    assert 'private-' not in json.dumps([trace.records, trace.failures])
+    if outcome in {'context-error', 'record-error'}:
+        assert trace.observation_errors > 0
+
+
+@pytest.mark.parametrize('category', ['missing-attestation', 'full-identity', 'missing-bound-call'])
+def test_failure_observer_classifies_first_binding_without_values_or_resolver_calls(category):
+    trace = _WorkFailureObservation()
+    windows, row, _ = _observation_subject()
+    metadata = {'id': 'tool:root:state', 'kind': 'tool', 'sessionId': 'root',
+                'rootSessionId': 'root', 'turnId': 'private-turn', 'parentId': None,
+                'revision': 2, 'phase': 'completed', 'startedAt': 1, 'endedAt': 2,
+                'tool_call_id': 'state'}
+    node = {**metadata, 'toolCallId': 'state', 'input': 'private-body'}
+    if category == 'full-identity':
+        node['revision'] = 3
+    fact = {'id': 'private-occurrence', 'data': metadata}
+    page = {'_proof': {'facts': [fact], 'attestedIds': [] if category == 'missing-attestation'
+                      else ['private-occurrence'], 'receiptDigest': 'private-digest'}, '_rootProofBound': []}
+    windows.pages['private-group'] = page
+    windows._root_proofs['root'] = {'id': 'a' * 32, 'status': 'complete', 'steps': 1, 'reason': None,
+        'owner': id(row), 'source': dict(row), 'fence': 1,
+        'pages': [('private-group', id(page), 'private-digest')]}
+    trace.binding(windows, row, node, None, (None, None))
+    trace.binding(windows, row, node, None, (None, None))
+    assert len(trace.failures) == 1
+    record = trace.failures[0]
+    assert record['category'] == category and record['clientConnected'] is True
+    assert record['mismatchFields'] == (['revision'] if category == 'full-identity' else [])
+    assert 'private-' not in json.dumps(record)
+
+
+def test_failure_observer_bounds_first_reason_and_writer_failure_cannot_mask_cleanup():
+    trace = _WorkFailureObservation()
+    for i in range(100):
+        trace.record('ordinary', {'count': i})
+        trace.record('failure', {'category': 'unknown'}, first=('failure', i))
+    assert len(trace.records) == 32 and len(trace.failures) == 16 and len(trace.seen) == 32
+    original_first = dict(trace.failures[0])
+    trace.record('failure', {'category': 'replacement'}, first=('failure', 0))
+    assert trace.failures[0] == original_first
+    primary, cleaned = ValueError('private-primary'), []
+    def broken(encoded):
+        assert len(encoded.encode()) <= 65536
+        raise OSError('private-writer')
+    with pytest.raises(ValueError) as caught:
+        try:
+            raise primary
+        finally:
+            trace.emit('synthetic-case', writer=broken)
+            cleaned.append(True)
+    assert caught.value is primary and cleaned == [True]
+    assert trace.observation_errors == 1
+
+
+@pytest.mark.parametrize('boundary', ['source', 'index', 'currentness'])
+def test_failure_observer_uses_original_refusal_without_second_dependency_probe(monkeypatch, boundary):
+    trace = _WorkFailureObservation()
+    windows, row, _ = _observation_subject()
+    calls, failure = [], ValueError('private-original')
+    def original(*args):
+        calls.append(args)
+        if boundary == 'currentness':
+            raise failure
+        return False
+    method = {'source': '_matches', 'index': '_binding_current',
+              'currentness': '_check_current'}[boundary]
+    monkeypatch.setattr(WorkWindows, method, staticmethod(original) if boundary == 'source' else original)
+    trace.install(monkeypatch, SimpleNamespace())
+    token = trace.window.set((windows, 'root'))
+    try:
+        if boundary == 'source':
+            args = ({'private-path': True}, [])
+            assert WorkWindows._matches(*args) is False
+        elif boundary == 'index':
+            args = (windows, {'sessionId': 'root'})
+            assert WorkWindows._binding_current(*args) is False
+        else:
+            args = (windows, 'root', row, dict(row), 0)
+            with pytest.raises(ValueError) as caught:
+                WorkWindows._check_current(*args)
+            assert caught.value is failure
+        assert calls == [args]
+        assert len(trace.failures) == 1 and 'private-' not in json.dumps(trace.failures)
+    finally:
+        trace.window.reset(token)
 
 
 class FakeProjector:

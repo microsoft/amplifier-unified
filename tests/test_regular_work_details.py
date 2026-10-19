@@ -27,6 +27,7 @@ from amplifier_web.execution_events import ExecutionEvents
 from amplifier_web.runtime import normalize_event
 from amplifier_web.server import create_app
 from test_service import Runtime
+from test_work_windows import work_failure_observation  # noqa: F401 - scoped observer fixture
 
 
 INPUT_ID = "regular-details-input"

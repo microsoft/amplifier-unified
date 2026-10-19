@@ -1,5 +1,6 @@
 import pytest
 from test_work_windows import fixture
+from test_work_windows import work_failure_observation  # noqa: F401 - scoped observer fixture
 from test_cold_work_binding import source as canonical_source  # noqa: F401 - shared pytest fixture
 
 
