@@ -56,6 +56,7 @@ function TaskList({dispatch,sessionId,compact=false,enabled=true,onAssignmentCha
  return <details className={'a-assignment-tasks'+(compact?' is-compact':'')} onToggle={event=>{if(event.target===event.currentTarget){invalidate();setOpen(event.currentTarget.open)}}}>
   <summary>Shared task list</summary>
   <p>Optional work items for this assignment. Claims record responsibility; they do not start work or lock files.</p>
+  <p>Worker activity is observed separately from task readiness. A paused or blocked chat keeps its responsibility.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" disabled={busy} onClick={reload}>Refresh tasks</button>
   {pending&&<div role="status"><p>A change has no confirmed response. Check that same change before trying another.</p><button className="a-soft" disabled={busy} onClick={()=>run()}>Check the same task change</button><button className="a-link" disabled={busy} onClick={()=>{persist({...savedRef.current,pending:null});setError('');reload()}}>Discard local request and inspect current tasks</button></div>}
@@ -69,6 +70,7 @@ function TaskList({dispatch,sessionId,compact=false,enabled=true,onAssignmentCha
     return <li key={task.id} data-task-id={task.id}>
      <strong>{task.title}</strong><span className="a-shared-task-status">{status}</span>
      {claim&&<p>{terminal?'Last responsibility: ':'Responsibility: '}{member(claim.sessionId)}{!terminal&&claim.status!=='current'?' — '+claim.detail:''}</p>}
+     {!terminal&&task.worker&&<p>Worker: {task.worker.label}{task.worker.blockedReason?' — '+task.worker.blockedReason:''}</p>}
      {!!task.blockedBy.length&&<p>Waiting for: {task.blockedBy.map(title).join(', ')}</p>}
      {task.blockedReason&&<p>Blocked: {task.blockedReason}</p>}
      {task.description&&<p>{task.description}</p>}

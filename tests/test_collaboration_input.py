@@ -489,3 +489,27 @@ async def test_checkpoint_anchor_uses_exact_native_index_and_root_generation(mon
     worker.observe({"type": "generation.started", "sessionId": "child", "rootSessionId": "native-root"})
     worker.observe({"type": "input.delivered", "sessionId": "child", "rootSessionId": "native-root", "input_id": "child-input"})
     assert worker.context_inputs == ["root-input"]
+
+@pytest.mark.parametrize('change', ['progress', 'stop', 'new-task', 'pause-resume', 'budget'])
+async def test_outcome_observation_admission_uses_current_task_authority(boundary, input_type, change):
+    b = boundary
+    b.runtime.generation = None
+    b.controls.require_idle = Mock()
+    b.task['continuationEpoch'] = 1
+    b.args['taskContinuationEpoch'] = 1
+    async def authorize(args):
+        b.task['revision'] += 1
+        if change == 'stop':
+            b.epoch[0] += 1
+        elif change == 'new-task':
+            b.task['id'] = 'other'
+        elif change == 'pause-resume':
+            b.task['continuationEpoch'] = 3
+        elif change == 'budget':
+            b.controls.coordinator.session_state['goal'] = {'cap': 2, 'turns_used': 2}
+        return b.permission
+    b.authorize = AsyncMock(side_effect=authorize)
+    result = await admit(b.controls, b.runtime, b.args, b.activation, b.authorize,
+                         stop_epoch=lambda: b.epoch[0])
+    assert result['accepted'] is (change == 'progress')
+    assert b.runtime.submit.await_count == (1 if change == 'progress' else 0)
