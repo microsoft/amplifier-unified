@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.181",
+      "title": "Recover configuration changes and open related chats",
+      "changes": [
+        "Inspect an interrupted conversation configuration change and resume it when saved evidence confirms that nothing was written. Recovery preserves the original permissions and does not repeat uncertain or partially completed changes.",
+        "Assistant replies can include Open chat cards for existing conversations. Cards use the current chat title and workspace and preserve unsaved-work safeguards when opening the destination.",
+        "Repair apply-patch placement for a conversation\u2019s working checkout while preserving its other saved configuration and controls.",
+        "Inspect original test-environment removal requests without restarting work. Cleanup retains verified files, preserves uncertain outcomes, and can finish confirmed preparation cleanup without removing the guest again.",
+        "Delegated computer-use tools preserve inherited remote desktop restrictions, and approval cards fit more reliably in the conversation layout."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.180",
       "title": "Keep idle chats ready for coordinated work",
       "changes": [
