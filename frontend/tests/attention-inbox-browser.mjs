@@ -16,7 +16,8 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:920},extraHTTPHeaders:headers});
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  const initial=await control({op:'many',count:13}),sid=initial.alpha,other=initial.beta;
- await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await page.goto(vite.resolvedUrls.local[0]);await page.locator('#amp-one').waitFor();
+ if(!await page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}).isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}).click();
  const inbox=page.getByRole('region',{name:'Activity to review',exact:true});await expect(inbox).toBeVisible();
  // A fresh install can have release notices. Review those through the real UI
