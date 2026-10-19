@@ -828,10 +828,28 @@ class WorkWindows:
             page = None
         # Snapshots do no source/index IO. Published invalidation hides binding;
         # explicit node/field reads also recheck physical source/index stamps.
-        bindings = page is not None and self.epochs.get(session['id']) == page.get('_bindingFence')
-        if bindings and page.get('_consumerProof'):
-            state = self._proof_state(session['id'], session)
-            bindings = bool(state and state['id'] == page['_consumerProof'] and state['status'] == 'complete')
+        root_proof = self._proof_state(session['id'], session)
+        page_current = bool(page is not None and not self.closed and not self.service.closed
+                            and self.epochs.get(session['id']) == page.get('_bindingFence'))
+        support_id = (page.get('_consumerProof') or page.get('_consumerSupport')) if page else None
+        if support_id:
+            proof = self._root_proofs.get(session['id'])
+            # Incomplete association can still describe a current bounded raw
+            # page. It cannot survive owner/fence changes or loss of support.
+            # Check only retained facts, including incomplete proof descriptors
+            # which the field-authority path deliberately never accepts.
+            support_current = bool(proof and root_proof and root_proof['id'] == support_id
+                and root_proof['status'] in {'complete', 'incomplete'}
+                and proof['owner'] == id(session) and proof['source'] == source_identity(session)
+                and proof['fence'] == self.epochs.get(session['id']) and proof['pages']
+                and all(group in self.pages and id(self.pages[group]) == object_id
+                        and self.pages[group].get('_proof', {}).get('receiptDigest') == digest
+                        for group, object_id, digest in proof['pages']))
+            page_current = page_current and support_current
+            if root_proof is None:
+                root_proof = {'id': support_id, 'status': 'stale',
+                              'reason': 'operation-expired', 'boundCount': 0}
+        bindings = page_current and (not support_id or root_proof['status'] == 'complete')
         groups = self._groups(page, bindings=bindings) if page else {'items': [], 'turns': [], 'mode': 'cursor',
             'offset': None, 'total': None, 'before': None, 'hasEarlier': False,
             'coverage': {'kind': 'event-window', 'historyComplete': False}}
@@ -851,7 +869,13 @@ class WorkWindows:
         from .image_generation import project as image_work
         work_status = (self.status.get(session['id'], {'status': 'loading', 'current': False})
                        if not rebound else {'status': 'loading', 'current': False})
-        root_proof = self._proof_state(session['id'], session)
+        # A retained publication is not current merely because its status says
+        # ready. The displayed page and its exact publication must still exist.
+        # Retain a noncurrent receipt as observation, never as field authority.
+        work_status = {key: value for key, value in work_status.items() if key != 'rootProof'}
+        work_status['current'] = bool(work_status.get('current') and page_current
+            and work_status.get('status') == 'ready'
+            and work_status.get('receipt') == page.get('receipt'))
         if root_proof is not None:
             work_status = {**work_status, 'rootProof': root_proof}
         return {'execution': {**{key: value for key, value in live_source['execution'].items()
