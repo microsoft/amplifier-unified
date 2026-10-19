@@ -876,11 +876,7 @@ class AppService:
                     # including the first frame after a host restart. Clients
                     # can then discard the previous host's resources and load
                     # its new descriptors without an ambiguous missing key.
-                    cached['shellBootstrapKey'] = self.shell.resources.bootstrap_key(client_id)
-                    if self.shell.resources.registered(client_id):
-                        resources = self.shell.resources.snapshot(client_id)
-                        if resources is not None:
-                            cached['shellResources'] = resources
+                    cached.update(self.shell.resources.browser_projection(client_id))
                 else:
                     cached['shellDataKey'] = self.projections.shell_key(self.state)
                     cached['shellChangeToken'] = self.shell.change_token(client_id)

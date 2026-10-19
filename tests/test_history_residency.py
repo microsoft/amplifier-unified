@@ -157,3 +157,35 @@ def test_one_wide_owner_cannot_exhaust_retirement_budget_before_rechecking(monke
     # the entire 20,000-element container to finish.
     assert examined <= 128
     assert len(owner['messages']) == 20000
+
+
+@pytest.mark.parametrize('protection', ['working', 'runtime', 'configuration', 'approval'])
+async def test_active_working_set_keeps_index_across_detail_publications(app_factory, protection):
+    from amplifier_web import history_residency
+
+    app = app_factory()
+    for number in range(12):
+        row = app._new_session({'title': f'Active {number}'})
+        row['status'] = 'working' if protection == 'working' else 'idle'
+        if protection == 'configuration':
+            row['configurationPending'] = {'revision': 1}
+        if protection == 'approval':
+            row['approvals'] = [{'id': f'approval-{number}', 'status': 'pending'}]
+        app._state['sessions'].append(row)
+    identities = [row['id'] for row in app._state['sessions']]
+    if protection == 'runtime':
+        app.runtime.workers = dict.fromkeys(identities)
+    app._state['selectedSessionId'] = identities[0]
+    app._save()
+    index = app.projections.sessions(app._state)
+    # Do not borrow an index alias during the proof: this test's retained index
+    # is safe because all rows are independently protected from retirement.
+    for iteration in range(3):
+        identity = identities[-1]
+        app._session(identity, hydrate=False)['streamingText'] = f'chunk {iteration}'
+        app._publish_changes(sessions={identity}, detail_only=True)
+        assert app.projections.sessions(app._state) is index
+        assert set(index.by_id) == set(identities)
+        assert not history_residency.retire(app)
+    if protection == 'runtime':
+        app.runtime.workers = {}
