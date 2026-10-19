@@ -210,9 +210,14 @@ async def test_large_correction_history_is_not_repeated_in_current_projection(
         assert 'Historical correction 0:' not in text
         assert 'Corrected promise: verify the source' in text
         assert 'Do not publish.' in text
-        summary = (await worker.perform('task.get'))['task']
+        projected = await worker.perform('task.get')
+        summary = projected['task']
         assert summary['correctionCount'] == 113
         assert summary['historyRef']['action'] == 'task.history'
+        # "Old" is not a semantic supersession decision. The preceding update
+        # did not explicitly fold correction-only constraints into current scope.
+        assert projected['detailRequired'] is True
+        assert any(ref['args']['field'] == 'corrections' for ref in projected['detailRefs'])
         assert worker.tasks.record()['corrections'] == original['corrections']
         assert worker.tasks.record()['objective'] == original['objective']
     finally:
@@ -431,6 +436,41 @@ async def test_saved_task_get_is_cold_and_does_not_return_the_app_snapshot(
         assert 'sessions' not in result.get('state', {})
         app.runtime.control.assert_not_called()
         app.management.ensure_runtime.assert_not_called()
+    finally:
+        app.management = None
+        await app.close()
+        if worker is not None:
+            await worker.close()
+
+
+async def test_mutation_dispatch_acknowledges_without_serializing_app_state(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'home'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Mutation target'})
+        sid = app._session()['id']
+        worker = controls(sid)
+        await corrected_task(worker)
+        async def control(target, operation, args):
+            assert target == sid
+            return await worker.perform(operation, args)
+        app.runtime = SimpleNamespace(control=control, close=AsyncMock())
+        app.management = SimpleNamespace(ensure_runtime=AsyncMock(), close=AsyncMock())
+        monkeypatch.setattr(app, 'browser_state',
+                            lambda *a, **kw: pytest.fail('Mutation must not serialize app state'))
+        revision = worker.tasks.record()['revision']
+        result = await app.dispatch('task.update', {
+            'sessionId': sid, 'expectedRevision': revision,
+            'artifactRefs': ['exact-evidence-ref']},
+            command_id='compact-mutation', include_state=True)
+        assert result['accepted'] is True
+        assert result['result']['receipt']['commandId'] == 'compact-mutation'
+        assert result['result']['receipt']['revision'] == revision + 1
+        assert encoded_size(result) <= TASK_CONTEXT_BYTES
+        assert 'sessions' not in result.get('state', {})
+        assert len(worker.tasks.record()['corrections']) == 113
     finally:
         app.management = None
         await app.close()
