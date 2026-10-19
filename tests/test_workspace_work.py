@@ -893,3 +893,63 @@ async def test_deleted_source_coverage_is_retired_only_after_source_commit(app, 
     assert not app.workspace_work.pending_input_facts
     assert (await app.dispatch('workspace.work.coverage', {
         'workspaceId': workspace_id(app, owner)}))['result']['observedInputs'] == 0
+
+
+async def test_unverified_pass_after_failure_remains_in_attention(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    for command, outcome in [('observed-failure', 'failed'), ('unverified-recovery', 'passed')]:
+        item = (await change_work(app, owner, 'report', item, command,
+            promiseRevision=1, candidate=candidate, outcome=outcome,
+            report='Reported outcome, not independent verification.', criteria=['retained']))['result']['item']
+    page = (await app.dispatch('workspace.work.list', {
+        'workspaceId': workspace_id(app, owner), 'filter': 'attention'}))['result']
+    assert page['total'] == 1 and page['items'][0]['id'] == item['id']
+    assert 'unverified_report' in page['items'][0]['attentionReasons']
+    check = retained_check(app, reviewer, candidate, 'independent-recovery')
+    await change_work(app, reviewer, 'report', item, 'checked-recovery',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Fresh independent check.',
+        criteria=['retained'], checkReceiptId=check)
+    assert (await app.dispatch('workspace.work.list', {
+        'workspaceId': workspace_id(app, owner), 'filter': 'attention'}))['result']['total'] == 0
+
+
+async def test_unloaded_source_snapshot_does_not_discard_pending_coverage(app):
+    from amplifier_web.workspace_work_coverage import stage_saved_inputs, acknowledge_saved_inputs
+    owner = app.state['sessions'][0]
+    app._message(owner, 'user', 'Pending source is not absent just because its body is unloaded.', inputOrigin='ui')
+    snapshot = {key: value for key, value in owner.items() if key != 'messages'}
+    staged = stage_saved_inputs(app.workspace_work, {owner['id']: snapshot}, {owner['id']})
+    acknowledge_saved_inputs(app.workspace_work, staged)
+    assert app.workspace_work.pending_input_facts
+    app._save(session_ids={owner['id']}, record_only=True)
+    assert not app.workspace_work.pending_input_facts
+    assert (await app.dispatch('workspace.work.coverage', {
+        'workspaceId': workspace_id(app, owner)}))['result']['observedInputs'] == 1
+
+
+async def test_pending_coverage_keeps_observed_hash_when_source_changes_before_save(app):
+    owner = app.state['sessions'][0]
+    message = app._message(owner, 'user', 'Original before save.', inputOrigin='ui')
+    initial = hashlib.sha256(message['text'].encode()).hexdigest()
+    message['text'] = 'Exact text actually saved.'
+    app._save(session_ids={owner['id']}, record_only=True)
+    page = (await app.dispatch('workspace.work.coverage', {
+        'workspaceId': workspace_id(app, owner)}))['result']
+    assert page['observedInputs'] == 1
+    assert page['items'][0]['sourceSha256'] == hashlib.sha256(message['text'].encode()).hexdigest()
+    assert page['items'][0]['observedSourceSha256'] == initial
+
+
+async def test_historical_criterion_reference_is_explicitly_unvalidated(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    check = retained_check(app, reviewer, candidate, 'historical-criterion-check')
+    item = (await revise(app, owner, item, 'revise-history-subject',
+        source=source(app, owner, 'Change the scope.'),
+        constraints=['The current promise differs.']))['result']['item']
+    await change_work(app, reviewer, 'report', item, 'attributed-history',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Historical criterion attribution.',
+        criteria=['not-a-current-criterion'], checkReceiptId=check)
+    history = (await app.dispatch('workspace.work.history', {
+        'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
+    assert history[-1]['evidence']['criteriaValidated'] is False
+    assert (await read(app, owner, item['id']))['item']['verification'] == 'not_verified'
