@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import React,{act as renderAct} from 'react';
+import React,{act as renderAct,useLayoutEffect} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
@@ -12,6 +12,21 @@ function Draft({entry}){useSettingsDraft('connection',entry);return null}
 let guard;
 function Fixture({entry}){guard=useSettingsDrafts();return React.createElement(SettingsDraftProvider,{value:guard.context},React.createElement(Draft,{entry}),guard.dialog)}
 const click=(root,label)=>root.root.findAllByType('button').find(button=>button.children.includes(label)).props.onClick();
+test('a committed unsaved settings edit blocks navigation before passive effects run',async()=>{
+ const observations=[];let root;
+ function CommitProbe({dirty}){
+  const navigation=useSettingsDrafts();
+  useLayoutEffect(()=>{observations.push({dirty,blocked:navigation.hasUnsaved()})});
+  return React.createElement(SettingsDraftProvider,{value:navigation.context},
+   React.createElement(Draft,{entry:{label:'Provider configuration',dirty}}));
+ }
+ await renderAct(async()=>root=create(React.createElement(CommitProbe,{dirty:false})));
+ observations.length=0;
+ await renderAct(async()=>root.update(React.createElement(CommitProbe,{dirty:true})));
+ assert.ok(observations.length>0);
+ assert.ok(observations.every(row=>row.blocked),'The newly committed edit must already be protected when navigation can read it');
+ await renderAct(async()=>root.unmount());
+});
 test('closing dirty connection setup requires review, keep, or explicit discard; secrets stay out of the prompt',async()=>{
  const calls=[],entry={label:'AI connection setup',dirty:true,review:()=>calls.push('review'),discard:()=>calls.push('discard')};let root,pending;
  await renderAct(async()=>root=create(React.createElement(Fixture,{entry})));
