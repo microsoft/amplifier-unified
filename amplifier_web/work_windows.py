@@ -766,7 +766,7 @@ class WorkWindows:
                 'bindingProvenance': 'host-diagnostics-receipt',
                 'placementProvenance': 'timestamp-within-proven-turn',
                 'partialWindow': True, 'nodeCounts': None, 'aggregateUsage': None,
-                'detailRevision': page['generation'], 'coverage': page['coverage'],
+                'detailRevision': WorkWindows._public_revision(page), 'coverage': page['coverage'],
                 'evidence': WorkWindows._evidence(page)}
         for group, rows in page['_boundNodes'].items():
             page['_boundGroups'][group].update(
@@ -775,17 +775,23 @@ class WorkWindows:
         page['_unassociatedIds'] = {row['id'] for row in page['items']} - used
 
     @staticmethod
+    def _public_revision(page):
+        # Consumer publication can change without changing the signed page.
+        return page.get('_consumerRevision', page['generation'])
+
+    @staticmethod
     def _evidence(page):
         return {'sessionId': page['sessionId'], 'part': 'observations',
-                'group': page['group'], 'revision': page['generation']}
+                'group': page['group'], 'revision': WorkWindows._public_revision(page)}
 
     @staticmethod
     def _groups(page, *, bindings=True):
         identity = page['group']
+        revision = WorkWindows._public_revision(page)
         coverage = page.get('coverage', {})
         group = {'id': identity, 'turnId': identity, 'anchorMessageId': None,
             'observationWindow': True, 'phase': 'recorded', 'label': 'Recent saved work',
-            'nodeCounts': None, 'aggregateUsage': None, 'detailRevision': page['generation'],
+            'nodeCounts': None, 'aggregateUsage': None, 'detailRevision': revision,
             'coverage': coverage, 'bindingCoverage': page.get('bindingCoverage'),
             'evidence': WorkWindows._evidence(page)}
         separate = bool((page.get('_unassociatedIds', page['items']) if bindings else page['items'])
@@ -795,7 +801,7 @@ class WorkWindows:
             'turns': [*([{'id': identity, 'phase': 'recorded', 'observationWindow': True}] if separate else []),
                       *(page.get('_boundTurns', {}).values() if bindings else [])],
             'mode': 'cursor', 'offset': None, 'total': None, 'before': page.get('before'),
-            'hasEarlier': page.get('before') is not None, 'revision': page['generation'],
+            'hasEarlier': page.get('before') is not None, 'revision': revision,
             'windowKey': page['windowKey'], 'coverage': coverage,
             'evidence': WorkWindows._evidence(page),
             'unavailableRanges': page.get('unavailableRanges', [])}
@@ -876,7 +882,8 @@ class WorkWindows:
         if page.get('_consumerProof') and group in page.get('_boundGroups', {}):
             return self._consumer_nodes(identity, group, page, revision=revision,
                 known=known, before=before, paged=paged, preserve=preserve)
-        if revision is not None and revision != page['generation']:
+        public_revision = self._public_revision(page)
+        if revision is not None and revision != public_revision:
             raise ValueError('This saved work window changed. Open it again.')
         items = []
         bound = group in page.get('_boundGroups', {})
@@ -892,7 +899,7 @@ class WorkWindows:
             selected = [row for row in selected if row['id'] in known]
         for original in selected:
             row = {key: deepcopy(value) for key, value in original.items() if key != '_eventFields'}
-            row.update(turnId=original['turnId'] if bound else group, detailVersion=page['generation'],
+            row.update(turnId=original['turnId'] if bound else group, detailVersion=public_revision,
                        observationWindow=not bound)
             for field in ('input', 'output', 'error', 'request', 'response'):
                 if field + 'Detail' in row:
@@ -901,11 +908,11 @@ class WorkWindows:
                 items.append(row)
         return {'items': items, 'order': [row['id'] for row in selected],
                 'offset': 0, 'total': len(selected), 'before': None,
-                'group': group, 'revision': page['generation'], 'coverage': page['coverage']}
+                'group': group, 'revision': public_revision, 'coverage': page['coverage']}
 
     def _consumer_nodes(self, identity, group, page, *, revision, known, before, paged, preserve):
         """Bounded client-owned node pages over the already accepted root proof."""
-        version, proof_id = page['_consumerRevision'], page['_consumerProof']
+        version, proof_id = self._public_revision(page), page['_consumerProof']
         if revision is not None and revision != version:
             raise ValueError('This Work proof changed. Reopen its latest steps.')
         client = self.live_pages._client()
@@ -977,21 +984,22 @@ class WorkWindows:
         if group not in self.pages:
             raise ValueError('This saved evidence window expired. Open its Work window again.')
         page = self._page(identity, group)
-        if revision != page['generation']:
+        public_revision = self._public_revision(page)
+        if revision != public_revision:
             raise ValueError('This saved evidence window changed. Open it again.')
         if not self._matches(page['source'], page.get('revisions')):
             raise ValueError('This saved evidence source changed. Open its Work window again.')
         items = []
         for original in page['items']:
             row = {key: deepcopy(value) for key, value in original.items() if key != '_eventFields'}
-            row.update(turnId=group, detailVersion=page['generation'], observationWindow=True)
+            row.update(turnId=group, detailVersion=public_revision, observationWindow=True)
             for field in ('input', 'output', 'error', 'request', 'response'):
                 if field + 'Detail' in row:
                     row[field + 'Detail'].update(sessionId=identity, windowKey=group)
             items.append(row)
         return {'items': items, 'order': [row['id'] for row in items],
                 'sessionId': identity, 'offset': 0, 'total': len(items), 'before': None,
-                'group': group, 'revision': page['generation'], 'coverage': page['coverage'],
+                'group': group, 'revision': public_revision, 'coverage': page['coverage'],
                 'evidence': self._evidence(page)}
 
     async def read_text(self, identity, args):
