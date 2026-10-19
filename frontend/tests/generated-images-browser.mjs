@@ -5,9 +5,112 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/generated_images_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser;
-const swapDiagnostic={schema:1,kind:'generated-image-preview-swap',records:[],dropped:0};
+let browser,page,releaseSwapGate,primaryFailure,swapObserving=false;
+const swapDiagnostic={schema:2,kind:'generated-image-preview-swap',records:[],dropped:0,controls:[],boundaries:null,cleanup:[]};
 let swapPhase=null;
+const assertPlacement=(result,label)=>assert.equal(result.problem,null,label);
+function installPreviewProbe(pane){
+ const gallery=pane.querySelector('.a-inline-gallery'),frame=gallery?.querySelector('.a-gallery-image-frame');
+ const rect=node=>{if(!node)return null;const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}};
+ const snapshot=()=>{
+  const box=rect(gallery),main=rect(frame),p=rect(pane),image=gallery?.querySelector('.a-inline-image img');
+  const notices=[...pane.querySelectorAll('[data-part="work-projection-status"]')];
+  return{available:true,sameNodes:pane.isConnected&&gallery?.isConnected&&frame?.isConnected&&
+   pane.querySelectorAll('.a-inline-gallery').length===1&&gallery.querySelectorAll('.a-gallery-image-frame').length===1&&
+   pane.querySelector('.a-inline-gallery')===gallery&&gallery.querySelector('.a-gallery-image-frame')===frame,
+   pane:{...p,scrollTop:pane.scrollTop,scrollHeight:pane.scrollHeight,clientHeight:pane.clientHeight,clientWidth:pane.clientWidth},
+   box,frame:main,workNotice:{count:notices.length,heights:notices.slice(0,4).map(n=>n.getBoundingClientRect().height),truncated:notices.length>4},
+   selectedImage:image?{complete:image.complete,naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight}:null};
+ };
+ const valid=s=>s?.available===true&&s.sameNodes===true&&['pane','box','frame'].every(k=>
+  s[k]&&['x','y','width','height'].every(f=>Number.isFinite(s[k][f]))&&s[k].width>0&&s[k].height>0)&&
+  ['scrollTop','scrollHeight','clientHeight','clientWidth'].every(k=>Number.isFinite(s.pane[k]))&&
+  s.pane.scrollTop>=0&&s.pane.scrollHeight>=s.pane.clientHeight&&s.pane.clientHeight>0&&s.pane.clientWidth>0;
+ const compare=(before,after)=>{
+  if(!valid(before)||!valid(after))return'invalid-geometry';
+  if(['x','y','width','height','clientHeight','clientWidth'].some(k=>before.pane[k]!==after.pane[k]))return'pane-geometry';
+  if(before.box.height!==after.box.height)return'gallery-height';
+  if(before.frame.height!==after.frame.height)return'frame-height';
+  const offset=(s,k,axis)=>s[k][axis]-s.pane[axis];
+  const contentTop=(s,k)=>offset(s,k,'y')+s.pane.scrollTop;
+  // With unchanged content geometry, retain the original raw-scroll control.
+  if(before.pane.scrollHeight===after.pane.scrollHeight&&
+   ['box','frame'].every(k=>Math.abs(contentTop(after,k)-contentTop(before,k))<1)&&
+   Math.abs(after.pane.scrollTop-before.pane.scrollTop)>=1)return'raw-scroll';
+  if(['x','y'].some(k=>Math.abs(offset(after,'box',k)-offset(before,'box',k))>=1))return'gallery-position';
+  if(['x','y'].some(k=>Math.abs(offset(after,'frame',k)-offset(before,'frame',k))>=1))return'frame-position';
+  return null;
+ };
+ let baseline,observer,timer,records=[],firstViolation=null,dropped=0,expired=false,last;
+ const loaded=()=>record('image-load');
+ const disconnect=()=>{observer?.disconnect();pane.removeEventListener('load',loaded,true);clearTimeout(timer);observer=null;timer=null};
+ const record=label=>{
+  const value=snapshot(),problem=compare(baseline,value),row={label,problem,value};
+  if(problem&&!firstViolation)firstViolation=row;
+  const signature=JSON.stringify(value);
+  if(signature!==last){
+   if(records.length<64)records.push(row);
+   else{dropped++;firstViolation??={label:'capacity',problem:'observation-capacity',value:null};disconnect()}
+   last=signature;
+  }
+  return{before:baseline,after:value,problem};
+ };
+ const begin=before=>{
+  disconnect();baseline=before;records=[];firstViolation=null;dropped=0;expired=false;last=null;
+  record('start');
+  // Mutation delivery observes the same pinned elements before a later frame
+  // can conceal a shift. This is not an all-frame or physical-display sensor.
+  observer=new MutationObserver(()=>record('mutation'));
+  observer.observe(pane,{subtree:true,childList:true,characterData:true,attributes:true});
+  pane.addEventListener('load',loaded,true);
+  timer=setTimeout(()=>{expired=true;firstViolation??={label:'deadline',problem:'observation-deadline',value:null};disconnect()},30000);
+ };
+ const finish=()=>{
+  if(baseline)record('finish');
+  disconnect();
+  return{records,firstViolation,dropped,expired};
+ };
+ const controls=async()=>{
+  const results=[],original=snapshot(),add=(name,before,after,expected)=>results.push({name,before,after,problem:compare(before,after),expected});
+  add('unchanged',original,snapshot(),null);
+  // Only the retained raw-scroll/extent pair is synthesized; other fields
+  // come from this actual snapshot. This is comparator, not layout, proof.
+  const measured=structuredClone(original);measured.pane.scrollTop=1193;measured.pane.scrollHeight=2028;
+  const compensated=structuredClone(measured);compensated.pane.scrollTop=1126;compensated.pane.scrollHeight=1961;
+  add('retained-compensated-67',measured,compensated,null);
+  add('missing',original,null,'invalid-geometry');
+  const malformed=structuredClone(original);malformed.frame.height=null;
+  add('malformed',original,malformed,'invalid-geometry');
+  for(const kind of ['scroll','gallery','frame']){
+   const before=snapshot(),node=kind==='gallery'?gallery:frame,style=node.getAttribute('style'),scroll=pane.scrollTop;
+   try{
+    if(kind==='scroll')pane.scrollTop-=8;
+    else node.style.transform='translateY(8px)';
+    add(kind,before,snapshot(),kind==='scroll'?'raw-scroll':kind==='gallery'?'gallery-position':'frame-position');
+   }finally{
+    if(kind==='scroll')pane.scrollTop=scroll;
+    else if(style===null)node.removeAttribute('style');else node.setAttribute('style',style);
+    add(kind+'-restored',before,snapshot(),null);
+    results.at(-1).restorationExact=pane.scrollTop===scroll&&node.getAttribute('style')===style;
+   }
+  }
+  const before=snapshot(),style=gallery.getAttribute('style');
+  begin(before);
+  try{
+   gallery.style.transform='translateY(8px)';
+   await Promise.resolve(); // Deliver the real mutation, not a stability wait.
+  }finally{
+   if(style===null)gallery.removeAttribute('style');else gallery.setAttribute('style',style);
+   await Promise.resolve();
+   add('shift-return-restored',before,snapshot(),null);
+   results.at(-1).restorationExact=gallery.getAttribute('style')===style&&pane.scrollTop===before.pane.scrollTop;
+  }
+  const transient=finish();
+  results.push({name:'shift-return-first-violation',problem:transient.firstViolation?.problem??null,expected:'gallery-position',boundaries:transient});
+  return results;
+ };
+ window.imagePreviewProbe={snapshot,compare,begin,record,finish,controls};
+}
 try{
  const boot=await new Promise((resolve,reject)=>{
   let output='';const timer=setTimeout(()=>reject(Error('Image fixture timeout')),20000);
@@ -16,7 +119,7 @@ try{
  });
  if(process.env.AMPLIFIER_EXPECTED_PACKAGE)assert.equal(boot.package,process.env.AMPLIFIER_EXPECTED_PACKAGE+'/server.py');
  browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
- const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-generated-images'}});
+ page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-generated-images'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const control=async(op,id)=>{const response=await page.request.post(boot.url+'/api/fixture/images',{data:{op,id}});assert.equal(response.status(),200);return response.json()};
  await page.goto(boot.url+'/login');await page.getByLabel('Username').fill('image-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');
@@ -28,29 +131,14 @@ try{
  const gallery=page.locator('.a-inline-gallery');
  const frame=gallery.locator('.a-gallery-image-frame');
  const geometry=async()=>{
-  const box=await gallery.boundingBox(),frameBox=await frame.boundingBox();
-  const measured=await page.locator('.a-messages').evaluate((node,observe)=>{
-   const scroll=node.scrollTop;
-   if(!observe)return{scroll,observation:{available:false}};
-   // One synchronous observation, in the existing scroll-read call. No text,
-   // resource URLs, state payloads, extra readiness wait or decode request.
-   let observation={available:false};
-   try{
-    const selected=node.querySelector('.a-inline-gallery');
-    const main=selected?.querySelector('.a-gallery-image-frame');
-    const image=selected?.querySelector('.a-inline-image img');
-    const pane=node.getBoundingClientRect();
-    const rect=element=>{if(!element)return null;const r=element.getBoundingClientRect();return{top:r.top,height:r.height,paneRelativeTop:r.top-pane.top}};
-    const notices=[...node.querySelectorAll('[data-part="work-projection-status"]')];
-    observation={available:true,pane:{top:pane.top,height:pane.height,scrollTop:node.scrollTop,clientHeight:node.clientHeight,scrollHeight:node.scrollHeight},gallery:rect(selected),frame:rect(main),workNotice:{count:notices.length,heights:notices.slice(0,4).map(element=>element.getBoundingClientRect().height),truncated:notices.length>4},selectedImage:image?{complete:image.complete,naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight}:null};
-   }catch{}
-   return{scroll,observation};
-  },swapPhase!==null);
+  const measured=await page.evaluate(()=>{const probe=window.imagePreviewProbe,value=probe.snapshot();return{value,problem:probe.compare(value,value)}});
+  assertPlacement(measured,'Geometry must be present and finite');
+  const {box,frame:frameBox,pane}=measured.value;
   if(swapPhase){
-   if(swapDiagnostic.records.length<3)swapDiagnostic.records.push({phase:swapPhase,original:{scroll:measured.scroll,galleryTop:box?.y??null,galleryHeight:box?.height??null,frameTop:frameBox?.y??null,frameHeight:frameBox?.height??null},observation:measured.observation});
+   if(swapDiagnostic.records.length<3)swapDiagnostic.records.push({phase:swapPhase,original:{scroll:pane.scrollTop,galleryTop:box.y,galleryHeight:box.height,frameTop:frameBox.y,frameHeight:frameBox.height},observation:measured.value});
    else swapDiagnostic.dropped++;
   }
-  return{box,frame:frameBox,scroll:measured.scroll};
+  return{box,frame:frameBox,scroll:pane.scrollTop,snapshot:measured.value};
  };
  await expect(gallery).toBeVisible();
  const single=await frame.boundingBox();assert.ok(single.width<=320);
@@ -104,15 +192,27 @@ try{
  const publication=await page.evaluate(id=>window.amplifier.getState().canvasArtifacts.find(row=>row.id===id),first.canvasId);
  assert.deepEqual(publication.publications,[{messageId:'origin',version:1}]);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false);
+ await page.locator('.a-messages').evaluate(installPreviewProbe);
+ swapDiagnostic.controls=await page.evaluate(()=>window.imagePreviewProbe.controls());
+ for(const result of swapDiagnostic.controls){
+  if(result.name.endsWith('-restored'))assert.equal(result.restorationExact,true,'Restore original scroll/style: '+result.name);
+  if(result.expected===null)assertPlacement(result,'Placement control: '+result.name);
+  else assert.throws(()=>assertPlacement(result,'Placement control: '+result.name),
+   error=>error instanceof assert.AssertionError&&error.actual===result.expected&&error.expected===null,
+   'The actual comparator must reject exactly '+result.name);
+ }
+ assert.equal(swapDiagnostic.controls.length,12,'All positive, negative and restoration controls ran');
  // Hold the resource request to measure the loading frame and scroll position.
- let release,entered;
- const waiting=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{release=resolve});
+ let entered;
+ const waiting=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{releaseSwapGate=resolve});
  await page.route('**/api/canvas/views/*/resource?*',async route=>{entered();await gate;await route.continue()});
  await gallery.scrollIntoViewIfNeeded();
  swapPhase='before';
  const before=await geometry();
  swapPhase=null;
  assert.ok(before.scroll>100,'Exercise image swapping from a scrolled reading position');
+ await page.evaluate(value=>window.imagePreviewProbe.begin(value),before.snapshot);
+ swapObserving=true;
  await gallery.getByRole('button',{name:'Image 2: Second concept',exact:true}).click();
  await waiting;
  await expect(gallery.getByText('Loading preview…')).toBeVisible();
@@ -120,14 +220,26 @@ try{
  const during=await geometry();
  swapPhase=null;
  assert.equal(during.box.height,before.box.height,'No collapse during delayed loading');
- assert.ok(Math.abs(during.scroll-before.scroll)<1,'No scroll jump during delayed loading');
- release();await page.unrouteAll({behavior:'wait'});
+ assertPlacement(await page.evaluate(([before,after])=>({problem:window.imagePreviewProbe.compare(before,after)}),
+  [before.snapshot,during.snapshot]),'No visible gallery/frame jump during delayed loading');
+ releaseSwapGate();await page.unrouteAll({behavior:'wait'});
  await expect(gallery.locator('.a-inline-image img')).toBeVisible();
+ // Decode readiness is not a layout-stability wait: the same baseline and
+ // first-violation observer remain active throughout, with no tolerance reset.
+ await expect.poll(()=>gallery.locator('.a-inline-image img').evaluate(image=>
+  image.complete&&image.naturalWidth>0&&image.naturalHeight>0)).toBe(true);
  swapPhase='released';
  const after=await geometry();
  swapPhase=null;
  assert.equal(after.box.height,before.box.height,'Landscape uses the same frame');
- assert.ok(Math.abs(after.scroll-before.scroll)<1,'No scroll jump when loading completes');
+ assertPlacement(await page.evaluate(([before,after])=>({problem:window.imagePreviewProbe.compare(before,after)}),
+  [before.snapshot,after.snapshot]),'No visible gallery/frame jump when loading completes');
+ swapDiagnostic.boundaries=await page.evaluate(()=>window.imagePreviewProbe.finish());
+ swapObserving=false;
+ assert.equal(swapDiagnostic.boundaries.dropped,0,'No lost mutation-boundary observations');
+ assert.equal(swapDiagnostic.boundaries.expired,false,'Observation stayed within its original action budget');
+ assertPlacement({problem:swapDiagnostic.boundaries.firstViolation?.problem??null},
+  'No gallery/frame movement at an observed mutation boundary');
  await page.route('**/api/canvas/views/*/resource?*',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Preview temporarily unavailable'})}));
  await gallery.getByRole('button',{name:'Image 3: Third concept',exact:true}).click();
  await expect(gallery.getByRole('button',{name:'Try preview again',exact:true})).toBeVisible();
@@ -166,5 +278,36 @@ try{
  await expect(page.locator('.a-image-generation').filter({hasText:'Image generated'})).toHaveCount(1);
  await control('stop');await page.reload();await expect(generating).toHaveCount(0);
  assert.deepEqual(errors,[]);
- console.log('Generated images passed: stable pending/result gallery slots, out-of-order completion, delayed landscape/portrait swaps without scroll movement, older saved appearance, automatic native receipt display without a model attach action, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
-}finally{try{console.log('GENERATED_IMAGE_SWAP_DIAGNOSTIC '+JSON.stringify(swapDiagnostic))}catch{try{console.error('GENERATED_IMAGE_SWAP_DIAGNOSTIC unavailable')}catch{}}await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)resolve();else{fixture.once('exit',resolve);setTimeout(resolve,5000)}})}
+ console.log('Generated images passed: stable pending/result gallery slots, out-of-order completion, delayed landscape/portrait swaps preserve visible gallery/frame positions with bounded mutation observations, older saved appearance, automatic native receipt display without a model attach action, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
+}catch(error){primaryFailure=error;throw error}
+finally{
+ const cleanupErrors=[];
+ const cleanup=async(label,work)=>{
+  let timer;
+  try{
+   await Promise.race([work(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Owned cleanup deadline: '+label)),5000)})]);
+   swapDiagnostic.cleanup.push({label,status:'completed'});
+  }catch(error){cleanupErrors.push(error);swapDiagnostic.cleanup.push({label,status:'incomplete'})}
+  finally{clearTimeout(timer)}
+ };
+ if(swapObserving)await cleanup('capture-and-disconnect',async()=>{swapDiagnostic.boundaries=await page.evaluate(()=>window.imagePreviewProbe.finish())});
+ // Releasing this owned network gate is not a replay of an app command.
+ releaseSwapGate?.();
+ if(page)await cleanup('routes',()=>page.unrouteAll({behavior:'wait'}));
+ if(browser)await cleanup('browser',()=>browser.close());
+ await cleanup('fixture',async()=>{
+  if(fixture.exitCode===null&&fixture.signalCode===null){
+   const exited=new Promise(resolve=>fixture.once('exit',resolve));
+   fixture.kill('SIGTERM');
+   await exited;
+  }
+  assert.equal(fixture.exitCode,0,'Owned fixture must exit normally');
+  assert.equal(fixture.signalCode,null,'Owned fixture must not require a signal kill');
+ });
+ if(fixture.exitCode===null&&fixture.signalCode===null){
+  fixture.kill('SIGKILL');
+  await cleanup('fixture-reap',()=>new Promise(resolve=>{if(fixture.exitCode!==null||fixture.signalCode!==null)resolve();else fixture.once('exit',resolve)}));
+ }
+ console.log('GENERATED_IMAGE_SWAP_DIAGNOSTIC '+JSON.stringify(swapDiagnostic));
+ if(cleanupErrors.length)throw new AggregateError([...(primaryFailure?[primaryFailure]:[]),...cleanupErrors],'Generated image owned cleanup incomplete');
+}
