@@ -135,11 +135,12 @@ class ConfigurationAuthority:
     def valid(self, grant, session):
         return (grant['status'] == 'active' and grant['workspace'] == session['workspace']
                 and grant['interruptionRevision'] == session.get('interruptionRevision', 0)
-                and (grant.get('expiresAt') is None or grant['expiresAt'] > time.time()))
+                and (grant.get('expiresAt') is None or grant['expiresAt'] > time.time())
+                and (not grant.get('accessRevision') or self.service.access_mode.full(session, grant['accessRevision'])))
 
     def snapshot(self, session, offset=0, limit=64):
         rows = self.rows(session['id'], offset, limit+1)
-        return {'sessionId': session['id'], 'grants': [{**row, 'usable': self.valid(row, session)} for row in rows[:limit]],
+        return {'sessionId': session['id'], 'accessMode': self.service.access_mode.snapshot(session)['mode'], 'grants': [{**row, 'usable': self.valid(row, session)} for row in rows[:limit]],
                 'nextOffset': offset+limit if len(rows)>limit else None, 'limit': limit, 'truncated': len(rows) > limit, 'effects': EFFECTS,
                 'scope': 'configuration only; no shell confinement or peer authority'}
 
@@ -245,6 +246,10 @@ class ConfigurationAuthority:
         if needed[1] != 'global' and workspace != source['workspace']:
             self.error('A configuration grant cannot change another workspace.')
         effect, scope = needed
+        if self.service.access_mode.full(source):
+            return {'accessRevision': self.service.access_mode.snapshot(source)['revision'],
+                    'sessionId': source['id'], 'workspace': source['workspace'],
+                    'interruptionRevision': source.get('interruptionRevision', 0), 'effect': effect, 'scope': scope}
         from .service import AppError
         grant, peer_grants, failure = None, [], None
         for candidate in self.eligible(source):
@@ -275,6 +280,14 @@ class ConfigurationAuthority:
                 self.check(item, workspace=workspace, scope=scope)
             return
         session = self.service._session(authority['sessionId'], hydrate=False)
+        if 'accessRevision' in authority:
+            if (not self.service.access_mode.full(session, authority['accessRevision'])
+                    or session['workspace'] != authority['workspace']
+                    or session.get('interruptionRevision', 0) != authority['interruptionRevision']
+                    or scope is not None and scope != authority['scope']
+                    or scope != 'global' and workspace is not None and str(workspace) != authority['workspace']):
+                self.error('Full access changed or the conversation was stopped or moved. The delayed change was not repeated.')
+            return
         grant = self.record(authority['grantId'])
         if (grant['sessionId'] != session['id'] or grant['revision'] != authority['grantRevision']
                 or not self.valid(grant, session) or authority['effect'] not in grant['effects']
@@ -332,19 +345,22 @@ class ConfigurationAuthority:
                         if row['id'] == grant['id']:
                             row['status'] = 'revoked'
                 else:
-                    if len(self.eligible(source)) >= 64:
+                    full = self.service.access_mode.full(source)
+                    if not full and len(self.eligible(source)) >= 64:
                         self.error('This conversation already has 64 active or pending configuration grants.', 409)
                     if args.get('expiresAt', time.time() + 1) <= time.time():
                         self.error('Choose a future expiry.', 400)
                     grant = {key: copy.deepcopy(args[key]) for key in ('effects', 'scopes', 'reason', 'expiresAt') if key in args}
                     grant.update(id='capability:' + str(uuid.uuid5(uuid.NAMESPACE_URL, identity)), sessionId=source['id'],
                         workspace=source['workspace'], interruptionRevision=source.get('interruptionRevision', 0), revision=1,
-                        status='active' if action == 'capability.grant' else 'pending', createdAt=time.time(),
+                        status='active' if action == 'capability.grant' or full else 'pending', createdAt=time.time(),
                         origin=origin, approvedBy='user' if action == 'capability.grant' else None,
                         authorizedInputIds=list((source.get('collaborationGeneration') or {}).get('inputIds', []))[:64])
                     from .collaboration import BINDING
                     grant['nativeWait'] = action == 'capability.request' and (BINDING.get() or {}).get('_configurationWait') is True
-                    if action == 'capability.request':
+                    if full and action == 'capability.request':
+                        grant.update(approvedBy='full-access', accessRevision=self.service.access_mode.snapshot(source)['revision'])
+                    if action == 'capability.request' and not full:
                         source.setdefault('approvals', []).append({'id': grant['id'], 'status': 'pending',
                             'title': 'Allow configuration changes?', 'prompt': grant['reason'],
                             'details': {'Changes': [EFFECTS[key] for key in grant['effects']], 'Scopes': grant['scopes'],

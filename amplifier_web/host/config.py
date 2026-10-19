@@ -127,6 +127,7 @@ class HostConfig:
     registry_home: Path
     config_home: Path | None = None
     global_only: bool = False
+    access_mode: str = "ask"
 
     @property
     def settings_file(self):
@@ -245,4 +246,6 @@ def read_config(workspace, *, home=None, shared_home=None, session_id=None, glob
         if isinstance(value, list): return [relocate(v) for v in value]
         if isinstance(value, str): return value.replace(str(home / "foundation"), str(registry_home))
         return value
-    return HostConfig(home, workspace, relocate(settings), registry_home, shared, global_only)
+    from ..access_mode import read_mode
+    return HostConfig(home, workspace, relocate(settings), registry_home, shared, global_only,
+                      read_mode(home, workspace, session_id))
