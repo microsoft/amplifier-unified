@@ -1690,3 +1690,153 @@ async def test_removal_read_never_backfills_a_preexisting_sparse_owner_reference
     assert state_records.load_owner(app.db, source['id']) == (legacy, controls)
     assert source['id'] not in [item['id'] for item in app._state['sessions']]
     assert removal_read_snapshot(app, row) == before
+
+
+# Proposed discovery contract. It reads existing journal rows; it never creates
+# an operation or infers a resource binding for an older unbound request.
+REMOVAL_LIST = 'workspace.environments.removal.list'
+
+
+def require_removal_list_contract():
+    from amplifier_web.service import ACTION_DEFINITIONS
+    assert REMOVAL_LIST in ACTION_DEFINITIONS, 'Passive original-removal discovery is not implemented'
+    return ACTION_DEFINITIONS[REMOVAL_LIST][1]
+
+
+def removal_list_args(app, row, **page):
+    return {**scope(app), 'id': row['id'], 'expectedRevision': row['revision'], **page}
+
+
+def test_removal_discovery_schema_contains_only_scope_resource_cas_and_bounded_page():
+    schema = require_removal_list_contract()
+    assert set(schema['properties']) == {
+        'workspaceId', 'sessionId', 'id', 'expectedRevision', 'offset', 'limit'}
+    assert set(schema['required']) == {'workspaceId', 'sessionId', 'id', 'expectedRevision'}
+    assert schema['properties']['offset']['minimum'] == 0
+    assert schema['properties']['limit']['minimum'] == 1
+    assert schema['properties']['limit']['maximum'] == 20
+    assert schema['additionalProperties'] is False
+
+
+@pytest.mark.parametrize('lifecycle', ['active', 'terminal', 'stopped'])
+async def test_removal_discovery_finds_original_after_later_stop_and_receipt_page(app, backend, monkeypatch, lifecycle):
+    require_removal_list_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    row = (await act(app, 'stop', row, 'later-stop-not-the-removal'))['resource']
+    assert row['lastOperation']['requestId'] == 'later-stop-not-the-removal'
+    sid = row['sessionId']
+    for index in range(105):
+        request, _ = app.operations.requests.begin(sid, 'workspace.environments.stop',
+            {'requestId': f'later-unrelated-{index}'}, {})
+        app.operations.requests.finish(request, 'completed', resourceId=row['id'])
+    assert original['requestId'] not in {r['requestId'] for r in app.operations.requests.list(sid)}
+    source, peer = app.state['sessions']
+    if lifecycle == 'terminal':
+        source['collaborationGeneration']['terminal'] = True
+    elif lifecycle == 'stopped':
+        source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    app.state['selectedSessionId'] = peer['id']
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    result = await agent(app, source, REMOVAL_LIST, removal_list_args(app, row), 'list-original')
+    assert result['accepted'] is True
+    assert result['result'] == {
+        'version': 1, 'sessionId': sid, 'id': row['id'], 'revision': row['revision'],
+        'items': [{'originalRequestId': original['requestId'],
+                   'state': 'outcome_unknown', 'binding': 'resource'}],
+        'nextOffset': None,
+    }
+    selected = result['result']['items'][0]
+    read = await agent(app, source, REMOVAL_READ, {
+        **removal_list_args(app, row), 'originalRequestId': selected['originalRequestId']}, 'read-discovered')
+    assert_unverified_removal_read(read['result'], row, original)
+    # Losing the passive response does not enqueue another operation. Re-reading
+    # the same exact snapshot returns the same projection without a write.
+    again = await agent(app, source, REMOVAL_LIST, removal_list_args(app, row), 'list-original')
+    assert again['result'] == result['result']
+    assert app.operations.requests.read(sid, original['requestId']) == original
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+async def test_removal_discovery_separates_unbound_rows_and_never_associates_other_resources(app, backend, monkeypatch):
+    require_removal_list_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    sid = row['sessionId']
+    peer = app.state['sessions'][1]
+    seeded = []
+    for request_id, root, binding in [
+        ('unbound-original', sid, None),
+        ('other-resource-original', sid, 'other-resource'),
+        ('peer-original', peer['id'], row['id']),
+    ]:
+        request, _ = app.operations.requests.begin(root, 'workspace.environments.remove',
+            {'requestId': request_id}, {})
+        request = app.operations.requests.finish(request, 'outcome_unknown',
+            **({'resourceId': binding} if binding is not None else {}),
+            message='SYNTHETIC_PRIVATE_RESULT', result={'key': 'SYNTHETIC_PRIVATE_CONFIG'})
+        seeded.append(request)
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    result = (await app.dispatch(REMOVAL_LIST, removal_list_args(app, row), include_state=False))['result']
+    assert result['items'] == [
+        {'originalRequestId': original['requestId'], 'state': 'outcome_unknown', 'binding': 'resource'},
+        {'originalRequestId': 'unbound-original', 'state': 'outcome_unknown', 'binding': 'unbound'},
+    ]
+    assert result['nextOffset'] is None and len(json.dumps(result).encode()) < 16384
+    assert 'SYNTHETIC_' not in json.dumps(result)
+    for request in seeded:
+        assert app.operations.requests.read(request['sessionId'], request['requestId']) == request
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+async def test_removal_discovery_is_bounded_and_pages_relevant_records_before_unrelated_noise(app, backend, monkeypatch):
+    require_removal_list_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    sid = row['sessionId']
+    # Historical data can contain multiple admissions. Discovery must enumerate,
+    # not choose the latest or silently manufacture a single original.
+    names = [original['requestId']]
+    for index in range(22):
+        name = f'historical-removal-{index:02}'
+        request, _ = app.operations.requests.begin(sid, 'workspace.environments.remove', {'requestId': name}, {})
+        app.operations.requests.finish(request, 'outcome_unknown', resourceId=row['id'])
+        names.append(name)
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    first = (await app.dispatch(REMOVAL_LIST, removal_list_args(app, row), include_state=False))['result']
+    assert len(first['items']) == 20 and first['nextOffset'] == 20
+    second = (await app.dispatch(REMOVAL_LIST, removal_list_args(app, row, offset=20, limit=20),
+                                 include_state=False))['result']
+    assert len(second['items']) == 3 and second['nextOffset'] is None
+    assert [x['originalRequestId'] for x in first['items'] + second['items']] == names
+    assert all(set(x) == {'originalRequestId', 'state', 'binding'}
+               and x['binding'] == 'resource' for x in first['items'] + second['items'])
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('refusal', ['peer', 'child', 'foreign-resource', 'stale-revision'])
+async def test_removal_discovery_refuses_wrong_owner_or_changed_resource_before_effects(app, backend, monkeypatch, refusal):
+    require_removal_list_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source, peer = app.state['sessions']
+    peer['collaborationGeneration'] = {'id': 'peer-generation', 'inputIds': ['peer-input'], 'terminal': False}
+    args, transport = removal_list_args(app, row), {}
+    caller = source
+    if refusal == 'peer':
+        caller = peer
+    elif refusal == 'child':
+        transport['_runtimeSessionId'] = 'synthetic-child'
+    elif refusal == 'foreign-resource':
+        args['id'] = '00000000-0000-4000-8000-000000000002'
+    else:
+        args['expectedRevision'] -= 1
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError) as caught:
+        await agent(app, caller, REMOVAL_LIST, args, 'refused-discovery', **transport)
+    assert (caught.value.status, str(caught.value)) in {
+        (403, 'Removal inspection requires the recorded root owner.'),
+        (409, 'Removal inspection changed or is busy.'),
+    }
+    assert app.operations.requests.read(row['sessionId'], original['requestId']) == original
+    assert calls == [] and removal_read_snapshot(app, row) == before

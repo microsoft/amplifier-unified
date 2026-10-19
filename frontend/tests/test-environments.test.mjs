@@ -200,3 +200,167 @@ test('verified setup completion reuses original request and remains owner scoped
   assert.equal(button(root,'Clean up interrupted setup').props.disabled,true);
  }finally{await act(async()=>root?.unmount())}
 });
+
+// Proposed panel contract, deliberately unimplemented on the frozen API base.
+// Ordinary panel activation still has its existing read. The inspection journey
+// must add ONLY passive list/read calls, never mutate() or a hidden refresh.
+const removalList='workspace.environments.removal.list',removalRead='workspace.environments.removal.read';
+const removalResource={id:'env',sessionId:'a',workspaceId:'w',revision:8,status:'stopped',
+ recovery:{available:true},lastOperation:{requestId:'later-stop',action:'workspace.environments.stop',state:'completed'}};
+const removalDiscovery=(overrides={})=>({version:1,sessionId:'a',id:'env',revision:8,
+ items:[{originalRequestId:'original-remove',state:'outcome_unknown',binding:'resource'}],
+ nextOffset:null,...overrides});
+const removalHeld=(overrides={})=>({version:1,sessionId:'a',id:'env',revision:8,
+ original:{requestId:'original-remove',state:'outcome_unknown'},status:'held',
+ code:'original_binding_unverified',executor:'unobserved',physical:'not_observed',
+ continuationAvailable:false,riskDecisionAvailable:false,...overrides});
+const inspectArgs={workspaceId:'w',sessionId:'a',id:'env',expectedRevision:8};
+const originalArgs={...inspectArgs,originalRequestId:'original-remove'};
+const requireButton=(root,label)=>{const found=button(root,label);assert.ok(found,`Missing actual component control: ${label}`);return found};
+
+for(const readOnly of [false,true])test(`original removal inspection is passive with readOnly=${readOnly} and a later stop`,async()=>{
+ let root;const calls=[],pending={action:'workspace.environments.remove',args:{requestId:'browser-pending-not-original'},id:'saved-command'};
+ storage.set(key,JSON.stringify({profileId:'linux-python',command:'keep draft',pending}));const saved=storage.get(key);
+ const dispatch=async(action,args,meta)=>{
+  calls.push({action,args,...(meta?{meta}:{})});
+  if(action==='workspace.environments.read'){assert.equal(calls.length,1,'inspection must not refresh');return accepted({items:[removalResource],capability:{status:'unavailable'}})}
+  if(action===removalList)return accepted(removalDiscovery());
+  if(action===removalRead)return accepted(removalHeld());
+  throw Error('Unexpected effect during passive inspection: '+action);
+ };
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true,readOnly}))});
+  const inspect=requireButton(root,'Inspect original removal');assert.notEqual(inspect.props.disabled,true);
+  await act(async()=>inspect.props.onClick());
+  await act(async()=>requireButton(root,'Read original removal original-remove').props.onClick());
+  assert.deepEqual(calls,[read,{action:removalList,args:inspectArgs},{action:removalRead,args:originalArgs}]);
+  assert.match(text(root.toJSON()),/Removal remains held/);assert.match(text(root.toJSON()),/Original request: original-remove/);
+  assert.match(text(root.toJSON()),/outcome unknown/);assert.match(text(root.toJSON()),/not observed/i);
+  assert.equal(button(root,'Continue removal'),undefined);assert.equal(button(root,'Replace removal'),undefined);
+  assert.equal(storage.get(key),saved,'passive read must not overwrite/replay a pending effect or draft');
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const problem of ['unbound','foreign-root','wrong-resource','stale-revision'])test(`discovery ${problem} cannot supply a guessed original`,async()=>{
+ let root;const calls=[];let value=removalDiscovery();
+ if(problem==='unbound')value=removalDiscovery({items:[{originalRequestId:'unbound-original',state:'outcome_unknown',binding:'unbound'}]});
+ if(problem==='foreign-root')value.sessionId='other-root';
+ if(problem==='wrong-resource')value.id='other-env';
+ if(problem==='stale-revision')value.revision=7;
+ const dispatch=async(action,args)=>{
+  calls.push({action,args});
+  if(action==='workspace.environments.read'){assert.equal(calls.length,1);return accepted({items:[removalResource]})}
+  if(action===removalList)return accepted(value);
+  throw Error('No original read or effect may follow invalid/unbound discovery: '+action);
+ };
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  await act(async()=>requireButton(root,'Inspect original removal').props.onClick());
+  assert.equal(root.root.findAllByType('button').filter(n=>text(n).startsWith('Read original removal')).length,0);
+  assert.match(text(root.toJSON()),problem==='unbound'?/not associated with this environment/i:/changed|another|does not match/i);
+  assert.deepEqual(calls,[read,{action:removalList,args:inspectArgs}]);
+  assert.equal(button(root,'Continue removal'),undefined);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('lost passive reply requires an explicit re-read, preserving the original effect receipt',async()=>{
+ let root;const calls=[];let reads=0;
+ storage.set(key,JSON.stringify({pending:{id:'effect-command',action:'workspace.environments.remove',args:{requestId:'old-effect'}},command:'saved draft'}));
+ const saved=storage.get(key);
+ const dispatch=async(action,args)=>{
+  calls.push({action,args});
+  if(action==='workspace.environments.read'){assert.equal(calls.length,1);return accepted({items:[removalResource]})}
+  if(action===removalList)return accepted(removalDiscovery());
+  if(action===removalRead){if(++reads===1)throw Error('Lost passive response');return accepted(removalHeld())}
+  throw Error('Unexpected effect: '+action);
+ };
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  await act(async()=>requireButton(root,'Inspect original removal').props.onClick());
+  await act(async()=>requireButton(root,'Read original removal original-remove').props.onClick());
+  assert.match(text(root.toJSON()),/Lost passive response/);assert.equal(reads,1);assert.equal(storage.get(key),saved);
+  await act(async()=>requireButton(root,'Read original removal original-remove').props.onClick());
+  assert.deepEqual(calls,[read,{action:removalList,args:inspectArgs},
+   {action:removalRead,args:originalArgs},{action:removalRead,args:originalArgs}]);
+  assert.match(text(root.toJSON()),/Removal remains held/);assert.equal(storage.get(key),saved);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const transition of ['hidden','new-owner','unmounted'])for(const failed of [false,true])test(`late passive ${failed?'error':'result'} after ${transition} is not applied or retried`,async()=>{
+ let root,settle;const calls=[];
+ const dispatch=(action,args)=>{
+  calls.push({action,args});
+  if(action==='workspace.environments.read')return Promise.resolve(accepted({items:args.sessionId==='a'?[removalResource]:[]}));
+  if(action===removalList)return Promise.resolve(accepted(removalDiscovery()));
+  if(action===removalRead)return new Promise((resolve,reject)=>{settle=()=>failed?reject(Error('STALE PASSIVE ERROR')):resolve(accepted(removalHeld({code:'STALE_PASSIVE_RESULT'})))});
+  throw Error('Unexpected effect: '+action);
+ };
+ const props={workspaceId:'w',sessionId:'a',act:dispatch,active:true};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,props))});
+  await act(async()=>requireButton(root,'Inspect original removal').props.onClick());
+  await act(async()=>{requireButton(root,'Read original removal original-remove').props.onClick()});
+  assert.equal(typeof settle,'function','actual read must be in flight');
+  if(transition==='unmounted')await act(async()=>root.unmount());
+  else await act(async()=>root.update(React.createElement(TaskEnvironments,{...props,
+   ...(transition==='hidden'?{active:false}:{sessionId:'other'})})));
+  const before=calls.length;
+  await act(async()=>settle());
+  assert.equal(calls.length,before,'late reply must not refresh, retry or mutate');
+  if(transition!=='unmounted')assert.doesNotMatch(text(root.toJSON()),/STALE|Removal remains held/);
+  assert.equal(calls.filter(c=>c.action===removalRead).length,1);
+  assert.ok(calls.every(c=>['workspace.environments.read',removalList,removalRead].includes(c.action)));
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('inspection coexists with the integrated artifact-export and ordinary removal controls',async()=>{
+ // PR831 supplies the export control on the later integrated base. This test
+ // deliberately requires it; do not fake it or count this preparation as green.
+ let root;const calls=[];
+ const dispatch=async(action,args,meta)=>{
+  calls.push({action,args,...(meta?{meta}:{})});
+  if(action==='workspace.environments.read')return accepted({items:[removalResource],capability:{status:'unavailable'}});
+  if(action===removalList)return accepted(removalDiscovery());
+  if(action===removalRead)return accepted(removalHeld());
+  if(action==='workspace.environments.exportArtifacts')return accepted({request:{state:'completed'}});
+  throw Error('Unexpected destructive action: '+action);
+ };
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  const exportControl=requireButton(root,'Save artifact evidence');
+  assert.equal(exportControl.props.disabled,false);
+  await act(async()=>requireButton(root,'Remove environment…').props.onClick());
+  await act(async()=>requireButton(root,'Keep environment').props.onClick());
+  assert.deepEqual(calls,[read],'opening/cancelling removal is not inspection or removal');
+  await act(async()=>requireButton(root,'Inspect original removal').props.onClick());
+  await act(async()=>requireButton(root,'Read original removal original-remove').props.onClick());
+  assert.deepEqual(calls,[read,{action:removalList,args:inspectArgs},{action:removalRead,args:originalArgs}]);
+  await act(async()=>requireButton(root,'Save artifact evidence').props.onClick());
+  const effects=calls.filter(c=>!['workspace.environments.read',removalList,removalRead].includes(c.action));
+  assert.equal(effects.length,1);assert.equal(effects[0].action,'workspace.environments.exportArtifacts');
+  assert.equal(effects[0].args.id,'env');assert.equal(effects[0].args.expectedRevision,8);
+  assert.equal(effects[0].args.sessionId,'a');assert.equal(effects[0].args.workspaceId,'w');
+  assert.ok(effects[0].args.requestId);assert.ok(effects[0].meta.id);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('removal discovery paging does not choose an original or refresh the environment',async()=>{
+ let root;const calls=[];
+ const dispatch=async(action,args)=>{
+  calls.push({action,args});
+  if(action==='workspace.environments.read'){assert.equal(calls.length,1);return accepted({items:[removalResource]})}
+  if(action===removalList)return accepted(args.offset===20
+   ?removalDiscovery({items:[{originalRequestId:'later-original',state:'outcome_unknown',binding:'resource'}]})
+   :removalDiscovery({items:Array.from({length:20},(_,i)=>({originalRequestId:'original-'+i,state:'outcome_unknown',binding:'resource'})),nextOffset:20}));
+  throw Error('Paging is not permission to read or repeat an operation: '+action);
+ };
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  await act(async()=>requireButton(root,'Inspect original removal').props.onClick());
+  await act(async()=>requireButton(root,'More removal requests').props.onClick());
+  assert.ok(requireButton(root,'Read original removal later-original'));
+  assert.deepEqual(calls,[read,{action:removalList,args:inspectArgs},
+   {action:removalList,args:{...inspectArgs,offset:20,limit:20}}]);
+  assert.equal(button(root,'More removal requests'),undefined);
+ }finally{await act(async()=>root?.unmount())}
+});
