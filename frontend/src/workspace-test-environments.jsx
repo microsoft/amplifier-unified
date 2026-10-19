@@ -13,21 +13,52 @@ function storageSize(value){
  return `${size.toLocaleString(undefined,{maximumFractionDigits:1})} ${units[unit]}`;
 }
 
+const removalStates=new Set(['admitting','running','completed','failed','outcome_unknown']);
+const exactKeys=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+const boundedRemoval=(value,bound)=>new TextEncoder().encode(JSON.stringify(value)).length<=bound;
+function removalPage(value,target,offset){
+ if(!exactKeys(value,['version','sessionId','id','revision','items','nextOffset'])||value.version!==1||
+  value.sessionId!==target.sessionId||value.id!==target.id||value.revision!==target.expectedRevision||
+  !Array.isArray(value.items)||value.items.length>20||!boundedRemoval(value,16384)||
+  !(value.nextOffset===null||(value.items.length===20&&Number.isSafeInteger(value.nextOffset)&&value.nextOffset===offset+20))||
+  value.items.some(row=>!exactKeys(row,['originalRequestId','state','binding'])||
+   typeof row.originalRequestId!=='string'||!row.originalRequestId||row.originalRequestId.length>200||
+   !removalStates.has(row.state)||!['resource','unbound'].includes(row.binding))||
+  new Set(value.items.map(row=>row.originalRequestId)).size!==value.items.length)
+  throw Error('Removal discovery changed or does not match this environment. Inspect it again.');
+ return value;
+}
+function removalResult(value,target){
+ if(!exactKeys(value,['version','sessionId','id','revision','original','status','code','executor','physical','continuationAvailable','riskDecisionAvailable'])||
+  value.version!==1||value.sessionId!==target.sessionId||value.id!==target.id||value.revision!==target.expectedRevision||
+  !exactKeys(value.original,['requestId','state'])||value.original.requestId!==target.originalRequestId||
+  !removalStates.has(value.original.state)||value.status!=='held'||
+  !['original_binding_missing','original_binding_unverified'].includes(value.code)||
+  value.executor!=='unobserved'||value.physical!=='not_observed'||value.continuationAvailable!==false||
+  value.riskDecisionAvailable!==false||!boundedRemoval(value,4096))
+  throw Error('Removal result changed or does not match this environment. Inspect it again.');
+ return value;
+}
+
 export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
  const form=useId(),visit=useRef(0),inFlight=useRef(false),live=useRef(active),mounted=useRef(false);
  const key='amplifier-test-environment:'+workspaceId+':'+sessionId;
  const [draft,setDraft]=useState(()=>{try{return JSON.parse(sessionStorage.getItem(key))||{profileId:'linux-python',command:'',pending:null}}catch{return {profileId:'linux-python',command:'',pending:null}}});
  const [page,setPage]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[request,setRequest]=useState(null),[removing,setRemoving]=useState(null),[fullCopy,setFullCopy]=useState(false),[checkOutput,setCheckOutput]=useState(null);
+ const [inspection,setInspection]=useState(null),inspectionEpoch=useRef(0),pageScope=useRef(null),current=useRef(null);
+ current.current={key,active,page};
  const pending=useRef(draft.pending);
  const retain=(value,required=false)=>{try{sessionStorage.setItem(key,JSON.stringify(value))}catch{if(required)return false}pending.current=value.pending;if(mounted.current)setDraft(value);return true};
  const refresh=async()=>{
+  inspectionEpoch.current++;setInspection(null);
   const token=++visit.current;
-  try{const value=unwrap(await act('workspace.environments.read',{workspaceId,sessionId}));if(live.current&&token===visit.current){setPage(value);setRequest(null);setError('')}}
+  try{const value=unwrap(await act('workspace.environments.read',{workspaceId,sessionId}));if(live.current&&token===visit.current){inspectionEpoch.current++;setInspection(null);pageScope.current=key;setPage(value);setRequest(null);setError('')}}
   catch(e){if(live.current&&token===visit.current)setError(e.message)}
  };
  // Hidden panels still own pending requests; only unmount ends their UI lifetime.
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  useEffect(()=>{live.current=active;if(active)refresh();return()=>{live.current=false;visit.current++}},[active,workspaceId,sessionId]);
+ useEffect(()=>{inspectionEpoch.current++;setInspection(null);return()=>{inspectionEpoch.current++}},[active,workspaceId,sessionId]);
  const waiting=(page?.checks||[]).some(row=>['queued','starting','preparing','checking','stopping','removing'].includes(row.status))||['accepted','running'].includes(page?.setup?.operation?.state)||['accepted','running'].includes(page?.setup?.operation?.cleanup?.state);
  useEffect(()=>{if(!active||!waiting)return;const timer=setInterval(()=>{if(!inFlight.current)refresh()},5000);return()=>clearInterval(timer)},[active,waiting,workspaceId,sessionId]);
  const mutate=async(action,args={})=>{
@@ -51,6 +82,34 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
   const token=visit.current;
   try{const value=unwrap(await act('workspace.tests.result',{workspaceId,sessionId,requestId:id,offset}));if(live.current&&token===visit.current)setCheckOutput({id,...value})}
   catch(e){if(live.current&&token===visit.current)setError(e.message)}
+ };
+ const inspectable=row=>active&&pageScope.current===key&&(!row.sessionId||row.sessionId===sessionId)&&(!row.workspaceId||row.workspaceId===workspaceId)&&Number.isSafeInteger(row.revision)&&row.revision>0;
+ const inspectRemoval=async(row,originalRequestId=null,offset=0)=>{
+  if(!inspectable(row)||busy)return;
+  if(originalRequestId!==null&&(!inspection||inspection.key!==key||inspection.id!==row.id||
+   inspection.revision!==row.revision||!inspection.items.some(item=>item.binding==='resource'&&item.originalRequestId===originalRequestId)))return;
+  const token=visit.current,epoch=++inspectionEpoch.current,target={workspaceId,sessionId,id:row.id,expectedRevision:row.revision};
+  const previous=inspection?.key===key&&inspection.id===row.id&&inspection.revision===row.revision?inspection:null;
+  setInspection({key,id:row.id,revision:row.revision,items:previous?.items||[],nextOffset:previous?.nextOffset??null,result:null,error:'',busy:true,token});
+  const stillCurrent=()=>mounted.current&&current.current.active&&current.current.key===key&&
+   token===visit.current&&epoch===inspectionEpoch.current&&pageScope.current===key&&
+   current.current.page?.items?.some(item=>item.id===row.id&&item.revision===row.revision&&
+    (!item.sessionId||item.sessionId===sessionId)&&(!item.workspaceId||item.workspaceId===workspaceId));
+  try{
+   const result=unwrap(await act(originalRequestId===null?'workspace.environments.removal.list':'workspace.environments.removal.read',
+    originalRequestId===null?{...target,...(offset?{offset,limit:20}:{})}:{...target,originalRequestId}));
+   if(!stillCurrent())return;
+   if(originalRequestId===null){
+    const value=removalPage(result,target,offset);
+    setInspection({key,id:row.id,revision:row.revision,items:value.items,nextOffset:value.nextOffset,result:null,error:'',busy:false,token});
+   }else{
+    const value=removalResult(result,{...target,originalRequestId});
+    setInspection({key,id:row.id,revision:row.revision,items:previous.items,nextOffset:previous.nextOffset,result:value,error:'',busy:false,token});
+   }
+  }catch(e){
+   if(stillCurrent())setInspection({key,id:row.id,revision:row.revision,items:originalRequestId===null?[]:previous.items,
+    nextOffset:originalRequestId===null?null:previous.nextOffset,result:null,error:e.message||'The passive read was not confirmed. Read it again explicitly.',busy:false,token});
+  }
  };
  return <section aria-label="Test environments" data-part="test-environments">
   <h4>Test environments</h4>
@@ -116,6 +175,23 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    {savedBytes!==null&&<p>Latest saved copy: {savedBytes}. {accounting.policy==='full'?'Includes a complete environment export.':'Includes the source snapshot, working folder and artifacts.'} These files stay saved until deliberately removed.</p>}
    {row.status==='removed'&&savedBytes===null&&<p>Previously saved files and results are kept. Their storage size has not been verified.</p>}
    <details><summary>Environment details</summary><pre className="a-state-view">{JSON.stringify(row,null,2)}</pre></details>
+   <button type="button" className="a-soft" disabled={!inspectable(row)||busy||inspection?.busy&&inspection.id===row.id} onClick={()=>inspectRemoval(row)}>Inspect original removal</button>
+   {active&&inspection?.key===key&&inspection.id===row.id&&inspection.revision===row.revision&&inspection.token===visit.current&&<section aria-label="Original removal inspection">
+    {inspection.busy&&<p role="status">Reading retained removal records…</p>}
+    {inspection.error&&<p role="alert">{inspection.error}</p>}
+    {!inspection.busy&&!inspection.error&&inspection.items.length===0&&<p>No original removal request is recorded for this environment.</p>}
+    <ul>{inspection.items.map(item=><li key={item.originalRequestId}>
+     {item.binding==='resource'?<button type="button" className="a-link" disabled={inspection.busy} onClick={()=>inspectRemoval(row,item.originalRequestId)}>Read original removal {item.originalRequestId}</button>:
+      <p>Request {item.originalRequestId} is not associated with this environment. Its outcome remains held.</p>}
+    </li>)}</ul>
+    {inspection.nextOffset!==null&&<button type="button" className="a-link" disabled={inspection.busy} onClick={()=>inspectRemoval(row,null,inspection.nextOffset)}>More removal requests</button>}
+    {inspection.result&&<div role="status">
+     <p>Removal remains held. Original request: {inspection.result.original.requestId}</p>
+     <p>Recorded outcome: {inspection.result.original.state.replaceAll('_',' ')}.</p>
+     <p>{inspection.result.code==='original_binding_missing'?'The original resource binding is missing.':'The original binding evidence is incomplete.'} No removal was repeated.</p>
+     <p>The executor and current physical environment were not observed. Inspection does not authorize continuation or removal.</p>
+    </div>}
+   </section>}
    {!readOnly&&row.status!=='removed'&&<>
     <button type="button" className="a-soft" disabled={cleanupBlocked} onClick={()=>mutate('workspace.environments.reconcile',{id:row.id,expectedRevision:row.revision})}>Check and recover</button>
     <p>Checks the current environment without rerunning commands. Releases ownership only when its absence is confirmed.</p>
