@@ -332,7 +332,7 @@ async def test_same_capture_reconsiders_binding_after_existing_index_commit(sour
 async def test_unavailable_index_revision_never_attests_existing_rows(source, monkeypatch):
     source.call('one')
     await source.diagnostics.flush()
-    monkeypatch.setattr(event_window, 'binding_revision', lambda home: None)
+    monkeypatch.setattr(event_window, 'binding_revision', lambda home, *args, **kwargs: None)
     assert not (await source.page())['_boundWork']
 
 
@@ -342,7 +342,7 @@ async def test_receipt_snapshot_observes_writer_without_relabelling_old_rows(sou
     source.call('one')
     await source.diagnostics.flush()
     connect = event_window.sqlite3.connect
-    committed, closed = [], []
+    committed, closed, opened, queried = [], [], [], []
 
     def commit():
         # Delete real indexed ownership records without changing canonical bytes.
@@ -357,6 +357,8 @@ async def test_receipt_snapshot_observes_writer_without_relabelling_old_rows(sou
             return getattr(self.db, name)
         def execute(self, sql, *args):
             result = self.db.execute(sql, *args)
+            if sql.startswith('SELECT event,stream'):
+                queried.append(True)
             if boundary == 'authority-query' and sql.startswith('SELECT event,stream') and not committed:
                 commit()
             return result
@@ -367,12 +369,15 @@ async def test_receipt_snapshot_observes_writer_without_relabelling_old_rows(sou
         def close(self):
             self.db.close()
             closed.append(True)
-            if boundary == 'teardown' and not committed:
+            if boundary == 'teardown' and queried and not committed:
                 commit()
 
     def observed_connect(database, *args, **kwargs):
         db = connect(database, *args, **kwargs)
-        return ObservedConnection(db) if str(database).endswith('?mode=ro') else db
+        if str(database).endswith('?mode=ro'):
+            opened.append(True)
+            return ObservedConnection(db)
+        return db
 
     monkeypatch.setattr(event_window.sqlite3, 'connect', observed_connect)
     if boundary == 'initialization':
@@ -381,12 +386,14 @@ async def test_receipt_snapshot_observes_writer_without_relabelling_old_rows(sou
         page = event_window.read_window(source.session, window_key='writer-boundary',
             cursor_key=b'k' * 32, cache_home=source.service.data_dir)
         assert page['_boundWork'] == []
-        assert page['_bindingRevision'] == event_window.binding_revision(source.service.data_dir)
+        assert page['_bindingRevision'] == event_window.binding_revision(source.service.data_dir, source.session)
     else:
         with pytest.raises(event_window.StaleWindow, match='binding index changed'):
             event_window.read_window(source.session, window_key='writer-boundary',
                 cursor_key=b'k' * 32, cache_home=source.service.data_dir)
-    assert committed == [boundary] and closed == [True]
+    assert committed == [boundary] and opened and closed == opened
+    if boundary != 'initialization':
+        assert queried  # Not an earlier token-only connection's close.
 
 
 @pytest.mark.asyncio
@@ -1240,7 +1247,7 @@ async def test_cumulative_proof_real_receipts_bind_recent_and_many_small_calls(s
     assert len(result['bound']) == calls
     assert result['pageReceipts'] == [p['_proof']['receiptDigest'] for p in pages]
     assert result['sourceStamp'] == pages[0]['_proof']['sourceStamp']
-    assert result['indexRevision'] == event_window.binding_revision(source.service.data_dir)
+    assert result['indexRevision'] == event_window.binding_revision(source.service.data_dir, source.session)
     one = next(row for row in result['bound'] if row['toolCallId'] == 'one')
     text, offset = [], 0
     while True:
@@ -1321,7 +1328,7 @@ async def test_cumulative_proof_refuses_incomplete_or_mutated_evidence(source, c
         elif change == 'source':
             proof['sourceStamp'][4] += 1
         elif change == 'index':
-            proof['indexRevision'][0][4] += 1
+            proof['indexRevision']['revision'] += 1
         elif change == 'record-hash':
             proof['records'][0]['sha256'] = '0' * 64
         elif change == 'attestation':
@@ -1483,7 +1490,7 @@ async def test_proof_validator_checks_signed_generation_chain_not_only_receipt(s
     if change == 'source':
         second['_proof']['sourceStamp'][4] += 1
     elif change == 'index':
-        second['_proof']['indexRevision'][0][4] += 1
+        second['_proof']['indexRevision']['revision'] += 1
     else:
         bad = pages[0]['before'][:-3] + 'xyz'
         pages[0]['before'] = pages[0]['_proof']['nextBefore'] = bad
@@ -1982,7 +1989,7 @@ async def test_explicit_proof_joins_actual_queued_receipts_without_fixture_flush
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('mutation', ['other-owner', 'delivery', 'checkpoint', 'same-owner',
+@pytest.mark.parametrize('mutation', ['other-owner', 'delivery', 'checkpoint', 'empty-flush', 'same-owner',
                                      'delete-reinsert', 'owner-aba'])
 async def test_owner_authority_survives_only_unrelated_index_changes(source, mutation):
     import sqlite3
@@ -2022,6 +2029,9 @@ async def test_owner_authority_survives_only_unrelated_index_changes(source, mut
                 db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
             finally:
                 db.close()
+        elif mutation == 'empty-flush':
+            assert not source.diagnostics.pending
+            await source.diagnostics.flush()
         if mutation in {'same-owner', 'delete-reinsert', 'owner-aba'}:
             with pytest.raises(ValueError, match='root proof'):
                 owner.proof_nodes('root', proof_id)

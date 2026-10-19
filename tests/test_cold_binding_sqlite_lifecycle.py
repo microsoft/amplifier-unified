@@ -171,7 +171,12 @@ async def test_controlled_writer_cannot_redeem_old_binding_revision(lifecycle):
         record['oldRow'] = _row(reader.execute(QUERY, (RECORD_ID,)))
         before = _observe(home, record, 'after-old-reader-first-records-query')
         assert record['oldRow'] == OLD_ROW and before is not None
-        page = {'_bindingRevision': before}
+        # Physical churn remains measured above. Field authority now uses a
+        # fresh scoped token, never the physical diagnostic stamp as a fallback.
+        source = {'id': 'synthetic-session', 'workspace': 'synthetic-workspace'}
+        authority = event_window.binding_revision(home, source)
+        assert authority is not None
+        page = {'_bindingRevision': authority, 'source': source}
         predicate_owner = SimpleNamespace(service=lifecycle.service)
         record['currentBeforeWriter'] = WorkWindows._binding_current(predicate_owner, page)
         assert record['currentBeforeWriter'] is True
