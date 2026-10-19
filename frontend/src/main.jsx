@@ -362,6 +362,25 @@ function App(){
  const rawConversationRows=useMemo(()=>withArtifactRows(conversationWorkRows(messages,workPlacement)),[messages,workPlacement]);
  const interim=useInterimReplies(rawConversationRows,execution,shell.composition?.presentation?.collapseInterimReplies===true,session?.id,messagesPane,state?.view?.executionExpanded,act);
  const conversationRows=interim.rows;
+ const [recordingTarget,setRecordingTarget]=useState(null);
+ useLayoutEffect(()=>{
+  if(!recordingTarget)return;
+  if(recordingTarget.sessionId!==session?.id){setRecordingTarget(null);return}
+  const element=document.getElementById('work-'+recordingTarget.group);
+  if(element){element.scrollIntoView({block:'center'});setRecordingTarget(null)}
+ },[recordingTarget,session?.id,state?.view?.executionExpanded]);
+ const openRecordings=async requested=>{
+  const observations=new Set(execution.turns.filter(turn=>turn.observationWindow).map(turn=>turn.id));
+  const candidates=conversationRows.filter(row=>row.kind==='work'&&row.items.some(item=>observations.has(item.turnId)));
+  const row=candidates.find(row=>row.items.some(item=>item.turnId===requested))||candidates.at(-1);
+  if(!row)return;
+  const group=row.items.some(item=>item.turnId===requested)?requested:row.items.filter(item=>observations.has(item.turnId)).at(-1).turnId;
+  const expanded=new Set(state.view?.executionExpanded||[]);
+  for(const key of [row.interim?row.id:'work:'+row.items[0].turnId,'turn:'+group]){expanded.delete('closed:'+key);expanded.add(key)}
+  await act('view.update',{patch:{executionExpanded:[...expanded]}});
+  setRecordingTarget({sessionId:session?.id,group});
+ };
+
  const readingWindowLoader=useRef(null),readingReference=useRef(null);
  readingReference.current=(id,messageId)=>session?.id===id?messages.find(row=>row.id===messageId)?.sourceReference:null;
  readingWindowLoader.current=async(id,messageId,isCurrent,reference)=>{
@@ -599,7 +618,7 @@ function App(){
   },
  });
  const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
- const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat};
+ const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings};
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:settingsState;
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
  return <ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
