@@ -701,3 +701,194 @@ def test_residual_helper_expected_counts_match_the_two_unchanged_modules():
         assert count == expected
     assert set(adapter.RESIDUAL_HELPER_COUNTS) == {
         'tests.test_integration_clients', 'tests.test_integration_checks'}
+
+
+def prepared_wheel_directory(tmp_path):
+    root, evidence = tmp_path / 'wheels', tmp_path / 'evidence'
+    root.mkdir()
+    evidence.mkdir()
+    wheel = fake_wheel(root / 'example-1.0-py3-none-any.whl', 'example')
+    # Exact default output of the pinned uv build, not arbitrary metadata.
+    (root / '.gitignore').write_bytes(b'*')
+    return root, evidence, wheel
+
+
+@pytest.mark.parametrize('stage', ['root-guest', 'installed-pwa'])
+def test_fixed_wheel_directory_keeps_archives_and_known_metadata(tmp_path, stage):
+    root, evidence, wheel = prepared_wheel_directory(tmp_path)
+    archives = adapter.wheel_archive_hashes([wheel], evidence)
+    baseline = adapter.verify_wheel_directory(root, archives, evidence)
+    assert archives == {wheel.name: adapter.digest(wheel)}
+    assert baseline == {
+        wheel.name: {'kind': 'file', 'sha256': adapter.digest(wheel)},
+        '.gitignore': {'kind': 'file', 'sha256': adapter.digest(root / '.gitignore')},
+    }
+    # Exercise the actual capture/comparison path, with no mocked digest,
+    # directory inventory or attestation. The same invariant serves both stages.
+    preparation = {'stage': stage, 'wheels': archives, 'wheelDirectory': baseline}
+    assert adapter.verify_wheel_directory(
+        root, preparation['wheels'], evidence, baseline=preparation['wheelDirectory']) == baseline
+    assert not (evidence / 'wheel-integrity-failure.json').exists()
+    # The old comparison rejects this unchanged, valid directory.
+    assert adapter.inventory(root) != archives
+
+
+@pytest.mark.parametrize('stage', ['root-guest', 'installed-pwa'])
+@pytest.mark.parametrize('change', [
+    'wheel-missing', 'wheel-extra', 'wheel-changed', 'wheel-substituted',
+    'metadata-missing', 'metadata-added', 'metadata-changed', 'metadata-newline',
+    'wheel-symlink', 'metadata-symlink', 'escaping-symlink', 'nested-symlink',
+    'directory', 'fifo', 'wheel-directory', 'forged-baseline',
+])
+def test_fixed_wheel_directory_refuses_drift_before_and_after_freeze(tmp_path, stage, change):
+    root, evidence, wheel = prepared_wheel_directory(tmp_path)
+    archives = adapter.wheel_archive_hashes([wheel], evidence)
+    baseline = adapter.verify_wheel_directory(root, archives, evidence)
+    if change == 'wheel-missing':
+        wheel.unlink()
+    elif change == 'wheel-extra':
+        fake_wheel(root / 'extra.whl', 'extra')
+    elif change == 'wheel-changed':
+        wheel.write_bytes(b'changed wheel bytes')
+    elif change == 'wheel-substituted':
+        wheel.rename(root / 'substitute.whl')
+    elif change == 'metadata-missing':
+        (root / '.gitignore').unlink()
+    elif change == 'metadata-added':
+        (root / 'unexpected.txt').write_bytes(b'synthetic private content must not be retained')
+    elif change in {'metadata-changed', 'metadata-newline'}:
+        (root / '.gitignore').write_bytes(b'changed' if change == 'metadata-changed' else b'*\n')
+    elif change in {'wheel-symlink', 'metadata-symlink', 'escaping-symlink'}:
+        target = wheel if change == 'wheel-symlink' else root / '.gitignore'
+        target.unlink()
+        if change == 'escaping-symlink':
+            outside = tmp_path / 'outside'
+            outside.write_bytes(b'synthetic private content must not be retained')
+            target.symlink_to(outside)
+        else:
+            target.symlink_to(root / ('.gitignore' if change == 'wheel-symlink' else wheel.name))
+    elif change in {'nested-symlink', 'directory'}:
+        folder = root / 'nested'
+        folder.mkdir()
+        if change == 'nested-symlink':
+            (folder / 'link').symlink_to(tmp_path / 'outside')
+    elif change == 'fifo':
+        adapter.os.mkfifo(root / 'pipe')
+    elif change == 'wheel-directory':
+        wheel.unlink()
+        wheel.mkdir()
+    else:
+        baseline = {**baseline, '.gitignore': {'kind': 'file', 'sha256': '0' * 64}}
+
+    with pytest.raises(ValueError, match='Wheel directory integrity'):
+        adapter.verify_wheel_directory(root, archives, evidence, baseline=baseline)
+    record = json.loads((evidence / 'wheel-integrity-failure.json').read_text())
+    assert record['boundary'] == ('baseline' if change == 'forged-baseline' else 'directory')
+    assert record['differenceCount'] > 0 and record['differences']
+    assert not record['truncated']
+    serialized = json.dumps(record)
+    assert str(tmp_path) not in serialized
+    assert 'synthetic private content must not be retained' not in serialized
+    assert not (evidence / 'junit.xml').exists()
+    if change != 'forged-baseline':
+        # Cannot accept an unsafe or drifted directory as a new baseline.
+        with pytest.raises(ValueError, match='Wheel directory integrity'):
+            adapter.verify_wheel_directory(root, archives, evidence)
+
+
+@pytest.mark.parametrize('kind', ['symlink', 'escaping-symlink', 'directory', 'fifo'])
+def test_selected_wheel_type_is_checked_before_hashing(tmp_path, kind):
+    root, evidence, wheel = prepared_wheel_directory(tmp_path)
+    wheel.unlink()
+    if kind == 'directory':
+        wheel.mkdir()
+    elif kind == 'fifo':
+        adapter.os.mkfifo(wheel)
+    else:
+        wheel.symlink_to(root / '.gitignore' if kind == 'symlink' else tmp_path / 'outside')
+    with pytest.raises(ValueError, match='Wheel directory integrity'):
+        adapter.wheel_archive_hashes([wheel], evidence)
+    record = json.loads((evidence / 'wheel-integrity-failure.json').read_text())
+    assert record['boundary'] == 'selected-wheels'
+    assert record['differences'][0]['change'] == 'type'
+
+
+def test_wheel_diagnostics_are_bounded_without_accepting_omitted_differences(tmp_path):
+    root, evidence, wheel = prepared_wheel_directory(tmp_path)
+    archives = adapter.wheel_archive_hashes([wheel], evidence)
+    for index in range(40):
+        (root / f'unexpected-{index:02}.txt').write_bytes(b'not retained')
+    with pytest.raises(ValueError, match='Wheel directory integrity'):
+        adapter.verify_wheel_directory(root, archives, evidence)
+    report = json.loads((evidence / 'wheel-integrity-failure.json').read_text())
+    assert report['differenceCount'] == 40
+    assert len(report['differences']) == 32 and report['truncated']
+    assert all(row['change'] == 'extra' for row in report['differences'])
+    assert 'not retained' not in json.dumps(report)
+
+
+@pytest.mark.parametrize('malformation', ['scalar', 'oversized-hash', 'extra-content', 'invalid-kind', 'manifest', 'path'])
+def test_wheel_baseline_failure_retains_only_validated_metadata(tmp_path, malformation):
+    root, evidence, wheel = prepared_wheel_directory(tmp_path)
+    archives = adapter.wheel_archive_hashes([wheel], evidence)
+    baseline = adapter.verify_wheel_directory(root, archives, evidence)
+    private = 'synthetic-private-content-' * 10000
+    if malformation == 'scalar':
+        baseline['.gitignore'] = private
+    elif malformation == 'oversized-hash':
+        baseline['.gitignore']['sha256'] = private
+    elif malformation == 'extra-content':
+        baseline['.gitignore']['content'] = private
+    elif malformation == 'invalid-kind':
+        baseline['.gitignore']['kind'] = private
+    elif malformation == 'manifest':
+        baseline = [private]
+    else:
+        baseline[str(tmp_path / 'private')] = {'kind': 'file', 'content': private}
+    with pytest.raises(ValueError, match='Wheel directory integrity'):
+        adapter.verify_wheel_directory(root, archives, evidence, baseline=baseline)
+    raw = (evidence / 'wheel-integrity-failure.json').read_text()
+    record = json.loads(raw)
+    assert record['boundary'] == 'baseline' and record['differenceCount'] > 0
+    assert len(raw) < 2000
+    assert 'synthetic-private-content-' not in raw and str(tmp_path) not in raw
+    assert any(row['actual'] == {'kind': 'invalid'} for row in record['differences'])
+
+
+@pytest.mark.parametrize('location', ['directory', 'baseline'])
+def test_wheel_diagnostics_retain_non_utf8_names_without_losing_refusal(tmp_path, location):
+    import hashlib
+    root, evidence, wheel = prepared_wheel_directory(tmp_path)
+    archives = adapter.wheel_archive_hashes([wheel], evidence)
+    baseline = adapter.verify_wheel_directory(root, archives, evidence)
+    name = adapter.os.fsdecode(b'extra-\xff.txt') if location == 'directory' else 'extra-\ud800.txt'
+    if location == 'directory':
+        (root / name).write_bytes(b'synthetic bytes not retained')
+    else:
+        baseline[name] = {'kind': 'file', 'sha256': '0' * 64}
+    with pytest.raises(ValueError, match='Wheel directory integrity'):
+        adapter.verify_wheel_directory(root, archives, evidence, baseline=baseline)
+    raw = (evidence / 'wheel-integrity-failure.json').read_text()
+    record = json.loads(raw)
+    assert record['boundary'] == location and record['differenceCount'] == 1
+    row = record['differences'][0]
+    assert row['name'] == name and row['change'] == 'extra'
+    assert row['nameHashEncoding'] == 'utf-8-surrogatepass'
+    assert row['nameSha256'] == hashlib.sha256(name.encode('utf-8', 'surrogatepass')).hexdigest()
+    assert len(raw) < 2000 and 'synthetic bytes not retained' not in raw
+
+
+def test_fixed_wheel_baseline_precedes_install_and_attestation_uses_both_maps():
+    import ast
+    tree = ast.parse((ROOT / 'scripts/qualify_default_installed.py').read_text())
+    prepare = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'guest_prepare')
+    attest = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'guest_attest')
+    source = ast.unparse(prepare)
+    assert source.index('wheel_archive_hashes(wheels,') < source.index('wheel_metadata(p)')
+    assert source.index('verify_wheel_directory(') < source.index("'pip', 'install'")
+    assert "'wheels': original_wheels" in source
+    assert "'wheelDirectory': wheel_directory" in source
+    actual = ast.unparse(attest)
+    assert "verify_wheel_directory(GUEST / 'wheels', preparation['wheels']" in actual
+    assert "baseline=preparation['wheelDirectory']" in actual
+    assert 'snapshot == json.loads(before.read_text())' in actual

@@ -169,6 +169,107 @@ def inventory(root, *, boundary=None):
     return result
 
 
+def wheel_integrity_failure(expected, actual, evidence, boundary):
+    """Retain bounded names/types/hashes, never artifact contents or link targets."""
+    def metadata_only(row):
+        if row is None:
+            return None
+        if not isinstance(row, dict) or not isinstance(row.get('kind'), str):
+            return {'kind': 'invalid'}
+        kind = row['kind']
+        if kind not in {'file', 'symlink', 'directory', 'special', 'missing', 'unreadable'}:
+            return {'kind': 'invalid'}
+        if set(row) - {'kind', 'sha256'}:
+            return {'kind': 'invalid'}
+        if 'sha256' in row:
+            value = row['sha256']
+            if kind != 'file' or not isinstance(value, str) or not re.fullmatch('[a-f0-9]{64}', value):
+                return {'kind': 'invalid'}
+            return {'kind': kind, 'sha256': value}
+        return {'kind': kind}
+
+    if not isinstance(actual, dict) or any(not isinstance(name, str) for name in actual):
+        actual = {'<manifest>': {'kind': 'invalid'}}
+    differences = []
+    count = 0
+    for name in sorted(set(expected) | set(actual)):
+        before, after = expected.get(name), actual.get(name)
+        if before == after:
+            continue
+        before, after = metadata_only(before), metadata_only(after)
+        count += 1
+        if len(differences) == 32:
+            continue
+        change = ('extra' if before is None else 'missing' if after is None else
+                  'type' if before.get('kind') != after.get('kind') else 'changed')
+        safe_name = name if Path(name).name == name and '/' not in name and '\\' not in name else '<invalid-name>'
+        differences.append({
+            'name': safe_name[:256], 'nameTruncated': len(safe_name) > 256,
+            'nameSha256': hashlib.sha256(name.encode('utf-8', 'surrogatepass')).hexdigest(),
+            'nameHashEncoding': 'utf-8-surrogatepass',
+            'change': change, 'expected': before, 'actual': after})
+    save(evidence / 'wheel-integrity-failure.json', {
+        'boundary': boundary, 'expectedEntries': len(expected), 'actualEntries': len(actual),
+        'differenceCount': count, 'differences': differences, 'truncated': count > len(differences)})
+    raise ValueError('Wheel directory integrity differs; inspect bounded failure evidence')
+
+
+def wheel_entry(path):
+    """Do not traverse links, directories or special files in the flat wheel output."""
+    try:
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            return {'kind': 'symlink'}
+        if stat.S_ISDIR(mode):
+            return {'kind': 'directory'}
+        if not stat.S_ISREG(mode):
+            return {'kind': 'special'}
+        return {'kind': 'file', 'sha256': digest(path)}
+    except FileNotFoundError:
+        return {'kind': 'missing'}
+    except OSError:
+        return {'kind': 'unreadable'}
+
+
+def wheel_archive_hashes(wheels, evidence):
+    """Freeze the selected archives before metadata reads or installation."""
+    actual = {p.name: wheel_entry(p) for p in wheels}
+    require(len(actual) == len(wheels) and actual, 'Duplicate or empty wheel selection')
+    if any(row['kind'] != 'file' for row in actual.values()):
+        expected = {name: row if row['kind'] == 'file' else {'kind': 'file'}
+                    for name, row in actual.items()}
+        wheel_integrity_failure(expected, actual, evidence, 'selected-wheels')
+    return {name: row['sha256'] for name, row in actual.items()}
+
+
+def verify_wheel_directory(root, wheel_hashes, evidence, *, baseline=None):
+    """Validate exact archives plus pinned uv's one known auxiliary file."""
+    require(wheel_hashes and all(
+        Path(name).name == name and name.endswith('.whl')
+        and isinstance(value, str) and re.fullmatch('[a-f0-9]{64}', value)
+        for name, value in wheel_hashes.items()), 'Invalid original wheel identities')
+    expected = {name: {'kind': 'file', 'sha256': value} for name, value in wheel_hashes.items()}
+    # uv 0.13.1 (62faed3351cfee2121b3c28b937b1f4b93233a93):
+    # prepare_output_directory creates exactly b'*' with create-gitignore=true.
+    # Do not baseline arbitrary extras or rewrite an existing sidecar.
+    expected['.gitignore'] = {'kind': 'file', 'sha256': hashlib.sha256(b'*').hexdigest()}
+    if baseline is not None and baseline != expected:
+        wheel_integrity_failure(expected, baseline, evidence, 'baseline')
+    try:
+        mode = root.lstat().st_mode
+        if not stat.S_ISDIR(mode):
+            actual = {'<root>': {'kind': 'symlink' if stat.S_ISLNK(mode) else 'special'}}
+        else:
+            actual = {p.name: wheel_entry(p) for p in sorted(root.iterdir())}
+    except OSError:
+        actual = {'<root>': {'kind': 'unreadable'}}
+    if actual != expected:
+        wheel_integrity_failure(expected, actual, evidence, 'directory')
+    # A flat directory of these exact regular files is its complete inventory.
+    # This independently preserves archive hashes as well as auxiliary identity.
+    return actual
+
+
 def download(spec, destination):
     with urllib.request.urlopen(spec['url'], timeout=60) as response, destination.open('xb') as output:
         shutil.copyfileobj(response, output)
@@ -319,6 +420,11 @@ def guest_prepare():
     core = GUEST / 'wheels' / Path(urllib.parse.urlsplit(data['core']['url']).path).name
     download(data['core'], core)
     wheels = sorted((GUEST / 'wheels').glob('*.whl'))
+    stage = identity.get('stage', 'ic13')
+    require(stage in ('ic13', 'desktop-safety', *FIXED_CASES), 'Unknown fixed stage')
+    original_wheels = wheel_archive_hashes(wheels, GUEST / 'evidence') if stage in FIXED_CASES else None
+    wheel_directory = (verify_wheel_directory(GUEST / 'wheels', original_wheels, GUEST / 'evidence')
+                       if stage in FIXED_CASES else None)
     names = [canonical(wheel_metadata(p)['Name']) for p in wheels]
     require(len(names) == len(set(names)) == len(packages) + 1, 'Duplicate/missing distribution build')
     check_direct_requirements(wheels, names, data['python'])
@@ -329,8 +435,6 @@ def guest_prepare():
     command([uv, 'pip', 'install', '--python', python, '--link-mode=copy', '--only-binary', 'amplifier-core',
              '--constraint', constraint_file, '--override', overrides, *wheels, *data['testRequirements'],
              'amplifier-bundle-context-intelligence[client]'], env=env, timeout=240)
-    stage = identity.get('stage', 'ic13')
-    require(stage in ('ic13', 'desktop-safety', *FIXED_CASES), 'Unknown fixed stage')
     if stage == 'installed-pwa':
         preparation_env = pwa_preparation_environment(env)
         command(['apt-get', 'install', '-y', '--no-install-recommends', 'xvfb', 'xauth', 'x11-utils'],
@@ -356,7 +460,8 @@ def guest_prepare():
     save(GUEST / 'evidence/preparation.json', {
         **identity, 'pinsSha256': digest(candidate / 'scripts/default-installed-pins.json'),
         'candidatePayload': payload, 'sources': sources,
-        'wheels': {p.name: digest(p) for p in wheels},
+        'wheels': original_wheels if stage in FIXED_CASES else {p.name: digest(p) for p in wheels},
+        **({'wheelDirectory': wheel_directory} if stage in FIXED_CASES else {}),
         'routingResources': {'path': str(resource_path), 'files': inventory(resource_path)},
         'candidateFiles': source_before, 'constraintsSha256': digest(constraint_file),
         'buildConstraintsSha256': digest(build_constraint), 'uvSha256': digest(uv),
@@ -393,8 +498,9 @@ def guest_attest():
                 'copiedTests': inventory(GUEST / 'qualification')}
     if preparation.get('stage') in FIXED_CASES:
         # Keep wheels and browser/system inputs in the same before/after fence.
-        snapshot['wheels'] = inventory(GUEST / 'wheels')
-        require(snapshot['wheels'] == preparation['wheels'], 'Prepared wheel bytes changed')
+        snapshot['wheels'] = verify_wheel_directory(
+            GUEST / 'wheels', preparation['wheels'], GUEST / 'evidence',
+            baseline=preparation['wheelDirectory'])
         snapshot['system'] = prerequisite_identity(preparation['stage'])
         if preparation['stage'] == 'installed-pwa':
             snapshot['browsers'] = inventory(GUEST / 'browsers')
