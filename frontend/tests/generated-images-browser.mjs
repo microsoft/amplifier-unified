@@ -9,20 +9,50 @@ let browser,page,releaseSwapGate,primaryFailure,swapObserving=false;
 const swapDiagnostic={schema:2,kind:'generated-image-preview-swap',records:[],dropped:0,controls:[],boundaries:null,cleanup:[]};
 let swapPhase=null;
 const assertPlacement=(result,label)=>assert.equal(result.problem,null,label);
-function installPreviewProbe(pane){
- const gallery=pane.querySelector('.a-inline-gallery'),frame=gallery?.querySelector('.a-gallery-image-frame');
+function installPreviewProbe(pane,targets){
+ const galleries=pane.querySelectorAll('.a-inline-gallery'),gallery=galleries.length===1?galleries[0]:null;
+ let observedEntries=null;
+ // Pane/gallery identity is stable; Preview's per-image key may replace its frame.
+ // Resolve one current frame and its public selected-entry tuple in one JS turn.
+ const resolveFrame=expectedEntry=>{
+  const previews=gallery?.querySelectorAll(':scope > section.a-inline-artifact[data-image-frame]')||[];
+  const frames=gallery?.querySelectorAll('.a-gallery-image-frame')||[];
+  const rails=gallery?.querySelectorAll(':scope > .a-inline-gallery-choices')||[];
+  const buttons=rails.length===1?[...rails[0].querySelectorAll(':scope > button')]:[];
+  const pressed=buttons.filter(button=>button.getAttribute('aria-pressed')==='true');
+  const preview=previews.length===1?previews[0]:null,frame=frames.length===1?frames[0]:null;
+  const titles=preview?.querySelectorAll(':scope > .a-inline-artifact-heading > strong')||[];
+  const versions=preview?.querySelectorAll(':scope > .a-inline-artifact-heading > span')||[];
+  const target=pressed.length===1?targets.find(row=>buttons[row.slot-1]===pressed[0]&&
+   pressed[0].getAttribute('aria-label')===`Image ${row.slot}: ${row.title}`&&
+   preview?.getAttribute('aria-label')===row.title&&titles.length===1&&titles[0].textContent===row.title&&
+   versions.length===1&&versions[0].textContent===`Version ${row.version}`):null;
+  const panes=pane.ownerDocument.querySelectorAll('.a-messages'),currentGalleries=pane.querySelectorAll('.a-inline-gallery');
+  return{frame,preview,buttons,target,identity:{
+   sameAnchors:!!(pane.isConnected&&gallery?.isConnected&&panes.length===1&&panes[0]===pane&&
+    currentGalleries.length===1&&currentGalleries[0]===gallery&&gallery.closest('.a-messages')===pane),
+   currentFrame:!!(frame?.isConnected&&preview?.isConnected&&frame.parentElement===preview&&
+    preview.parentElement===gallery&&frame.closest('.a-inline-gallery')===gallery),
+   selectedTarget:!!(target&&buttons.length===targets.length&&targets.every(row=>
+    buttons[row.slot-1].getAttribute('aria-label')===`Image ${row.slot}: ${row.title}`)&&
+    (!observedEntries||observedEntries.includes(target.entry))&&(!expectedEntry||target.entry===expectedEntry)),
+   previewCount:previews.length,frameCount:frames.length,railCount:rails.length,pressedCount:pressed.length,
+   entry:target?.entry??null,resourceId:target?.resourceId??null,version:target?.version??null}};
+ };
+ const initialFrame=resolveFrame().frame;
  const rect=node=>{if(!node)return null;const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}};
- const snapshot=()=>{
-  const box=rect(gallery),main=rect(frame),p=rect(pane),image=gallery?.querySelector('.a-inline-image img');
+ const snapshot=expectedEntry=>{
+  const {frame,target,identity}=resolveFrame(expectedEntry);
+  const images=frame?.querySelectorAll(':scope > .a-inline-image > img')||[],image=images.length===1?images[0]:null;
+  const box=rect(gallery),main=rect(frame),p=rect(pane);
   const notices=[...pane.querySelectorAll('[data-part="work-projection-status"]')];
-  return{available:true,sameNodes:pane.isConnected&&gallery?.isConnected&&frame?.isConnected&&
-   pane.querySelectorAll('.a-inline-gallery').length===1&&gallery.querySelectorAll('.a-gallery-image-frame').length===1&&
-   pane.querySelector('.a-inline-gallery')===gallery&&gallery.querySelector('.a-gallery-image-frame')===frame,
+  return{available:true,identity:{...identity,frameIsInitial:!!frame&&frame===initialFrame,
+   initialFrameConnected:!!initialFrame?.isConnected,imageMatches:images.length<=1&&(!image||image.getAttribute('alt')===target?.title)},
    pane:{...p,scrollTop:pane.scrollTop,scrollHeight:pane.scrollHeight,clientHeight:pane.clientHeight,clientWidth:pane.clientWidth},
    box,frame:main,workNotice:{count:notices.length,heights:notices.slice(0,4).map(n=>n.getBoundingClientRect().height),truncated:notices.length>4},
    selectedImage:image?{complete:image.complete,naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight}:null};
  };
- const valid=s=>s?.available===true&&s.sameNodes===true&&['pane','box','frame'].every(k=>
+ const valid=s=>s?.available===true&&['sameAnchors','currentFrame','selectedTarget','imageMatches'].every(k=>s.identity?.[k]===true)&&['pane','box','frame'].every(k=>
   s[k]&&['x','y','width','height'].every(f=>Number.isFinite(s[k][f]))&&s[k].width>0&&s[k].height>0)&&
   ['scrollTop','scrollHeight','clientHeight','clientWidth'].every(k=>Number.isFinite(s.pane[k]))&&
   s.pane.scrollTop>=0&&s.pane.scrollHeight>=s.pane.clientHeight&&s.pane.clientHeight>0&&s.pane.clientWidth>0;
@@ -55,10 +85,11 @@ function installPreviewProbe(pane){
   }
   return{before:baseline,after:value,problem};
  };
- const begin=before=>{
+ const begin=(before,entries=[before.identity.entry])=>{
   disconnect();baseline=before;records=[];firstViolation=null;dropped=0;expired=false;last=null;
+  observedEntries=entries;
   record('start');
-  // Mutation delivery observes the same pinned elements before a later frame
+  // Observe pinned anchors and the current selected frame before a later frame
   // can conceal a shift. This is not an all-frame or physical-display sensor.
   observer=new MutationObserver(()=>record('mutation'));
   observer.observe(pane,{subtree:true,childList:true,characterData:true,attributes:true});
@@ -67,7 +98,7 @@ function installPreviewProbe(pane){
  };
  const finish=()=>{
   if(baseline)record('finish');
-  disconnect();
+  disconnect();observedEntries=null;
   return{records,firstViolation,dropped,expired};
  };
  // Fixed synthetic gallery/frame only. Keep absence distinct from an empty
@@ -94,6 +125,8 @@ function installPreviewProbe(pane){
  };
  const controls=async()=>{
   const results=[],original=snapshot(),add=(name,before,after,expected)=>results.push({name,before,after,problem:compare(before,after),expected});
+  if(!valid(original))throw Error('Preview controls require one valid selected frame');
+  const {frame,preview,buttons}=resolveFrame();
   add('unchanged',original,snapshot(),null);
   // Only the retained raw-scroll/extent pair is synthesized; other fields
   // come from this actual snapshot. This is comparator, not layout, proof.
@@ -135,6 +168,61 @@ function installPreviewProbe(pane){
   }
   const transient=finish();
   results.push({name:'shift-return-first-violation',problem:transient.firstViolation?.problem??null,expected:'gallery-position',boundaries:transient});
+  // Replace only the frame shell. Move the existing loaded children rather than
+  // cloning images/starting requests; restore React's exact nodes before clicking.
+  const parent=frame.parentNode,next=frame.nextSibling,children=[...frame.childNodes];
+  const replacement=frame.cloneNode(false),duplicate=frame.cloneNode(false);
+  const frameStyle=frame.getAttribute('style'),frameProperties=propertyFacts(frame),previewLabel=preview.getAttribute('aria-label');
+  const selections=buttons.map(button=>button.getAttribute('aria-pressed'));
+  const restoreAttribute=(node,name,value)=>{if(value===null)node.removeAttribute(name);else node.setAttribute(name,value)};
+  try{
+   replacement.append(...children);frame.replaceWith(replacement);
+   add('replacement',original,snapshot(),null);
+   results.at(-1).replacementWitness={oldRetired:!frame.isConnected,currentConnected:replacement.isConnected,
+    selectedFrame:resolveFrame().frame===replacement,childrenRetained:children.every((node,index)=>replacement.childNodes[index]===node)};
+   replacement.remove();
+   add('replacement-missing',original,snapshot(),'invalid-geometry');
+   parent.insertBefore(replacement,next);pane.scrollTop=original.pane.scrollTop;
+   parent.insertBefore(duplicate,next);
+   add('replacement-duplicate',original,snapshot(),'invalid-geometry');
+   duplicate.remove();pane.scrollTop=original.pane.scrollTop;
+   preview.setAttribute('aria-label',targets[1].title);
+   add('replacement-wrong-identity',original,snapshot(),'invalid-geometry');
+   restoreAttribute(preview,'aria-label',previewLabel);
+   buttons[0].setAttribute('aria-pressed','false');buttons[1].setAttribute('aria-pressed','true');
+   add('replacement-wrong-selection',original,snapshot(),'invalid-geometry');
+   buttons.forEach((button,index)=>restoreAttribute(button,'aria-pressed',selections[index]));
+   const replacementStyle=replacement.getAttribute('style'),replacementProperties=propertyFacts(replacement);
+   begin(original);
+   try{
+    replacement.setAttribute('style',`${replacementStyle===null?'':replacementStyle};transform:translateY(8px);`);
+    add('replacement-shifted',original,snapshot(),'frame-position');
+    await Promise.resolve(); // Deliver the shifted replacement's real mutation.
+   }finally{
+    restoreAttribute(replacement,'style',replacementStyle);
+    await Promise.resolve();
+    add('replacement-shift-return-restored',original,snapshot(),null);
+    const actualStyle=replacement.getAttribute('style'),actualScroll=pane.scrollTop;
+    results.at(-1).restorationExact=actualStyle===replacementStyle&&actualScroll===original.pane.scrollTop;
+    results.at(-1).restorationFacts=restorationFacts(replacement,replacementStyle,original.pane.scrollTop,replacementProperties,actualStyle,actualScroll);
+   }
+   const replacedTransient=finish();
+   results.push({name:'replacement-shift-return-first-violation',problem:replacedTransient.firstViolation?.problem??null,
+    expected:'frame-position',boundaries:replacedTransient});
+  }finally{
+   disconnect();observedEntries=null;
+   duplicate.remove();replacement.remove();frame.append(...children);parent.insertBefore(frame,next);
+   restoreAttribute(frame,'style',frameStyle);restoreAttribute(preview,'aria-label',previewLabel);
+   buttons.forEach((button,index)=>restoreAttribute(button,'aria-pressed',selections[index]));
+   pane.scrollTop=original.pane.scrollTop;
+   add('replacement-original-restored',original,snapshot(),null);
+   const actualStyle=frame.getAttribute('style'),actualScroll=pane.scrollTop;
+   results.at(-1).restorationExact=actualStyle===frameStyle&&actualScroll===original.pane.scrollTop&&
+    resolveFrame().frame===frame&&frame.nextSibling===next&&!replacement.isConnected&&!duplicate.isConnected&&
+    frame.childNodes.length===children.length&&children.every((node,index)=>frame.childNodes[index]===node)&&
+    preview.getAttribute('aria-label')===previewLabel&&buttons.every((button,index)=>button.getAttribute('aria-pressed')===selections[index]);
+   results.at(-1).restorationFacts=restorationFacts(frame,frameStyle,original.pane.scrollTop,frameProperties,actualStyle,actualScroll);
+  }
   return results;
  };
  window.imagePreviewProbe={snapshot,compare,begin,record,finish,controls};
@@ -158,14 +246,15 @@ try{
  await control('start','first');
  const gallery=page.locator('.a-inline-gallery');
  const frame=gallery.locator('.a-gallery-image-frame');
- const geometry=async()=>{
-  const measured=await page.evaluate(()=>{const probe=window.imagePreviewProbe,value=probe.snapshot();return{value,problem:probe.compare(value,value)}});
-  assertPlacement(measured,'Geometry must be present and finite');
+ const geometry=async expectedEntry=>{
+  const measured=await page.evaluate(entry=>{const probe=window.imagePreviewProbe,value=probe.snapshot(entry);return{value,problem:probe.compare(value,value)}},expectedEntry);
   const {box,frame:frameBox,pane}=measured.value;
   if(swapPhase){
-   if(swapDiagnostic.records.length<3)swapDiagnostic.records.push({phase:swapPhase,original:{scroll:pane.scrollTop,galleryTop:box.y,galleryHeight:box.height,frameTop:frameBox.y,frameHeight:frameBox.height},observation:measured.value});
+   if(swapDiagnostic.records.length<3)swapDiagnostic.records.push({phase:swapPhase,expectedEntry,problem:measured.problem,
+    original:{scroll:pane?.scrollTop??null,galleryTop:box?.y??null,galleryHeight:box?.height??null,frameTop:frameBox?.y??null,frameHeight:frameBox?.height??null},observation:measured.value});
    else swapDiagnostic.dropped++;
   }
+  assertPlacement(measured,'Geometry must be present, finite and bound to '+expectedEntry);
   return{box,frame:frameBox,scroll:pane.scrollTop,snapshot:measured.value};
  };
  await expect(gallery).toBeVisible();
@@ -220,9 +309,28 @@ try{
  const publication=await page.evaluate(id=>window.amplifier.getState().canvasArtifacts.find(row=>row.id===id),first.canvasId);
  assert.deepEqual(publication.publications,[{messageId:'origin',version:1}]);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false);
- await page.locator('.a-messages').evaluate(installPreviewProbe);
+ // Freeze only the three synthetic public identities, not artifact bodies or URLs.
+ // The DOM has title/version/pressed-slot identity, not a resource-id attribute.
+ const targets=await page.evaluate(firstId=>{
+  const state=window.amplifier.getState();
+  return ['first','second','third'].map((entry,index)=>{
+   const rows=state.canvasArtifacts.filter(row=>row.sessionId===state.selectedSessionId&&row.kind==='image'&&row.imageRequestId===entry);
+   if(rows.length!==1)throw Error('Expected one synthetic image: '+entry);
+   const row=rows[0],links=(row.publications||[]).filter(link=>link.messageId==='origin'),versions=(row.versions||[]).filter(version=>version.version===1);
+   if(links.length!==1||links[0].version!==1||versions.length!==1||entry==='first'&&row.id!==firstId)throw Error('Unexpected synthetic publication: '+entry);
+   const title=versions[0].title||row.title;
+   if(typeof row.id!=='string'||!row.id.length||row.id.length>128||typeof title!=='string'||!title.length||title.length>128)throw Error('Unbounded synthetic identity');
+   return{entry,slot:index+1,resourceId:row.id,title,version:1};
+  });
+ },first.canvasId);
+ assert.equal(new Set(targets.map(row=>row.title)).size,3,'Synthetic public titles must distinguish entries');
+ assert.equal(targets[1].title,'Second concept');assert.equal(targets[2].title,'Third concept');
+ await page.locator('.a-messages').evaluate(installPreviewProbe,targets);
+ assertPlacement(await page.evaluate(()=>{const probe=window.imagePreviewProbe,value=probe.snapshot('first');return{problem:probe.compare(value,value)}}),'Controls target the first synthetic entry');
  swapDiagnostic.controls=await page.evaluate(()=>window.imagePreviewProbe.controls());
  for(const result of swapDiagnostic.controls){
+  if(result.replacementWitness)for(const [name,value] of Object.entries(result.replacementWitness))assert.equal(value,true,'Replacement witness: '+name);
+  if(result.boundaries){assert.equal(result.boundaries.dropped,0,'Control observations retained: '+result.name);assert.equal(result.boundaries.expired,false,'Control observation deadline: '+result.name)}
   if(result.name.endsWith('-restored'))assert.equal(result.restorationFacts.bounded,true,'Bounded restoration facts: '+result.name);
   if(result.name.endsWith('-restored'))assert.equal(result.restorationExact,true,'Restore original scroll/style: '+result.name);
   if(result.expected===null)assertPlacement(result,'Placement control: '+result.name);
@@ -230,23 +338,23 @@ try{
    error=>error instanceof assert.AssertionError&&error.actual===result.expected&&error.expected===null,
    'The actual comparator must reject exactly '+result.name);
  }
- assert.equal(swapDiagnostic.controls.length,12,'All positive, negative and restoration controls ran');
+ assert.equal(swapDiagnostic.controls.length,21,'All 12 original and 9 replacement controls ran');
  // Hold the resource request to measure the loading frame and scroll position.
  let entered;
  const waiting=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{releaseSwapGate=resolve});
  await page.route('**/api/canvas/views/*/resource?*',async route=>{entered();await gate;await route.continue()});
  await gallery.scrollIntoViewIfNeeded();
  swapPhase='before';
- const before=await geometry();
+ const before=await geometry('first');
  swapPhase=null;
  assert.ok(before.scroll>100,'Exercise image swapping from a scrolled reading position');
- await page.evaluate(value=>window.imagePreviewProbe.begin(value),before.snapshot);
+ await page.evaluate(value=>window.imagePreviewProbe.begin(value,['first','second']),before.snapshot);
  swapObserving=true;
  await gallery.getByRole('button',{name:'Image 2: Second concept',exact:true}).click();
  await waiting;
  await expect(gallery.getByText('Loading preview…')).toBeVisible();
  swapPhase='held';
- const during=await geometry();
+ const during=await geometry('second');
  swapPhase=null;
  assert.equal(during.box.height,before.box.height,'No collapse during delayed loading');
  assertPlacement(await page.evaluate(([before,after])=>({problem:window.imagePreviewProbe.compare(before,after)}),
@@ -258,7 +366,7 @@ try{
  await expect.poll(()=>gallery.locator('.a-inline-image img').evaluate(image=>
   image.complete&&image.naturalWidth>0&&image.naturalHeight>0)).toBe(true);
  swapPhase='released';
- const after=await geometry();
+ const after=await geometry('second');
  swapPhase=null;
  assert.equal(after.box.height,before.box.height,'Landscape uses the same frame');
  assertPlacement(await page.evaluate(([before,after])=>({problem:window.imagePreviewProbe.compare(before,after)}),
@@ -272,11 +380,11 @@ try{
  await page.route('**/api/canvas/views/*/resource?*',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Preview temporarily unavailable'})}));
  await gallery.getByRole('button',{name:'Image 3: Third concept',exact:true}).click();
  await expect(gallery.getByRole('button',{name:'Try preview again',exact:true})).toBeVisible();
- assert.equal((await geometry()).box.height,before.box.height,'Error keeps the same frame');
+ assert.equal((await geometry('third')).box.height,before.box.height,'Error keeps the same frame');
  await page.unrouteAll({behavior:'wait'});
  await gallery.getByRole('button',{name:'Try preview again',exact:true}).click();
  await expect(gallery.locator('.a-inline-image img')).toBeVisible();
- assert.equal((await geometry()).box.height,before.box.height,'Portrait uses the same frame');
+ assert.equal((await geometry('third')).box.height,before.box.height,'Portrait uses the same frame');
  await gallery.getByRole('button',{name:'Image 2: Second concept',exact:true}).click();
  await gallery.getByRole('button',{name:'Open Second concept in full view',exact:true}).first().click();
  await expect(page.locator('.a-canvas-workspace img').first()).toBeVisible();
