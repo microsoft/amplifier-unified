@@ -212,6 +212,87 @@ async def main():
                 await service.event_log_view.windows.close()
                 service.event_log_view.windows = WorkWindows(service)
                 await service.event_log_view.windows.read(aid)
+            elif op == 'bounded-provider-records':
+                from types import SimpleNamespace
+                from amplifier_core import HookRegistry, HookResult
+                from amplifier_web.event_log_view import event_path
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.provider_recording import install_request_redaction
+                from amplifier_web.runtime import normalize_event
+                from amplifier_web.work_windows import WorkWindows
+                row = service._session(aid)
+                event_path(row, aid).unlink(missing_ok=True)
+                now = time.time()
+                # Two bounded saved pages exercise the enclosing collapsed
+                # Work group, not just a standalone observation turn.
+                for i in range(140):
+                    log_hook(aid, 'tool:post', {'tool_call_id': 'saved-' + str(i),
+                        'tool_name': 'Earlier saved check', 'result': {'success': True}}, now - 30 + i / 100)
+                row.update(status='idle', messages=[{'id': 'recording-question', 'role': 'user',
+                    'text': 'Inspect the saved provider calls', 'createdAt': now - 10}],
+                    execution={'nodes': [], 'turns': []})
+                ensure_turn(row, 'recordings')
+                row['execution']['turns'][0].update(anchorMessageId='recording-question', startedAt=now-9,
+                    phase='completed')
+                for i in range(105):
+                    row['execution']['nodes'].append({'id': 'earlier-' + str(i), 'kind': 'tool',
+                        'turnId': 'recordings', 'label': 'Earlier check', 'phase': 'completed',
+                        'startedAt': now - 8, 'endedAt': now - 7})
+                hooks, capabilities, emitted = HookRegistry(), {}, []
+                coordinator = SimpleNamespace(hooks=hooks, get_capability=capabilities.get,
+                    register_capability=lambda key, value: capabilities.update({key: value}))
+                install_request_redaction(coordinator, directory=event_path(row, aid).parent)
+                pending = []
+                async def capture(event, data):
+                    pending.append((event, copy.deepcopy(data), time.time()))
+                    return HookResult()
+                for event in ('llm:request', 'llm:response'):
+                    hooks.register(event, capture, priority=100)
+                class Provider:
+                    def get_info(self): return {'id': 'test', 'defaults': {'model': 'bounded-recording'}}
+                    async def complete(self, request):
+                        await hooks.emit('llm:request', {'provider': 'test', 'model': 'bounded-recording',
+                            'request_id': 'bounded-attempt', 'raw': {'instructions': 'RECORDED-REQUEST',
+                            'largeDiagnostic': 'x' * 1_100_000, 'end': 'FULL-RECORDING-END'}})
+                        await hooks.emit('llm:response', {'provider': 'test', 'model': 'bounded-recording',
+                            'request_id': 'bounded-attempt', 'raw': {'text': 'RECORDED-RESPONSE'}})
+                        return {'usage': {'input_tokens': 2500, 'output_tokens': 103}}
+                events = ExecutionEvents(aid, emitted.append)
+                events.turn_id = 'recordings'
+                await events.instrument_provider(aid, Provider()).complete(SimpleNamespace(model='bounded-recording'))
+                for event in emitted:
+                    kind, data = normalize_event(event, aid)
+                    await service.on_runtime_event(kind, data)
+                # Legacy bytes are intact but have no exact host-call receipt.
+                # The browser must expose their own observation, never infer a
+                # live association merely from matching model/time/usage.
+                for name, value in (('request', 'LEGACY-REQUEST'), ('response', 'LEGACY-RESPONSE')):
+                    pending.append(('llm:' + name, {'provider': 'test', 'model': 'legacy-recording',
+                        'request_id': 'legacy-attempt', 'raw': {'text': value}}, time.time()))
+                await service.on_runtime_event('execution.event', {'id': 'llm:legacy', 'kind': 'llm',
+                    'sessionId': aid, 'rootSessionId': aid, 'turnId': 'recordings', 'producerId': 'legacy-fixture',
+                    'revision': 1, 'liveObservation': True, 'phase': 'completed', 'label': 'Legacy model call',
+                    'provider': 'test', 'model': 'legacy-recording', 'startedAt': now, 'endedAt': time.time(),
+                    'usage': {'totalTokens': 12}})
+                service.fixture_provider_records = pending
+                if not args.get('delayCapture'):
+                    for event, data, at in pending:
+                        log_hook(aid, event, data, at)
+                    service.fixture_provider_records = []
+                await service.event_log_view.windows.close()
+                service.event_log_view.windows = WorkWindows(service)
+                await service.event_log_view.windows.read(aid)
+                def no_complete_projection(*args, **kwargs):
+                    raise AssertionError('This fixture must use bounded event windows only')
+                service.event_log_view.read = no_complete_projection
+            elif op == 'flush-provider-records':
+                # Only canonical bytes arrive: no execution event can wake an
+                # already open completed call on behalf of the product.
+                for event, data, at in service.fixture_provider_records:
+                    log_hook(aid, event, data, at)
+                service.fixture_provider_records = []
+                await service.event_log_view.windows.read(aid)
             elif op in {'canonical-work','canonical-append'}:
                 from amplifier_web.event_log_view import event_path
                 row=service._session(aid);base=1700000000
