@@ -453,7 +453,7 @@ def execute_call(payload):
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
             identity = lib.launch_id(payload['operationId'], config=config)
-        if action in {'read', 'execute', 'stop', 'remove'} | jobs.JOB_ACTIONS:
+        if action in {'read', 'execute', 'stop', 'remove', 'exportArtifacts'} | jobs.JOB_ACTIONS:
             docker_owner(payload, identity, backend, binding_source)
         if action in jobs.JOB_ACTIONS:
             if not source_ready(root, identity, snapshot):
@@ -504,6 +504,20 @@ def execute_call(payload):
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'removed' if result.complete else 'unknown', 'result': serialize(result),
                     'archives': archives, 'retention': retained, 'message': 'Source and artifacts were retained before removal.' if result.complete else 'Artifacts were retained; teardown is not confirmed.'}
+        if action == 'exportArtifacts':
+            universe = lib.status(identity, config=config)
+            if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
+                return {'ok': False, 'effectAdmitted': False, 'universeId': identity, 'status': 'unknown',
+                        'message': 'Artifact recovery requires observed stopped containers. Nothing was exported.'}
+            destination = root / ('artifacts-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
+            destination.mkdir(mode=0o700)
+            # The qualified library bounds the producer's export. Verification
+            # additionally checks complete tar structure, links and selected size.
+            archives = [serialize(lib.export_files(identity, '/artifacts', destination / 'artifacts.tar', config=config))]
+            retained = retention.verify_artifacts(archives)
+            retain_manifest(destination, archives)
+            return {'ok': True, 'universeId': identity, 'status': 'stopped', 'archives': archives,
+                    'artifactExport': retained, 'message': 'Artifacts retained. The stopped environment and workspace are unchanged; removal is not authorized.'}
         raise ValueError('Unsupported managed test environment action.')
     except DigitalTwinUniverseError as exc:
         return {'ok': False, 'status': 'unknown', 'universeId': identity or exc.universe_id,

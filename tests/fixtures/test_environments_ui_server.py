@@ -48,7 +48,7 @@ async def main(home, port, backend='docker'):
     (workspace / 'check.py').write_text("print('workspace check passed')\n")
     calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True,
                                  'backendAvailable': True, 'longOutput': False, 'executeFailure': False,
-                                 'setupRequired': False}
+                                 'setupRequired': False, 'artifactTimeout': False}
     setup_calls = []
     lock = threading.Lock()
     config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
@@ -110,6 +110,12 @@ async def main(home, port, backend='docker'):
             if action == 'reconcile':
                 value['observation'] = {'backendIdentity': backend_identity, 'rootOwner': row['sessionId'],
                     'operationId': row['launchOperationId'], 'universeId': identity, 'ownership': 'matched', 'absenceConfirmed': False}
+            if action == 'exportArtifacts':
+                if mode['artifactTimeout']:
+                    return {'ok': False, 'status': 'unknown', 'message': 'Artifact export acknowledgement lost.'}
+                value['artifactExport'] = {'verified': True, 'selection': ['/artifacts'],
+                    'archiveBytes': 1024, 'logicalBytes': 24, 'format': 'tar'}
+                value['archives'] = []  # Controlled transport: no real archive claim.
             if action == 'remove':
                 value['retention'] = {'verified': True, 'sourceBytes': 23, 'archiveBytes': 2025,
                     'totalBytes': 2048, 'format': 'tar',
@@ -135,7 +141,8 @@ async def main(home, port, backend='docker'):
         with lock:
             observed = {'calls': list(calls), 'setupCalls': list(setup_calls), 'callCounts': dict(Counter(call['action'] for call in calls)), 'states': dict(states), 'mode': dict(mode)}
         observed['resources'] = [{key: row.get(key) for key in ('id', 'sessionId', 'workspaceId',
-            'revision', 'backendKey', 'backendType', 'retentionMode', 'environmentState')}
+            'revision', 'backendKey', 'backendType', 'retentionMode', 'environmentState',
+            'lastOperation', 'lastArtifactExport', 'artifactExport')}
             for identity in dict.fromkeys(call['resourceId'] for call in observed['calls'])
             for row in [environments.get(home, sid, identity)]]
         observed['requests'] = service.operations.requests.list(sid)
@@ -154,7 +161,7 @@ async def main(home, port, backend='docker'):
                 mode['capacityAvailable'] = bool(value['capacityAvailable'])
             if 'backendAvailable' in value:
                 mode['backendAvailable'] = bool(value['backendAvailable'])
-            for key in ('longOutput', 'executeFailure', 'setupRequired'):
+            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout'):
                 if key in value:
                     if type(value[key]) is not bool:
                         raise web.HTTPBadRequest(text=key + ' must be boolean')

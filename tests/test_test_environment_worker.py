@@ -257,6 +257,29 @@ def test_docker_full_retention_is_rejected_without_export(library, tmp_path):
     assert not any(name in {'export', 'destroy'} for name, _, _ in calls)
 
 
+def test_artifact_recovery_exports_fixed_selection_without_other_effects(library, tmp_path):
+    lib, calls = library
+    result = worker.execute_call(payload(tmp_path, 'exportArtifacts'))
+    assert result['ok'] and result['status'] == 'stopped'
+    assert result['artifactExport']['selection'] == ['/artifacts']
+    assert [name for name, _, _ in calls] == ['status', 'export']
+    assert calls[-1][1][1] == '/artifacts'
+    assert len(list(tmp_path.glob('artifacts-*/manifest.json'))) == 1
+    assert not list(tmp_path.glob('retained-*'))
+
+
+def test_artifact_recovery_refuses_running_or_foreign_backend(library, tmp_path):
+    lib, calls = library
+    lib.status = lambda *a, **k: Value(state='running', services=[])
+    result = worker.execute_call(payload(tmp_path, 'exportArtifacts'))
+    assert not result['ok'] and result['effectAdmitted'] is False
+    assert not calls
+    value = payload(tmp_path, 'exportArtifacts')
+    value['expectedBackendIdentity']['daemon'] = 'replacement'
+    assert worker.execute_call(value)['code'] == 'backend_unverified'
+    assert not calls
+
+
 @pytest.mark.parametrize('has_settlement,has_pending,confirmed', [(False, False, False), (True, True, False), (True, False, True)])
 def test_docker_reconcile_does_not_manufacture_absence(library, tmp_path, monkeypatch, has_settlement, has_pending, confirmed):
     value = payload(tmp_path, 'reconcile')

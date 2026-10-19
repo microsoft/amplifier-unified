@@ -111,6 +111,8 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    {row.observation?.status==='unverified'&&<p>Current state could not be verified. This is a saved observation.</p>}
    {['outcome_unknown','unknown'].includes(row.status)&&<p>The previous outcome is uncertain. Inspect the environment before taking another action.</p>}
    {row.lastRecovery&&<p role="status">Last recovery check: {row.lastRecovery.state?.replaceAll('_',' ')||'unknown'}. {row.lastRecovery.message||'The original request result is kept separately.'}</p>}
+   {row.lastArtifactExport&&<p role="status">Artifact recovery: {row.lastArtifactExport.state?.replaceAll('_',' ')||'unknown'}. {row.lastArtifactExport.message}</p>}
+   {row.artifactExport?.verified&&<p>Artifact evidence saved: {storageSize(row.artifactExport.archiveBytes)}. This copy does not include the working folder or authorize removal.</p>}
    {savedBytes!==null&&<p>Latest saved copy: {savedBytes}. {accounting.policy==='full'?'Includes a complete environment export.':'Includes the source snapshot, working folder and artifacts.'} These files stay saved until deliberately removed.</p>}
    {row.status==='removed'&&savedBytes===null&&<p>Previously saved files and results are kept. Their storage size has not been verified.</p>}
    <details><summary>Environment details</summary><pre className="a-state-view">{JSON.stringify(row,null,2)}</pre></details>
@@ -123,6 +125,8 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
      <button type="submit" className="a-soft" disabled={blocked||!draft.command.trim()||!['running','ready'].includes(row.status)}>Run check</button>
     </form>
     <button type="button" className="a-soft" disabled={cleanupBlocked||['stopped','not-started'].includes(row.status)} onClick={()=>mutate('workspace.environments.stop',{id:row.id,expectedRevision:row.revision})}>Stop and keep data</button>
+    <button type="button" className="a-soft" disabled={cleanupBlocked||row.status!=='stopped'||row.lastArtifactExport?.state==='outcome_unknown'} onClick={()=>mutate('workspace.environments.exportArtifacts',{id:row.id,expectedRevision:row.revision})}>Save artifact evidence</button>
+    {row.lastArtifactExport?.state==='outcome_unknown'&&<p>The artifact export is uncertain. Its original request and the stopped environment are retained; it will not be repeated automatically.</p>}
     {removing!==row.id?<button type="button" className="a-soft" disabled={cleanupBlocked||!['stopped','not-started'].includes(row.status)} onClick={()=>{setRemoving(row.id);setFullCopy(row.retention?.mode==='full')}}>Remove environment…</button>:<div role="group" aria-label="Confirm environment removal">
      <p>{fullCopy?'A complete environment export and saved check results will be retained.':'The working folder, artifacts and saved check results will be retained.'} The environment will be removed only after those files are saved. {!fullCopy?'Files elsewhere in the container are not retained.':''}</p>
      {row.retention?.fullAvailable&&<details><summary>Save more files</summary><label><input type="checkbox" checked={fullCopy} disabled={cleanupBlocked} onChange={event=>setFullCopy(event.target.checked)}/> Keep a complete copy of the environment</label><p>This uses more storage. Choose it if the smaller export could not preserve your files, or if you need files outside the working folder and artifacts.</p></details>}

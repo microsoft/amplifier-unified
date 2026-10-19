@@ -52,6 +52,7 @@ def definitions(schema, string):
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
         'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its source and artifacts. Optional full retention preserves the complete Incus environment; Docker supports files only. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
         'workspace.environments.reconcile': ('Inspect this exact owned environment and repair its metadata without starting, stopping, deleting or replaying backend work. Retire ownership only after the original backend proves physical absence; earlier uncertain operations stay uncertain.', schema(owned)),
+        'workspace.environments.exportArtifacts': ('Recover a bounded, verified artifacts archive from this exact stopped owned environment. No workspace export, restart, command execution or deletion. Does not satisfy preservation required for removal. Unknown exports never replay.', schema(owned)),
     }
 
 
@@ -134,6 +135,7 @@ def public(home, row):
         'status': row.get('environmentState', 'unknown'), 'universeId': row.get('universeId'),
         'source': row['source'], 'snapshot': row.get('snapshot'), 'sourceReady': row.get('sourceReady'), 'services': row.get('services', []),
         'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
+        'artifactExport': row.get('artifactExport'), 'lastArtifactExport': row.get('lastArtifactExport'),
         'preparation': dependencies.status(storage.directory(home, row)) if row.get('preparationPending') or row.get('preparedDependencies') else None,
         'preparationCleanup': row.get('preparationCleanup'),
         'reason': row.get('reason'), 'observation': row.get('observation'),
@@ -247,7 +249,7 @@ def invoke(config, home, row, action, args):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False
-    deadline = time.monotonic() + (650 if action == 'start' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
         process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
@@ -298,7 +300,7 @@ def confirmed_result(row, request):
     return (request.get('state') in {'completed', 'failed'}
             and request.get('resourceId') == row['id']
             and request.get('sessionId') == row['sessionId']
-            and request.get('action') in {'workspace.environments.' + action for action in ('start', 'execute', 'stop', 'remove')}
+            and request.get('action') in {'workspace.environments.' + action for action in ('start', 'execute', 'stop', 'remove', 'exportArtifacts')}
             and isinstance(request.get('result'), dict))
 
 
@@ -306,6 +308,13 @@ def project_result(home, row, request):
     """Rebuild resource metadata from its exact receipt without another effect."""
     result = request['result']
     action = request['action'].rsplit('.', 1)[-1]
+    if action == 'exportArtifacts':
+        # Keep the prior failed/unknown removal visible and preserve ownership.
+        changes = {'pendingRequest': None, 'lastArtifactExport': request}
+        if result.get('ok') and result.get('artifactExport', {}).get('verified') is True:
+            changes['artifactExport'] = {**result['artifactExport'], 'requestId': request['requestId'],
+                                         'archives': result['archives'] if 'archives' in result else []}
+        return save(home, row, **changes)
     changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
     if action == 'start' and (result.get('admissionDenied') or result.get('effectAdmitted') is False):
         changes['backendAdmitted'] = False
@@ -385,11 +394,15 @@ def effect(app, row, action, args, config, request, admit):
             raise ValueError('This environment already owns a durable check. Observe or cancel that exact job.')
         if action == 'remove' and row.get('environmentState') not in {'stopped', 'not-started'}:
             raise ValueError('Stop and inspect this environment before removing it.')
+        if action == 'exportArtifacts' and (not row.get('backendAdmitted') or row.get('guestRemoved')
+                                           or row.get('environmentState') != 'stopped'):
+            raise ValueError('Artifact recovery requires a stopped owned environment.')
         if row['status'] == 'retired':
             raise ValueError('This environment has already been removed.')
         admit()
         row = save(home, row, pendingRequest=request['requestId'],
-                   environmentState={'start': 'preparing', 'execute': 'running', 'stop': 'stopping', 'remove': 'removing'}[action])
+                   environmentState={'start': 'preparing', 'execute': 'running', 'stop': 'stopping',
+                                     'remove': 'removing', 'exportArtifacts': 'stopped'}[action])
         if action == 'start':
             prepared = invoke(config, home, row, 'prepare', args)
             if not prepared.get('ok'):
@@ -452,10 +465,14 @@ def effect(app, row, action, args, config, request, admit):
     except BaseException as exc:
         # Hold the physical owner lock through final persistence. A rejected
         # competing request must never change the active owner's resource.
-        try:
-            recorded = app.operations.requests.read(sid, request['requestId'])
-        except (OSError, ValueError, sqlite3.Error):
-            recorded = {}
+        # A returned terminal commit is already proof. A subsequent read fault
+        # cannot authorize overwriting that receipt with an unknown outcome.
+        recorded = request if confirmed_result(row, request) else {}
+        if not recorded:
+            try:
+                recorded = app.operations.requests.read(sid, request['requestId'])
+            except (OSError, ValueError, sqlite3.Error):
+                recorded = {}
         if confirmed_result(row, recorded):
             # The receipt and resource projection have separate commit points.
             # Retry only the projection; never downgrade or replay a known effect.
@@ -482,8 +499,11 @@ def effect(app, row, action, args, config, request, admit):
         if locked and (admitted or action == 'start'):
             try:
                 row = get(home, sid, row['id'])
-                row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
-                           lastOperation=request, reason=request['message'])
+                if action == 'exportArtifacts':
+                    row = save(home, row, pendingRequest=None, lastArtifactExport=request)
+                else:
+                    row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
+                               lastOperation=request, reason=request['message'])
             except (OSError, ValueError, sqlite3.Error):
                 pass
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
@@ -607,9 +627,12 @@ def read(app, sid, config):
                             if request['state'] == 'admitting':
                                 request = app.operations.requests.finish(request, 'outcome_unknown',
                                     message='The operation owner stopped before recording completion. Nothing was replayed.')
-                            row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
-                                lastOperation=request,
-                                reason='The operation owner stopped before recording completion. Nothing was replayed.')
+                            if request['action'] == 'workspace.environments.exportArtifacts':
+                                row = save(home, row, pendingRequest=None, lastArtifactExport=request)
+                            else:
+                                row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
+                                    lastOperation=request,
+                                    reason='The operation owner stopped before recording completion. Nothing was replayed.')
                     if row['status'] == 'retired':
                         result.append(public(home, {**row, 'recovery': {'available': False, 'reason': 'This environment is already retired.'}}))
                         continue
@@ -653,7 +676,7 @@ async def dispatch(app, action, args, origin, caller, authority):
         raise AppError('Choose this conversation’s current workspace.', 403)
     captured = tuple(source.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision'))
     config, availability, reason = configuration(app)
-    historical = action.rsplit('.', 1)[-1] in {'stop', 'remove', 'reconcile'}
+    historical = action.rsplit('.', 1)[-1] in {'stop', 'remove', 'reconcile', 'exportArtifacts'}
     row = None
     def guard():
         current = app._session(sid, hydrate=False)

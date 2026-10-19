@@ -12,7 +12,7 @@ const fixture=process.env.AMPLIFIER_TEST_BASE_URL?null:spawn(process.env.AMPLIFI
 let browser,page,failure;
 try{
  const url=process.env.AMPLIFIER_TEST_BASE_URL||await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),30000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:JSON.parse(process.env.AMPLIFIER_CHROMIUM_ARGS||'[]')});
  const context=await browser.newContext({viewport:{width:1280,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
@@ -37,7 +37,7 @@ try{
  const writes=[],controls=[];let dropped=false;
  await page.route('**/api/actions',async route=>{
   const body=route.request().postDataJSON();
-  if(['workspace.environments.reconcile','workspace.environments.remove'].includes(body?.action))controls.push(body);
+  if(['workspace.environments.reconcile','workspace.environments.remove','workspace.environments.exportArtifacts'].includes(body?.action))controls.push(body);
   if(body?.action==='workspace.environments.start'){
    writes.push(body);
    if(!dropped){dropped=true;await route.fetch();await route.abort('connectionreset');return}
@@ -87,6 +87,26 @@ try{
   assert.equal(recoveryCall.sessionId,initial.sessionId);assert.equal(recoveryCall.workspaceId,initial.workspaceId);
  await panel.getByRole('button',{name:'Stop and keep data',exact:true}).click();
  await expect(panel.getByText('Environment: stopped',{exact:true})).toBeVisible();
+ const beforeArtifact=await facts(),artifactOwner=beforeArtifact.resources[0];
+ await panel.getByRole('button',{name:'Save artifact evidence',exact:true}).click();
+ await expect(panel.getByText('Artifact evidence saved: 1 KiB.',{exact:false})).toBeVisible();
+ const artifactSaved=await facts(),artifactRequest=controls.find(item=>item.action==='workspace.environments.exportArtifacts');
+ assert.equal(artifactRequest.args.id,artifactOwner.id);assert.equal(artifactRequest.args.expectedRevision,artifactOwner.revision);
+ assert.equal(artifactSaved.callCounts.exportArtifacts,1);
+ assert.deepEqual(artifactSaved.resources[0].lastOperation,artifactOwner.lastOperation,'Artifact export preserves the previous operation receipt');
+ assert.equal(artifactSaved.resources[0].environmentState,'stopped');
+ for(const action of ['start','execute','stop','remove'])assert.equal(artifactSaved.callCounts[action]||0,beforeArtifact.callCounts[action]||0,'Artifact recovery must not '+action);
+ await page.request.post(url+'/fixture/environment-mode',{data:{artifactTimeout:true}});
+ await panel.getByRole('button',{name:'Save artifact evidence',exact:true}).click();
+ await expect(panel.getByText('Artifact recovery: outcome unknown.',{exact:false})).toBeVisible();
+ await expect(panel.getByRole('button',{name:'Save artifact evidence',exact:true})).toBeDisabled();
+ const artifactRefresh=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='workspace.environments.read');
+ await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
+ await (await artifactRefresh).finished();
+ const artifactUnknown=await facts();assert.equal(artifactUnknown.callCounts.exportArtifacts,2,'Refreshing does not replay an uncertain artifact export');
+ assert.deepEqual(artifactUnknown.resources[0].lastOperation,artifactOwner.lastOperation);
+ assert.equal(artifactUnknown.resources[0].environmentState,'stopped');
+ await page.request.post(url+'/fixture/environment-mode',{data:{artifactTimeout:false}});
  await panel.getByRole('button',{name:'Remove environment…',exact:true}).click();
  await expect(panel.getByRole('group',{name:'Confirm environment removal'})).toBeVisible();
  assert.equal((await facts()).callCounts.remove||0,0,'Opening removal confirmation does not remove');
@@ -142,9 +162,10 @@ try{
  await page.setViewportSize({width:1280,height:1050});
  await page.screenshot({path:output+'/queued-check-desktop.png'});
  const final=await facts();assert.equal(final.callCounts.start,2);assert.equal(final.callCounts.execute,3);assert.equal(final.callCounts.stop,2);assert.equal(final.callCounts.remove,2);assert.deepEqual(errors,[]);
+ assert.equal(final.callCounts.exportArtifacts,2,'Later refreshes and navigation never replay an uncertain artifact export');
  assert.deepEqual(final.calls.filter(item=>item.action==='remove').map(item=>item.retentionMode),['full','files'],'Full copy applies only to its confirmed removal; later queued cleanup keeps its default');
  assert.equal(final.workspaceFile,initial.workspaceFile);assert.deepEqual(final.messages,initial.messages);assert.deepEqual(final.runtimeCalls,initial.runtimeCalls);
-  await writeFile(output+'/test-environments-browser-report.json',JSON.stringify({passed:true,realHostActionsAndReceipts:true,backend:'controlled Incus capability and transport',docker:false,incusAllocation:false,publicWorkspaceDetailsEntry:true,fullCopyDefaultToggleCancelReset:true,exactRetentionModeAndOwner:true,fullCopyDoesNotChangeNextDefault:true,recoveryUsesRetainedBackend:true,providerCalls:false,lostAckReloadNoReplay:true,peerRequestReplacesStaleResult:true,unknownCommandNotReplayed:true,reconcilePreservesUnknownReceipt:true,cleanupWithUnavailableActiveBackend:true,verifiedRetentionSize:true,stopBeforeRemove:true,removalConfirmation:true,mobileNoOverflow:true,queuedWaitSurvivesReload:true,cancelledWaitNoEffects:true,automaticCheckExportRemoval:true,retainedCheckOutput:true,counts:final.callCounts,controlRequests:controls,backendCalls:final.calls,limits:['Controlled backend transport; no real container allocation, archive verification or provider execution.','Desktop and narrow pointer activation; no new physical-touch or complete keyboard-traversal claim.'],errors},null,2));
+  await writeFile(output+'/test-environments-browser-report.json',JSON.stringify({passed:true,realHostActionsAndReceipts:true,backend:'controlled Incus capability and transport',docker:false,incusAllocation:false,publicWorkspaceDetailsEntry:true,fullCopyDefaultToggleCancelReset:true,exactRetentionModeAndOwner:true,fullCopyDoesNotChangeNextDefault:true,recoveryUsesRetainedBackend:true,providerCalls:false,lostAckReloadNoReplay:true,peerRequestReplacesStaleResult:true,unknownCommandNotReplayed:true,reconcilePreservesUnknownReceipt:true,cleanupWithUnavailableActiveBackend:true,verifiedRetentionSize:true,artifactRecoveryPreservesOwnerAndLastOperation:true,unknownArtifactExportNeverReplayed:true,stopBeforeRemove:true,removalConfirmation:true,mobileNoOverflow:true,queuedWaitSurvivesReload:true,cancelledWaitNoEffects:true,automaticCheckExportRemoval:true,retainedCheckOutput:true,counts:final.callCounts,controlRequests:controls,backendCalls:final.calls,limits:['Controlled backend transport; no real container allocation, archive verification or provider execution.','Desktop and narrow pointer activation; no new physical-touch or complete keyboard-traversal claim.'],errors},null,2));
 }catch(error){failure=error;if(page)await page.screenshot({path:output+'/test-environments-failure.png'}).catch(()=>{});throw error}
 finally{
  const cleanup=[];try{await browser?.close()}catch(error){cleanup.push(error)}
