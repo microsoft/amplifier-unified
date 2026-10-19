@@ -1106,6 +1106,142 @@ async def test_actual_worker_uses_bounded_window_protocol(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('authority', ['missing', 'malformed'])
+async def test_actual_raw_worker_keeps_unassociated_fields_without_authority(tmp_path, monkeypatch, authority):
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=5)
+    if authority == 'malformed':
+        database = service.data_dir / 'diagnostics' / 'events.sqlite3'
+        database.parent.mkdir(parents=True)
+        database.write_bytes(b'not a receipt database; preserve this synthetic evidence')
+    owner.projector = None  # Exercise the actual isolated window worker.
+    try:
+        result = await owner.read('s')
+        page = owner.pages[owner.current['s']]
+        assert page['_bindingRevision'] is None
+        assert page['bindingCoverage']['status'] == 'authority-unavailable'
+        assert not page['_boundWork'] and not page['_boundGroups']
+        assert owner._binding_current(page) is False
+        assert owner._bound_current(page) is False
+        assert all(group['observationWindow'] for group in result['items'])
+        rows = owner.nodes('s', result['items'][0]['id'])['items']
+        assert len(rows) == 5 and all(row['association'] == 'unverified' for row in rows)
+        assert all('bindingProvenance' not in row for row in rows)
+        for number, row in enumerate(rows):
+            assert (await owner.read_text('s', row['outputDetail']))['value'] == f'value-{number}'
+        projected = owner.project(session)
+        assert projected['workProjection']['current'] is True
+        assert projected['workBindingCoverage']['status'] == 'authority-unavailable'
+        assert owner.projector._process is not None
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_raw_cache_requires_explicit_read_to_reconsider_authority(tmp_path, monkeypatch):
+    from amplifier_web.diagnostics import Diagnostics
+    from amplifier_web import event_window
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=5)
+    diagnostic = None
+    try:
+        first = await owner.read('s', _initial=True)
+        original = owner.pages[owner.current['s']]
+        assert original['_bindingRevision'] is None and not original['_boundWork']
+        assert owner._binding_current(original) is False
+        before = len(owner.projector.inputs)
+        # This is an actual unavailable -> validated authority transition, not
+        # a token injected into the already accepted raw page.
+        service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+        diagnostic = Diagnostics(service)
+        assert diagnostic.storage_ready and not diagnostic.storage_error
+        authority = event_window.binding_revision(service.data_dir, session)
+        assert authority is not None
+        await owner.read('s', _initial=True)
+        assert owner.pages[owner.current['s']] is original
+        assert original['_bindingRevision'] is None and len(owner.projector.inputs) == before
+        refreshed = await owner.read('s')  # One explicit read, no passive reproof.
+        current = owner.pages[owner.current['s']]
+        assert current is not original and current['_bindingRevision'] == authority
+        assert refreshed['revision'] != first['revision']
+        assert len(owner.projector.inputs) == before + 1
+        # The source contains body observations only. A newly valid index does
+        # not retrospectively certify any of them or the previous raw page.
+        assert not current['_boundWork'] and not original['_boundWork']
+        assert owner._bound_current(original) is False
+        assert all(row['association'] == 'unverified' for row in
+                   owner.observations('s', original['group'], first['revision'])['items'])
+    finally:
+        await owner.close()
+        if diagnostic is not None:
+            await diagnostic.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('damage', ['missing-dependency', 'malformed-token', 'invented-binding',
+                                  'verified-row', 'invented-proof'])
+async def test_raw_unavailable_marker_cannot_admit_binding_or_malformed_dependency(tmp_path, monkeypatch, damage):
+    owner, _, _, _ = fixture(tmp_path, monkeypatch, count=5)
+    original = owner.projector.project
+    async def altered(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        page = result['page']
+        assert page['_bindingRevision'] is None
+        if damage == 'missing-dependency':
+            page.pop('_bindingRevision')
+        elif damage == 'malformed-token':
+            page['_bindingRevision'] = {'kind': 'diagnostics-owner-v1', 'revision': 0}
+        elif damage == 'invented-binding':
+            page['_boundWork'] = [{'turnId': 'forged'}]
+        elif damage == 'verified-row':
+            page['items'][0]['association'] = 'verified'
+        else:
+            page['_proof'] = {'indexRevision': None}
+        return result
+    monkeypatch.setattr(owner.projector, 'project', altered)
+    try:
+        with pytest.raises(ValueError, match='ownership changed'):
+            await owner.read('s')
+        assert not owner.pages and not owner.current and not owner._root_proofs
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['source', 'epoch'])
+async def test_unavailable_raw_field_keeps_source_and_post_await_fence(tmp_path, monkeypatch, mutation):
+    owner, _, path, _ = fixture(tmp_path, monkeypatch, count=5)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = owner.projector.project
+    async def held(inputs, *, key):
+        value = await original(inputs, key=key)
+        if inputs['operation'] == 'field':
+            entered.set()
+            await asyncio.wait_for(release.wait(), 5)
+        return value
+    monkeypatch.setattr(owner.projector, 'project', held)
+    task = None
+    try:
+        page = await owner.read('s')
+        rows = owner.nodes('s', page['items'][0]['id'])['items']
+        task = asyncio.create_task(owner.read_text('s', rows[0]['outputDetail']))
+        await asyncio.wait_for(entered.wait(), 5)
+        if mutation == 'source':
+            with path.open('a') as stream:
+                stream.write('{}\n')
+        else:
+            owner.invalidate({'s'})
+        release.set()
+        with pytest.raises(ValueError, match='expired'):
+            await asyncio.wait_for(asyncio.shield(task), 5)
+    finally:
+        release.set()
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+
+
+@pytest.mark.asyncio
 async def test_same_owner_source_reassignment_rejects_cached_rows_and_inflight_field(tmp_path, monkeypatch):
     owner, session, _, _ = fixture(tmp_path, monkeypatch)
     first = await owner.read('s')
