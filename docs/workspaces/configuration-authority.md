@@ -175,3 +175,32 @@ qualified separately from the scripted browser adapter.
 Source, native, browser and installed-wheel evidence are distinct. These checks
 do not establish real-provider cooperation, provider-login acceptance, optional
 recipe integration, release publication, installed-host adoption or OS isolation.
+
+## Persistent Full access
+
+Chat info > **Access & approvals** offers **Ask when needed** and **Full access**.
+The user chooses this chat, workspace default, or app default; chat overrides
+workspace, which overrides app. Inherit removes that layer's choice. Defaults
+remain Ask when needed. Full access persists across turns, Stop and host restarts.
+Only authenticated user controls can call `access.set`; agents can inspect their
+own mode with `access.get` but cannot enable it. Repository settings cannot opt in.
+Records live in the existing host command database with revision-checked,
+idempotent saves. New native workers read only the three exact policy records.
+
+Full access preauthorizes configuration effects at all scopes and ordinary
+allow/deny tool permissions. Pending valid permission requests are answered once;
+questions, expired requests, lost workers and old tool effects are never replayed.
+Existing root ownership, execution identity, Stop, resource ownership, capacity,
+retention and recovery checks remain in force. A trusted root remains responsible
+for evaluating peer messages. Configuration commits recheck the captured mode
+revision; turning the mode off fences delayed changes and grants derived from it.
+
+File, patch, image and search mounts (including child definitions and restored
+plans) use all accessible local filesystem roots under Full access. Original
+policy declarations are retained in the plan and restored before recomposition;
+turning Full access off cannot preserve a widened snapshot by accident. Existing
+worker retirement follows the file-access admission fence and waits for active
+work and persistent children. Approvals use the saved preference immediately; the
+UI separately identifies file mounts pending retirement. No provider turn starts.
+Operating system permissions, unavailable tools, external account authentication
+and explicit user questions are not replaced by this preference.

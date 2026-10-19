@@ -136,6 +136,7 @@ def setup_routes(app, streams):
             "coordination.artifact": "sessionId",
             "coordination.review": "sessionId",
             "coordination.recap": "sessionId", "coordination.diagnostics": "sessionId",
+            "access.get": "sessionId", "access.set": "sessionId",
             "capability.read": "sessionId", "capability.request": "sessionId",
             "capability.grant": "sessionId", "capability.revoke": "sessionId",
             "runtime.provenance": "sessionId", "integration.capture": "sessionId",

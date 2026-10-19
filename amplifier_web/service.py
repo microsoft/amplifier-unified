@@ -242,6 +242,8 @@ from .capacity import definitions as capacity_definitions
 ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
 from .configuration_authority import definitions as configuration_authority_definitions
 ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
+from .access_mode import definitions as access_mode_definitions
+ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
 
 
 class AppError(Exception):
@@ -694,6 +696,8 @@ class AppService:
         self.collaboration = Collaboration(self)
         from .configuration_authority import ConfigurationAuthority
         self.configuration_authority = ConfigurationAuthority(self)
+        from .access_mode import AccessMode
+        self.access_mode = AccessMode(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
         from .test_queue import TestQueue
@@ -1855,6 +1859,9 @@ class AppService:
         if action.startswith("session.handoff."):
             return await self.handoffs.dispatch(action, args, origin, caller_session_id,
                 include_state=include_state, admission_check=admission_check)
+        if action.startswith("access."):
+            return await self.access_mode.dispatch(action, args, origin, command_id, caller_session_id,
+                admission_check=admission_check, expected_revision=expected_revision)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
@@ -4251,6 +4258,8 @@ class AppService:
             elif kind == "approval.requested":
                 session["approvals"].append({**payload, "status": "pending"})
                 self._activity(session, "approval", "Waiting for your approval")
+                if self.access_mode.full(session):
+                    self._task(self.access_mode.settle(session["id"]))
             elif kind == "approval.resolved":
                 for approval in session["approvals"]:
                     if approval["id"] == payload.get("id"):

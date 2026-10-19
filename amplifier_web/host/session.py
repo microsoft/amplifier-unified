@@ -363,6 +363,8 @@ def _expand_module_configuration(node, in_provider=False):
 
 def _apply_host_policy(bundle, config, *, execution_workspace=None):
     """Host write boundaries cover file, patch and image tools, including snapshots."""
+    from ..access_mode import restore_file_policy, full_file_policy
+    restore_file_policy(bundle)
     settings = config.settings
     # A managed checkout can differ from the immutable history/config workspace.
     # Repository paths follow execution; unrelated explicitly allowed paths stay.
@@ -514,7 +516,7 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             if isinstance(child, dict):
                 search_policies(child.get('tools', []), child.get('agents', {}), files, inherited)
     search_policies(bundle.tools, bundle.agents, [], [])
-    return bundle
+    return full_file_policy(bundle) if getattr(config, "access_mode", "ask") == "full" else bundle
 
 
 async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
