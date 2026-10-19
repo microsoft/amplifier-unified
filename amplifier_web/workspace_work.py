@@ -22,6 +22,7 @@ SOURCE_CHARS = 131072
 
 
 def definitions(schema, string):
+    from .workspace_work_evidence import definitions as evidence_definitions
     scope = {'workspaceId': string(100)}
     actor = {'sessionId': string(200)}
     target = {**scope, 'id': string(200)}
@@ -34,6 +35,7 @@ def definitions(schema, string):
                'constraints': {'type': 'array', 'maxItems': 32, 'items': {**string(1000), 'minLength': 1}},
                'nextAction': string(1000), 'blockedReason': string(1000)}
     return {
+        **evidence_definitions(schema, string),
         'workspace.work.list': ('Read bounded durable promises without starting models or workers. Coverage is not a complete historical inventory.', schema({**scope, **page,
             'filter': {'enum': ['accepted', 'all', 'proposed', 'closed', 'attention']},
             'query': string(200)}, ['workspaceId'])),
@@ -144,7 +146,8 @@ class WorkspaceWork:
         value = {key: copy.deepcopy(item[key]) for key in (
             'id', 'workspaceId', 'revision', 'promiseRevision', 'title', 'commitment',
             'disposition', 'ownerSessionId', 'nextAction', 'blockedReason', 'updatedAt',
-            'verification', 'humanDecision', 'delivery')}
+            'verification', 'humanDecision', 'delivery', 'execution')}
+        value['candidate'] = item.get('candidate')
         value['readRef'] = {'action': 'workspace.work.read', 'args': {'workspaceId': item['workspaceId'], 'id': item['id']}}
         return value
 
@@ -218,6 +221,7 @@ class WorkspaceWork:
         # Source body is deliberately separate from history summaries.
         values = [{**{k: row[k] for k in ('id', 'kind', 'sequence', 'promiseRevision', 'actor', 'recordedAt')},
                    'changedFields': list(row.get('changes', {})),
+                   **{k: copy.deepcopy(row[k]) for k in ('evidence', 'link', 'decision', 'disposition') if k in row},
                    'source': {k: v for k, v in row.get('source', {}).items() if k != 'text'},
                    'sourceRef': {'action': 'workspace.work.source', 'args': {
                        'workspaceId': workspace['id'], 'id': item['id'], 'sourceId': row['id']}}
@@ -288,7 +292,8 @@ class WorkspaceWork:
         actor = self.actor(args, origin, caller, workspace)
         if not command_id:
             self.error('Work mutations require a stable command ID.', 400)
-        self.validate_content(args)
+        if verb in {'create', 'revise'}:
+            self.validate_content(args)
         digest = fingerprint([action, args, origin, actor['id']])
         # Avoid rehydrating a source for a confirmed idempotent retry.
         async with self.service.lock:
@@ -307,6 +312,8 @@ class WorkspaceWork:
             self.db.execute('BEGIN IMMEDIATE')
             try:
                 now = time.time()
+                event_extra = {}
+                event_promise = None
                 if verb == 'create':
                     if args['commitment'] == 'accepted' and captured['inputOrigin'] not in {'ui', 'user'}:
                         self.error('Accepted Work requires proven human source origin; retain other sources as proposals.', 400)
@@ -323,7 +330,8 @@ class WorkspaceWork:
                             'ownerSessionId': actor['id'], 'schemaVersion': 1, 'sourceKey': source_key,
                             'revision': 1, 'promiseRevision': 1, 'commitment': args['commitment'],
                             'disposition': 'open', 'verification': 'not_verified', 'humanDecision': 'not_recorded',
-                            'delivery': 'not_recorded', 'eventCount': 1, 'createdAt': now, 'updatedAt': now,
+                            'delivery': 'not_recorded', 'execution': 'not_started', 'links': [], 'criterionEvidence': {},
+                            'eventCount': 1, 'createdAt': now, 'updatedAt': now,
                             'interpretation': '', 'criteria': [], 'constraints': [], 'nextAction': '', 'blockedReason': ''}
                 elif verb == 'revise':
                     item = self.load(args['id'], workspace)
@@ -342,16 +350,23 @@ class WorkspaceWork:
                     if promise_change:
                         item['promiseRevision'] += 1
                         item['verification'] = 'not_verified'
+                        item['humanDecision'] = 'not_recorded'
+                        item['criterionEvidence'] = {}
+                        item['execution'] = 'not_started'
                 else:
-                    self.error('Unsupported Work mutation.', 400)
-                for key in ('title', 'interpretation', 'criteria', 'constraints', 'nextAction', 'blockedReason'):
+                    from .workspace_work_evidence import mutate
+                    item = self.load(args['id'], workspace)
+                    event_extra, event_promise = mutate(self, verb, item, args, actor, origin, workspace)
+                changed_fields = ('title', 'interpretation', 'criteria', 'constraints', 'nextAction', 'blockedReason') if verb in {'create', 'revise'} else ()
+                for key in changed_fields:
                     if key in args:
                         item[key] = copy.deepcopy(args[key])
                 event_id = 'work-event:' + str(uuid.uuid5(uuid.NAMESPACE_URL, command_id))
                 event = {'id': event_id, 'commandAction': EVENT, 'kind': verb, 'workItemId': item['id'],
-                         'sequence': item['eventCount'], 'promiseRevision': item['promiseRevision'],
+                         'sequence': item['eventCount'], 'promiseRevision': event_promise or item['promiseRevision'],
                          'actor': {'origin': origin, 'sessionId': actor['id']}, 'recordedAt': now,
-                         'source': captured or {}, 'changes': {k: copy.deepcopy(args[k]) for k in ('title', 'interpretation', 'criteria', 'constraints', 'nextAction', 'blockedReason') if k in args}}
+                         'source': captured or {}, **event_extra,
+                         'changes': {k: copy.deepcopy(args[k]) for k in changed_fields if k in args}}
                 self.receipts.insert(event_id, fingerprint(event), event)
                 item['latestEventRef'] = event_id
                 if verb == 'create':

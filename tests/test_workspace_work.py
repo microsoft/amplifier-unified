@@ -259,3 +259,86 @@ async def test_stop_blocks_mutation_but_not_passive_read(app):
     assert (await read(app, owner, item['id']))['item']['disposition'] == 'open'
     with pytest.raises(AppError):
         await revise(app, owner, item, 'after-stop', nextAction='Resume without authority')
+
+
+async def change_work(app, actor, verb, item, identity, **extra):
+    return await agent_action(app, actor, 'workspace.work.' + verb, {
+        'workspaceId': workspace_id(app, actor), 'sessionId': actor['id'],
+        'id': item['id'], 'expectedRevision': item['revision'], **extra}, identity)
+
+
+async def test_return_is_unverified_and_cannot_close_or_claim_human_acceptance(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    reported = (await change_work(app, owner, 'report', item, 'report-result',
+        promiseRevision=1, candidate='a' * 40, outcome='passed',
+        report='Worker says it passed.', criteria=['retained']))['result']['item']
+    assert reported['verification'] == 'not_verified'
+    assert reported['execution'] == 'reported'
+    assert reported['humanDecision'] == reported['delivery'] == 'not_recorded'
+    with pytest.raises(AppError):
+        await change_work(app, owner, 'disposition', reported, 'false-close',
+            disposition='closed', reason='Worker said success', basis='satisfied')
+    with pytest.raises(AppError):
+        await change_work(app, owner, 'decision', reported, 'false-human',
+            decision='accepted', candidate='a' * 40, promiseRevision=1)
+
+
+async def test_links_do_not_enroll_or_start_peer_and_stale_return_keeps_original_scope(app):
+    owner, peer = app.state['sessions']
+    item = (await create(app, owner))['result']['item']
+    item = (await change_work(app, owner, 'link', item, 'link-peer',
+        linkedSessionId=peer['id'], role='executor', candidate='a' * 40))['result']['item']
+    assert app.assignments.current(peer) is None and app.runtime.inputs == []
+    await generation(app, peer, 'peer-execution', ['linked-input'])
+    correction = source(app, owner, 'Include a cold reopen.')
+    item = (await revise(app, owner, item, 'scope-v2', source=correction,
+        criteria=[{'id': 'retained', 'text': 'The exact source survives two cold reopens.'}]))['result']['item']
+    item = (await change_work(app, peer, 'report', item, 'late-report',
+        promiseRevision=1, candidate='a' * 40, outcome='passed',
+        report='Finished the old revision.', criteria=['retained']))['result']['item']
+    assert item['promiseRevision'] == 2 and item['verification'] == 'not_verified'
+    assert item['execution'] != 'reported'
+    history = (await app.dispatch('workspace.work.history', {
+        'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']
+    late = next(row for row in history['items'] if row['kind'] == 'report')
+    assert late['promiseRevision'] == 1
+    assert late['evidence']['qualification'] == 'participant_report'
+
+
+async def test_exact_check_receipt_and_distinct_root_are_required_for_verified_closure(app):
+    owner, reviewer = app.state['sessions']
+    item = (await create(app, owner))['result']['item']
+    candidate = 'b' * 40
+    item = (await change_work(app, owner, 'link', item, 'link-builder',
+        linkedSessionId=owner['id'], role='executor', candidate=candidate))['result']['item']
+    item = (await change_work(app, owner, 'link', item, 'link-reviewer',
+        linkedSessionId=reviewer['id'], role='reviewer', candidate=candidate))['result']['item']
+    await generation(app, reviewer, 'reviewer-turn', ['review-input'])
+    # Synthetic canonical collection fixture; not evidence about any real build.
+    collection = {'commandAction': 'integration.collect', 'result': {
+        'id': 'collection-one', 'kind': 'collection', 'sessionId': reviewer['id'],
+        'status': 'passed', 'candidateStatus': 'matched',
+        'repositories': [{'repositoryPath': '/synthetic/repo', 'status': 'passed',
+                          'candidateStatus': 'matched', 'resultingSource': {'head': candidate},
+                          'artifacts': [{'status': 'retained', 'sha256': 'c' * 64, 'outputId': 'test-output'}],
+                          'operation': {'state': 'completed', 'returncode': 0}}]}}
+    app.collaboration.insert('collection-one', 'fixture', collection)
+    app.db.commit()
+    with pytest.raises(AppError):
+        await change_work(app, reviewer, 'report', item, 'wrong-candidate',
+            promiseRevision=1, candidate='d' * 40, outcome='passed', report='Wrong source',
+            criteria=['retained'], checkReceiptId='collection-one')
+    checked = (await change_work(app, reviewer, 'report', item, 'verified',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Checked exact source',
+        criteria=['retained'], checkReceiptId='collection-one'))['result']['item']
+    assert checked['verification'] == 'independent_checks_passed'
+    assert checked['humanDecision'] == checked['delivery'] == 'not_recorded'
+    closed = (await change_work(app, owner, 'disposition', checked, 'close',
+        disposition='closed', reason='Defined criteria checked.', basis='satisfied'))['result']['item']
+    reopened = (await change_work(app, owner, 'disposition', closed, 'reopen',
+        disposition='open', reason='New counterevidence needs inspection.', basis='reopened'))['result']['item']
+    assert reopened['disposition'] == 'open' and reopened['verification'] == 'not_verified'
+    history = (await app.dispatch('workspace.work.history', {
+        'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
+    assert len([row for row in history if row['kind'] == 'disposition']) == 2
