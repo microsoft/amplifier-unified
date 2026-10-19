@@ -6,16 +6,26 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {chromium,expect} from '@playwright/test';
+import {chromium,expect as baseExpect} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {assertPassiveActions,bounded,createWorkObserver,unknownCleanupValue} from './shared-work-test-helpers.mjs';
 
+const actionTimeoutMs=7000,navigationTimeoutMs=15000;
+const expect=baseExpect.configure({timeout:actionTimeoutMs});
+const observer=createWorkObserver();
+const observePage=(page,client)=>{
+ page.setDefaultTimeout(actionTimeoutMs);
+ page.setDefaultNavigationTimeout(navigationTimeoutMs);
+ page.on('pageerror',error=>observer.pageError(client,error));
+ page.on('request',request=>observer.request(client,request));
+};
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/empty_host_ui_server.py','--chat-controls','--shared-work'],{stdio:['ignore','pipe','inherit']});
 const stop=ownFixture(fixture,{label:'Shared Work fixture'});
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
 const headers={Authorization:'Bearer fixture-browser-control-token'};
-const launch={headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
+const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
 let browser,originalError,result;
 try {
  const url=await new Promise((resolve,reject)=>{
@@ -27,12 +37,11 @@ try {
  await mkdir(output,{recursive:true});
  browser=await chromium.launch(launch);
  const page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
- const errors=[],calls=[];
- page.on('pageerror',error=>errors.push(error.message));
- page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')calls.push(request.postDataJSON())});
- const manifest=await (await page.request.get(url+'/fixture/shared-work')).json();
- const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
- const state=()=>page.evaluate(()=>window.amplifier.getState());
+ observePage(page,'primary');
+ const calls=observer.calls;
+ const manifest=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
+ const action=(name,args={})=>bounded(page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),actionTimeoutMs,'Primary '+name);
+ const state=()=>bounded(page.evaluate(()=>window.amplifier.getState()),actionTimeoutMs,'Primary state read');
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  // The selected draft belongs to a different chat; reading Work must not touch it.
  const created=await action('session.create',{workspace:manifest.workspace.path,title:'Draft owner'});
@@ -66,6 +75,9 @@ try {
  const detail=work.getByRole('article',{name:'Work details'});
  await expect(detail).toBeVisible();
  for(const fact of ['Commitment','Execution','Verification','Human decision','Delivery','Cleanup'])await expect(detail.getByText(fact,{exact:true})).toBeVisible();
+ const cleanupValue=detail.locator('dt').filter({hasText:/^Cleanup$/}).locator('xpath=following-sibling::*[1][self::dd]');
+ await expect(cleanupValue).toHaveCount(1);
+ await expect(cleanupValue).toHaveText(unknownCleanupValue);
  await expect(detail.getByText(/Returned.*unverified/i)).toBeVisible();
  await expect(detail.getByText(/Independent checks passed|Cleanup complete|Shipped/)).toHaveCount(0);
  const source=detail.getByRole('region',{name:'Original source'});
@@ -84,7 +96,8 @@ try {
  assert.equal((await state()).selectedSessionId,draftOwner);
  const readCalls=calls.slice(before);
  assert.ok(readCalls.filter(row=>row.action.startsWith('workspace.work.')).every(row=>['workspace.work.list','workspace.work.read','workspace.work.history','workspace.work.source'].includes(row.action)));
- assert.ok(readCalls.every(row=>!['session.select','conversation.send','worker.spawn','task.start','coordination.create'].includes(row.action)));
+ assertPassiveActions(readCalls);
+ observer.assertHealthy();
  assert.ok(readCalls.filter(row=>row.action==='workspace.work.list').every(row=>row.args.limit<=50));
  // New incoming state cannot steal focus; Back restores the explicit item.
  for(const width of [390,320,1440]) {
@@ -102,28 +115,38 @@ try {
  }
  // A second browser client has independent presentation choices.
  const peer=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
- peer.on('pageerror',error=>errors.push(error.message));
+ observePage(peer,'peer');
  await peer.goto(url);await peer.waitForFunction(()=>window.amplifier);
- await peer.evaluate(id=>window.amplifier.dispatch('view.update',{patch:{workSurface:'workspace',workWorkspaceId:id,workWorkspaceTab:'work'}}),manifest.workspace.id);
+ await bounded(peer.evaluate(id=>window.amplifier.dispatch('view.update',{patch:{workSurface:'workspace',workWorkspaceId:id,workWorkspaceTab:'work'}}),manifest.workspace.id),actionTimeoutMs,'Peer Work navigation');
  const peerWork=peer.getByRole('region',{name:'Shared work',exact:true});
  await peerWork.getByRole('combobox',{name:'Show work'}).selectOption('closed');
  await expect(peerWork.locator(`[data-work-id="${manifest.closed.id}"]`)).toBeVisible();
  await expect(filter).toHaveValue('accepted');
  await expect(work.getByRole('textbox',{name:'Find work'})).toHaveValue('Retain the original promise');
+ assertPassiveActions(calls.slice(before)); // Includes both clients, before explicit Open chat.
+ observer.assertHealthy(); // Rejects session.warm across the whole observation.
  // Only explicit Open chat traverses the existing guarded navigation path.
  await detail.getByRole('button',{name:'Open chat: '+manifest.ownerSessionId,exact:true}).click();
  await expect.poll(async()=>(await state()).selectedSessionId).toBe(manifest.ownerSessionId);
  await action('session.select',{id:draftOwner});
- await expect(composer).toHaveDraft('Private draft remains unchanged.');
+ await expect(composer).toHaveDraft('Private draft remains unchanged.',{timeout:actionTimeoutMs});
  await expect(page.getByRole('button',{name:'Remove private-draft.txt',exact:true})).toBeVisible();
- const observation=await (await page.request.get(url+'/fixture/shared-work')).json();
+ const observation=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(observation.forbiddenRuntimeCalls,[]);
- const runtime=await (await page.request.get(url+'/fixture')).json();
+ assert.deepEqual(observation.runtimeCallbackCounts,{start:0,send:0,prewarm:0});
+ assert.equal(observation.pendingWarmups,0,'No scheduled warm callback may remain unobserved');
+ const runtime=await (await page.request.get(url+'/fixture',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);assert.equal(runtime.workerCount,0);
- assert.deepEqual(errors,[]);
+ // Close observed pages before the final awaited assertion: detached listener
+ // failures from either client must not arrive after the PASS decision.
+ await bounded(peer.close(),actionTimeoutMs,'Peer page close');
+ await bounded(page.close(),actionTimeoutMs,'Primary page close');
+ observer.assertHealthy();
  result={status:'passed',sourceFixture:true,installedWheel:false,launchOptions:launch,
   acceptedItems:found.size,sourcePagesComplete:true,priorReturnRetained:true,currentUnknown:true,
   widths:[1440,390,320],clients:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
+  runtimeCallbackCounts:observation.runtimeCallbackCounts,observationErrors:observer.errors,
+  browserTimeouts:{actionTimeoutMs,navigationTimeoutMs},
   limits:['No live provider or private history','Dirty Canvas/Settings and cold service reopen still require separate qualification']};
 } catch(error) {originalError=error;throw error}
 finally {await finishFixture({label:'Shared Work fixture',close:[['browser',()=>browser?.close()]],stop,originalError})}

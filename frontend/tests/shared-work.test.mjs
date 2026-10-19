@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import React, {act} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
+import {bounded,deferredRead,observeCompletion,requireCompletion,unknownCleanupValue} from './shared-work-test-helpers.mjs';
 
 const vite = await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {SharedWorkBrowser} = await vite.ssrLoadModule('/src/workspace-work.jsx');
@@ -33,12 +34,25 @@ const detail = (row=item(),patch={})=>({item:{...row,criteria:[{id:'cold',text:'
  interpretation:'An attributed interpretation, not execution authority.',links:[{sessionId:'owner',role:'executor',candidate:'candidate-one',promiseRevision:2}],
  eventCount:2,originalSourceRef:'work-event:original'},originalSource:source(),
  historyRef:{action:'workspace.work.history',args:{workspaceId:workspace.id,id:row.id}},...patch});
-async function mount(dispatch,props={}) {
+async function mount(dispatch,props={},retain=()=>{}) {
  assert.equal(typeof SharedWorkBrowser,'function','SharedWorkBrowser must be implemented after test readiness');
- let root;await act(async()=>{root=create(React.createElement(SharedWorkBrowser,{workspace,dispatch,onOpenChat:()=>{throw Error('Unexpected chat navigation')},...props}))});return root;
+ let root;await act(async()=>{root=create(React.createElement(SharedWorkBrowser,{workspace,dispatch,onOpenChat:()=>{throw Error('Unexpected chat navigation')},...props}));retain(root)});return root;
 }
 const inspect = async(root,id='work:one')=>act(async()=>root.root.findByProps({'data-work-id':id}).props.onClick());
 const unmount = root=>act(async()=>root.unmount());
+
+async function finishDeferredTest({root,release,completions,originalError}) {
+ const failures=[];
+ release(); // Settle our mocked read even if selection/assertions failed.
+ try {await bounded(act(async()=>{await Promise.all(completions.map(requireCompletion))}),2000,'Deferred handler settlement')}
+ catch(error){failures.push(error)}
+ try {if(root)await bounded(unmount(root),2000,'Deferred test unmount')}
+ catch(error){failures.push(error)}
+ if(failures.length) {
+  const failure=new AggregateError(failures,'Deferred test cleanup failed');
+  if(originalError)console.error(failure);else throw failure;
+ }
+}
 
 test('cold Work inspection requests accepted-open only and never needs a selected chat',async()=>{
  const calls=[];const root=await mount(async(action,args)=>{calls.push([action,args]);assert.equal(action,'workspace.work.list');return accepted(page())});
@@ -69,6 +83,12 @@ test('participant return keeps all six facts distinct and missing cleanup stays 
  await inspect(root);const value=text(root.toJSON());
  for(const label of ['Commitment','Execution','Verification','Human decision','Delivery','Cleanup'])assert.ok(value.includes(label),label);
  assert.match(value,/Returned.*unverified/i);assert.match(value,/not recorded|unknown/i);
+ const cleanupTerms=root.root.findAllByType('dt').filter(node=>text(node)==='Cleanup');
+ assert.equal(cleanupTerms.length,1,'Exactly one Cleanup fact');
+ const term=cleanupTerms[0],siblings=term.parent.children.filter(node=>typeof node!=='string');
+ const cleanup=siblings[siblings.indexOf(term)+1];
+ assert.equal(cleanup?.type,'dd','Cleanup has its own value, not another fact’s text');
+ assert.match(text(cleanup),unknownCleanupValue,'Missing cleanup is unknown/not recorded, never None');
  assert.doesNotMatch(value,/Human request|Shipped|All checks passed|Cleanup complete/);
  assert.match(value,/peer/i);assert.deepEqual(opened,[]);
  const open=root.root.findAllByType('button').find(node=>node.props['aria-label']==='Open chat: owner');
@@ -99,24 +119,42 @@ test('correction source uses exact allowed history ref and keeps old evidence at
 });
 
 test('obsolete workspace result cannot replace the current workspace or start a detail read',async()=>{
- let resolveOld;const calls=[];const dispatch=async(action,args)=>{calls.push([action,args]);return args.workspaceId===workspace.id?new Promise(resolve=>{resolveOld=resolve}):accepted(page([item('work:new',{workspaceId:'other',title:'Current workspace result'})],{workspaceId:'other'}))};
- const root=await mount(dispatch);
- await act(async()=>root.update(React.createElement(SharedWorkBrowser,{workspace:{id:'other',path:'/synthetic/other'},dispatch})));
- await act(async()=>resolveOld(accepted(page([item('work:old',{title:'Obsolete result'})]))));
- assert.match(text(root.toJSON()),/Current workspace result/);assert.doesNotMatch(text(root.toJSON()),/Obsolete result/);
- assert.ok(calls.every(([name])=>name==='workspace.work.list'));await unmount(root);
+ const old=deferredRead(),calls=[],completions=[observeCompletion(old.promise)];
+ const release=()=>old.resolve(accepted(page([item('work:old',{title:'Obsolete result'})])));
+ const dispatch=async(action,args)=>{calls.push([action,args]);return args.workspaceId===workspace.id?old.promise:accepted(page([item('work:new',{workspaceId:'other',title:'Current workspace result'})],{workspaceId:'other'}))};
+ let root,originalError;
+ try {
+  root=await bounded(mount(dispatch,{},value=>{root=value}),2000,'Mount pending workspace');
+  await bounded(act(async()=>root.update(React.createElement(SharedWorkBrowser,{workspace:{id:'other',path:'/synthetic/other'},dispatch}))),2000,'Select new workspace');
+  await bounded(act(async()=>{release();await old.promise}),2000,'Release obsolete workspace read');
+  assert.match(text(root.toJSON()),/Current workspace result/);assert.doesNotMatch(text(root.toJSON()),/Obsolete result/);
+  assert.ok(calls.every(([name])=>name==='workspace.work.list'));
+ } catch(error){originalError=error;throw error}
+ finally{await finishDeferredTest({root,release,completions,originalError})}
 });
 
 test('obsolete item detail cannot replace the later explicit item selection',async()=>{
- let resolveOld;const other=item('work:two',{title:'Second promise'});
- const root=await mount(async(action,args)=>{
+ const old=deferredRead(),other=item('work:two',{title:'Second promise'});
+ const release=()=>old.resolve(accepted(detail(item(),{originalSource:source({text:'Obsolete detail body'})})));
+ const completions=[observeCompletion(old.promise)];let root,originalError,oldReadStarted=false;
+ const dispatch=async(action,args)=>{
   if(action==='workspace.work.list')return accepted(page([item(),other]));
-  if(action==='workspace.work.read'&&args.id==='work:one')return new Promise(resolve=>{resolveOld=resolve});
+  if(action==='workspace.work.read'&&args.id==='work:one'){oldReadStarted=true;return old.promise}
   if(action==='workspace.work.read')return accepted(detail(other,{originalSource:source({text:'Second exact source'})}));
   return accepted({items:[],total:0,truncated:false,nextAfter:null});
- });
- await inspect(root);await inspect(root,'work:two');await act(async()=>resolveOld(accepted(detail(item(),{originalSource:source({text:'Obsolete detail body'})}))));
- assert.match(text(root.toJSON()),/Second exact source/);assert.doesNotMatch(text(root.toJSON()),/Obsolete detail body/);await unmount(root);
+ };
+ try {
+  root=await bounded(mount(dispatch,{},value=>{root=value}),2000,'Mount detail race');
+  await bounded(act(async()=>{
+   // Do not return/await this handler: it may validly wait for our held read.
+   completions.push(observeCompletion(root.root.findByProps({'data-work-id':'work:one'}).props.onClick()));
+  }),2000,'Begin first detail selection');
+  assert.ok(oldReadStarted,'First detail request must be in flight before selecting another item');
+  await bounded(inspect(root,'work:two'),2000,'Select second item');
+  await bounded(act(async()=>{release();await Promise.all(completions.map(requireCompletion))}),2000,'Release first detail and flush');
+  assert.match(text(root.toJSON()),/Second exact source/);assert.doesNotMatch(text(root.toJSON()),/Obsolete detail body/);
+ } catch(error){originalError=error;throw error}
+ finally{await finishDeferredTest({root,release,completions,originalError})}
 });
 
 test('refresh failure retains the prior observed list with an explicit stale warning',async()=>{

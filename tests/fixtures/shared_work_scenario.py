@@ -10,24 +10,35 @@ from aiohttp import web
 
 async def install(app, runtime):
     service = app['service']
+    calls = []
+    callback_counts = {'start': 0, 'send': 0, 'prewarm': 0}
+
+    async def forbidden_start(*args, **kwargs):
+        calls.append('start')
+        callback_counts['start'] += 1
+        raise AssertionError('Work inspection must not start a runtime')
+
+    async def forbidden_send(*args, **kwargs):
+        calls.append('send')
+        callback_counts['send'] += 1
+        raise AssertionError('Work inspection must not send model input')
+
+    async def forbidden_prewarm(*args, **kwargs):
+        calls.append('prewarm')
+        callback_counts['prewarm'] += 1
+        raise AssertionError('Work inspection must not prewarm a runtime')
+
+    # SessionWarmup.schedule silently returns when prewarm is absent. Supply a
+    # counted failure trap, not a worker emulator, before any scenario creation.
+    runtime.start = forbidden_start
+    runtime.send = forbidden_send
+    runtime.prewarm = forbidden_prewarm
     workspace = service.state['workspaces'][0]
     created = await service.dispatch('session.create', {
         'workspace': workspace['path'], 'title': 'Synthetic Work owner'},
         command_id='fixture-shared-work-owner')
     assert created['accepted']
     owner = service._session(created['result']['sessionId'])
-    calls = []
-
-    async def forbidden_start(*args, **kwargs):
-        calls.append('start')
-        raise AssertionError('Work inspection must not start a runtime')
-
-    async def forbidden_send(*args, **kwargs):
-        calls.append('send')
-        raise AssertionError('Work inspection must not send model input')
-
-    runtime.start = forbidden_start
-    runtime.send = forbidden_send
 
     def source(text, origin='ui'):
         message = service._message(owner, 'user', text, inputOrigin=origin)
@@ -91,6 +102,8 @@ async def install(app, runtime):
     async def inspect(request):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
             raise web.HTTPForbidden()
-        return web.json_response({**manifest, 'forbiddenRuntimeCalls': list(calls)})
+        return web.json_response({**manifest, 'forbiddenRuntimeCalls': list(calls),
+            'runtimeCallbackCounts': dict(callback_counts),
+            'pendingWarmups': len(service.warmup.pending)})
 
     app.router.add_get('/fixture/shared-work', inspect)
