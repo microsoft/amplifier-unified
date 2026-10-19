@@ -179,6 +179,9 @@ class WorkspaceWork:
             reasons.append('owner_needs_review')
         if item.get('humanDecisionSequence', 0) and not value['humanDecisionCurrent']:
             reasons.append('counterevidence_after_decision')
+        elif (value['latestOutcome'] == 'passed' and item['verification'] != 'independent_checks_passed'
+                and not (item['humanDecision'] == 'accepted' and value['humanDecisionCurrent'])):
+            reasons.append('unverified_report')
         value['attentionReasons'] = reasons
         value['cleanup'] = {'status': 'reported' if item.get('resources') else 'not_recorded',
                             'references': copy.deepcopy(item.get('resources', [])),
@@ -233,6 +236,10 @@ class WorkspaceWork:
                          "OR (json_extract(receipt,'$.result.disposition')='open' AND json_extract(receipt,'$.result.nextAction')!='') "
                          "OR (coalesce(json_extract(receipt,'$.result.humanDecisionSequence'),0)>0 "
                          "AND json_extract(receipt,'$.result.humanDecisionSequence')<=coalesce(json_extract(receipt,'$.result.counterevidenceSequence'),0)) "
+                         "OR (json_extract(receipt,'$.result.latestOutcome')='passed' "
+                         "AND json_extract(receipt,'$.result.verification')!='independent_checks_passed' "
+                         "AND NOT (json_extract(receipt,'$.result.humanDecision')='accepted' "
+                         "AND coalesce(json_extract(receipt,'$.result.humanDecisionSequence'),0)>coalesce(json_extract(receipt,'$.result.counterevidenceSequence'),0))) "
                          "OR EXISTS (SELECT 1 FROM json_each(json_extract(commands.receipt,'$.result.dependsOn')) dependency "
                          "WHERE NOT EXISTS (SELECT 1 FROM commands parent WHERE parent.id=dependency.value "
                          "AND json_extract(parent.receipt,'$.commandAction')='workspace.work.record' "

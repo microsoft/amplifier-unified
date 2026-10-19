@@ -49,6 +49,7 @@ def observe(work, session, message):
 
 
 def stage_saved_inputs(work, sessions, admitted, deleted=()):
+    from .cold_display import MARKER
     staged = []
     for identity, row in list(work.pending_input_facts.items()):
         if row['sessionId'] in deleted:
@@ -57,15 +58,19 @@ def stage_saved_inputs(work, sessions, admitted, deleted=()):
         if row['sessionId'] not in admitted:
             continue
         session = sessions.get(row['sessionId'])
-        if session is None:
+        if (session is None or 'messages' not in session
+                or 'messages' in dict.get(session, MARKER, {})
+                or session.get('historyManaged') and not session.get('historyLoaded')):
             continue
         message = next((m for m in session.get('messages', []) if m.get('id') == row['messageId']), None)
         # The admitted source snapshot is authoritative; metadata does not retain
         # an abandoned message body. A failed save still keeps the pending fact.
-        if (not message or message.get('role') != 'user' or message.get('inputOrigin') != row['inputOrigin']
-                or hashlib.sha256(message.get('text', '').encode()).hexdigest() != row['sourceSha256']):
+        if not message or message.get('role') != 'user' or message.get('inputOrigin') != row['inputOrigin']:
             staged.append(identity)
             continue
+        saved_hash = hashlib.sha256(message.get('text', '').encode()).hexdigest()
+        if saved_hash != row['sourceSha256']:
+            row = {**row, 'observedSourceSha256': row['sourceSha256'], 'sourceSha256': saved_hash}
         if not work.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
             work.receipts.insert(identity, fingerprint(row), row)
         staged.append(identity)

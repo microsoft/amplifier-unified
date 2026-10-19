@@ -184,6 +184,7 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         extra['evidence'] = {key: copy.deepcopy(args[key]) for key in
             ('candidate', 'outcome', 'report', 'criteria', 'checkReceiptId', 'references') if key in args}
         extra['evidence'].update(qualification=qualification, reportedBy=actor['id'],
+                                criteriaValidated=event_promise == item['promiseRevision'],
                                 source='host-bound collection' if args.get('checkReceiptId') else 'agent report')
         # Historical attempts stay in immutable receipts, never current verdicts.
         if event_promise == item['promiseRevision']:
