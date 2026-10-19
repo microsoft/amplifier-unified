@@ -11,6 +11,14 @@ def definitions(schema, string):
     required = ['workspaceId', 'sessionId', 'id', 'expectedRevision']
     candidate = {**string(100), 'minLength': 1}
     return {
+        'workspace.work.publication': ('Retain an explicitly attributed publication report for the current exact promise and candidate. Never publishes, fetches references, verifies delivery or records host-confirmed shipment.', schema({**target,
+            'promiseRevision': {'type': 'integer', 'minimum': 1}, 'candidate': candidate,
+            'outcome': {'enum': ['published', 'failed', 'unknown', 'not_run']},
+            'destination': {**string(1000), 'minLength': 1},
+            'references': {'type': 'array', 'minItems': 1, 'maxItems': 8, 'uniqueItems': True,
+                           'items': {**string(1000), 'minLength': 1}},
+            'report': {**string(2000), 'minLength': 1}},
+            [*required, 'promiseRevision', 'candidate', 'outcome', 'destination', 'references', 'report'])),
         'workspace.work.resource': ("Append the current linked owner's bounded resource/cleanup report. Explicit attribution only; no resource scan, verified teardown claim or lifecycle action.", schema({**target,
             'resourceId': {**string(500), 'minLength': 1}, 'kind': {**string(100), 'minLength': 1},
             'reportedState': {'enum': ['active', 'unknown', 'reaped', 'observed_absent']},
@@ -119,7 +127,24 @@ def mutate(work, verb, item, args, actor, origin, workspace):
     extra = {}
     if verb in {'link', 'disposition'} and not owner:
         work.error('Only the accountable Work owner can change responsibility or disposition.', 403)
-    if verb == 'resource':
+    if verb == 'publication':
+        if args['promiseRevision'] != item['promiseRevision'] or args['candidate'] != item.get('candidate'):
+            work.error('Publication reports must name the current exact promise and candidate.')
+        links = [link for link in item.get('links', [])
+                 if link['sessionId'] == actor['id'] and link['candidate'] == args['candidate']
+                 and link['promiseRevision'] == args['promiseRevision']]
+        if not owner and not any(_link_current(work, link, workspace) for link in links):
+            work.error('Publication reports require current linked responsibility.', 403)
+        if not all(text.strip() for text in [args['destination'], args['report'], *args['references']]):
+            work.error('Publication reports require nonempty destination, report and exact references.', 400)
+        publication = {key: copy.deepcopy(args[key]) for key in
+                       ('promiseRevision', 'candidate', 'outcome', 'destination', 'references', 'report')}
+        publication.update(reportedBy=actor['id'], recordedAt=time.time(),
+                           attribution='participant_report', hostObserved=False, independentlyVerified=False)
+        item['delivery'] = 'reported_' + args['outcome']
+        item['deliveryReport'] = copy.deepcopy(publication)
+        extra['publication'] = publication
+    elif verb == 'resource':
         if not owner and not any(l['sessionId'] == actor['id'] and _link_current(work, l, workspace) for l in item.get('links', [])):
             work.error('Resource reports belong to the accountable or linked current owner.', 403)
         resources = item.setdefault('resources', [])
@@ -168,7 +193,8 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         if args['role'] == 'executor' and item.get('candidate') != args['candidate']:
             item.update(candidate=args['candidate'], verification='not_verified', criterionEvidence={},
                         humanDecision='not_recorded', humanDecisionSequence=0,
-                        latestOutcome='not_reported', execution='not_started')
+                        latestOutcome='not_reported', execution='not_started',
+                        delivery='not_recorded', deliveryReport=None)
         extra['link'] = copy.deepcopy(link)
     elif verb == 'report':
         event_promise = args['promiseRevision']

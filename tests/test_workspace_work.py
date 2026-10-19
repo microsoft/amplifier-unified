@@ -980,6 +980,10 @@ async def test_publication_report_is_attributed_and_never_verification_or_effect
     assert current['humanDecision'] == before['humanDecision']
     assert current['execution'] == before['execution']
     assert current['latestOutcome'] == before['latestOutcome']
+    if outcome != 'published':
+        assert 'publication_' + outcome in current['attentionReasons']
+        assert (await app.dispatch('workspace.work.list', {
+            'workspaceId': workspace_id(app, owner), 'filter': 'attention'}))['result']['total'] == 1
     history = (await app.dispatch('workspace.work.history', {
         'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
     last = history[-1]

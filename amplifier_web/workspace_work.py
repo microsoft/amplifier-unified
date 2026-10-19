@@ -165,6 +165,10 @@ class WorkspaceWork:
         value['latestOutcome'] = item.get('latestOutcome', 'not_reported')
         value['humanDecisionCurrent'] = item.get('humanDecisionSequence', 0) > item.get('counterevidenceSequence', 0)
         value['captureAuthority'] = 'Attributed scope interpretation; not an execution grant.'
+        publication = item.get('deliveryReport')
+        value['deliveryReport'] = ({key: copy.deepcopy(publication[key]) for key in
+            ('promiseRevision', 'candidate', 'outcome', 'reportedBy', 'recordedAt',
+             'attribution', 'hostObserved', 'independentlyVerified')} if publication else None)
         value['blockedBy'] = self.blocked_by(item)
         owner = self.owner_observation(item['ownerSessionId'])
         value['ownerObservation'] = owner
@@ -182,6 +186,8 @@ class WorkspaceWork:
         elif (value['latestOutcome'] == 'passed' and item['verification'] != 'independent_checks_passed'
                 and not (item['humanDecision'] == 'accepted' and value['humanDecisionCurrent'])):
             reasons.append('unverified_report')
+        if item['delivery'] in {'reported_failed', 'reported_unknown', 'reported_not_run'}:
+            reasons.append('publication_' + item['delivery'].removeprefix('reported_'))
         value['attentionReasons'] = reasons
         value['cleanup'] = {'status': 'reported' if item.get('resources') else 'not_recorded',
                             'references': copy.deepcopy(item.get('resources', [])),
@@ -240,6 +246,7 @@ class WorkspaceWork:
                          "AND json_extract(receipt,'$.result.verification')!='independent_checks_passed' "
                          "AND NOT (json_extract(receipt,'$.result.humanDecision')='accepted' "
                          "AND coalesce(json_extract(receipt,'$.result.humanDecisionSequence'),0)>coalesce(json_extract(receipt,'$.result.counterevidenceSequence'),0))) "
+                         "OR json_extract(receipt,'$.result.delivery') IN ('reported_failed','reported_unknown','reported_not_run') "
                          "OR EXISTS (SELECT 1 FROM json_each(json_extract(commands.receipt,'$.result.dependsOn')) dependency "
                          "WHERE NOT EXISTS (SELECT 1 FROM commands parent WHERE parent.id=dependency.value "
                          "AND json_extract(parent.receipt,'$.commandAction')='workspace.work.record' "
@@ -305,7 +312,7 @@ class WorkspaceWork:
                    'changedFields': list(row.get('changes', {})),
                    'eventRef': {'action': 'workspace.work.event', 'args': {
                        'workspaceId': workspace['id'], 'id': item['id'], 'eventId': row['id']}},
-                   **{k: copy.deepcopy(row[k]) for k in ('evidence', 'link', 'decision', 'disposition', 'resource') if k in row},
+                   **{k: copy.deepcopy(row[k]) for k in ('evidence', 'link', 'decision', 'disposition', 'resource', 'publication') if k in row},
                    'source': {k: v for k, v in row.get('source', {}).items() if k != 'text'},
                    'sourceRef': {'action': 'workspace.work.source', 'args': {
                        'workspaceId': workspace['id'], 'id': item['id'], 'sourceId': row['id']}}
@@ -414,7 +421,7 @@ class WorkspaceWork:
                     self.error('Event does not belong to this Work item.', 404)
                 value = {'event': {key: copy.deepcopy(event[key]) for key in
                     ('id', 'kind', 'sequence', 'promiseRevision', 'actor', 'recordedAt', 'changes',
-                     'evidence', 'link', 'decision', 'disposition', 'resource') if key in event}}
+                     'evidence', 'link', 'decision', 'disposition', 'resource', 'publication') if key in event}}
             else:
                 event = self.receipts.receipt(args['sourceId'] if verb == 'source' else item['originalSourceRef'])
                 if event.get('commandAction') != EVENT or event.get('workItemId') != item['id'] or not event.get('source'):
@@ -499,6 +506,8 @@ class WorkspaceWork:
                         item['latestOutcome'] = 'not_reported'
                         item['criterionEvidence'] = {}
                         item['execution'] = 'not_started'
+                        item['delivery'] = 'not_recorded'
+                        item['deliveryReport'] = None
                 else:
                     from .workspace_work_evidence import mutate
                     item = self.load(args['id'], workspace)
