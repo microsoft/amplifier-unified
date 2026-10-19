@@ -1789,3 +1789,98 @@ async def test_selected_proof_support_has_one_consumer_group_and_raw_subset_sync
         assert owner.nodes('root', first['group'], known={}, paged=True)['order'] == []
     finally:
         await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['selected-root', 'ordinary-page', 'older-support'])
+async def test_public_work_revision_matches_evidence_without_changing_signed_page(source, mode):
+    source.call('one')
+    if mode == 'older-support':
+        for number in range(30):
+            _compact_proof_call(source, f'later-{number}')
+    await source.diagnostics.flush()
+    # One unassociated observation keeps the selected root's raw group visible.
+    append_event(source.workspace, 'root', 'tool:post', {
+        'timestamp': time.time(), 'session_id': 'root', 'tool_call_id': 'unassociated',
+        'tool_name': 'read_file', 'result': {'text': 'Independent raw evidence'}})
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        view = await (owner.read('root') if mode == 'ordinary-page' else owner.read_selected('root'))
+        if mode == 'older-support':
+            assert view['before']
+            view = await owner.read_selected('root', before=view['before'])
+        page = owner.pages[view['evidence']['group']]
+        generation, manifest = page['generation'], copy.deepcopy(page.get('_proof'))
+        version = page['_consumerRevision'] if mode == 'selected-root' else generation
+        if mode == 'selected-root':
+            assert version == view['rootProof']['id'] and version != generation
+        else:
+            assert '_consumerRevision' not in page
+        assert view['revision'] == view['evidence']['revision'] == version
+        assert WorkWindows._groups(page, bindings=False)['items'][0]['detailRevision'] == version
+        for group in view['items']:
+            assert group['detailRevision'] == group['evidence']['revision'] == version
+        raw = owner.observations('root', page['group'], version)
+        assert raw['revision'] == raw['evidence']['revision'] == version
+        assert raw['order'] == [row['id'] for row in page['items']]
+        assert all(row['detailVersion'] == version and row['association'] == 'unverified'
+                   for row in raw['items'])
+        nodes = owner.nodes('root', page['group'], revision=version)
+        assert nodes['revision'] == version
+        assert all(row['detailVersion'] == version for row in nodes['items'])
+        synced = owner.nodes('root', page['group'], revision=version, paged=True,
+            known={row['id']: row['detailVersion'] for row in nodes['items']})
+        assert synced['revision'] == version and synced['items'] == []
+        obsolete = generation if mode == 'selected-root' else 'obsolete-public-revision'
+        for wrong in (obsolete, 'another-revision'):
+            with pytest.raises(ValueError, match='changed'):
+                owner.observations('root', page['group'], wrong)
+            with pytest.raises(ValueError, match='changed'):
+                owner.nodes('root', page['group'], revision=wrong)
+        with pytest.raises(ValueError, match='changed'):
+            owner.observations('root', page['group'], None)
+        assert page['generation'] == generation and page.get('_proof') == manifest
+        if mode == 'selected-root':
+            group = next(g for g in view['items'] if not g.get('observationWindow'))
+            assert owner.nodes('root', group['id'], revision=version)['items']
+            owner.invalidate({'root'})
+            with pytest.raises(ValueError, match='expired'):
+                owner.nodes('root', group['id'], revision=version)
+            assert owner.observations('root', page['group'], version)['order'] == raw['order']
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_registered_selected_root_uses_one_exact_public_revision_for_evidence(
+        source, authenticated_client, monkeypatch):
+    async with _ready_cold_web(source, authenticated_client, monkeypatch) as (service, client):
+        response = await client.get('/api/conversation/detail',
+            params={'sessionId': 'root', 'part': 'groups'})
+        assert response.status == 200, await response.text()
+        view = await response.json()
+        group, node = await _assert_cold_web_details(client, view, source)
+        evidence, version = group['evidence'], group['detailRevision']
+        assert version == view['revision'] == evidence['revision'] == node['evidence']['revision']
+        page = service.event_log_view.windows.pages[evidence['group']]
+        generation = page['generation']
+        assert version == view['rootProof']['id'] and version != generation
+        for part in ('observations', 'nodes'):
+            query = {**evidence, 'part': part}
+            response = await client.get('/api/conversation/detail', params=query)
+            assert response.status == 200, await response.text()
+            result = await response.json()
+            assert result['revision'] == version
+            assert all(row['detailVersion'] == version for row in result['items'])
+            rejected = await client.get('/api/conversation/detail',
+                params={**query, 'revision': generation})
+            assert rejected.status == 400, await rejected.text()
+            await rejected.read()
+        assert page['generation'] == generation
