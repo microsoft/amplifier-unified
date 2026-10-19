@@ -115,16 +115,83 @@ def test_initial_view_preferences_are_part_of_settled_identity(owner):
     assert owner.bootstrap_key('one') == bootstrap
 
 
-def test_completed_envelope_rechecks_capacity_and_new_demand(owner, monkeypatch):
+@pytest.mark.parametrize('browser', [False, True])
+def test_completed_envelope_rechecks_capacity_and_new_demand(owner, monkeypatch, browser):
+    def snapshot():
+        return owner.browser_projection('one')['shellResources'] if browser else owner.snapshot('one')
+
     register(owner)
-    first = owner.snapshot('one')
+    first = snapshot()
     monkeypatch.setattr(resources, 'MAX_TOTAL_BYTES', owner.total_bytes - 1)
-    assert owner.snapshot('one')['error']['code'] == 'shell_resource_limit'
+    assert snapshot()['error']['code'] == 'shell_resource_limit'
     monkeypatch.setattr(resources, 'MAX_TOTAL_BYTES', owner.total_bytes + 100000)
-    assert 'error' not in owner.snapshot('one')
+    assert 'error' not in snapshot()
     register(owner, demand=2)
-    assert owner.snapshot('one')['demandId'] == 2
+    assert snapshot()['demandId'] == 2
     assert first['demandId'] == 1
+
+
+@pytest.mark.parametrize('recovery', [False, True])
+def test_browser_projection_preserves_preview_recovery_and_scope(owner, recovery):
+    owner.shell.saved['preview'] = {'id': 'preview', 'composition': {
+        'instances': [{'id': 'preview-nav', 'package': 'builtin.chats', 'slot': 'navigation'},
+                      {'id': 'custom', 'package': 'digest', 'slot': 'app.status'}],
+        'presentation': {}}}
+    unregistered = owner.browser_projection('one')
+    assert unregistered == {'shellBootstrapKey': owner.bootstrap_key('one')}
+    assert owner.shell.calls == []
+
+    owner.register('one', 1, [], resources.scope_for(owner.shell.service.state), recovery=recovery)
+    first = owner.browser_projection('one')
+    envelope = first['shellResources']
+    assert first['shellBootstrapKey'] == envelope['bootstrapKey'] == owner.bootstrap_key('one')
+    assert set(envelope['instances']) == ({'workspaces', 'chats'} if recovery else {'preview-nav', 'custom'})
+    if not recovery:
+        assert envelope['instances']['custom']['resources']['customSnapshot']['value']['custom']
+
+    calls = list(owner.shell.calls)
+    owner.shell.service.state['selectedSessionId'] = 'other'
+    assert owner.browser_projection('one') == {'shellBootstrapKey': first['shellBootstrapKey']}
+    assert owner.shell.calls == calls
+    owner.register('one', 2, [], resources.scope_for(owner.shell.service.state), recovery=recovery)
+    after = owner.browser_projection('one')['shellResources']
+    assert after['scope'][0] == 'other' and envelope['scope'][0] == 'chat'
+    assert after['demandId'] == 2
+
+
+@pytest.mark.parametrize('recovery', [False, True])
+def test_browser_projection_prunes_idle_resources_but_keeps_active_registration(owner, monkeypatch, recovery):
+    clock = [0.0]
+    monkeypatch.setattr(resources, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    owner.register('one', 1, [], resources.scope_for(owner.shell.service.state), recovery=recovery)
+    first = owner.browser_projection('one')
+    owner.shell.service._client_snapshots = {'one': first}
+    owner.shell.service._client_snapshot_preferences = {'one': 'preferences'}
+    owner.shell.service.queue_clients = {'queue': 'one'}
+    owner.shell.service.queue_sessions = {'queue': None}
+    clock[0] = 100
+    assert owner.browser_projection('one')['shellResources'] is first['shellResources']
+    owner.shell.service.queue_clients = {}
+    assert 'shellResources' in owner.browser_projection('one')
+    calls = list(owner.shell.calls)
+    clock[0] = 160
+    retired = owner.browser_projection('one')
+    assert retired == {'shellBootstrapKey': first['shellBootstrapKey']}
+    assert owner.shell.calls == calls and owner.total_bytes == 0 and 'one' not in owner.clients
+    assert owner.shell.service._client_snapshots == {}
+    assert owner.shell.service._client_snapshot_preferences == {}
+    # A subsequent unregistered frame uses the saved composition again.
+    assert owner.browser_projection('one') == {'shellBootstrapKey': owner.bootstrap_key('one')}
+
+
+def test_browser_projection_requires_bound_web_client_without_registration(owner):
+    owner.shell.service.clients.current.set(None)
+    with pytest.raises(AppError):
+        owner.browser_projection('one')
+    owner.shell.service.clients.current.set('one')
+    owner.shell.service.clients.records['one']['kind'] = 'tui'
+    with pytest.raises(AppError):
+        owner.browser_projection('one')
 
 
 def test_scope_mismatch_does_no_projection_until_exact_new_demand(owner):
@@ -211,6 +278,52 @@ def test_resource_field_split_preserves_partial_snapshot_contract(owner,resource
 
 
 from test_shell_modules import service
+
+
+async def test_browser_frames_prepare_shell_once_and_observe_saved_client_changes(service, monkeypatch):
+    from amplifier_web import shell_components
+
+    identity = 'resource-preparation'
+    service.clients.attach(identity)
+    with service.clients.bind(identity):
+        owner = service.shell.resources
+        owner.register(identity, 1, [], resources.scope_for(service.state))
+        read_client = service.shell.client
+        calls = {}
+        for target, attribute, label in ((service.shell, 'client', 'read'),
+                (shell_components, 'resolved', 'resolve'), (owner, '_bootstrap', 'bootstrap'),
+                (owner, '_prune', 'prune')):
+            original = getattr(target, attribute)
+
+            def observe(*args, _original=original, _label=label, **kwargs):
+                calls[_label] = calls.get(_label, 0) + 1
+                return _original(*args, **kwargs)
+
+            monkeypatch.setattr(target, attribute, observe)
+
+        first = service.browser_state()
+        old = deepcopy(first['shellResources'])
+        assert calls == {'read': 1, 'resolve': 1, 'bootstrap': 1, 'prune': 1}
+        assert first['shellBootstrapKey'] == first['shellResources']['bootstrapKey']
+        calls.clear()
+        service.state['revision'] += 1
+        quiet = service.browser_state()
+        assert calls == {'read': 1, 'resolve': 1, 'bootstrap': 1, 'prune': 1}
+        assert quiet['shellResources'] is first['shellResources']
+
+        client = read_client(identity)
+        client['views']['chats'] = {'generation': 1, 'viewRevision': 1, 'view': {'navFilter': 'changed'}}
+        service.shell.put('client', identity, client)
+        service.state['revision'] += 1
+        calls.clear()
+        changed = service.browser_state()
+        assert calls == {'read': 1, 'resolve': 1, 'bootstrap': 1, 'prune': 1}
+        assert changed['shellBootstrapKey'] != first['shellBootstrapKey']
+        assert changed['shellBootstrapKey'] == changed['shellResources']['bootstrapKey']
+        chats = changed['shellResources']['instances']['chats']
+        assert chats['generation'] == 1
+        assert chats['resources']['context']['value']['view']['navFilter'] == 'changed'
+        assert first['shellResources'] == old
 
 
 async def test_real_navigation_resources_reassemble_exact_existing_snapshot(service):
