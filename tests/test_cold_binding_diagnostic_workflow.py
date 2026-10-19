@@ -69,10 +69,11 @@ def test_diagnostic_has_only_five_fixed_files_and_retained_evidence(workflow):
         'tests/test_work_windows.py',
         'tests/test_resident_work_pages.py',
         'tests/test_regular_work_details.py',
+        'tests/test_receipt_authority.py',
     )
-    # Historical test ID retained; one fixed consumer module is added to the
-    # original five, with no free-form selection or default-suite change.
-    assert len(files) == 6
+    # Historical test ID retained; the six existing files remain, with the
+    # fixed authority module added. No free-form selection or default change.
+    assert len(files) == 7
     expected = PREAMBLE + PYTEST + ' \\\n'
     expected += ''.join('  ' + path + ' \\\n' for path in files[:-1])
     expected += '  ' + files[-1] + ' ' + PIPE
