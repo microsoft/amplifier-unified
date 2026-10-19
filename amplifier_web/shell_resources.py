@@ -101,9 +101,13 @@ class ShellResources:
         """Called with actual changed global keys after a canonical commit."""
         if global_keys is None:
             self.unknown_epoch += 1
+            self.queries.invalidate_workspaces()
         else:
-            for key in set(global_keys) & GLOBAL_KEYS:
+            changed = set(global_keys) & GLOBAL_KEYS
+            for key in changed:
                 self.epochs[key] += 1
+            if 'workspaces' in changed:
+                self.queries.invalidate_workspaces()
 
     def _prune(self):
         service, now = self.shell.service, time.monotonic()

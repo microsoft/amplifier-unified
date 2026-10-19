@@ -189,3 +189,27 @@ async def test_active_working_set_keeps_index_across_detail_publications(app_fac
         assert not history_residency.retire(app)
     if protection == 'runtime':
         app.runtime.workers = {}
+
+
+async def test_retained_active_index_observes_same_count_workspace_replacement(app_factory):
+    app = app_factory()
+    for number in range(12):
+        row = app._new_session({'title': f'Working {number}'})
+        row['status'] = 'working'
+        app._state['sessions'].append(row)
+    app._save()
+    before = app.projections.sessions(app._state)
+    old = app._state['workspaces'][0]
+    replacement = {**old, 'id': 'resolved-workspace', 'name': 'Resolved workspace'}
+    # Native reconciliation can remove an unresolved registration and append
+    # its resolved replacement without changing the registry's length.
+    app._state['workspaces'] = [replacement, *app._state['workspaces'][1:]]
+    app._save_changes(globals={'workspaces'})
+    current = app.projections.sessions(app._state)
+    assert old['id'] not in current.workspaces
+    assert current.workspaces[replacement['id']] == replacement
+    assert current.workspace_positions[replacement['id']] == 0
+    assert set(current.by_id) == set(before.by_id)
+    identity = row['id']
+    app._publish_changes(sessions={identity}, detail_only=True)
+    assert app.projections.sessions(app._state) is current

@@ -1039,6 +1039,11 @@ class AppService:
         changed_clients = {identity for identity, value in pending_clients.items()
                            if self.clients.saved.get(identity) != value}
         self.clients.acknowledge(pending_clients)
+        if 'workspaces' in changed_global_keys:
+            # Native reconciliation may replace registrations without changing
+            # their count. Refresh the admitted index on committed registry
+            # changes, while retaining it during ordinary streaming updates.
+            self.projections.values.pop(('session-index',), None)
         self.shell.resources.invalidate(changed_global_keys)
         self._view_cache = pending_views
         self._session_projection_refs = pending_references
