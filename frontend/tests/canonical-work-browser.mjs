@@ -114,7 +114,7 @@ try{
  assert.equal(requestReads.length,2);assert.equal(responseReads.length,1);
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await expect(model.getByRole('button',{name:/^View request/})).toBeVisible();assert.equal(responseReads.length,1);
- const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
+ const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/This call’s request recording isn’t available here/);
  const priorWindow=await saved.getAttribute('data-group-id');
  await control({op:'canonical-append'});
  await expect(saved).not.toHaveAttribute('data-group-id',priorWindow,{timeout:15000});

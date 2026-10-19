@@ -9,6 +9,7 @@ import {selectedMetrics,metricsVisible} from './execution-observability.js';
 import {detailLinks,elapsedLabel,isRunning} from './timeline-data';
 import {textValue,record} from './execution-content.js';
 import {settingsPatch} from './settings-navigation';
+import {WorkNavigationContext} from './work-navigation';
 import {JsonPayload} from './json-payload.jsx';
 
 export function useExecutionField(node,field,open){
@@ -73,14 +74,16 @@ export function ToolContent({node,action,input,output,error}){
 
 const requestLabels={message_count:'Messages',tool_count:'Tools',has_instructions:'Instructions',has_system:'System message',reasoning_enabled:'Reasoning enabled',thinking_enabled:'Thinking enabled',thinking_budget:'Thinking budget',background_mode:'Background mode',stream:'Streaming',max_tokens:'Maximum tokens',max_output_tokens:'Maximum output tokens',temperature:'Temperature',top_p:'Top P',parallel_tool_calls:'Parallel tool calls',tool_choice:'Tool choice',purpose:'Purpose',reasoning_effort:'Reasoning effort'};
 export function ModelContent({node,error,now,act}){
+ const navigation=React.useContext(WorkNavigationContext);
  const presentation=useShellContext()?.composition?.presentation||{},showElapsed=metricsVisible(presentation,'step')&&selectedMetrics(presentation).includes('elapsedSeconds');
  const formatTime=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'long'}):null;
- const facts=[['Provider',node.provider],['Model',node.model],['Status',node.status||node.phase],['Started',formatTime(node.startedAt)],['Ended',formatTime(node.endedAt)],['Elapsed',showElapsed?elapsedLabel(node,now):null],...Object.entries(node.requestInfo||{}).map(([key,value])=>[requestLabels[key]||key,typeof value==='boolean'?(value?'Yes':'No'):value])].filter(([,value])=>value!=null&&value!=='');
+ const facts=[['Provider',node.provider],['Model',node.model],['Status',node.status||node.phase],['Recorded',node.observationWindow?formatTime(node.createdAt):null],['Started',formatTime(node.startedAt)],['Ended',formatTime(node.endedAt)],['Elapsed',showElapsed?elapsedLabel(node,now):null],...Object.entries(node.requestInfo||{}).map(([key,value])=>[requestLabels[key]||key,typeof value==='boolean'?(value?'Yes':'No'):value])].filter(([,value])=>value!=null&&value!=='');
 
  return <><dl className="a-execution-model-facts">{facts.map(([label,value])=><React.Fragment key={label}><dt>{label}</dt><dd>{String(value)}</dd></React.Fragment>)}</dl>
   <UsageDetails usage={node.usage} scope="step" record={{...node,calls:1}} observedAt={now} label="Model call usage" costLabel="Call cost (USD)"/>
   <ExecutionBlock label="Error" text={error.value} loading={error.incomplete}/><FieldStatus label="Error" field={error}/>
   <small>Provider recordings may contain summaries instead of full payloads.</small>
+  {node.recordingsGroup&&navigation?.openRecordings&&(!node.requestDetail||!node.responseDetail)&&<p className="a-caption">Saved recordings may be listed separately. <button type="button" className="a-link" data-action="view.update" onClick={()=>navigation.openRecordings(node.recordingsGroup)}>Show saved recordings</button></p>}
   {['request','response'].map(field=><ModelPayload key={field+':'+(node[field+'Detail']?.digest||'')} node={node} field={field} act={act}/>)}
  </>;
 }
@@ -90,9 +93,9 @@ function ModelPayload({node,field,act}){
  // even small payloads and restored expanded calls require an explicit click.
  const [open,setOpen]=useState(false),loaded=useExecutionField(node,field,open);
  const reference=node[field+'Detail'],capture=node[field+'Capture'],recording=node[field+'Recording'],label=field[0].toUpperCase()+field.slice(1);
- if(!reference)return <p className="a-caption">{isRunning(node)?`Waiting for the recorded ${field}…`:`No provider ${field} was recorded for this call.`} {!isRunning(node)&&field==='request'&&<>To record future calls, open recording settings and choose Save capture settings. Start a new chat to check; earlier calls cannot be recovered. {act&&<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:settingsPatch('diagnostics')})}>Open recording settings</button>}</>}</p>;
+ if(!reference)return <p className="a-caption">{isRunning(node)?`Waiting for a linked ${field} recording…`:node.observationWindow?`This event has no ${field} payload.`:`This call’s ${field} recording isn’t available here.`} {!isRunning(node)&&field==='request'&&!node.observationWindow&&<>Recording settings save automatically and apply when a supported runtime next prepares. They cannot create recordings for past calls. {act&&<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:settingsPatch('diagnostics')})}>Open recording settings</button>}</>}</p>;
  return <section className="a-model-payload" aria-label={`Recorded ${field}`}>
-  {recording&&<><a className="a-link" download href={clientUrl('/api/conversation/provider-recording?'+new URLSearchParams({sessionId:reference.sessionId,id:node.id,field,digest:recording.sha256}))}>Download {recording.truncated?'partial':'full'} recorded {field} (JSON)</a><small>Redacted provider event · {(recording.bytes/1024/1024).toFixed(1)} MB{recording.truncated?' · Capture limit reached; some content is omitted.':''}</small></>}
+  {recording&&<><a className="a-link" download href={clientUrl('/api/conversation/provider-recording?'+new URLSearchParams({sessionId:reference.sessionId,id:reference.id,field,digest:recording.sha256,...(reference.windowKey?{windowKey:reference.windowKey}:{})}))}>Download {recording.truncated?'partial':'full'} recorded {field} (JSON)</a><small>Redacted provider event · {(recording.bytes/1024/1024).toFixed(1)} MB{recording.truncated?' · Capture limit reached; some content is omitted.':''}</small></>}
   <button type="button" className="a-link a-execution-request-toggle" aria-expanded={open} onClick={()=>setOpen(!open)}>{open?'Hide':'View'} {field}{!open&&Number.isFinite(reference.length)&&` · ${reference.length.toLocaleString()} characters`}</button>
   {open&&<>
    {capture?.redacted&&<small>Recognizable credentials redacted.</small>}

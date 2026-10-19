@@ -198,10 +198,18 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         field = request.query.get('field')
         if field not in {'request', 'response'}:
             raise ValueError('Choose a provider request or response.')
-        session = service._session(request.query.get('sessionId'))
-        node = next((row for row in session.get('execution', {}).get('nodes', [])
-                     if row.get('id') == request.query.get('id') and row.get('kind') == 'llm'), None)
-        reference = (node or {}).get('_eventFields', {}).get(field)
+        windows = service.event_log_view.windows
+        page = resident = None
+        if (request.query.get('windowKey') or '').startswith('resident-work:'):
+            session = service._session(request.query.get('sessionId'), hydrate=False)
+            resident, node, reference, recording_receipt = windows.live_pages.recording(session, request.query)
+        elif request.query.get('windowKey'):
+            session, page, node, reference = windows.recording(request.query.get('sessionId'), request.query)
+        else:
+            session = service._session(request.query.get('sessionId'))
+            node = next((row for row in session.get('execution', {}).get('nodes', [])
+                         if row.get('id') == request.query.get('id') and row.get('kind') == 'llm'), None)
+            reference = (node or {}).get('_eventFields', {}).get(field)
         if not reference:
             raise ValueError('This provider recording is no longer available.')
         opening = asyncio.create_task(asyncio.to_thread(open_record, reference, request.query.get('digest')))
@@ -216,6 +224,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             opening.add_done_callback(release)
             raise
         try:
+            if page is not None:
+                windows.check_recording(session, page)
+            if resident is not None:
+                windows.live_pages.check_recording(session, request.query, resident, recording_receipt)
             header = {'schemaVersion': 1, 'kind': 'provider.' + field, 'callId': node['id'],
                       'sessionId': node.get('sessionId'), 'rootSessionId': session['id'],
                       'provider': node.get('provider'), 'model': node.get('model'),
