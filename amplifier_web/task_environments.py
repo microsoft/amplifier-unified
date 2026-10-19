@@ -308,13 +308,16 @@ def require_resolved_removal(app, row, exclude_request_id=None):
     """A new identity cannot escape any retained unresolved removal.
 
     lastOperation can be a later stop/read; the bounded request-list page is not
-    the history. Query the existing journal for this root/resource only.
+    the history. An unbound removal cannot be assigned to a resource after a
+    crash, so it holds this root only; another root's history cannot hold it.
     """
     journal = app.operations.requests.journal
     with journal.lock:
         found = journal.db.execute(
             "SELECT id,value FROM operation_requests WHERE session_id=? "
-            "AND json_extract(value,'$.resourceId')=? "
+            "AND (json_extract(value,'$.resourceId')=? "
+            "OR COALESCE(json_type(value,'$.resourceId'),'null')!='text' "
+            "OR json_extract(value,'$.resourceId')='') "
             "AND json_extract(value,'$.action')='workspace.environments.remove' "
             "AND COALESCE(json_extract(value,'$.state'),'outcome_unknown') NOT IN ('completed','failed') "
             "AND (? IS NULL OR id!=?) ORDER BY rowid LIMIT 1",
@@ -402,7 +405,7 @@ def resume_preparation_removal(app, row, config):
 def effect(app, row, action, args, config, request, admit):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
-    locked = admitted = False
+    locked = admitted = binding_pending = False
     result = None
     try:
         lock.acquire()
@@ -412,9 +415,25 @@ def effect(app, row, action, args, config, request, admit):
         if action != 'start' and row['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
         if action == 'remove':
-            # Also covers the queue's existing direct effect route. Refuse before
-            # projection/configuration writes or an external helper call.
+            # The queue calls this common route without public begin_removal.
+            # Persist the trusted row binding before any projection or helper,
+            # not merely in the final result after an effect may have occurred.
+            binding_pending = True
+            recorded = app.operations.requests.read(sid, request['requestId'])
+            if (recorded.get('sessionId') != sid or recorded.get('requestId') != request['requestId']
+                    or recorded.get('action') != 'workspace.environments.remove'
+                    or recorded.get('state') != 'admitting'
+                    or recorded.get('resourceId') not in (None, row['id'])):
+                raise ValueError('The original removal admission cannot be rebound or replayed.')
+            request = recorded
+            binding_pending = False
+            # Also covers the queue's direct route, before projection/config
+            # writes. Never let this refusal rewrite an already-retained UNKNOWN.
             require_resolved_removal(app, row, request['requestId'])
+            binding_pending = True
+            if recorded.get('resourceId') is None:
+                request = app.operations.requests.finish(recorded, 'admitting', resourceId=row['id'])
+            binding_pending = False
         if row.get('pendingRequest') and row['pendingRequest'] != request['requestId']:
             prior = app.operations.requests.read(sid, row['pendingRequest'])
             if confirmed_result(row, prior):
@@ -498,12 +517,25 @@ def effect(app, row, action, args, config, request, admit):
         row = project_result(home, row, request)
         return {'resource': public(home, row), 'request': request}
     except BaseException as exc:
+        if binding_pending:
+            # A failed binding publication or non-admitting retained request
+            # must not be rewritten by the generic failure-result handler.
+            # Restart leaves uncertainty held, including legacy unbound rows.
+            raise
         # Hold the physical owner lock through final persistence. A rejected
         # competing request must never change the active owner's resource.
         try:
             recorded = app.operations.requests.read(sid, request['requestId'])
         except (OSError, ValueError, sqlite3.Error):
             recorded = {}
+        if action == 'remove' and result is None and (
+                recorded.get('state') != 'admitting'
+                or recorded.get('sessionId') != sid
+                or recorded.get('action') != 'workspace.environments.remove'
+                or recorded.get('resourceId') not in (None, row['id'])):
+            # Lock/admission/revision can fail before the binding check above.
+            # They cannot terminalize or attach an older uncertain request.
+            raise
         if confirmed_result(row, recorded):
             # The receipt and resource projection have separate commit points.
             # Retry only the projection; never downgrade or replay a known effect.

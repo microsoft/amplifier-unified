@@ -683,3 +683,213 @@ async def test_confirmed_destroy_survives_host_guest_removed_persistence_failure
     assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
     duplicate = await act(app, 'remove', row, 'metadata-remove')
     assert duplicate['request'] == result['request'] and calls == ['remove']
+
+
+async def queued_removal_fixture(app, queue):
+    """Use the real queue effect entry; only its already-owned job is seeded."""
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'queue-binding-stop'))['resource']
+    await submit(app, 'queue-binding-check')
+    receipt = record(queue, app, 'queue-binding-check')
+    receipt['job']['resourceId'] = row['id']
+    queue.save(receipt)
+    return row, receipt, owner.configuration(app)[0]
+
+
+@pytest.mark.parametrize('boundary', ['before-effect', 'binding-save', 'after-helper'])
+async def test_queue_origin_interruption_restart_holds_original_removal(app, queue, backend, monkeypatch, boundary):
+    from amplifier_web.operation_requests import OperationRequests
+    row, receipt, config = await queued_removal_fixture(app, queue)
+    request_id = receipt['requestId'] + ':remove'
+    requests = app.operations.requests
+    begin, finish, thread = requests.begin, requests.finish, app.worktrees.finish_thread
+    before = owner.get(app.data_dir, row['sessionId'], row['id'])
+    begun, faults, helper_calls = [], [], []
+
+    def observe_begin(sid, action, args, actor):
+        result, fresh = begin(sid, action, args, actor)
+        if action == 'workspace.environments.remove':
+            assert fresh and 'resourceId' not in result
+            begun.append(copy.deepcopy(result))  # Actual queue-produced unbound admission.
+        return result, fresh
+
+    def interrupted_finish(saved, state, **fields):
+        if saved['requestId'] == request_id and (
+                boundary == 'binding-save' and state == 'admitting' and 'resourceId' in fields
+                or boundary == 'after-helper' and state != 'admitting'):
+            faults.append(state)
+            raise OSError('synthetic queue interruption before receipt publication')
+        return finish(saved, state, **fields)
+
+    async def interrupted_thread(function, *args, **kwargs):
+        if boundary == 'before-effect' and function is owner.effect:
+            faults.append('before-effect')
+            raise OSError('synthetic queue interruption before common effect')
+        return await thread(function, *args, **kwargs)
+
+    def invoke(configured, home, raw, action, args):
+        assert action == 'remove'
+        saved = requests.read(row['sessionId'], request_id)
+        assert saved['state'] == 'admitting' and saved['resourceId'] == row['id']
+        helper_calls.append(copy.deepcopy(saved))
+        return {'ok':False, 'status':'unknown'}  # An effect, not a completed removal.
+
+    with monkeypatch.context() as fault:
+        fault.setattr(requests, 'begin', observe_begin)
+        fault.setattr(requests, 'finish', interrupted_finish)
+        fault.setattr(app.worktrees, 'finish_thread', interrupted_thread)
+        fault.setattr(owner, 'invoke', invoke)
+        with pytest.raises(OSError, match='synthetic queue interruption'):
+            await queue.effect(receipt, config, 'remove', cleanup=True)
+    assert len(begun) == 1 and faults
+    assert len(helper_calls) == (1 if boundary == 'after-helper' else 0)
+    saved = requests.read(row['sessionId'], request_id)
+    assert saved['state'] == 'admitting' and saved['requestId'] == begun[0]['requestId']
+    assert saved['createdAt'] == begun[0]['createdAt']
+    assert saved.get('resourceId') == (row['id'] if boundary == 'after-helper' else None)
+    if boundary != 'after-helper':
+        assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
+
+    # Execute the actual journal startup sweep, not a fixture-written UNKNOWN.
+    reopened = OperationRequests(requests.journal)
+    unknown = reopened.read(row['sessionId'], request_id)
+    assert unknown['state'] == 'outcome_unknown'
+    assert {k:v for k,v in unknown.items() if k not in {'state','message','updatedAt'}} == {
+        k:v for k,v in saved.items() if k not in {'state','message','updatedAt'}}
+    observed = observer(monkeypatch, 'stopped')
+    current = owner.get(app.data_dir, row['sessionId'], row['id'])
+    reconciled = await act(app, 'reconcile', owner.public(app.data_dir, current), 'queue-restart-observe')
+    assert observed == ['reconcile'] and reconciled['resource']['status'] == 'stopped'
+    assert requests.read(row['sessionId'], request_id) == unknown
+    before_new = owner.get(app.data_dir, row['sessionId'], row['id'])
+    new_calls = []
+    monkeypatch.setattr(owner, 'invoke', lambda *args: new_calls.append(args))
+    with pytest.raises(AppError, match='original removal'):
+        await act(app, 'remove', reconciled['resource'], 'new-id-after-queue-restart')
+    assert new_calls == []
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == before_new
+    assert requests.read(row['sessionId'], request_id) == unknown
+    with pytest.raises(ValueError, match='not found'):
+        requests.read(row['sessionId'], 'new-id-after-queue-restart')
+    assert await queue.effect(receipt, config, 'remove', cleanup=True) == unknown
+    assert not new_calls and requests.read(row['sessionId'], request_id) == unknown
+
+
+async def test_queue_removal_persists_binding_before_helper_and_keeps_completion(app, queue, backend, monkeypatch):
+    row, receipt, config = await queued_removal_fixture(app, queue)
+    requests = app.operations.requests
+    begin, invoke = requests.begin, owner.invoke
+    begun, calls = [], []
+    request_id = receipt['requestId'] + ':remove'
+    def observe_begin(sid, action, args, actor):
+        result, fresh = begin(sid, action, args, actor)
+        if action == 'workspace.environments.remove':
+            assert fresh and 'resourceId' not in result
+            begun.append(copy.deepcopy(result))
+        return result, fresh
+    def inspect(configured, home, raw, action, args):
+        saved = requests.read(raw['sessionId'], request_id)
+        assert saved['resourceId'] == row['id'] and saved['state'] == 'admitting'
+        assert saved['requestId'] == begun[0]['requestId'] and saved['createdAt'] == begun[0]['createdAt']
+        calls.append((action, copy.deepcopy(saved)))
+        return invoke(configured, home, raw, action, args)
+    monkeypatch.setattr(requests, 'begin', observe_begin)
+    monkeypatch.setattr(owner, 'invoke', inspect)
+    result = await queue.effect(receipt, config, 'remove', cleanup=True)
+    assert result['state'] == 'completed' and result['resourceId'] == row['id']
+    assert len(begun) == len(calls) == 1 and calls[0][0] == 'remove'
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] == 'retired'
+    assert await queue.effect(receipt, config, 'remove', cleanup=True) == result
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('scope_kind,state,binding,blocked', [
+    ('same', 'outcome_unknown', None, True),
+    ('same', 'outcome_unknown', '', True),
+    ('same', 'outcome_unknown', 7, True),
+    ('other-root', 'outcome_unknown', None, False),
+    ('same', 'outcome_unknown', 'other-resource', False),
+    ('same', 'completed', None, False),
+    ('same', 'failed', None, False),
+])
+async def test_unbound_removal_hold_is_same_root_only_and_never_infers_owner(app, backend, scope_kind, state, binding, blocked):
+    row = (await start(app))['resource']
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    sid = row['sessionId'] if scope_kind == 'same' else app.state['sessions'][1]['id']
+    request, _ = app.operations.requests.begin(sid, 'workspace.environments.remove',
+        {'requestId':'historical-unbound'}, {})
+    request = app.operations.requests.finish(request, state, **({'resourceId':binding} if binding is not None else {}))
+    if blocked:
+        with pytest.raises(ValueError, match='original removal'):
+            owner.require_resolved_removal(app, raw)
+    else:
+        owner.require_resolved_removal(app, raw)
+    assert app.operations.requests.read(sid, request['requestId']) == request
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == raw
+
+
+@pytest.mark.parametrize('change', ['unknown', 'completed', 'different-resource'])
+async def test_common_removal_never_rebinds_retained_request(app, backend, monkeypatch, change):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'no-rebind-stop'))['resource']
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    config = owner.configuration(app)[0]
+    args = {'requestId':'no-rebind', 'expectedRevision':raw['revision']}
+    request, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.remove', args, {})
+    if change == 'different-resource':
+        request = app.operations.requests.finish(request, 'admitting', resourceId='different-resource')
+    else:
+        request = app.operations.requests.finish(request, 'outcome_unknown' if change == 'unknown' else 'completed')
+    other, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.remove',
+        {'requestId':'another-unbound-original'}, {})
+    other = app.operations.requests.finish(other, 'outcome_unknown')
+    helpers = []
+    monkeypatch.setattr(owner, 'invoke', lambda *args: helpers.append(args))
+    with pytest.raises(ValueError, match='cannot be rebound or replayed'):
+        await asyncio.to_thread(owner.effect, app, raw, 'remove', args, config, request, lambda: None)
+    assert not helpers and owner.get(app.data_dir, row['sessionId'], row['id']) == raw
+    assert app.operations.requests.read(row['sessionId'], request['requestId']) == request
+    assert app.operations.requests.read(row['sessionId'], other['requestId']) == other
+
+
+@pytest.mark.parametrize('boundary', ['stale-revision', 'revoked-admission', 'locked'])
+async def test_early_common_refusal_never_rewrites_original_unknown(app, backend, monkeypatch, boundary):
+    from contextlib import nullcontext
+    from filelock import Timeout as LockTimeout
+    from amplifier_web.operation_requests import OperationRequests
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'early-stop'))['resource']
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    args = {'requestId':'early-original', 'expectedRevision':raw['revision']}
+    request, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.remove', args, {})
+    reopened = OperationRequests(app.operations.requests.journal)
+    unknown = reopened.read(row['sessionId'], request['requestId'])
+    assert unknown['state'] == 'outcome_unknown' and 'resourceId' not in unknown
+    config = owner.configuration(app)[0]
+    current = row
+    if boundary == 'stale-revision':
+        observer(monkeypatch, 'stopped')
+        current = (await act(app, 'reconcile', row, 'early-observe'))['resource']
+        assert current['revision'] != args['expectedRevision']
+    before = owner.get(app.data_dir, row['sessionId'], row['id'])
+    helpers = []
+    monkeypatch.setattr(owner, 'invoke', lambda *values: helpers.append(values))
+    def admit():
+        if boundary == 'revoked-admission':
+            raise ValueError('synthetic original authority revoked')
+    lock = FileLock(str(app.data_dir / 'workspace-resources' / ('environment-' + row['id'] + '.lock')))
+    error = LockTimeout if boundary == 'locked' else ValueError
+    match = 'lock' if boundary == 'locked' else 'changed' if boundary == 'stale-revision' else 'authority revoked'
+    with lock if boundary == 'locked' else nullcontext():
+        with pytest.raises(error, match=match):
+            await asyncio.to_thread(owner.effect, app, raw, 'remove', args, config, unknown, admit)
+    assert helpers == []
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
+    assert reopened.read(row['sessionId'], request['requestId']) == unknown
+    with pytest.raises(AppError, match='original removal'):
+        await act(app, 'remove', current, 'early-new-request')
+    assert helpers == []
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
+    assert reopened.read(row['sessionId'], request['requestId']) == unknown
+    with pytest.raises(ValueError, match='not found'):
+        reopened.read(row['sessionId'], 'early-new-request')
