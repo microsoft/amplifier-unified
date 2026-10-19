@@ -29,7 +29,7 @@ class _WorkFailureObservation:
         'explicit-reopen', 'operation-expired', 'cancelled', 'deadline',
         'source_changed', 'timeout', 'queue_full', 'closed', 'worker-failed',
         'missing-proof', 'page-limit', 'index-or-source-unavailable',
-        'incomplete-source', 'proof-failed',
+        'incomplete-source', 'proof-failed', 'diagnostics-unavailable',
     })
     fields = ('id', 'kind', 'sessionId', 'rootSessionId', 'turnId', 'parentId',
               'revision', 'phase', 'startedAt', 'endedAt')
@@ -199,6 +199,40 @@ class _WorkFailureObservation:
         self.record('proof-expiring', {**self.snapshot(windows, identity, proof=proof),
                     'expiryReason': label, 'origin': self.origin()},
                     first=('expiry', id(windows), self.proof_id(proof.get('id'))))
+
+    def persist_error(self, diagnostics, error):
+        classes = {
+            ('builtins', 'FileNotFoundError'), ('builtins', 'PermissionError'),
+            ('builtins', 'OSError'), ('builtins', 'ValueError'), ('builtins', 'TypeError'),
+            ('builtins', 'AttributeError'), ('builtins', 'KeyError'),
+            ('sqlite3', 'OperationalError'), ('sqlite3', 'IntegrityError'),
+            ('sqlite3', 'DatabaseError'), ('json.decoder', 'JSONDecodeError'),
+        }
+        sites = {
+            ('amplifier_web.diagnostics', 'Diagnostics._persist'): 'Diagnostics._persist',
+            ('amplifier_web.diagnostics', 'Diagnostics._initialize_storage'): 'Diagnostics._initialize_storage',
+            ('amplifier_web.diagnostics', 'Diagnostics._db'): 'Diagnostics._db',
+            ('amplifier_web.capture_index', 'index_shared'): 'capture_index.index_shared',
+            ('amplifier_web.capture_index', 'CaptureMetadataCache.validate'): 'CaptureMetadataCache.validate',
+            ('amplifier_web.session_files', 'validate_capture'): 'session_files.validate_capture',
+            ('amplifier_web.session_files', 'append_event'): 'session_files.append_event',
+        }
+        error_type = type(error)
+        category = error_type.__name__ if (error_type.__module__, error_type.__name__) in classes else 'other'
+        tb, site, line = error.__traceback__, 'unknown', None
+        for _ in range(24):
+            if tb is None:
+                break
+            frame = tb.tb_frame
+            known = sites.get((frame.f_globals.get('__name__'), frame.f_code.co_qualname))
+            if known:
+                site, line = known, self.number(tb.tb_lineno, 100000)
+            tb = tb.tb_next
+        # First exception only; no messages, filenames, locals or raw traceback.
+        self.record('diagnostic-first-persist-error', {
+            'service': self.service_id(diagnostics.service), 'exceptionClass': category,
+            'innermostRepoFunction': site, 'line': line, 'traceCapped': tb is not None},
+            first=('persist-error', id(diagnostics)))
 
     def binding(self, windows, session, row, proof_id, result):
         if row.get('toolCallId') not in self.targets or result[1] is not None:
@@ -449,7 +483,8 @@ class _WorkFailureObservation:
             self.safe(boundary, 'started')
             try:
                 result = original_persist(diagnostics, items, cfg)
-            except BaseException:
+            except BaseException as error:
+                self.safe(self.persist_error, diagnostics, error)
                 self.safe(boundary, 'raised')
                 raise
             else:
@@ -869,6 +904,70 @@ async def test_writer_wait_and_late_drain_share_the_existing_proof_deadline(tmp_
         release.set()
         await asyncio.gather(task, return_exceptions=True)
         await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_writer_lock_wait_does_not_start_a_late_flush(tmp_path, monkeypatch):
+    import amplifier_web.work_windows as module
+    owner, _, _, service = fixture(tmp_path, monkeypatch, count=3)
+    diagnostic = SimpleNamespace(flush_lock=asyncio.Lock(), storage_ready=True, storage_error=False,
+                                 configuration_error=False, stopping=False, pending=[])
+    calls = []
+    async def flush():
+        calls.append(True)
+    diagnostic._flush = flush
+    service.diagnostics = diagnostic
+    await diagnostic.flush_lock.acquire()
+    monkeypatch.setattr(module, 'PROOF_SECONDS', .05)
+    try:
+        result = await asyncio.wait_for(owner.prove('s'), 1)
+        assert result['reason'] == 'deadline' and owner._proof_draining
+        assert not calls and not owner.pages and not owner.projector.inputs
+        diagnostic.flush_lock.release()
+        await asyncio.gather(*tuple(owner._proof_draining), return_exceptions=True)
+        assert not calls and not owner.pages and not owner.projector.inputs
+    finally:
+        if diagnostic.flush_lock.locked():
+            diagnostic.flush_lock.release()
+        await owner.close()
+
+
+@pytest.mark.parametrize('error_type,expected', [(FileNotFoundError, 'FileNotFoundError'),
+                                                (ValueError, 'ValueError'), (RuntimeError, 'other')])
+def test_first_persist_error_observation_keeps_class_not_message_or_paths(error_type, expected):
+    trace = _WorkFailureObservation()
+    _, _, diagnostic = _observation_subject()
+    try:
+        raise error_type('private-exception-text /private/source')
+    except error_type as error:
+        trace.persist_error(diagnostic, error)
+        trace.persist_error(diagnostic, error)
+    assert len(trace.failures) == 1
+    row = trace.failures[0]
+    assert row['exceptionClass'] == expected
+    assert row['innermostRepoFunction'] == 'unknown' and row['line'] is None
+    assert row['traceCapped'] is False
+    assert 'private' not in json.dumps(row)
+
+
+def test_first_persist_error_observer_failure_cannot_replace_original_exception(monkeypatch):
+    from amplifier_web.diagnostics import Diagnostics
+    trace = _WorkFailureObservation()
+    _, _, diagnostic = _observation_subject()
+    failure, calls = ValueError('private-original'), []
+    def persist(*args):
+        calls.append(args)
+        raise failure
+    def broken(*args):
+        raise OSError('private-observer')
+    monkeypatch.setattr(Diagnostics, '_persist', persist)
+    monkeypatch.setattr(trace, 'persist_error', broken)
+    trace.install(monkeypatch, SimpleNamespace())
+    items, config = [], {}
+    with pytest.raises(ValueError) as caught:
+        Diagnostics._persist(diagnostic, items, config)
+    assert caught.value is failure
+    assert calls == [(diagnostic, items, config)] and trace.observation_errors == 1
 
 
 def fixture(tmp_path, monkeypatch, count=140):

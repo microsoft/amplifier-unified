@@ -68,6 +68,120 @@ def _calls(later_calls):
     return calls
 
 
+def _prepare_authored_capture(session, sid):
+    """Initialize fixture metadata before exposing its authored events file."""
+    from datetime import datetime, timezone
+    from filelock import FileLock
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_files import project_slug, validate_capture
+
+    path = event_path(session, sid)
+    directory = path.parent
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Match session_files.append_event's metadata contract and lock. The initial
+    # index scan validates metadata whenever it sees an events file; this only
+    # corrects fixture ordering, not the still-unidentified persistence exception.
+    with FileLock(str(directory / ".unified-append.lock")):
+        metadata = directory / "metadata.json"
+        if metadata.exists():
+            validate_capture(directory)
+        else:
+            stamp = datetime.now(timezone.utc).isoformat()
+            SessionStore._atomic(metadata, json.dumps({
+                "format": "context-intelligence", "version": "1.0.0",
+                "session_id": sid, "workspace": project_slug(session["workspace"]),
+                "working_dir": str(session["workspace"]), "parent_id": "",
+                "started_at": stamp, "last_event_at": stamp, "status": "running",
+            }))
+    return path
+
+
+def test_authored_capture_metadata_precedes_events(tmp_path, monkeypatch):
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_files import project_slug, validate_capture
+
+    session, sid = {"workspace": str(tmp_path)}, "regular-fixture-metadata"
+    path = event_path(session, sid)
+    metadata = path.parent / "metadata.json"
+    atomic, writes = SessionStore._atomic, []
+
+    def observed_atomic(target, text):
+        assert target == metadata
+        assert not path.exists(), "Capture metadata must precede authored events"
+        atomic(target, text)
+        writes.append(target)
+
+    monkeypatch.setattr(SessionStore, "_atomic", staticmethod(observed_atomic))
+    assert _prepare_authored_capture(session, sid) == path
+    saved = validate_capture(path.parent)
+    assert saved == {
+        "format": "context-intelligence", "version": "1.0.0",
+        "session_id": sid, "workspace": project_slug(tmp_path),
+        "working_dir": str(tmp_path), "parent_id": "",
+        "started_at": saved["started_at"], "last_event_at": saved["started_at"],
+        "status": "running",
+    }
+    assert isinstance(saved["started_at"], str) and saved["started_at"]
+    before = metadata.read_bytes()
+    assert _prepare_authored_capture(session, sid) == path
+    assert metadata.read_bytes() == before and writes == [metadata]
+    assert not path.exists(), "Metadata preparation must not fabricate event records"
+
+
+def test_authored_capture_preserves_existing_metadata(tmp_path, monkeypatch):
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_files import validate_capture
+
+    session, sid = {"workspace": str(tmp_path)}, "regular-fixture-existing"
+    path = event_path(session, sid)
+    path.parent.mkdir(parents=True)
+    metadata = path.parent / "metadata.json"
+    saved = {
+        "format": "context-intelligence", "version": "1.0.0",
+        "session_id": sid, "status": "completed",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "last_event_at": "2026-01-01T00:01:00+00:00",
+        "parent_id": "retained-parent", "optional": {"producer": "retained"},
+    }
+    metadata.write_text(json.dumps(saved, indent=2) + "\n", encoding="utf-8")
+    before, stat = metadata.read_bytes(), metadata.stat()
+
+    def forbidden_atomic(*_):
+        pytest.fail("Existing capture metadata must not be replaced")
+
+    monkeypatch.setattr(SessionStore, "_atomic", staticmethod(forbidden_atomic))
+    assert _prepare_authored_capture(session, sid) == path
+    assert _prepare_authored_capture(session, sid) == path
+    assert validate_capture(path.parent) == saved
+    assert metadata.read_bytes() == before
+    assert (metadata.stat().st_ino, metadata.stat().st_mtime_ns) == (stat.st_ino, stat.st_mtime_ns)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("invalid", [
+    {"format": "other-capture", "version": "1.0.0"},
+    {"format": "context-intelligence", "version": "unsupported"},
+], ids=["format", "version"])
+def test_authored_capture_refuses_invalid_metadata(tmp_path, monkeypatch, invalid):
+    from amplifier_web.host.storage import SessionStore
+
+    session, sid = {"workspace": str(tmp_path)}, "regular-fixture-invalid"
+    path = event_path(session, sid)
+    path.parent.mkdir(parents=True)
+    metadata = path.parent / "metadata.json"
+    metadata.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+    before = metadata.read_bytes()
+
+    def forbidden_atomic(*_):
+        pytest.fail("Invalid capture metadata must not be silently repaired")
+
+    monkeypatch.setattr(SessionStore, "_atomic", staticmethod(forbidden_atomic))
+    with pytest.raises(ValueError, match="Unsupported Context Intelligence capture format/version"):
+        _prepare_authored_capture(session, sid)
+    assert metadata.read_bytes() == before
+    assert not path.exists(), "Invalid metadata must refuse before events become visible"
+
+
 async def _emit(service, sid, event):
     normalized = normalize_event(event, sid)
     assert normalized is not None
@@ -91,8 +205,7 @@ async def _seed(service, calls, audit=None):
     emitted = []
     observer = ExecutionEvents(sid, emitted.append)
     observer.lifecycle({"type": "input.delivered", "input_id": INPUT_ID})
-    path = event_path(session, sid)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = _prepare_authored_capture(session, sid)
     with path.open("w", encoding="utf-8") as stream:
         for call in calls:
             for name, fields in (("tool:pre", {"tool_input": call["input"]}),

@@ -1943,3 +1943,39 @@ async def test_composed_web_currentness_requires_support_then_one_explicit_reope
             composed = service.projections.detail(root)
         assert composed['workProjection']['current'] is True
         assert composed['workProjection']['receipt']['proofId'] == reopened['rootProof']['id']
+
+
+@pytest.mark.asyncio
+async def test_explicit_proof_joins_actual_queued_receipts_without_fixture_flush(source, monkeypatch):
+    source.call('one')
+    source.service.diagnostics = source.diagnostics
+    assert source.diagnostics.pending
+    owner = WorkWindows(source.service)
+    calls = []
+    original_flush = source.diagnostics._flush
+    async def flush():
+        calls.append(True)
+        await original_flush()
+    monkeypatch.setattr(source.diagnostics, '_flush', flush)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            assert not source.diagnostics.pending
+            assert source.diagnostics.storage_ready and not source.diagnostics.storage_error
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        view = await owner.read_selected('root')
+        assert view['rootProof']['status'] == 'complete'
+        assert view['rootProof']['boundCount'] == 1 and calls == [True]
+        bound = owner.proof_nodes('root', view['rootProof']['id'])[0]
+        detail = bound['inputDetail']
+        result = await owner.read_proven_field('root', view['rootProof']['id'], bound['id'],
+                                               {**detail, 'offset': 0, 'limit': 4096})
+        assert result['value'] and result['nextOffset'] == 4096
+        owner.project(source.session)
+        assert calls == [True]  # Field and passive projection do not flush/rescan.
+    finally:
+        await owner.close()
