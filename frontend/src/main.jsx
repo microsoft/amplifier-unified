@@ -26,6 +26,7 @@ import windowControlsOverlayCss from './window-controls-overlay.css?raw';
 import './window-controls-overlay.css';
 import {AppReloadContext,AppReloadNotice,useAppReload} from './app-reload.jsx';
 import {AppearanceSettings} from './appearance-settings';
+import {homePatch} from './adaptive-work.js';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel,useGuardedSettingsSession} from './settings-drafts';
 import {useMessageOutbox,outboxMessages} from './message-outbox';
@@ -464,7 +465,7 @@ function App(){
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
  function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};const journalEntry=draftJournal.stage(sessionId,value);draftJournalEntries.current.set(payload,journalEntry);setDraftStorageError(!journalEntry.persisted);stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)}
- async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace?{workspace}:{})}
+ async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace&&typeof workspace==='object'?workspace:workspace?{workspace}:{})}
  async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||newChatSetup(pendingView.current.apply(latest.current))),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
   const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
   if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
@@ -604,7 +605,9 @@ function App(){
   },
  });
  const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
- const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings};
+ const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,
+  home:(extra={})=>act('view.update',{patch:homePatch(presentation,extra)}),
+  setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:settingsState;
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
  return <ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">

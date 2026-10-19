@@ -93,6 +93,10 @@ class ClientViews:
                 shared = self.service._state
                 record = {key: copy.deepcopy(shared.get(key)) for key in LOCAL_KEYS}
                 record["view"] = record.get("view") or {}
+                if kind == 'web':
+                    record['view']['workSurface'] = 'home'
+                    record['view']['navPinned'] = False
+                    record['view'].pop('workHomeView', None)
                 record["canvas"] = record.get("canvas") or {}
                 record["drafts"] = {}
                 record["attachments"] = {}

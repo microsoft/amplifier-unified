@@ -6,6 +6,7 @@ import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {createPortal} from 'react-dom';
 import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal,CalendarClock} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
+import {AdaptiveWorkHome} from './adaptive-work.jsx';
 import {useNavigationController,ChatList,NavigationEditor,ChatSearch} from './shell/navigation-components';
 import {WorkspaceCleanup} from './storage-settings';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -56,9 +57,10 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
  const displayTitle=useChatTitle(session,{eager:!browsing}).title;
  const setup=!session&&!browsing?newChatSetup(state):null;
  const workspace=state.workspaces?.find(row=>setup?setup.location?.kind!=='managed'&&row.path===setup.workspace:row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
- const title=surface==='workspaces'?'All workspaces':surface==='chats'?'Search chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
+ const title=surface==='home'?'Your work':surface==='workspaces'?'All workspaces':surface==='chats'?'Search chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
  return <header className="a-work-header" data-part="header" inert={!!state.view?.panel}>
   <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
+  <button type="button" className="a-work-home-button" aria-label="Go to Home" onClick={()=>nav.home()}><ArrowLeft/><span>Home</span></button>
   {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
@@ -105,7 +107,7 @@ export function WorkspaceFiles({workspace,state,act}){
 }
 function WorkBrowser({host,workspaceHost,state,act}){
  const model=useNavigationController(host,'chats'),workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),now=useActivityClock(),nav=useContext(WorkNavigationContext);
- const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=surface!=='chat';
+ const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=!['chat','home'].includes(surface);
  const workspacePending=surface==='workspace'&&(workspaceModel.state.navigationWorkspacePending||model.state.navigationWorkspacePending);
  const setTab=tab=>act('view.update',{patch:{workWorkspaceTab:tab}});
  const view=surface==='chats'?{...model.view,...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,navChatScope:'all'}:{...model.view,navChatScope:'workspace'};
@@ -129,7 +131,7 @@ function WorkBrowser({host,workspaceHost,state,act}){
 export function WorkSurface({shell,state,act}){
  const chats=shell.composition.instances.find(row=>row.package==='builtin.chats'),workspaces=shell.composition.instances.find(row=>row.package==='builtin.workspaces');
  if(!chats)return <div className="a-work-browser"><p>Your custom navigation is available in the sidebar. This browser uses the standard Chats component.</p><a href="?shell=recovery">Open with standard navigation</a></div>;
- return <div className="a-work-browser-host" hidden={workSurface(state)==='chat'}><WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/></div>;
+ return <div className="a-work-browser-host" hidden={workSurface(state)==='chat'}>{workSurface(state)==='home'?<AdaptiveWorkHome host={shell.hostFor(chats)} state={state} act={act} presentation={shell.composition.presentation}/>:<WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/>}</div>;
 }
 
 // Live controls stay outside the conversation, which is hidden during browsing.

@@ -2,6 +2,7 @@ import {conversationHistoryPending} from './history-window.js';
 import {OutputSettings} from './outputs';
 import {PublishingSettings} from './publishing';
 import {ChatOverview} from './work-overview';
+import {AdaptiveNavLinks} from './adaptive-work.jsx';
 import {NavigationOpen,useModalFocus} from './responsive-navigation';
 import {CanvasControlsHost} from './canvas-controls';
 import {CanvasWorkspace} from './canvas-workspace';
@@ -39,7 +40,7 @@ export function WorkspaceRail({state,session,act,selectSession,newSession,shell,
   <div className="a-nav-rail">
    <div className="a-nav-head"><button className="a-icon" type="button" aria-label="Close navigation" title="Close sidebar" aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>layout.narrow?close():patch(act,{navPinned:false,navExpanded:false}).then(()=>{if(typeof document!=='undefined')document.querySelector('[aria-label="Open navigation"]')?.focus()})}>{layout.narrow?<X/>:<PanelLeft/>}{!layout.narrow&&<AttentionBadge state={state} section="chats"/>}</button><strong className="a-nav-reveal" title="Hold Alt+Shift (Option+Shift on Mac) to reveal chat shortcuts">Your work</strong></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.draft" aria-label="New chat" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
-   <div className="a-nav-content a-nav-reveal"><ShellModules shell={shell}/></div>{footer}
+   <div className="a-nav-content a-nav-reveal"><AdaptiveNavLinks state={state}/><ShellModules shell={shell}/></div>{footer}
   </div>
   {layout.docked&&<PaneResizer layout={layout} pane="nav"/>}
  </aside></ChatShortcutScope></NavigationOpen.Provider>;

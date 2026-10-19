@@ -9,6 +9,10 @@ owns behavior and accessibility; an appearance changes their presentation.
 
 ## Independent preferences
 
+The web arrival experience additionally follows the [adaptive work views
+contract](adaptive-work-views.md). Detail determines a default starting view;
+explicit view selection and responsive layout remain independent.
+
 - Theme: semantic colors, type, surface treatment and optional artwork. Use
   host tokens, including the contrasting on-accent foreground, rather than
   assuming that accent buttons always have white text.

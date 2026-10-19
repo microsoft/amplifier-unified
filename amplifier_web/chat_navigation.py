@@ -214,8 +214,20 @@ def initialize(state):
 
 def view_patch(patch):
     # Browsing is client presentation, never a change to the active chat/folder.
-    if 'workSurface' in patch and patch['workSurface'] not in ('chat', 'workspace', 'workspaces', 'chats'):
-        raise ValueError('Choose chat, workspace, workspaces or chats.')
+    if 'workSurface' in patch and patch['workSurface'] not in ('chat', 'workspace', 'workspaces', 'chats', 'home'):
+        raise ValueError('Choose home, chat, workspace, workspaces or chats.')
+    if 'workHomeView' in patch and patch['workHomeView'] not in ('focus', 'brief', 'studio'):
+        raise ValueError('Choose Focus, Brief or Studio.')
+    if 'workHomeFilter' in patch and patch['workHomeFilter'] not in ('all', 'attention', 'unread', 'working', 'idle'):
+        raise ValueError('Choose a work status.')
+    if 'workHomeScope' in patch and (not isinstance(patch['workHomeScope'], str) or not 1 <= len(patch['workHomeScope']) <= 100):
+        raise ValueError('Choose a work scope.')
+    if 'workHomeQuery' in patch and (not isinstance(patch['workHomeQuery'], str) or len(patch['workHomeQuery']) > 500):
+        raise ValueError('Search text must be 500 characters or fewer.')
+    if 'workHomePages' in patch:
+        value = patch['workHomePages']
+        if not isinstance(value, dict) or any(key not in ('attention', 'unread', 'working', 'idle') or type(index) is not int or not 0 <= index <= 1_000_000 for key, index in value.items()):
+            raise ValueError('Choose valid work page indexes.')
     if 'workWorkspaceTab' in patch and patch['workWorkspaceTab'] not in ('chats', 'files', 'details'):
         raise ValueError('Choose chats, files or details.')
     if 'workWorkspaceId' in patch and patch['workWorkspaceId'] is not None and (not isinstance(patch['workWorkspaceId'], str) or not 1 <= len(patch['workWorkspaceId']) <= 100):
