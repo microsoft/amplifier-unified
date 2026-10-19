@@ -6,6 +6,8 @@ import logging
 import time
 import uuid
 
+from .task_binding import continuation_epoch
+
 
 def definitions(schema, string):
     sid = {"sessionId": string(200)}
@@ -194,6 +196,12 @@ class TaskController:
             raise ValueError("Unknown task operation")
         if task["status"] == "active" and not self.coordinator.get_capability("live.continuation_guard_supported"):
             raise ValueError("This orchestrator needs durable task continuation guard support")
+        # Reports about this objective remain useful while its progress and
+        # constraints evolve. Ending/replacing/suspending the objective fences
+        # old automatic continuations, including a pause followed by resume.
+        task['continuationEpoch'] = (revision + 1 if operation != 'task.update'
+            or task.get('objective') != (previous or {}).get('objective')
+            else continuation_epoch(previous))
         task.update(revision=revision + 1, updatedAt=time.time())
         old_goal = copy.deepcopy(self.coordinator.session_state.get("goal"))
         old_history = copy.deepcopy(self.history)
