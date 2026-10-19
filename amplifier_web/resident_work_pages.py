@@ -100,8 +100,8 @@ class ResidentWorkPages:
         """
         nodes = raw(session).get('execution', {}).get('nodes', [])
         rows, _, _ = self._rows(self._source(session, max(0, len(nodes) - NODE_LIMIT), len(nodes)), group)
-        return any((row.get('liveObservation') or row.get('_eventFields'))
-                   and not any(field in row for field in CANONICAL_FIELDS) for row in rows)
+        return any(row.get('_eventFields') or (row.get('liveObservation')
+                   and not any(field in row for field in CANONICAL_FIELDS)) for row in rows)
 
     def revision_for(self, session, group, base_revision):
         """Wrap the live projection's base revision; never initiate a proof.
