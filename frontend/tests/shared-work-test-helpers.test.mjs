@@ -79,10 +79,14 @@ test('action observation overflow fails rather than silently dropping a possible
 });
 
 test('passive guard retains the previous worker/navigation and Work mutation oracles',()=>{
- for(const action of ['session.select','session.warm','conversation.send','worker.spawn','task.start','coordination.create','workspace.work.report']) {
+ for(const action of ['session.select','session.warm','conversation.send','worker.spawn','task.start','coordination.create',
+  'workspace.work.report','workspace.work.publication','workspace.work.resource','workspace.work.decision','workspace.work.reviewInput']) {
   assert.throws(()=>assertPassiveActions([{client:'peer',action,args:{}}]),/Passive Work|Unexpected Work mutation/);
  }
  assert.doesNotThrow(()=>assertPassiveActions([{client:'primary',action:'view.update',args:{}}]));
+ for(const action of ['workspace.work.wait','workspace.work.event','workspace.work.coverage']) {
+  assert.doesNotThrow(()=>assertPassiveActions([{client:'peer',action,args:{}}]));
+ }
 });
 
 test('Cleanup value accepts explicit uncertainty but rejects None or leakage from another facet',()=>{

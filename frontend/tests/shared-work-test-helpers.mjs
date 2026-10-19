@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 
 export const unknownCleanupValue=/^(?:unknown|not recorded)(?:\s*[/\u00b7\u2014-]\s*(?:unknown|not recorded))?\.?$/i;
-export const passiveWorkReads=new Set(['workspace.work.list','workspace.work.read','workspace.work.history','workspace.work.source']);
+export const passiveWorkReads=new Set(['workspace.work.list','workspace.work.read','workspace.work.history','workspace.work.source',
+ 'workspace.work.wait','workspace.work.event','workspace.work.coverage']);
 const forbiddenPassiveActions=new Set(['session.select','session.warm','conversation.send','worker.spawn','task.start','coordination.create']);
 
 export function assertPassiveActions(calls) {

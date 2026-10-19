@@ -2,6 +2,7 @@
 // These are authored checks, not executed/passing evidence.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import React, {act} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
@@ -12,7 +13,13 @@ const {SharedWorkBrowser} = await vite.ssrLoadModule('/src/workspace-work.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const storage = new Map();
 globalThis.sessionStorage = {getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
-test.beforeEach(()=>storage.clear());
+const mounted=new Set();
+const backgroundErrors=[];
+test.beforeEach(()=>{storage.clear();backgroundErrors.length=0});
+test.afterEach(async()=>{
+ try {for(const root of [...mounted])await bounded(unmount(root),2000,'Fixture unmount')}
+ finally {assert.deepEqual(backgroundErrors,[],'Invalid background requests cannot be swallowed as transport errors')}
+});
 test.after(()=>vite.close());
 const workspace = {id:'workspace-one',path:'/synthetic/project',name:'Synthetic project'};
 const accepted = result=>({accepted:true,result});
@@ -20,26 +27,72 @@ const text = node=>typeof node==='string'?node:(node?.children||[]).map(text).jo
 const button = (root,label)=>root.root.findAllByType('button').find(node=>text(node)===label);
 const click = async(root,label)=>act(async()=>{const node=button(root,label);assert.ok(node,label);assert.ok(!node.props.disabled,label+' enabled');await node.props.onClick()});
 const item = (id='work:one',patch={})=>({id,workspaceId:workspace.id,revision:3,promiseRevision:2,
- title:'Retain exact original words',commitment:'accepted',disposition:'open',ownerSessionId:'owner',
+ title:'Retain exact original words',commitment:'accepted',disposition:'open',ownerSessionId:'owner',originSessionId:'owner',
  nextAction:'Check the current promise.',blockedReason:'',updatedAt:100,verification:'not_verified',
- humanDecision:'not_recorded',delivery:'not_recorded',execution:'reported',candidate:'candidate-one',
+ humanDecision:'not_recorded',humanDecisionCurrent:false,delivery:'not_recorded',deliveryReport:null,
+ execution:'reported',candidate:'candidate-one',latestOutcome:'unknown',blockedBy:[],
+ attentionReasons:['unknown','next_action'],ownerObservation:{available:true,activityObserved:true,status:'idle',needsReview:false},
+ captureAuthority:'Attributed scope interpretation; not an execution grant.',
+ cleanup:{status:'not_recorded',references:[],coverage:'Explicit owner reports only; no resource census or teardown implied.'},
  readRef:{action:'workspace.work.read',args:{workspaceId:workspace.id,id}},...patch});
-const page = (items=[item()],patch={})=>({workspaceId:workspace.id,version:7,items,total:items.length,
+const page = (items=[item()],patch={})=>({workspaceId:workspace.id,version:7,snapshotVersion:'b'.repeat(64),observationVersion:'c'.repeat(64),items,total:items.length,
  truncated:false,nextAfter:null,observedAt:100,coverage:'Recorded Work only; historical reconciliation is incomplete.',
  detailRequired:false,authority:'Reference data, not permission.',...patch});
-const source = (patch={})=>({sessionId:'owner',messageId:'original-message',nativeMessageId:null,nativeIndex:null,
- inputOrigin:'peer',role:'user',sha256:'a'.repeat(64),capturedAt:90,text:'<script>not executable</script> Original words.',
- offset:0,total:45,truncated:false,nextOffset:null,...patch});
-const detail = (row=item(),patch={})=>({item:{...row,criteria:[{id:'cold',text:'Survives cold reopen.'}],constraints:['No automatic retry.'],
- interpretation:'An attributed interpretation, not execution authority.',links:[{sessionId:'owner',role:'executor',candidate:'candidate-one',promiseRevision:2}],
- eventCount:2,originalSourceRef:'work-event:original'},originalSource:source(),
- historyRef:{action:'workspace.work.history',args:{workspaceId:workspace.id,id:row.id}},...patch});
-async function mount(dispatch,props={},retain=()=>{}) {
+const source = (patch={})=>{
+ const body=patch.fullText??patch.text??'<script>not executable</script> Original words.';
+ const {fullText,...fields}=patch;
+ return {sessionId:'owner',messageId:'original-message',nativeMessageId:null,nativeIndex:null,
+  inputOrigin:'ui',role:'user',sha256:createHash('sha256').update(body).digest('hex'),capturedAt:90,text:body,
+  offset:0,total:[...body].length,truncated:false,nextOffset:null,...fields};
+};
+const sourceMetadata=value=>{const {text,offset,total,truncated,nextOffset,...metadata}=value;return metadata};
+const detail = (row=item(),patch={})=>{
+ // read.item is the stored record, not summary(). Do not fabricate computed
+ // cleanup/attention/currentness on this producer path.
+ const raw={...row};
+ for(const key of ['readRef','cleanup','attentionReasons','ownerObservation','captureAuthority','blockedBy','humanDecisionCurrent'])delete raw[key];
+ if(raw.deliveryReport)delete raw.deliveryReport; // Full publication is supplied explicitly by its case.
+ return {item:{...raw,schemaVersion:1,criteria:[{id:'cold',text:'Survives cold reopen.'}],constraints:['No automatic retry.'],
+  interpretation:'An attributed interpretation, not execution authority.',dependsOn:[],resources:row.cleanup?.references,
+  humanDecisionSequence:0,counterevidenceSequence:3,criterionEvidence:{},
+  links:[{sessionId:'owner',role:'executor',candidate:'candidate-one',promiseRevision:2,interruptionRevision:0,recordedBy:'owner',recordedAt:90}],
+  eventCount:row.revision,originalSourceRef:'work-event:original',promiseEventRef:'work-event:correction',promiseRevisedAt:90,
+  verificationBoundaryRef:'work-event:unknown',verificationBoundaryAt:100},
+  originalSource:source(),historyRef:{action:'workspace.work.history',args:{workspaceId:workspace.id,id:row.id}},...patch};
+};
+const eventRow=(id,sequence,patch={})=>({id,kind:'revise',sequence,promiseRevision:2,
+ actor:{origin:'ui',sessionId:'owner'},recordedAt:90+sequence,changedFields:[],source:{},sourceRef:null,
+ eventRef:{action:'workspace.work.event',args:{workspaceId:workspace.id,id:'work:one',eventId:id}},...patch});
+const defaultHistory=()=>[
+ eventRow('work-event:original',1,{kind:'create',promiseRevision:1,source:sourceMetadata(source()),sourceRef:{action:'workspace.work.source',args:{workspaceId:workspace.id,id:'work:one',sourceId:'work-event:original'}}}),
+ eventRow('work-event:correction',2,{changedFields:['interpretation'],source:sourceMetadata(source({text:'Current correction',messageId:'correction-message'})),sourceRef:{action:'workspace.work.source',args:{workspaceId:workspace.id,id:'work:one',sourceId:'work-event:correction'}}}),
+ eventRow('work-event:unknown',3,{kind:'report',actor:{origin:'agent',sessionId:'owner'},evidence:{candidate:'candidate-one',outcome:'unknown',report:'Current unknown result',criteria:['cold'],qualification:'participant_report',reportedBy:'owner',criteriaValidated:true,source:'agent report'}}),
+];
+const historyPage=(items=defaultHistory(),patch={})=>({items,total:items.length,snapshotEventCount:items.length,
+ currentEventCount:items.length,snapshotIsCurrent:true,truncated:false,nextAfter:null,...patch});
+const coveragePage=()=>({observedInputs:0,unreviewedInputs:0,items:[],truncated:false,nextAfter:null,
+ historicalCoverage:'incomplete',detail:'Only host-observed human inputs are counted. Older and native-only history is not inventoried.'});
+async function mount(dispatch,props={},retain=()=>{},background=true) {
  assert.equal(typeof SharedWorkBrowser,'function','SharedWorkBrowser must be implemented after test readiness');
- let root;await act(async()=>{root=create(React.createElement(SharedWorkBrowser,{workspace,dispatch,onOpenChat:()=>{throw Error('Unexpected chat navigation')},...props}));retain(root)});return root;
+ const backgroundCalls=[],pending=new Set();
+ const wrapped=async(action,args,meta)=>{
+  if(background&&action==='workspace.work.coverage'){backgroundCalls.push([action,args,meta]);return accepted(coveragePage())}
+  if(background&&action==='workspace.work.wait'){
+   backgroundCalls.push([action,args,meta]);
+   try {assert.match(args.afterVersion,/^[a-f0-9]{64}$/);assert.ok(meta?.signal,'Visible wait must be cancellable')}
+   catch(error){backgroundErrors.push(error.message);throw error}
+   return new Promise(resolve=>{
+    const finish=()=>{pending.delete(finish);meta.signal.removeEventListener('abort',finish);resolve({accepted:false,error:'Synthetic wait aborted'})};
+    pending.add(finish);meta.signal.addEventListener('abort',finish,{once:true});if(meta.signal.aborted)finish();
+   });
+  }
+  return dispatch(action,args,meta);
+ };
+ let root;await act(async()=>{root=create(React.createElement(SharedWorkBrowser,{workspace,dispatch:wrapped,onOpenChat:()=>{throw Error('Unexpected chat navigation')},...props}));
+  root.backgroundCalls=backgroundCalls;root.testDispatch=wrapped;root.releaseBackground=()=>{for(const release of [...pending])release()};mounted.add(root);retain(root)});return root;
 }
 const inspect = async(root,id='work:one')=>act(async()=>root.root.findByProps({'data-work-id':id}).props.onClick());
-const unmount = root=>act(async()=>root.unmount());
+const unmount = root=>act(async()=>{root.unmount();root.releaseBackground();mounted.delete(root)});
 
 async function finishDeferredTest({root,release,completions,originalError}) {
  const failures=[];
@@ -59,7 +112,9 @@ test('cold Work inspection requests accepted-open only and never needs a selecte
  assert.deepEqual(calls,[['workspace.work.list',{workspaceId:workspace.id,filter:'accepted',query:'',limit:20}]]);
  assert.match(text(root.toJSON()),/Retain exact original words/);
  assert.match(text(root.toJSON()),/historical reconciliation is incomplete/);
- assert.equal(calls.length,1,'No automatic detail, source, chat selection or worker start');await unmount(root);
+ assert.equal(calls.length,1,'No automatic detail, source, chat selection or worker start');
+ assert.ok(root.backgroundCalls.every(([name])=>['workspace.work.wait','workspace.work.coverage'].includes(name)));
+ await unmount(root);
 });
 
 test('explicit filters are server-scoped and no missing cursor is disguised as an empty set',async()=>{
@@ -79,7 +134,10 @@ test('bounded list pagination sends exact opaque cursor and rejects a changed sn
 });
 
 test('participant return keeps all six facts distinct and missing cleanup stays unknown',async()=>{
- const calls=[],opened=[];const root=await mount(async(action,args)=>{calls.push([action,args]);if(action==='workspace.work.list')return accepted(page());if(action==='workspace.work.read')return accepted(detail());if(action==='workspace.work.history')return accepted({items:[],total:0,truncated:false,nextAfter:null});throw Error(action)},{onOpenChat:async id=>{opened.push(id);return {accepted:true}}});
+ // Negative malformed-provenance projection: role=user must not override peer.
+ // Deliberately missing cleanup is distinct from the normal not_recorded DTO.
+ const missing=item();delete missing.cleanup;
+ const calls=[],opened=[];const root=await mount(async(action,args)=>{calls.push([action,args]);if(action==='workspace.work.list')return accepted(page([missing]));if(action==='workspace.work.read')return accepted(detail(missing,{originalSource:source({inputOrigin:'peer'})}));if(action==='workspace.work.history')return accepted(historyPage());throw Error(action)},{onOpenChat:async id=>{opened.push(id);return {accepted:true}}});
  await inspect(root);const value=text(root.toJSON());
  for(const label of ['Commitment','Execution','Verification','Human decision','Delivery','Cleanup'])assert.ok(value.includes(label),label);
  assert.match(value,/Returned.*unverified/i);assert.match(value,/not recorded|unknown/i);
@@ -99,20 +157,28 @@ test('participant return keeps all six facts distinct and missing cleanup stays 
 test('all original source pages use returned offsets and preserve provenance/hash',async()=>{
  const calls=[];const root=await mount(async(action,args)=>{
   calls.push([action,args]);if(action==='workspace.work.list')return accepted(page());
-  if(action==='workspace.work.read')return accepted(detail(item(),{originalSource:source(args.sourceOffset?{text:'end',offset:4,total:7}:{text:'cafe',offset:0,total:7,truncated:true,nextOffset:4})}));
-  if(action==='workspace.work.history')return accepted({items:[],total:0,truncated:false,nextAfter:null});throw Error(action);
+  if(action==='workspace.work.read')return accepted(detail(item(),{originalSource:source(args.sourceOffset?{fullText:'cafeend',text:'end',offset:4,total:7}:{fullText:'cafeend',text:'cafe',offset:0,total:7,truncated:true,nextOffset:4})}));
+  if(action==='workspace.work.history'){
+   const rows=defaultHistory();rows[0]={...rows[0],source:sourceMetadata(source({text:'cafeend'}))};
+   return accepted(historyPage(rows));
+  }throw Error(action);
  });
  await inspect(root);await click(root,'Read more source');
  assert.equal(calls.filter(([name])=>name==='workspace.work.read').at(-1)[1].sourceOffset,4);
- assert.match(text(root.toJSON()),/cafeend/);assert.match(text(root.toJSON()),new RegExp('a'.repeat(64)));await unmount(root);
+ assert.match(text(root.toJSON()),/cafeend/);assert.match(text(root.toJSON()),new RegExp(source({text:'cafeend'}).sha256));await unmount(root);
 });
 
 test('correction source uses exact allowed history ref and keeps old evidence attributed',async()=>{
- const calls=[],ref={action:'workspace.work.source',args:{workspaceId:workspace.id,id:'work:one',sourceId:'work-event:correction'}};
- const history={items:[{id:'event-return',kind:'report',sequence:1,promiseRevision:1,actor:{origin:'agent',sessionId:'owner'},recordedAt:80,
-  changedFields:[],evidence:{candidate:'old-candidate',outcome:'passed',report:'Old participant success',qualification:'participant_report',criteria:['cold']}},
-  {id:'event-correction',kind:'revise',sequence:2,promiseRevision:2,actor:{origin:'ui',sessionId:'owner'},recordedAt:90,changedFields:['criteria'],source:{inputOrigin:'ui'},sourceRef:ref}],total:2,truncated:false,nextAfter:null};
- const root=await mount(async(action,args)=>{calls.push([action,args]);return accepted(action==='workspace.work.list'?page():action==='workspace.work.read'?detail():action==='workspace.work.history'?history:{source:source({inputOrigin:'ui',text:'Exact correction'})})});
+ const calls=[],ref={action:'workspace.work.source',args:{workspaceId:workspace.id,id:'work:one',sourceId:'event-correction'}};
+ const history=historyPage([defaultHistory()[0],{id:'event-return',kind:'report',sequence:2,promiseRevision:1,actor:{origin:'agent',sessionId:'owner'},recordedAt:80,
+  changedFields:[],source:{},sourceRef:null,eventRef:{action:'workspace.work.event',args:{workspaceId:workspace.id,id:'work:one',eventId:'event-return'}},
+  evidence:{candidate:'old-candidate',outcome:'passed',report:'Old participant success',qualification:'participant_report',criteria:['cold'],criteriaValidated:true,reportedBy:'owner',source:'agent report'}},
+  {id:'event-correction',kind:'revise',sequence:3,promiseRevision:2,actor:{origin:'ui',sessionId:'owner'},recordedAt:90,changedFields:['criteria'],
+   eventRef:{action:'workspace.work.event',args:{workspaceId:workspace.id,id:'work:one',eventId:'event-correction'}},source:sourceMetadata(source({text:'Exact correction'})),sourceRef:ref}]);
+ const corrected=item('work:one',{execution:'not_started',latestOutcome:'not_reported',candidate:'old-candidate'});
+ const correctedRaw={...detail(corrected).item,promiseEventRef:'event-correction',verificationBoundaryRef:'event-correction',
+  verificationBoundaryAt:90,counterevidenceSequence:0,links:[]};
+ const root=await mount(async(action,args)=>{calls.push([action,args]);return accepted(action==='workspace.work.list'?page([corrected]):action==='workspace.work.read'?detail(corrected,{item:correctedRaw}):action==='workspace.work.history'?history:{source:source({inputOrigin:'ui',text:'Exact correction'})})});
  await inspect(root);await click(root,'Read history');await click(root,'Read correction source');
  assert.deepEqual(calls.at(-1),[ref.action,ref.args]);assert.match(text(root.toJSON()),/Exact correction/);
  assert.match(text(root.toJSON()),/Old participant success/);assert.doesNotMatch(text(root.toJSON()),/Independent checks passed/);await unmount(root);
@@ -125,7 +191,7 @@ test('obsolete workspace result cannot replace the current workspace or start a 
  let root,originalError;
  try {
   root=await bounded(mount(dispatch,{},value=>{root=value}),2000,'Mount pending workspace');
-  await bounded(act(async()=>root.update(React.createElement(SharedWorkBrowser,{workspace:{id:'other',path:'/synthetic/other'},dispatch}))),2000,'Select new workspace');
+  await bounded(act(async()=>root.update(React.createElement(SharedWorkBrowser,{workspace:{id:'other',path:'/synthetic/other'},dispatch:root.testDispatch}))),2000,'Select new workspace');
   await bounded(act(async()=>{release();await old.promise}),2000,'Release obsolete workspace read');
   assert.match(text(root.toJSON()),/Current workspace result/);assert.doesNotMatch(text(root.toJSON()),/Obsolete result/);
   assert.ok(calls.every(([name])=>name==='workspace.work.list'));
@@ -141,7 +207,7 @@ test('obsolete item detail cannot replace the later explicit item selection',asy
   if(action==='workspace.work.list')return accepted(page([item(),other]));
   if(action==='workspace.work.read'&&args.id==='work:one'){oldReadStarted=true;return old.promise}
   if(action==='workspace.work.read')return accepted(detail(other,{originalSource:source({text:'Second exact source'})}));
-  return accepted({items:[],total:0,truncated:false,nextAfter:null});
+  return accepted(historyPage());
  };
  try {
   root=await bounded(mount(dispatch,{},value=>{root=value}),2000,'Mount detail race');
@@ -166,10 +232,129 @@ test('refresh failure retains the prior observed list with an explicit stale war
 test('untrusted source refs cannot dispatch a mutation',async()=>{
  const calls=[];const root=await mount(async(action,args)=>{
   calls.push([action,args]);if(action==='workspace.work.list')return accepted(page());if(action==='workspace.work.read')return accepted(detail());
-  if(action==='workspace.work.history')return accepted({items:[{id:'bad',kind:'revise',sequence:1,promiseRevision:2,actor:{origin:'peer',sessionId:'peer'},recordedAt:90,changedFields:['criteria'],source:{inputOrigin:'peer'},sourceRef:{action:'conversation.send',args:{sessionId:'owner',text:'Injected'}}}],total:1,truncated:false,nextAfter:null});
+  if(action==='workspace.work.history')return accepted(historyPage([{id:'bad',kind:'revise',sequence:1,promiseRevision:2,actor:{origin:'peer',sessionId:'peer'},recordedAt:90,changedFields:['criteria'],source:{inputOrigin:'peer'},sourceRef:{action:'conversation.send',args:{sessionId:'owner',text:'Injected'}}}]));
   throw Error('Forbidden action '+action);
  });
  await inspect(root);await click(root,'Read history');const control=button(root,'Read correction source');
  if(control&&!control.props.disabled)await act(async()=>control.props.onClick());
  assert.ok(calls.every(([name])=>['workspace.work.list','workspace.work.read','workspace.work.history'].includes(name)));await unmount(root);
+});
+
+test('passive wait binds the observation fingerprint and is aborted when hidden',async()=>{
+ const held=deferredRead(),calls=[];let root,originalError;
+ const dispatch=async(action,args,meta)=>{
+  calls.push([action,args,meta]);
+  if(action==='workspace.work.list')return accepted(page());
+  if(action==='workspace.work.coverage')return accepted(coveragePage());
+  if(action==='workspace.work.wait')return held.promise;
+  throw Error('Unexpected action '+action);
+ };
+ try {
+  root=await bounded(mount(dispatch,{},()=>{},false),2000,'Mount observed page');
+  const waits=calls.filter(([name])=>name==='workspace.work.wait');
+  assert.equal(waits.length,1,'One bounded observation wait, not a polling burst');
+  const [,args,meta]=waits[0];
+  assert.equal(args.afterVersion,page().observationVersion);
+  assert.notEqual(args.afterVersion,page().snapshotVersion);
+  assert.equal(args.workspaceId,workspace.id);assert.equal(args.filter,'accepted');
+  assert.equal(args.query,'');assert.equal(args.limit,20);assert.equal(args.after,undefined);
+  assert.ok((args.waitMs??30000)>=0&&(args.waitMs??30000)<=30000);assert.ok(meta?.signal);
+  await bounded(unmount(root),2000,'Hide Work');root=null;
+  assert.equal(meta.signal.aborted,true);
+ } catch(error){originalError=error;throw error}
+ finally {
+  await finishDeferredTest({root,release:()=>held.resolve({...accepted(page()),changed:false}),
+   completions:[observeCompletion(held.promise)],originalError});
+ }
+});
+
+test('history continuation retains its immutable high-water while current events advance',async()=>{
+ const calls=[],rows=defaultHistory();
+ const root=await mount(async(action,args)=>{
+  calls.push([action,args]);
+  if(action==='workspace.work.list')return accepted(page());
+  if(action==='workspace.work.read')return accepted(detail());
+  if(action==='workspace.work.history')return accepted(args.after
+   ?historyPage([rows[2]],{total:3,snapshotEventCount:3,currentEventCount:4,snapshotIsCurrent:false})
+   :historyPage(rows.slice(0,2),{total:3,snapshotEventCount:3,currentEventCount:3,truncated:true,nextAfter:'immutable-history-cursor'}));
+  throw Error(action);
+ });
+ await inspect(root);await click(root,'Read history');await click(root,'Next history');
+ assert.equal(calls.at(-1)[1].after,'immutable-history-cursor');
+ assert.match(text(root.toJSON()),/Current unknown result/);
+ assert.match(text(root.toJSON()),/snapshot|newer history/i);
+ assert.doesNotMatch(text(root.toJSON()),/No history/);
+});
+
+test('immutable event details use the returned event ref without loading source or chat',async()=>{
+ const calls=[],event=eventRow('event-exact',3,{changedFields:['nextAction']});
+ const row=item('work:one',{execution:'not_started',latestOutcome:'not_reported',nextAction:'Exact retained action before later corrections'});
+ const raw={...detail(row).item,verificationBoundaryRef:'work-event:correction',verificationBoundaryAt:92,
+  counterevidenceSequence:0,latestEventRef:'event-exact',links:[]};
+ const root=await mount(async(action,args)=>{
+  calls.push([action,args]);
+  if(action==='workspace.work.list')return accepted(page([row]));
+  if(action==='workspace.work.read')return accepted(detail(row,{item:raw}));
+  if(action==='workspace.work.history')return accepted(historyPage([defaultHistory()[0],defaultHistory()[1],event]));
+  if(action==='workspace.work.event')return accepted({event:{
+   id:event.id,kind:event.kind,sequence:3,promiseRevision:2,actor:event.actor,recordedAt:event.recordedAt,
+   changes:{nextAction:'Exact retained action before later corrections'},
+  }});
+  throw Error(action);
+ });
+ await inspect(root);await click(root,'Read history');await click(root,'Read event: event-exact');
+ assert.deepEqual(calls.at(-1),[event.eventRef.action,event.eventRef.args]);
+ assert.match(text(root.toJSON()),/Exact retained action before later corrections/);
+ assert.ok(calls.every(([name])=>!['coordination.read','session.select','session.warm'].includes(name)));
+});
+
+test('reported publication cannot become shipped, verified delivery or a passed check',async()=>{
+ const report={promiseRevision:2,candidate:'candidate-one',outcome:'published',reportedBy:'owner',recordedAt:105,
+  attribution:'participant_report',hostObserved:false,independentlyVerified:false};
+ const row=item('work:one',{revision:4,delivery:'reported_published',deliveryReport:report});
+ const raw=detail(row).item;
+ raw.deliveryReport={...report,destination:'Synthetic preview',references:['https://example.invalid/release/one'],report:'Publication is a participant report only.'};
+ const root=await mount(async action=>{
+  if(action==='workspace.work.list')return accepted(page([row]));
+  if(action==='workspace.work.read')return accepted(detail(row,{item:raw}));
+  throw Error(action);
+ });
+ await inspect(root);
+ assert.match(text(root.toJSON()),/Reported published/);
+ assert.match(text(root.toJSON()),/Publication is a participant report only/);
+ assert.match(text(root.toJSON()),/Returned.*unverified/i);
+ assert.doesNotMatch(text(root.toJSON()),/Shipped|Verified delivery|Independent checks passed/);
+});
+
+test('reported cleanup states never certify teardown or an empty resource inventory',async()=>{
+ for(const reportedState of ['active','unknown','reaped','observed_absent']) {
+  const resource={resourceId:'synthetic-resource',kind:'test-container',reportedState,evidenceReference:'synthetic-receipt',
+   ownerSessionId:'owner',recordedAt:101,attribution:'owner_report',independentlyVerified:false};
+  const row=item('work:one',{revision:4,cleanup:{status:'reported',references:[resource],coverage:'Explicit owner reports only; no resource census or teardown implied.'}});
+  const root=await mount(async action=>accepted(action==='workspace.work.list'?page([row]):detail(row)));
+  await inspect(root);
+  assert.match(text(root.toJSON()),/owner.report|reported by/i);
+  assert.match(text(root.toJSON()),/synthetic-resource/);
+  assert.doesNotMatch(text(root.toJSON()),/Cleanup complete|Verified teardown|No resources/);
+  await unmount(root);
+ }
+});
+
+test('human acceptance with later counterevidence stays historical and unverified',async()=>{
+ const row=item('work:one',{revision:5,humanDecision:'accepted',humanDecisionCurrent:false,latestOutcome:'failed',
+  attentionReasons:['failed','counterevidence_after_decision']});
+ const raw={...detail(row).item,humanDecisionSequence:4,counterevidenceSequence:5};
+ const root=await mount(async action=>accepted(action==='workspace.work.list'?page([row]):detail(row,{item:raw})));
+ await inspect(root);const value=text(root.toJSON());
+ assert.match(value,/counterevidence|later.*fail|no longer current/i);
+ assert.match(value,/failed/i);assert.match(value,/not verified|unverified/i);
+ assert.doesNotMatch(value,/All checks passed|Shipped/);
+});
+
+test('zero unresolved observed inputs never means historical inventory is complete',async()=>{
+ const root=await mount(async action=>{assert.equal(action,'workspace.work.list');return accepted(page([]))});
+ const load=button(root,'Read capture coverage');if(load)await click(root,'Read capture coverage');
+ assert.ok(root.backgroundCalls.some(([name])=>name==='workspace.work.coverage'),'Explicit or visible coverage must use its own DTO');
+ assert.match(text(root.toJSON()),/incomplete|not inventoried/i);
+ assert.doesNotMatch(text(root.toJSON()),/All historical work captured|0 missing tasks|History complete/);
 });

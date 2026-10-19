@@ -78,6 +78,14 @@ async def install(app, runtime):
         candidate='synthetic-candidate-one', outcome='unknown',
         report='The current cold-reopen outcome is unknown; the old success is retained.',
         criteria=['cold'])
+    # Exact current producer: publication is only an attributed report. It must
+    # not change the unknown check outcome, verification or human decision.
+    target = await command('publication', 'reported-publication', id=target['id'],
+        expectedRevision=target['revision'], promiseRevision=target['promiseRevision'],
+        candidate='synthetic-candidate-one', outcome='published',
+        destination='Synthetic preview destination',
+        references=['https://example.invalid/releases/synthetic-candidate-one'],
+        report='Participant reports publication; no host-observed delivery or independent verification.')
     rows = [target]
     for index in range(22):
         rows.append(await command('create', f'page-{index}',
@@ -87,16 +95,28 @@ async def install(app, runtime):
     proposal = await command('create', 'proposal', source=source('A peer suggestion, not human acceptance.', 'peer'),
         intentKey='proposal', title='Unaccepted peer proposal', commitment='proposed', criteria=[])
     closed = await command('create', 'closed-create', source=source('Cancel this synthetic request explicitly.'),
-        intentKey='cancelled', title='Cancelled scope is not shipped', commitment='accepted', criteria=[])
+        intentKey='cancelled', title='Cancelled scope is not shipped', commitment='accepted',
+        criteria=[{'id': 'cancelled-scope', 'text': 'Cancellation retains the original source and reason.'}])
     closed = await command('disposition', 'closed-disposition', id=closed['id'],
         expectedRevision=closed['revision'], disposition='closed', basis='cancelled',
         reason='Synthetic cancellation; no correctness or publication claim.')
+    # Keep the target's missing-cleanup oracle. A different existing row carries
+    # an owner-reported reaped resource, not independently verified teardown.
+    resource_row = await command('resource', 'reported-cleanup', id=rows[1]['id'],
+        expectedRevision=rows[1]['revision'], resourceId='synthetic-resource-one',
+        kind='test-container', reportedState='reaped',
+        evidenceReference='synthetic-cleanup-receipt')
+    rows[1] = resource_row
+    source('Synthetic ordinary conversation not yet reviewed for capture.')
     service._save()
+    coverage = (await service.dispatch('workspace.work.coverage', {
+        'workspaceId': workspace['id'], 'limit': 20}))['result']
     manifest = {
         'workspace': workspace, 'ownerSessionId': owner['id'], 'target': target,
         'acceptedIds': [row['id'] for row in rows], 'proposal': proposal, 'closed': closed,
         'originalText': original, 'originalSha256': hashlib.sha256(original.encode()).hexdigest(),
         'correctionText': correction, 'synthetic': True,
+        'reportedCleanup': resource_row, 'coverage': coverage,
     }
 
     async def inspect(request):

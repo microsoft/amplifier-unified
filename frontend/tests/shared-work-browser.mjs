@@ -8,7 +8,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {chromium,expect as baseExpect} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
-import {assertPassiveActions,bounded,createWorkObserver,unknownCleanupValue} from './shared-work-test-helpers.mjs';
+import {assertPassiveActions,bounded,createWorkObserver,passiveWorkReads,unknownCleanupValue} from './shared-work-test-helpers.mjs';
 
 const actionTimeoutMs=7000,navigationTimeoutMs=15000;
 const expect=baseExpect.configure({timeout:actionTimeoutMs});
@@ -26,7 +26,7 @@ const stop=ownFixture(fixture,{label:'Shared Work fixture'});
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
-let browser,originalError,result;
+let browser,originalError,result,page,fixtureUrl;
 try {
  const url=await new Promise((resolve,reject)=>{
   let body='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),30000);
@@ -34,12 +34,23 @@ try {
   fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});
   fixture.stdout.on('data',chunk=>{body+=chunk;for(const line of body.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}});
  });
+ fixtureUrl=url;
  await mkdir(output,{recursive:true});
  browser=await chromium.launch(launch);
- const page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
+ page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
  observePage(page,'primary');
  const calls=observer.calls;
  const manifest=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
+ assert.equal(manifest.target.delivery,'reported_published');
+ assert.equal(manifest.target.latestOutcome,'unknown');
+ assert.equal(manifest.target.verification,'not_verified');
+ assert.equal(manifest.target.humanDecision,'not_recorded');
+ assert.equal(manifest.target.deliveryReport.hostObserved,false);
+ assert.equal(manifest.target.deliveryReport.independentlyVerified,false);
+ assert.equal(manifest.coverage.historicalCoverage,'incomplete');
+ assert.ok(manifest.coverage.unreviewedInputs>=1);
+ assert.deepEqual(manifest.runtimeCallbackCounts,{start:0,send:0,prewarm:0});
+ assert.equal(manifest.pendingWarmups,0);
  const action=(name,args={})=>bounded(page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),actionTimeoutMs,'Primary '+name);
  const state=()=>bounded(page.evaluate(()=>window.amplifier.getState()),actionTimeoutMs,'Primary state read');
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
@@ -79,6 +90,8 @@ try {
  await expect(cleanupValue).toHaveCount(1);
  await expect(cleanupValue).toHaveText(unknownCleanupValue);
  await expect(detail.getByText(/Returned.*unverified/i)).toBeVisible();
+ await expect(detail.getByText('Reported published',{exact:true})).toBeVisible();
+ await expect(detail.getByText('Participant reports publication; no host-observed delivery or independent verification.',{exact:true})).toBeVisible();
  await expect(detail.getByText(/Independent checks passed|Cleanup complete|Shipped/)).toHaveCount(0);
  const source=detail.getByRole('region',{name:'Original source'});
  for(let index=0;index<20&&!((await source.innerText()).includes('ORIGINAL-END'));index++) {
@@ -95,10 +108,14 @@ try {
  await expect(detail.getByText('The current cold-reopen outcome is unknown; the old success is retained.',{exact:true})).toBeVisible();
  assert.equal((await state()).selectedSessionId,draftOwner);
  const readCalls=calls.slice(before);
- assert.ok(readCalls.filter(row=>row.action.startsWith('workspace.work.')).every(row=>['workspace.work.list','workspace.work.read','workspace.work.history','workspace.work.source'].includes(row.action)));
+ assert.ok(readCalls.filter(row=>row.action.startsWith('workspace.work.')).every(row=>passiveWorkReads.has(row.action)));
  assertPassiveActions(readCalls);
  observer.assertHealthy();
  assert.ok(readCalls.filter(row=>row.action==='workspace.work.list').every(row=>row.args.limit<=50));
+ const waitCalls=readCalls.filter(row=>row.action==='workspace.work.wait');
+ assert.ok(waitCalls.length>0,'Visible Work subscribes without a model or worker');
+ assert.ok(waitCalls.every(row=>typeof row.args.afterVersion==='string'&&row.args.afterVersion.length===64
+  &&row.args.workspaceId===manifest.workspace.id&&(row.args.waitMs??30000)<=30000));
  // New incoming state cannot steal focus; Back restores the explicit item.
  for(const width of [390,320,1440]) {
   await page.setViewportSize({width,height:900});
@@ -148,7 +165,17 @@ try {
   runtimeCallbackCounts:observation.runtimeCallbackCounts,observationErrors:observer.errors,
   browserTimeouts:{actionTimeoutMs,navigationTimeoutMs},
   limits:['No live provider or private history','Dirty Canvas/Settings and cold service reopen still require separate qualification']};
-} catch(error) {originalError=error;throw error}
+} catch(error) {
+ originalError=error;
+ // An expected missing-UI baseline still needs observed fixture/runtime facts.
+ // Evidence collection never replaces the original assertion or bypasses finally.
+ const failure={status:'failed',error:error.message,observationErrors:observer.errors,fixture:null};
+ try {
+  if(page&&fixtureUrl)failure.fixture=await (await page.request.get(fixtureUrl+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
+  await writeFile(path.join(output,'failure.json'),JSON.stringify(failure,null,2)+'\n');
+ } catch(evidenceError){console.error('Failure evidence unavailable:',evidenceError.message)}
+ throw error;
+}
 finally {await finishFixture({label:'Shared Work fixture',close:[['browser',()=>browser?.close()]],stop,originalError})}
 await writeFile(path.join(output,'result.json'),JSON.stringify(result,null,2)+'\n');
 console.log(JSON.stringify(result));
