@@ -1060,3 +1060,50 @@ async def test_collection_publication_report_and_human_acceptance_do_not_imply_s
     assert item['verification'] == 'independent_checks_passed'
     assert item['humanDecision'] == 'accepted'
     assert item['delivery'] == 'not_recorded'
+
+
+async def test_publication_unlinked_current_root_is_rejected_by_link_guard(app):
+    owner, peer = app.state['sessions']
+    item = (await create(app, owner))['result']['item']
+    item = (await change_work(app, owner, 'link', item, 'publication-builder-only',
+        linkedSessionId=owner['id'], role='executor', candidate='b' * 40))['result']['item']
+    await generation(app, peer, 'unlinked-publication-generation', ['unlinked-input'])
+    before = await read(app, owner, item['id'])
+    with pytest.raises(AppError, match='linked responsibility'):
+        await publication_report(app, peer, item, command='unlinked-publication')
+    assert await read(app, owner, item['id']) == before
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id='unlinked-publication'").fetchone()
+    assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize('change', ['promise', 'candidate'])
+async def test_publication_current_binding_with_stale_link_is_rejected(app, change):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    if change == 'promise':
+        item = (await revise(app, owner, item, 'scope-after-publication-link',
+            source=source(app, owner, 'The current promise changed.'),
+            constraints=['New current condition.']))['result']['item']
+    else:
+        item = (await change_work(app, owner, 'link', item, 'candidate-after-publication-link',
+            linkedSessionId=owner['id'], role='executor', candidate='d' * 40))['result']['item']
+    before = await read(app, owner, item['id'])
+    # Use the CURRENT item/candidate/promise, so only the reviewer's stale link
+    # can reject. Do not Stop the reviewer or rely on an earlier schema guard.
+    with pytest.raises(AppError, match='linked responsibility'):
+        await publication_report(app, reviewer, item, command='stale-link-publication')
+    assert await read(app, owner, item['id']) == before
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id='stale-link-publication'").fetchone()
+    assert not app.runtime.inputs
+
+
+async def test_publication_summary_omits_report_destination_and_reference_bodies(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    item = (await publication_report(app, owner, item))['result']['item']
+    assert not {'report', 'destination', 'references'} & set(item['deliveryReport'])
+    page = (await app.dispatch('workspace.work.list', {
+        'workspaceId': workspace_id(app, owner)}))['result']
+    listed = next(row for row in page['items'] if row['id'] == item['id'])
+    assert listed['deliveryReport'] == item['deliveryReport']
+    detail = await read(app, owner, item['id'])
+    assert detail['item']['deliveryReport']['references'] == ['synthetic-release:release-one']
+    assert detail['item']['deliveryReport']['report']
