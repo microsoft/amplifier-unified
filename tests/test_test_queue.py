@@ -376,3 +376,18 @@ async def test_known_preservation_failure_uses_separate_cleanup_without_repeatin
     await submit(app, 'next')
     await drive(queue)
     assert record(queue, app, 'next')['job']['status'] == 'passed'
+
+
+async def test_owner_recheck_failure_does_not_admit_cleanup_continuation(app, queue, backend, monkeypatch):
+    original = environments.invoke
+    def invoke(config, home, row, action, args):
+        if action == 'remove':
+            backend.append((action, dict(args)))
+            return {'ok': False, 'status': 'unknown', 'effectAdmitted': False,
+                    'phase': 'rechecking', 'code': 'ownership_conflict'}
+        return original(config, home, row, action, args)
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    await submit(app)
+    await drive(queue)
+    assert record(queue, app)['job']['status'] == 'unknown'
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']

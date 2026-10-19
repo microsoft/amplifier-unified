@@ -413,7 +413,7 @@ def test_cleanup_recovery_preserves_all_files_and_verifies_absence(library, tmp_
     assert result['retention']['archiveOnly']
     assert [name for name, *_ in calls if name in {'execute','stop','export','destroy'}] == ['export','export','destroy']
     assert all(kwargs['max_bytes'] == worker.retention.RECOVERY_LIMIT for name, _, kwargs in calls if name == 'export')
-    assert {p.stem for p in next(tmp_path.glob('cleanup-*')).glob('*.json')} == {'preserving','verifying','removing','observing'}
+    assert {p.stem for p in next(tmp_path.glob('cleanup-*')).glob('*.json')} == {'preserving','verifying','rechecking','removing','observing'}
 
 
 def test_failed_preservation_reports_known_phase_and_never_destroys(library, tmp_path):
@@ -440,9 +440,25 @@ def test_cleanup_recovery_keeps_owner_until_physical_absence(library, tmp_path, 
     assert not released and not (tmp_path / 'backend-removed.json').exists()
 
 
-@pytest.mark.parametrize('code', ['owner_changed', 'backend_changed'])
+@pytest.mark.parametrize('code', ['owner_changed', 'ownership_conflict', 'backend_changed'])
 def test_cleanup_changed_owner_does_not_claim_stopped(code):
     result = worker.cleanup_failure({}, 'verifying', 'owned', code)
     assert result['status'] == 'unknown' and result['effectAdmitted'] is False
     assert 'No removal was attempted' in result['message']
     assert 'unchanged' not in result['message']
+
+
+def test_cleanup_owner_recheck_failure_is_not_preservation_failure(library, tmp_path, monkeypatch):
+    _, calls = library
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    observed = []
+    def inspect(*args):
+        observed.append(args)
+        if len(observed) == 1:
+            return {'status': 'stopped'}
+        raise ValueError('The actual owner changed')
+    monkeypatch.setattr(worker, 'docker_reconcile', inspect)
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert result['status'] == 'unknown' and result['effectAdmitted'] is False
+    assert result['phase'] == 'rechecking' and result['code'] == 'owner_unverified'
+    assert not any(name == 'destroy' for name, *_ in calls)

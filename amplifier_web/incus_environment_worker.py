@@ -542,6 +542,8 @@ def execute_call(payload):
                 return {'ok': True, 'universeId': name, 'status': 'stopped', 'archives': archives,
                         'artifactExport': retained,
                         'message': 'Artifacts retained. The stopped environment and workspace are unchanged; removal is not authorized.'}
+            phase = 'rechecking'
+            common.cleanup_phase(payload, phase)
             _, current = observe(config, env, name, payload)
             if current is None or current.get('status') != 'Stopped':
                 return common.cleanup_failure(payload, phase, name, 'owner_changed')

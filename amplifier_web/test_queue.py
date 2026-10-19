@@ -497,7 +497,7 @@ class TestQueue:
             receipt = self.get(identity)
             if (removal['state'] == 'failed' and removal.get('result', {}).get('effectAdmitted') is False
                     and removal['result'].get('phase') in {'preserving', 'verifying'}
-                    and removal['result'].get('code') not in {'owner_changed', 'backend_changed', 'retention_storage'}):
+                    and removal['result'].get('code') not in {'owner_changed', 'ownership_conflict', 'backend_changed', 'retention_storage'}):
                 # A definitive pre-teardown failure permits the separately
                 # recorded preservation path, never replay of an unknown effect.
                 receipt['job']['previousRemoval'] = self.summary(removal)

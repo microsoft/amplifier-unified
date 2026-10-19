@@ -372,8 +372,10 @@ def cleanup_phase(payload, phase):
 
 
 def cleanup_failure(payload, phase, identity, code='preservation_failed'):
-    before_removal = phase in {'preserving', 'verifying'}
-    changed_owner = code in {'owner_changed', 'backend_changed'}
+    before_removal = phase in {'preserving', 'verifying', 'rechecking'}
+    changed_owner = phase == 'rechecking' or code in {'owner_changed', 'ownership_conflict', 'backend_changed'}
+    if phase == 'rechecking' and code == 'preservation_failed':
+        code = 'owner_unverified'
     if phase == 'verifying' and code == 'preservation_failed':
         code = 'archive_verification_failed'
     return {'ok': False, 'status': 'stopped' if before_removal and not changed_owner else 'unknown',
@@ -537,6 +539,9 @@ def execute_call(payload):
             retained = retention.verify_retention(root, archives, 'archive-only' if recovering else 'files')
             retain_manifest(destination, archives)
             # Revalidate the physical stopped owner immediately before teardown.
+            if recovering:
+                phase = 'rechecking'
+                cleanup_phase(payload, phase)
             observed = docker_reconcile(payload, identity, backend, binding_source) if recovering else None
             if recovering and (observed.get('status') != 'stopped' or observed['observation']['ownership'] != 'matched'):
                 return cleanup_failure(payload, phase, identity, 'owner_changed')

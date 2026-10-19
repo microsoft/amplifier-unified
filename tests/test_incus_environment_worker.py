@@ -495,7 +495,7 @@ def test_recovery_cleanup_verifies_physical_absence_after_preservation(tmp_path,
     result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
     assert result['ok'] and result['retention']['archiveOnly']
     assert [args[0] for _, args in calls if args[0] in {'export','exec','stop','destroy','launch'}] == ['export','destroy']
-    assert {path.stem for path in next(tmp_path.glob('cleanup-*')).glob('*.json')} == {'preserving','verifying','removing','observing'}
+    assert {path.stem for path in next(tmp_path.glob('cleanup-*')).glob('*.json')} == {'preserving','verifying','rechecking','removing','observing'}
 
 
 def test_recovery_never_releases_owner_on_unknown_post_destroy_state(tmp_path, backend, monkeypatch):
@@ -504,3 +504,19 @@ def test_recovery_never_releases_owner_on_unknown_post_destroy_state(tmp_path, b
     result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
     assert not result['ok'] and result['status'] == 'unknown'
     assert result['retention']['verified']
+
+
+def test_cleanup_owner_change_after_export_is_not_preservation_failure(tmp_path, backend, monkeypatch):
+    backend[1].update(instance='Stopped', launch='stopped')
+    previous = worker.observe
+    observations = []
+    def observe(*args, **kwargs):
+        observations.append(args)
+        if len(observations) > 1:
+            raise worker.BackendFailure('ownership_conflict', 'owner changed')
+        return previous(*args, **kwargs)
+    monkeypatch.setattr(worker, 'observe', observe)
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert result['status'] == 'unknown' and result['effectAdmitted'] is False
+    assert result['phase'] == 'rechecking' and result['code'] == 'ownership_conflict'
+    assert not any(args[0] == 'destroy' for _, args in backend[0])
