@@ -166,3 +166,273 @@ async def test_observation_epoch_survives_progress_but_fences_changed_authority(
             epoch = record['continuationEpoch']
     finally:
         await worker.close()
+
+
+# Preparation-only contract candidates, intentionally not xfailed. New read DTOs
+# need interface review before implementation. Never use real task data here.
+TASK_CONTEXT_BYTES = 12 * 1024
+
+
+def encoded_size(value):
+    return len(json.dumps(value, ensure_ascii=False).encode('utf-8'))
+
+
+async def corrected_task(worker, count=113):
+    await create(worker, objective='Original promise: preserve the exact source.')
+    for index in range(count):
+        await worker.perform('task.update', {
+            'commandId': f'correction-{index}',
+            'expectedRevision': worker.tasks.record()['revision'],
+            'correction': f'Historical correction {index}: ' + 'retain evidence; ' * 280,
+        })
+    await worker.perform('task.update', {
+        'commandId': 'current-promise',
+        'expectedRevision': worker.tasks.record()['revision'],
+        'objective': 'Corrected promise: verify the source and retain earlier evidence.',
+        'constraints': ['Do not publish.', 'Read current constraints before dependent work.'],
+    })
+
+
+@pytest.mark.parametrize('projection', ['get', 'boundary'])
+async def test_large_correction_history_is_not_repeated_in_current_projection(
+        tmp_path, monkeypatch, projection):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        await corrected_task(worker)
+        original = copy.deepcopy(worker.tasks.record())
+        if projection == 'get':
+            text = json.dumps(await worker.perform('task.get'), ensure_ascii=False)
+        else:
+            hook = await worker.tasks.boundary('provider:request', {'session_id': 'task'})
+            text = hook.context_injection
+        assert len(text.encode('utf-8')) <= TASK_CONTEXT_BYTES
+        assert 'Historical correction 0:' not in text
+        assert 'Corrected promise: verify the source' in text
+        assert 'Do not publish.' in text
+        summary = (await worker.perform('task.get'))['task']
+        assert summary['correctionCount'] == 113
+        assert summary['historyRef']['action'] == 'task.history'
+        assert worker.tasks.record()['corrections'] == original['corrections']
+        assert worker.tasks.record()['objective'] == original['objective']
+    finally:
+        await worker.close()
+
+
+async def test_exact_mutation_receipt_is_small_and_does_not_become_current_state(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        await corrected_task(worker)
+        revision = worker.tasks.record()['revision']
+        args = {'commandId': 'saved-update', 'expectedRevision': revision,
+                'artifactRefs': ['evidence:unchanged-candidate']}
+        first = await worker.perform('task.update', args)
+        assert encoded_size(first) <= TASK_CONTEXT_BYTES
+        assert first['receipt']['commandId'] == 'saved-update'
+        assert first['receipt']['revision'] == revision + 1
+        await worker.perform('task.pause', {
+            'commandId': 'new-pause', 'expectedRevision': revision + 1})
+        replay = await worker.perform('task.update', args)
+        assert replay['duplicate'] is True
+        assert replay['receipt'] == first['receipt']
+        assert worker.tasks.record()['status'] == 'paused'
+        assert worker.tasks.record()['revision'] == revision + 2
+        saved = await worker.perform('task.receipt', {'commandId': 'saved-update'})
+        assert saved['receipt'] == first['receipt']
+        assert encoded_size(saved) <= TASK_CONTEXT_BYTES
+    finally:
+        await worker.close()
+
+
+async def test_failed_update_preserves_full_record_history_receipts_and_saved_bytes(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        await corrected_task(worker, count=3)
+        before = copy.deepcopy((worker.tasks.record(), worker.tasks.history,
+                                worker.tasks.receipts, worker.coordinator.session_state['goal']))
+        disk = worker.state_path().read_bytes()
+        def fail(**kwargs):
+            raise OSError('Synthetic write refusal')
+        monkeypatch.setattr(worker, 'persist', fail)
+        with pytest.raises(OSError, match='Synthetic write refusal'):
+            await worker.perform('task.update', {
+                'commandId': 'failed-update', 'expectedRevision': worker.tasks.record()['revision'],
+                'objective': 'Must not replace the promise', 'correction': 'Must not land'})
+        assert (worker.tasks.record(), worker.tasks.history, worker.tasks.receipts,
+                worker.coordinator.session_state['goal']) == before
+        assert worker.state_path().read_bytes() == disk
+        assert 'failed-update' not in worker.tasks.receipts
+    finally:
+        await worker.close()
+
+
+async def test_correction_history_pages_recover_every_exact_body_after_reopen(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    first = controls()
+    restored = None
+    try:
+        await corrected_task(first)
+        expected = copy.deepcopy(first.tasks.record()['corrections'])
+        identity = first.tasks.record()['id']
+        restored = controls()
+        await restored.restore()
+        args = {'taskId': identity, 'limit': 20}
+        found, cursors = [], set()
+        for _ in range(10):
+            page = await restored.perform('task.history', args)
+            assert encoded_size(page) <= TASK_CONTEXT_BYTES
+            assert len(page['items']) <= 20
+            assert page['coverage'] != 'unknown'
+            for row in page['items']:
+                if row['kind'] != 'correction':
+                    continue
+                assert 'text' not in row
+                ref = row['detailRef']
+                text, detail_args = '', dict(ref['args'])
+                for _ in range(10):
+                    detail = await restored.perform(ref['action'], detail_args)
+                    assert encoded_size(detail) <= TASK_CONTEXT_BYTES
+                    text += detail['text']
+                    if detail['nextOffset'] is None:
+                        break
+                    detail_args['offset'] = detail['nextOffset']
+                else:
+                    pytest.fail('Correction detail made no bounded progress')
+                found.append((row['revision'], text))
+            if page['nextAfter'] is None:
+                break
+            assert page['nextAfter'] not in cursors
+            cursors.add(page['nextAfter'])
+            args['after'] = page['nextAfter']
+        else:
+            pytest.fail('History made no bounded progress')
+        assert found == [(row['revision'], row['text']) for row in expected]
+        assert restored.tasks.record()['corrections'] == expected
+        assert restored.tasks.record()['status'] == 'active'
+    finally:
+        await first.close()
+        if restored is not None:
+            await restored.close()
+
+
+async def test_oversized_current_constraints_require_exact_paged_detail(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        constraints = [f'Constraint {index}: ' + '\u754c' * 3900 for index in range(100)]
+        await create(worker, constraints=constraints)
+        task = worker.tasks.record()
+        summary = await worker.perform('task.get')
+        assert encoded_size(summary) <= TASK_CONTEXT_BYTES
+        assert summary['detailRequired'] is True
+        ref = next(ref for ref in summary['detailRefs'] if ref['args']['field'] == 'constraints')
+        assert ref['args']['expectedRevision'] == task['revision']
+        pieces, args = [], dict(ref['args'])
+        for _ in range(500):
+            page = await worker.perform(ref['action'], args)
+            assert encoded_size(page) <= TASK_CONTEXT_BYTES
+            assert page['revision'] == task['revision']
+            pieces.append(page['text'])
+            if page['nextOffset'] is None:
+                break
+            assert page['nextOffset'] > args.get('offset', 0)
+            args['offset'] = page['nextOffset']
+        else:
+            pytest.fail('Current constraints cannot be read completely through bounded pages')
+        assert json.loads(''.join(pieces)) == constraints
+        old_args = dict(ref['args'])
+        await worker.perform('task.update', {
+            'commandId': 'new-constraints', 'expectedRevision': task['revision'],
+            'constraints': ['New constraint: no dependent effects.']})
+        with pytest.raises(ValueError, match='revision|changed|stale'):
+            await worker.perform(ref['action'], old_args)
+        assert worker.tasks.record()['constraints'] == ['New constraint: no dependent effects.']
+    finally:
+        await worker.close()
+
+
+async def test_original_and_corrected_objectives_remain_distinct_after_reopen(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    first = controls()
+    restored = None
+    try:
+        await corrected_task(first, count=2)
+        identity = first.tasks.record()['id']
+        restored = controls()
+        await restored.restore()
+        original = await restored.perform('task.detail', {
+            'taskId': identity, 'expectedRevision': restored.tasks.record()['revision'],
+            'field': 'originalObjective'})
+        assert original['text'] == 'Original promise: preserve the exact source.'
+        assert restored.tasks.record()['objective'] == (
+            'Corrected promise: verify the source and retain earlier evidence.')
+        assert len(restored.tasks.record()['corrections']) == 2
+    finally:
+        await first.close()
+        if restored is not None:
+            await restored.close()
+
+
+async def test_delayed_completion_cannot_close_corrected_paused_task(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        await create(worker)
+        late = {'commandId': 'late-worker-completion', 'expectedRevision': 1,
+                'condition': worker.tasks.record()['objective'], 'evidence': ['Old worker return']}
+        await worker.perform('task.update', {
+            'commandId': 'correction', 'expectedRevision': 1,
+            'objective': 'Current corrected promise', 'constraints': ['Do not run old work.']})
+        await worker.perform('task.pause', {'commandId': 'stop', 'expectedRevision': 2})
+        before = copy.deepcopy(worker.tasks.record())
+        with pytest.raises(ValueError, match='revision changed'):
+            await worker.perform('task.complete', late)
+        assert worker.tasks.record() == before
+        assert not await worker.tasks.continuation_allowed()
+        assert 'late-worker-completion' not in worker.tasks.receipts
+    finally:
+        await worker.close()
+
+
+async def test_saved_task_get_is_cold_and_does_not_return_the_app_snapshot(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'home'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Cold task'})
+        sid = app._session()['id']
+        worker = controls(sid)
+        await create(worker)
+        await worker.perform('task.pause', {'commandId': 'pause', 'expectedRevision': 1})
+        await worker.close()
+        worker = None
+        app.runtime = SimpleNamespace(
+            control=AsyncMock(side_effect=AssertionError('No worker control on a cold read')),
+            close=AsyncMock())
+        app.management = SimpleNamespace(
+            ensure_runtime=AsyncMock(side_effect=AssertionError('No worker warming')),
+            close=AsyncMock())
+        monkeypatch.setattr(app.history, 'ensure_loaded',
+                            AsyncMock(side_effect=AssertionError('No transcript hydration')))
+        monkeypatch.setattr(app, 'browser_state',
+                            lambda *a, **kw: pytest.fail('No full app snapshot'))
+        result = await app.dispatch('task.get', {'sessionId': sid}, include_state=True)
+        assert result['result']['task']['status'] == 'paused'
+        assert result['result']['task']['objective'] == 'Ship the verified report'
+        assert encoded_size(result) <= TASK_CONTEXT_BYTES
+        assert 'sessions' not in result.get('state', {})
+        app.runtime.control.assert_not_called()
+        app.management.ensure_runtime.assert_not_called()
+    finally:
+        app.management = None
+        await app.close()
+        if worker is not None:
+            await worker.close()

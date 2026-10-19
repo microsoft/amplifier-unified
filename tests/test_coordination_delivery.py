@@ -1,10 +1,16 @@
 """Coordination uses the existing budget/stream boundary, not retained reminders."""
+import copy
+import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from amplifier_core.message_models import ChatRequest, Message, ToolSpec
 from amplifier_web.coordination_delivery import CoordinationDelivery
 from amplifier_web.surface_delivery import SurfaceProvider
+from amplifier_web.service import AppError
+from test_collaborative_workspaces import app, agent_action, generation
+from test_workspace_work import create as create_work, source, workspace_id
 
 
 class Previous:
@@ -77,3 +83,166 @@ async def test_budget_and_transport_share_one_observation_then_next_request_refr
         else:
             assert await wrapped.complete(original) == 'done'
     assert len(reads) == 2 and measured == transported and measured[0] != measured[1]
+
+
+# Test-first proposed bridge extension: coordination.current.work is the SAME
+# bounded workspace.work.context DTO, not a second task store or execution loop.
+WORK_CONTEXT_BYTES = 12 * 1024
+
+
+def observation(value):
+    messages = [m for m in value.messages if (m.metadata or {}).get('coordinationObservation')]
+    assert len(messages) == 1
+    return json.loads(messages[0].content.split('\n', 1)[1])
+
+
+@pytest.mark.parametrize('count', [0, 20, 21, 1000])
+async def test_registered_work_context_pages_cover_the_set_without_hydration(
+        app, monkeypatch, count):
+    owner = app.state['sessions'][0]
+    original = source(app, owner, 'Exact source body must never appear in request stubs.')
+    identities = set()
+    for index in range(count):
+        item = (await create_work(app, owner, original, command=f'capture-{index}',
+                                  intent=f'promise-{index}', title=f'Promise {index}'))['result']['item']
+        identities.add(item['id'])
+    before = copy.deepcopy(app.runtime.inputs)
+    monkeypatch.setattr(app.history, 'ensure_loaded',
+                        AsyncMock(side_effect=AssertionError('No transcript hydration')))
+    app.management = SimpleNamespace(
+        ensure_runtime=AsyncMock(side_effect=AssertionError('No worker warming')),
+        close=AsyncMock())
+    calls = []
+    async def bridge(operation, args):
+        calls.append(operation)
+        return await app.app_bridge(operation, args, owner['id'])
+    try:
+        delivery = CoordinationDelivery(Previous(), bridge)
+        prepared = await delivery.prepare(request(), None)
+        page = observation(prepared)['work']
+        assert calls == ['coordination.current']  # One request-boundary observation.
+        seen, cursors = set(), set()
+        for _ in range(1001):
+            assert len(json.dumps(page, ensure_ascii=False).encode()) <= WORK_CONTEXT_BYTES
+            assert len(page['items']) <= 20
+            assert page['total'] == count
+            assert page['coverage']  # Recorded empty is not historical completeness.
+            assert 'Exact source body' not in json.dumps(page)
+            batch = {row['id'] for row in page['items']}
+            assert not seen.intersection(batch)
+            seen.update(batch)
+            assert page['truncated'] == bool(page['nextAfter'])
+            if page['nextAfter'] is None:
+                break
+            assert batch and page['nextAfter'] not in cursors
+            cursors.add(page['nextAfter'])
+            page = (await app.app_bridge('dispatch', {
+                'action': 'workspace.work.context',
+                'args': {'sessionId': owner['id'], 'after': page['nextAfter']}}, owner['id']))['result']
+        else:
+            pytest.fail('Work context paging did not terminate')
+        assert seen == identities
+        assert app.runtime.inputs == before
+        app.management.ensure_runtime.assert_not_called()
+        delivery.commit(prepared)
+    finally:
+        app.management = None
+
+
+async def test_work_context_includes_owned_and_contributing_items_only(app):
+    owner, contributor = app.state['sessions']
+    own = (await create_work(app, owner))['result']['item']
+    await generation(app, contributor, 'contributor-generation', ['synthetic-input'])
+    linked = (await create_work(app, contributor, command='contributed',
+                               intent='contributed'))['result']['item']
+    unrelated = (await create_work(app, contributor, command='unrelated',
+                                  intent='unrelated'))['result']['item']
+    await agent_action(app, contributor, 'workspace.work.link', {
+        'sessionId': contributor['id'], 'workspaceId': workspace_id(app, contributor),
+        'id': linked['id'], 'expectedRevision': linked['revision'],
+        'linkedSessionId': owner['id'], 'role': 'reviewer', 'candidate': 'a' * 40,
+    }, 'link-reviewer')
+    value = await app.app_bridge('coordination.current', {}, owner['id'])
+    ids = {row['id'] for row in value['work']['items']}
+    assert ids == {own['id'], linked['id']}
+    assert unrelated['id'] not in ids
+
+
+async def test_work_cursor_rejects_a_changed_set_instead_of_mixing_snapshots(app):
+    owner = app.state['sessions'][0]
+    original = source(app, owner)
+    for index in range(21):
+        await create_work(app, owner, original, command=f'initial-{index}', intent=str(index))
+    first = (await app.app_bridge('dispatch', {
+        'action': 'workspace.work.context', 'args': {'sessionId': owner['id']}}, owner['id']))['result']
+    assert first['nextAfter']
+    await create_work(app, owner, original, command='new-record', intent='new-record')
+    with pytest.raises(AppError, match='changed|refresh|snapshot'):
+        await app.app_bridge('dispatch', {'action': 'workspace.work.context',
+            'args': {'sessionId': owner['id'], 'after': first['nextAfter']}}, owner['id'])
+
+
+@pytest.mark.parametrize('work', [
+    None,
+    {'status': 'unavailable', 'reason': 'Projection failed', 'coverage': 'unknown'},
+])
+async def test_missing_work_projection_is_not_an_empty_complete_set(work):
+    async def bridge(operation, args):
+        return {} if work is None else {'work': work}
+    prepared = await CoordinationDelivery(Previous(), bridge).prepare(request(), None)
+    projected = observation(prepared)['work']
+    assert projected['status'] == 'unavailable'
+    assert projected['coverage'] == 'unknown'
+    assert projected.get('total') is None
+
+
+async def test_unbounded_or_body_bearing_work_projection_fails_closed():
+    async def bridge(operation, args):
+        return {'work': {'status': 'available', 'items': [{
+            'id': 'work-one', 'revision': 1, 'promiseRevision': 1,
+            'constraints': ['PRIVATE_CONSTRAINT_BODY' * 20000],
+            'originalSource': {'text': 'PRIVATE_SOURCE_BODY' * 20000},
+        }], 'total': 1, 'coverage': 'unknown'}}
+    prepared = await CoordinationDelivery(Previous(), bridge).prepare(request(), None)
+    text = prepared.model_dump_json()
+    assert 'PRIVATE_CONSTRAINT_BODY' not in text
+    assert 'PRIVATE_SOURCE_BODY' not in text
+    projected = observation(prepared)['work']
+    assert projected['status'] == 'unavailable'
+    assert projected['detailRequired'] is True
+    assert projected.get('total') is None  # Failed projection is not trusted.
+
+
+@pytest.mark.parametrize('stream', [False, True])
+async def test_work_observation_is_measured_and_transported_once_per_request(stream):
+    calls, measured, transported = [], [], []
+    async def bridge(operation, args):
+        calls.append(operation)
+        return {'work': {'status': 'available', 'version': len(calls), 'items': [],
+                         'total': 0, 'truncated': False, 'nextAfter': None,
+                         'coverage': 'unknown', 'detailRequired': False}}
+    class Provider:
+        async def request_budget(self, value, **kwargs):
+            measured.append(value.model_dump_json())
+            return {'tokens': 100}
+        async def complete(self, value, **kwargs):
+            transported.append(value.model_dump_json())
+            return 'done'
+        async def stream(self, value, **kwargs):
+            transported.append(value.model_dump_json())
+            yield 'done'
+    wrapped = SurfaceProvider(Provider(), CoordinationDelivery(Previous(), bridge))
+    for _ in range(2):
+        original = request()
+        await wrapped.request_budget(original)
+        if stream:
+            assert [row async for row in wrapped.stream(original)] == ['done']
+        else:
+            assert await wrapped.complete(original) == 'done'
+    assert calls == ['coordination.current', 'coordination.current']
+    assert measured == transported
+    assert observation_json_version(measured[0]) != observation_json_version(measured[1])
+
+
+def observation_json_version(serialized):
+    return observation(ChatRequest.model_validate_json(serialized))['work']['version']
