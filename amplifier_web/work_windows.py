@@ -478,6 +478,8 @@ class WorkWindows:
             raise _SupersededRead('The requested conversation changed. Open it again.')
         pages = [self.pages[group] for group, _, _ in proof['pages']]
         if not pages:
+            self._state(identity, {'status': 'unavailable', 'current': False,
+                                  'reason': state.get('reason'), 'rootProof': state})
             return {'items': [], 'turns': [], 'mode': 'cursor', 'before': None,
                     'hasEarlier': False, 'total': None, 'rootProof': state,
                     'coverage': {'historyComplete': False}, 'unavailableRanges': []}
@@ -575,15 +577,20 @@ class WorkWindows:
         return self._proof_state(identity, physical=True)
 
     async def _proof_step(self, inputs, key, deadline):
+        return await self._proof_dependency(
+            lambda: self._worker().project(inputs, key=key), deadline)
+
+    async def _proof_dependency(self, start, deadline):
+        """Own an awaited writer or reader through the same aggregate budget."""
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError()
-        task = asyncio.create_task(self._worker().project(inputs, key=key))
+        task = asyncio.create_task(start())
         try:
             return await asyncio.wait_for(asyncio.shield(task), remaining)
         except BaseException:
-            # ProcessProjector shields its physical work. Keep that work owned
-            # and counted even when this aggregate operation stops accepting it.
+            # Neither a writer thread nor ProcessProjector's physical work is
+            # cancelled with its HTTP waiter. Keep late work owned and counted.
             if not task.done():
                 self._proof_draining.add(task)
                 def settled(done):
@@ -592,6 +599,25 @@ class WorkWindows:
                         done.exception()
                 task.add_done_callback(settled)
             raise
+
+    async def _writer_ready(self, identity, owner, proof):
+        diagnostic = getattr(self.service, 'diagnostics', None)
+        if diagnostic is None:
+            # Reader-only owners have no writer boundary to join; their source
+            # and exact index authority are still checked by the worker.
+            return True
+        async with diagnostic.flush_lock:
+            # A timed-out/cancelled proof can still own a waiter for this lock.
+            # Once the lock opens, do not start a new drain for expired work.
+            self._proof_guard(identity, owner, proof)
+            # Join the existing writer, then drain the currently queued records
+            # ONCE. Never requeue a previously failed batch or create a writer.
+            await diagnostic._flush()
+            return (diagnostic.storage_ready is True
+                    and diagnostic.storage_error is False
+                    and diagnostic.configuration_error is False
+                    and diagnostic.stopping is False
+                    and not diagnostic.pending)
 
     def _proof_guard(self, identity, owner, proof):
         if time.monotonic() >= proof['deadline']:
@@ -606,6 +632,15 @@ class WorkWindows:
         from .event_window import validate_root_proof, StaleWindow
         before, stamp, index = None, None, None
         try:
+            self._proof_guard(identity, owner, proof)
+            ready = await self._proof_dependency(
+                lambda: self._writer_ready(identity, owner, proof), proof['deadline'])
+            # A publication during writer readiness is still supersession.
+            # Do not adopt its new fence or quietly retry with a different root.
+            self._proof_guard(identity, owner, proof)
+            if not ready:
+                proof.update(status='incomplete', reason='diagnostics-unavailable')
+                return self._proof_public(proof)
             for step in range(MAX_PAGES):
                 self._proof_guard(identity, owner, proof)
                 inputs = {'operation': 'proof-step', 'session': proof['source'],

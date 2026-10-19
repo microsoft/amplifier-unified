@@ -189,7 +189,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                     revision=request.query.get('revision'), before=request.query.get('before'),
                     preserve=request.query.get('preserve') == 'true'))
             if part == 'nodes':
-                if request.query.get('before') is None and request.query.get('preserve') != 'true':
+                if (request.query.get('before') is None and request.query.get('preserve') != 'true'
+                        and windows.live_pages.needs_canonical(session, request.query.get('group'))):
                     await windows.read_selected(session['id'])
                 return web.json_response(windows.live_pages.read(session, request.query.get('group'),
                     before=request.query.get('before'), revision=request.query.get('revision'),

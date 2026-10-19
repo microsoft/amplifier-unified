@@ -91,6 +91,18 @@ class ResidentWorkPages:
         self.groups.move_to_end(self._key(session, group))
         return entry
 
+    def needs_canonical(self, session, group):
+        """Classify the requested latest resident slice, without acquiring proof.
+
+        Inline fields keep the existing resident receipt route. Metadata-only
+        observer rows or recorded-field aliases need canonical authority; a
+        failed canonical lookup can never fall back through this classification.
+        """
+        nodes = raw(session).get('execution', {}).get('nodes', [])
+        rows, _, _ = self._rows(self._source(session, max(0, len(nodes) - NODE_LIMIT), len(nodes)), group)
+        return any((row.get('liveObservation') or row.get('_eventFields'))
+                   and not any(field in row for field in CANONICAL_FIELDS) for row in rows)
+
     def revision_for(self, session, group, base_revision):
         """Wrap the live projection's base revision; never initiate a proof.
 
