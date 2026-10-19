@@ -320,7 +320,7 @@ async def test_exact_check_receipt_and_distinct_root_are_required_for_verified_c
         'id': 'collection-one', 'kind': 'collection', 'sessionId': reviewer['id'],
         'status': 'passed', 'candidateStatus': 'matched',
         'repositories': [{'repositoryPath': '/synthetic/repo', 'status': 'passed',
-                          'candidateStatus': 'matched', 'resultingSource': {'head': candidate},
+                          'candidateStatus': 'matched', 'resultingSource': {'head': candidate, 'dirty': False},
                           'artifacts': [{'status': 'retained', 'sha256': 'c' * 64, 'outputId': 'test-output'}],
                           'operation': {'state': 'completed', 'returncode': 0}}]}}
     app.collaboration.insert('collection-one', 'fixture', collection)
@@ -342,3 +342,109 @@ async def test_exact_check_receipt_and_distinct_root_are_required_for_verified_c
     history = (await app.dispatch('workspace.work.history', {
         'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
     assert len([row for row in history if row['kind'] == 'disposition']) == 2
+
+
+async def test_contributor_context_uses_work_links_without_assignment_enrollment(app):
+    owner, peer = app.state['sessions']
+    item = (await create(app, owner))['result']['item']
+    await change_work(app, owner, 'link', item, 'contributor', linkedSessionId=peer['id'],
+                      role='executor', candidate='a' * 40)
+    await generation(app, peer, 'contributor-turn', ['contributor-input'])
+    result = await agent_action(app, peer, 'workspace.work.context', {'sessionId': peer['id']}, 'context')
+    assert result['result']['total'] == 1
+    assert result['result']['items'][0]['id'] == item['id']
+    assert app.assignments.current(peer) is None and app.runtime.inputs == []
+
+
+async def test_claim_reassignment_fences_linked_work_report(app):
+    from test_assignments import child
+    from test_assignment_tasks import create as create_task, change as change_task
+    owner = app.state['sessions'][0]
+    peer, _ = await child(app, owner, 'execution-peer')
+    task = await create_task(app, owner)
+    claimed = (await change_task(app, peer, 'claim', task, agent=True))['result']['task']
+    item = (await create(app, owner))['result']['item']
+    item = (await change_work(app, owner, 'link', item, 'claim-link',
+        linkedSessionId=peer['id'], role='executor', candidate='a' * 40,
+        taskId=task['id'], claimId=claimed['claim']['id']))['result']['item']
+    await change_task(app, owner, 'reassign', claimed, holderSessionId=owner['id'])
+    with pytest.raises(AppError, match='responsibility'):
+        await change_work(app, peer, 'report', item, 'old-claim-return',
+            promiseRevision=1, candidate='a' * 40, outcome='passed',
+            report='Late stale holder', criteria=['retained'])
+    assert (await read(app, owner, item['id']))['item']['verification'] == 'not_verified'
+
+
+async def test_dependency_cycle_and_cancelled_dependency_are_not_ready(app):
+    owner = app.state['sessions'][0]
+    first = (await create(app, owner, command='first', intent='first'))['result']['item']
+    second = (await create(app, owner, command='second', intent='second', dependsOn=[first['id']]))['result']['item']
+    assert second['blockedBy'] == [first['id']]
+    with pytest.raises(AppError, match='cycle'):
+        await revise(app, owner, first, 'cycle', dependsOn=[second['id']])
+    await change_work(app, owner, 'disposition', first, 'cancel-first',
+        disposition='closed', basis='cancelled', reason='The requested work was withdrawn.')
+    listed = (await app.dispatch('workspace.work.list', {'workspaceId': workspace_id(app, owner)}))['result']
+    assert next(row for row in listed['items'] if row['id'] == second['id'])['blockedBy'] == [first['id']]
+    assert not app.runtime.inputs
+
+
+async def test_transaction_failure_preserves_current_record_and_no_partial_event(app, monkeypatch):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    before = await read(app, owner, item['id'])
+    original = app.collaboration.insert
+    def fail_final(identity, digest, receipt):
+        if identity == 'fail-commit':
+            raise OSError('Synthetic final receipt failure')
+        return original(identity, digest, receipt)
+    monkeypatch.setattr(app.collaboration, 'insert', fail_final)
+    with pytest.raises(OSError, match='Synthetic'):
+        await revise(app, owner, item, 'fail-commit', nextAction='Must roll back')
+    assert (await read(app, owner, item['id'])) == before
+    events = (await app.dispatch('workspace.work.history', {
+        'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']
+    assert events['total'] == 1 and len(events['items']) == 1
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id='fail-commit'").fetchone()
+
+
+async def test_index_loss_does_not_lose_work_or_replay_capture(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    for name in ('work_current_scope', 'work_source_intent', 'work_history_scope'):
+        app.db.execute('DROP INDEX ' + name)
+    app.db.commit()
+    from amplifier_web.workspace_work import WorkspaceWork
+    rebuilt = WorkspaceWork(app)
+    page = rebuilt.listing({'id': workspace_id(app, owner)}, {})
+    assert page['total'] == 1 and page['items'][0]['id'] == item['id']
+    assert not app.runtime.inputs
+
+
+async def test_large_synthetic_work_set_is_bounded_and_all_open_items_are_reachable(app):
+    from amplifier_operations.coordination import fingerprint
+    owner = app.state['sessions'][0]
+    first = (await create(app, owner))['result']['item']
+    template = (await read(app, owner, first['id']))['item']
+    ids = {first['id']}
+    # Synthetic retained records isolate the indexed read from capture throughput.
+    # Source capture itself is tested through the action path above.
+    for index in range(999):
+        item = {**copy.deepcopy(template), 'id': f'work:synthetic-{index:04d}',
+                'sourceKey': f'synthetic-source-{index}'}
+        ids.add(item['id'])
+        app.collaboration.insert(item['id'], fingerprint(item), {
+            'commandAction': 'workspace.work.record', 'result': item})
+    app.db.commit()
+    observed = []
+    args = {'sessionId': owner['id']}
+    while True:
+        page = (await agent_action(app, owner, 'workspace.work.context', args, 'read-context'))['result']
+        assert len(json.dumps(page, ensure_ascii=False).encode()) <= 12 * 1024
+        assert len(page['items']) <= 20 and page['total'] == 1000
+        observed.extend(row['id'] for row in page['items'])
+        if not page['nextAfter']:
+            break
+        assert page['truncated']
+        args['after'] = page['nextAfter']
+    assert len(observed) == len(set(observed)) == 1000 and set(observed) == ids

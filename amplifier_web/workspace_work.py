@@ -33,6 +33,7 @@ def definitions(schema, string):
     content = {'title': {**string(200), 'minLength': 1},
                'interpretation': string(4000), 'criteria': criteria,
                'constraints': {'type': 'array', 'maxItems': 32, 'items': {**string(1000), 'minLength': 1}},
+               'dependsOn': {'type': 'array', 'maxItems': 32, 'uniqueItems': True, 'items': string(200)},
                'nextAction': string(1000), 'blockedReason': string(1000)}
     return {
         **evidence_definitions(schema, string),
@@ -46,13 +47,16 @@ def definitions(schema, string):
         'workspace.work.source': ('Read the exact retained original or correction source in bounded text pages, without loading its chat.', schema({**target,
             'sourceId': string(200), 'offset': {'type': 'integer', 'minimum': 0},
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 8000}}, ['workspaceId', 'id', 'sourceId'])),
+        'workspace.work.event': ('Read one immutable Work change, preserving prior acceptance and attributed evidence without loading a chat.', schema({
+            **target, 'eventId': string(200)}, ['workspaceId', 'id', 'eventId'])),
         'workspace.work.context': ('Read the calling root\'s bounded current Work summary and explicit overflow links. Missing detail is not permission.', schema({**actor, **page}, ['sessionId'])),
         'workspace.work.create': ('Capture a promise with an exact original source before commissioning work. Does not create a worker, goal or assignment. Proven human origin is required for accepted scope.', schema({**scope, **actor, **content,
             'source': source, 'intentKey': {**string(100), 'minLength': 1},
             'commitment': {'enum': ['accepted', 'proposed']}},
             ['workspaceId', 'sessionId', 'source', 'intentKey', 'title', 'commitment', 'criteria'])),
         'workspace.work.revise': ('Owner revises a promise at its exact record/promise revisions. Scope changes require a new retained source; old source and evidence remain.', schema({**target, **actor, **content,
-            'source': source, 'expectedRevision': {'type': 'integer', 'minimum': 1},
+            'source': source, 'commitment': {'enum': ['accepted', 'proposed']},
+            'expectedRevision': {'type': 'integer', 'minimum': 1},
             'expectedPromiseRevision': {'type': 'integer', 'minimum': 1}},
             ['workspaceId', 'sessionId', 'id', 'expectedRevision', 'expectedPromiseRevision'])),
     }
@@ -148,6 +152,7 @@ class WorkspaceWork:
             'disposition', 'ownerSessionId', 'nextAction', 'blockedReason', 'updatedAt',
             'verification', 'humanDecision', 'delivery', 'execution')}
         value['candidate'] = item.get('candidate')
+        value['blockedBy'] = self.blocked_by(item)
         value['readRef'] = {'action': 'workspace.work.read', 'args': {'workspaceId': item['workspaceId'], 'id': item['id']}}
         return value
 
@@ -166,8 +171,10 @@ class WorkspaceWork:
         where = ["json_extract(receipt,'$.commandAction')=?", "json_extract(receipt,'$.result.workspaceId')=?"]
         params = [RECORD, workspace['id']]
         if owner:
-            where.append("json_extract(receipt,'$.result.ownerSessionId')=?")
-            params.append(owner)
+            where.append("(json_extract(receipt,'$.result.ownerSessionId')=? OR EXISTS "
+                         "(SELECT 1 FROM json_each(json_extract(receipt,'$.result.links')) "
+                         "WHERE json_extract(value,'$.sessionId')=?))")
+            params.extend([owner, owner])
         if selected == 'accepted':
             where.extend(["json_extract(receipt,'$.result.commitment')='accepted'", "json_extract(receipt,'$.result.disposition')='open'"])
         elif selected == 'proposed':
@@ -221,6 +228,8 @@ class WorkspaceWork:
         # Source body is deliberately separate from history summaries.
         values = [{**{k: row[k] for k in ('id', 'kind', 'sequence', 'promiseRevision', 'actor', 'recordedAt')},
                    'changedFields': list(row.get('changes', {})),
+                   'eventRef': {'action': 'workspace.work.event', 'args': {
+                       'workspaceId': workspace['id'], 'id': item['id'], 'eventId': row['id']}},
                    **{k: copy.deepcopy(row[k]) for k in ('evidence', 'link', 'decision', 'disposition') if k in row},
                    'source': {k: v for k, v in row.get('source', {}).items() if k != 'text'},
                    'sourceRef': {'action': 'workspace.work.source', 'args': {
@@ -228,6 +237,41 @@ class WorkspaceWork:
                        if row.get('source') else None} for row in values]
         return {'items': values, 'total': item['eventCount'], 'truncated': len(rows) > limit,
                 'nextAfter': _encode([workspace['id'], item['id'], values[-1]['sequence']]) if len(rows) > limit else None}
+
+    def blocked_by(self, item):
+        blocked = []
+        for identity in item.get('dependsOn', []):
+            try:
+                dependency = self.receipts.receipt(identity)['result']
+                satisfied = (dependency.get('workspaceId') == item['workspaceId']
+                             and dependency.get('disposition') == 'closed'
+                             and dependency.get('dispositionBasis') == 'satisfied')
+            except (KeyError, ValueError):
+                satisfied = False
+            if not satisfied:
+                blocked.append(identity)
+        return blocked
+
+    def check_dependencies(self, workspace, item, dependencies):
+        if len(dependencies) != len(set(dependencies)):
+            self.error('Dependencies must be distinct.', 400)
+        # Bounded traversal fails explicitly rather than doing unbounded work.
+        visiting, done = set(), set()
+        def visit(identity):
+            if identity in visiting or identity == item['id']:
+                self.error('Work dependencies cannot form a cycle.')
+            if identity in done:
+                return
+            if len(done) + len(visiting) >= 256:
+                self.error('Dependency inspection exceeds its bounded graph limit.', 429)
+            visiting.add(identity)
+            dependency = self.load(identity, workspace)
+            for parent in dependency.get('dependsOn', []):
+                visit(parent)
+            visiting.remove(identity)
+            done.add(identity)
+        for identity in dependencies:
+            visit(identity)
 
     async def capture(self, reference, actor, workspace):
         from .owned_history import require
@@ -271,10 +315,17 @@ class WorkspaceWork:
             return {'accepted': True, 'result': self.listing(workspace, args, owner=args['sessionId'], context=True)}
         if verb == 'list':
             return {'accepted': True, 'result': self.listing(workspace, args)}
-        if verb in {'read', 'history', 'source'}:
+        if verb in {'read', 'history', 'source', 'event'}:
             item = self.load(args['id'], workspace)
             if verb == 'history':
                 value = self.history(workspace, item, args)
+            elif verb == 'event':
+                event = self.receipts.receipt(args['eventId'])
+                if event.get('commandAction') != EVENT or event.get('workItemId') != item['id']:
+                    self.error('Event does not belong to this Work item.', 404)
+                value = {'event': {key: copy.deepcopy(event[key]) for key in
+                    ('id', 'kind', 'sequence', 'promiseRevision', 'actor', 'recordedAt', 'changes',
+                     'evidence', 'link', 'decision', 'disposition') if key in event}}
             else:
                 event = self.receipts.receipt(args['sourceId'] if verb == 'source' else item['originalSourceRef'])
                 if event.get('commandAction') != EVENT or event.get('workItemId') != item['id'] or not event.get('source'):
@@ -332,7 +383,7 @@ class WorkspaceWork:
                             'disposition': 'open', 'verification': 'not_verified', 'humanDecision': 'not_recorded',
                             'delivery': 'not_recorded', 'execution': 'not_started', 'links': [], 'criterionEvidence': {},
                             'eventCount': 1, 'createdAt': now, 'updatedAt': now,
-                            'interpretation': '', 'criteria': [], 'constraints': [], 'nextAction': '', 'blockedReason': ''}
+                            'interpretation': '', 'criteria': [], 'constraints': [], 'dependsOn': [], 'nextAction': '', 'blockedReason': ''}
                 elif verb == 'revise':
                     item = self.load(args['id'], workspace)
                     if item['ownerSessionId'] != actor['id']:
@@ -341,10 +392,10 @@ class WorkspaceWork:
                         self.error('Work revision changed; inspect current state before changing it.')
                     if item['disposition'] != 'open':
                         self.error('Closed Work needs an explicit corrective reopening.')
-                    promise_change = any(key in args and args[key] != item.get(key) for key in ('interpretation', 'criteria', 'constraints'))
+                    promise_change = any(key in args and args[key] != item.get(key) for key in ('interpretation', 'criteria', 'constraints', 'commitment'))
                     if promise_change and not captured:
                         self.error('A promise correction needs its exact source.')
-                    if promise_change and item['commitment'] == 'accepted' and captured['inputOrigin'] not in {'ui', 'user'}:
+                    if promise_change and (item['commitment'] == 'accepted' or args.get('commitment') == 'accepted') and captured['inputOrigin'] not in {'ui', 'user'}:
                         self.error('Changing accepted scope needs proven human source origin.', 400)
                     item.update(revision=item['revision'] + 1, eventCount=item['eventCount'] + 1, updatedAt=now)
                     if promise_change:
@@ -357,10 +408,14 @@ class WorkspaceWork:
                     from .workspace_work_evidence import mutate
                     item = self.load(args['id'], workspace)
                     event_extra, event_promise = mutate(self, verb, item, args, actor, origin, workspace)
-                changed_fields = ('title', 'interpretation', 'criteria', 'constraints', 'nextAction', 'blockedReason') if verb in {'create', 'revise'} else ()
+                if 'dependsOn' in args:
+                    self.check_dependencies(workspace, item, args['dependsOn'])
+                changed_fields = ('title', 'interpretation', 'criteria', 'constraints', 'commitment', 'dependsOn', 'nextAction', 'blockedReason') if verb in {'create', 'revise'} else ()
                 for key in changed_fields:
                     if key in args:
                         item[key] = copy.deepcopy(args[key])
+                if item['commitment'] == 'accepted' and not item['criteria']:
+                    self.error('Accepted Work needs at least one explicit acceptance criterion.', 400)
                 event_id = 'work-event:' + str(uuid.uuid5(uuid.NAMESPACE_URL, command_id))
                 event = {'id': event_id, 'commandAction': EVENT, 'kind': verb, 'workItemId': item['id'],
                          'sequence': item['eventCount'], 'promiseRevision': event_promise or item['promiseRevision'],

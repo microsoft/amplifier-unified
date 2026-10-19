@@ -13,7 +13,7 @@ def definitions(schema, string):
     return {
         'workspace.work.link': ('Owner links an existing same-workspace execution or reviewer without enrolling, starting or granting it authority. Links are not claims.', schema({**target,
             'linkedSessionId': string(200), 'role': {'enum': ['executor', 'reviewer']},
-            'candidate': candidate}, [*required, 'linkedSessionId', 'role', 'candidate'])),
+            'candidate': candidate, 'taskId': string(200), 'claimId': string(200)}, [*required, 'linkedSessionId', 'role', 'candidate'])),
         'workspace.work.report': ('Append an attributed result for an exact promise/candidate. A report alone never means independent verification. Optional checkReceiptId must be this actor\'s exact retained integration collection.', schema({**target,
             'promiseRevision': {'type': 'integer', 'minimum': 1}, 'candidate': candidate,
             'outcome': {'enum': ['passed', 'failed', 'unknown', 'not_run']},
@@ -40,6 +40,14 @@ def _link_current(work, link, workspace):
         return False
     if row.get('workspace') != workspace['path'] or row.get('interruptionRevision', 0) != link['interruptionRevision']:
         return False
+    if link.get('taskId'):
+        value = work.service.assignments.current(row)
+        task = (value or {}).get('tasks', {}).get(link['taskId'])
+        if not task or value['id'] != link['assignmentId']:
+            return False
+        claim = work.service.assignments.tasks.claim_status(value, task)
+        if not claim or claim['id'] != link['claimId'] or claim['sessionId'] != row['id'] or claim['status'] != 'current':
+            return False
     return not work.service.assignments.blocked(session=row)
 
 
@@ -60,6 +68,7 @@ def _qualification(work, actor, item, args):
     if args['outcome'] == 'passed' and (
             collection.get('status') != 'passed' or collection.get('candidateStatus') != 'matched'
             or observed != 'passed' or row.get('candidateStatus') != 'matched'
+            or row.get('resultingSource', {}).get('dirty') is not False
             or row.get('operation', {}).get('state') != 'completed'
             or row.get('operation', {}).get('returncode') != 0
             or not row.get('artifacts') or any(a.get('status') != 'retained' for a in row['artifacts'])):
@@ -91,8 +100,8 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         if row.get('status') in {'stopping', 'stopped'}:
             work.error('Stopped work cannot gain a new execution link.', 403)
         links = item.setdefault('links', [])
-        identity = (row['id'], args['candidate'], args['role'])
-        prior = next((l for l in links if (l['sessionId'], l['candidate'], l['role']) == identity), None)
+        identity = (row['id'], args['candidate'], args['role'], item['promiseRevision'])
+        prior = next((l for l in links if (l['sessionId'], l['candidate'], l['role'], l['promiseRevision']) == identity), None)
         if prior:
             work.error('This exact relationship is already retained; inspect it before changing responsibility.')
         if len(links) >= 32 or args['role'] == 'executor' and sum(l['role'] == 'executor' for l in links) >= 8:
@@ -100,6 +109,17 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         link = {'sessionId': row['id'], 'candidate': args['candidate'], 'role': args['role'],
                 'promiseRevision': item['promiseRevision'], 'interruptionRevision': row.get('interruptionRevision', 0),
                 'recordedBy': actor['id'], 'recordedAt': time.time()}
+        if bool(args.get('taskId')) != bool(args.get('claimId')):
+            work.error('An execution task link needs both exact task and claim identities.', 400)
+        if args.get('taskId'):
+            value = work.service.assignments.current(row)
+            task = (value or {}).get('tasks', {}).get(args['taskId'])
+            if not task or (work.service.assignments.current(actor) or {}).get('id') != value['id']:
+                work.error('The execution task must belong to both linked assignment members.', 403)
+            claim = work.service.assignments.tasks.claim_status(value, task)
+            if not claim or claim['id'] != args['claimId'] or claim['sessionId'] != row['id'] or claim['status'] != 'current':
+                work.error('The execution claim is stale or belongs to another holder.', 409)
+            link.update(assignmentId=value['id'], taskId=task['id'], claimId=claim['id'])
         links.append(link)
         if args['role'] == 'executor' and item.get('candidate') != args['candidate']:
             item.update(candidate=args['candidate'], verification='not_verified', criterionEvidence={},
@@ -156,12 +176,15 @@ def mutate(work, verb, item, args, actor, origin, workspace):
                 work.error('Closing needs a closure basis.', 400)
             if args['basis'] == 'satisfied' and item['verification'] != 'independent_checks_passed' and item['humanDecision'] != 'accepted':
                 work.error('Satisfied closure requires qualified criteria or an actual human acceptance decision.')
+            if args['basis'] == 'satisfied' and (work.blocked_by(item) or item.get('blockedReason')):
+                work.error('Blocked dependencies must be resolved before satisfied closure.')
         elif args['basis'] != 'reopened':
             work.error('Opening a closed item needs an explicit corrective reopening.', 400)
         extra['disposition'] = {'previous': item['disposition'], 'current': args['disposition'],
                                 'basis': args['basis'], 'reason': args['reason']}
         item['disposition'] = args['disposition']
         item['dispositionReason'] = args['reason']
+        item['dispositionBasis'] = args['basis']
         if args['disposition'] == 'open':
             item.update(verification='not_verified', criterionEvidence={}, humanDecision='not_recorded')
     else:
