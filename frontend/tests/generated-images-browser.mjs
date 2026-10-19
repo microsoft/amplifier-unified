@@ -108,7 +108,8 @@ function installPreviewProbe(pane){
    const properties=propertyFacts(node);
    try{
     if(kind==='scroll')pane.scrollTop-=8;
-    else node.style.transform='translateY(8px)';
+    // Mutate and restore the same raw attribute boundary; keep null distinct.
+    else node.setAttribute('style',`${style===null?'':style};transform:translateY(8px);`);
     add(kind,before,snapshot(),kind==='scroll'?'raw-scroll':kind==='gallery'?'gallery-position':'frame-position');
    }finally{
     if(kind==='scroll')pane.scrollTop=scroll;
@@ -122,7 +123,7 @@ function installPreviewProbe(pane){
   const before=snapshot(),style=gallery.getAttribute('style'),properties=propertyFacts(gallery);
   begin(before);
   try{
-   gallery.style.transform='translateY(8px)';
+   gallery.setAttribute('style',`${style===null?'':style};transform:translateY(8px);`);
    await Promise.resolve(); // Deliver the real mutation, not a stability wait.
   }finally{
    if(style===null)gallery.removeAttribute('style');else gallery.setAttribute('style',style);
