@@ -43,6 +43,10 @@ def definitions(schema, string):
         'workspace.work.list': ('Read bounded durable promises without starting models or workers. Coverage is not a complete historical inventory.', schema({**scope, **page,
             'filter': {'enum': ['accepted', 'all', 'proposed', 'closed', 'attention']},
             'query': string(200)}, ['workspaceId'])),
+        'workspace.work.wait': ('Passively wait for this exact workspace page observation to change. No model, worker or execution; rechecks scope after each wait.', schema({**scope, **page,
+            'filter': {'enum': ['accepted', 'all', 'proposed', 'closed', 'attention']}, 'query': string(200),
+            'afterVersion': string(64), 'waitMs': {'type': 'integer', 'minimum': 0, 'maximum': 30000}},
+            ['workspaceId', 'afterVersion'])),
         'workspace.work.read': ('Read one durable promise and its retained original source. No history hydration, execution or permission change.', schema({**target,
             'sourceOffset': {'type': 'integer', 'minimum': 0},
             'sourceLimit': {'type': 'integer', 'minimum': 1, 'maximum': 8000}}, ['workspaceId', 'id'])),
@@ -81,6 +85,7 @@ class WorkspaceWork:
         self.service = service
         self.db = service.db
         self.receipts = service.collaboration
+        self.pending_input_facts = {}
         # Expression indexes are derived; canonical receipts survive index loss.
         self.db.execute("""CREATE INDEX IF NOT EXISTS work_current_scope ON commands(
             json_extract(receipt,'$.result.workspaceId'),
@@ -154,12 +159,41 @@ class WorkspaceWork:
     def summary(self, item):
         value = {key: copy.deepcopy(item[key]) for key in (
             'id', 'workspaceId', 'revision', 'promiseRevision', 'title', 'commitment',
-            'disposition', 'ownerSessionId', 'nextAction', 'blockedReason', 'updatedAt',
+            'disposition', 'ownerSessionId', 'originSessionId', 'nextAction', 'blockedReason', 'updatedAt',
             'verification', 'humanDecision', 'delivery', 'execution')}
         value['candidate'] = item.get('candidate')
+        value['latestOutcome'] = item.get('latestOutcome', 'not_run')
+        value['humanDecisionCurrent'] = item.get('humanDecisionSequence', 0) > item.get('counterevidenceSequence', 0)
+        value['captureAuthority'] = 'Attributed scope interpretation; not an execution grant.'
         value['blockedBy'] = self.blocked_by(item)
+        owner = self.owner_observation(item['ownerSessionId'])
+        value['ownerObservation'] = owner
+        reasons = []
+        if item.get('blockedReason') or value['blockedBy']:
+            reasons.append('blocked')
+        if item.get('latestOutcome') in {'failed', 'unknown', 'not_run'}:
+            reasons.append(item['latestOutcome'])
+        if item.get('nextAction') and item['disposition'] == 'open':
+            reasons.append('next_action')
+        if owner['needsReview']:
+            reasons.append('owner_needs_review')
+        if item.get('humanDecisionSequence', 0) and not value['humanDecisionCurrent']:
+            reasons.append('counterevidence_after_decision')
+        value['attentionReasons'] = reasons
+        value['cleanup'] = {'status': 'reported' if item.get('resources') else 'not_recorded',
+                            'references': copy.deepcopy(item.get('resources', [])),
+                            'coverage': 'Explicit owner reports only; no resource census or teardown implied.'}
         value['readRef'] = {'action': 'workspace.work.read', 'args': {'workspaceId': item['workspaceId'], 'id': item['id']}}
         return value
+
+    def owner_observation(self, sid):
+        row = next((r for r in self.service.state['sessions'] if r['id'] == sid), None)
+        resident = row is not None
+        if row is None:
+            row = self.service.directory.resolve(sid)
+        return {'available': row is not None, 'activityObserved': resident,
+                'status': (row or {}).get('status', 'unavailable'),
+                'needsReview': row is None or row.get('status') in {'stopped', 'failed', 'error', 'interrupted', 'cancelled'}}
 
     def listing(self, workspace, args, *, owner=None, context=False):
         version = self.version(workspace)
@@ -187,7 +221,16 @@ class WorkspaceWork:
         elif selected == 'closed':
             where.append("json_extract(receipt,'$.result.disposition')='closed'")
         elif selected == 'attention':
-            where.append("json_extract(receipt,'$.result.disposition')='open'")
+            owners = {}
+            def owner_attention(sid):
+                if sid not in owners:
+                    owners[sid] = self.owner_observation(sid)['needsReview']
+                return int(owners[sid])
+            self.db.create_function('work_owner_attention', 1, owner_attention)
+            where.append("(json_extract(receipt,'$.result.blockedReason')!='' "
+                         "OR json_extract(receipt,'$.result.latestOutcome') IN ('failed','unknown','not_run') "
+                         "OR (json_extract(receipt,'$.result.disposition')='open' AND json_extract(receipt,'$.result.nextAction')!='') "
+                         "OR work_owner_attention(json_extract(receipt,'$.result.ownerSessionId'))=1)")
         if query:
             self.db.create_function('work_casefold', 1, lambda s: str(s or '').casefold(), deterministic=True)
             where.append("instr(work_casefold(json_extract(receipt,'$.result.title')),?)>0")
@@ -198,7 +241,9 @@ class WorkspaceWork:
                               [*params, after_id, limit + 1]).fetchall()
         items = [self.summary(json.loads(row[0])['result']) for row in raw[:limit]]
         if context:
-            items = [{key: row[key] for key in ('id', 'revision', 'promiseRevision', 'title', 'nextAction', 'blockedReason', 'readRef')} for row in items]
+            items = [{key: row[key] for key in ('id', 'revision', 'promiseRevision', 'title',
+                     'originSessionId', 'candidate', 'latestOutcome', 'humanDecisionCurrent',
+                     'attentionReasons', 'nextAction', 'blockedReason', 'readRef')} for row in items]
             for row in items:
                 row['title'] = row['title'][:100]
                 row['nextAction'] = row['nextAction'][:200]
@@ -210,38 +255,45 @@ class WorkspaceWork:
                     'observedAt': time.time(), 'coverage': 'Recorded Work only; historical reconciliation is incomplete.',
                     'detailRequired': bool(context), 'authority': 'Reference data; current constraints and execution permissions remain binding.'}
         page = result()
+        page['observationVersion'] = fingerprint([scope, version, items, total])
         if context:
             while len(json.dumps(page, ensure_ascii=False).encode()) > CONTEXT_BYTES and items:
                 items.pop()
                 page = result()
+                page['observationVersion'] = fingerprint([scope, version, items, total])
         return page
 
     def history(self, workspace, item, args):
         limit = args.get('limit', 20)
         after = 0
+        high_water = item['eventCount']
         if args.get('after'):
             cursor = _decode(args['after'])
-            if (not isinstance(cursor, list) or len(cursor) != 3
+            if (not isinstance(cursor, list) or len(cursor) != 4
                     or cursor[:2] != [workspace['id'], item['id']]
-                    or type(cursor[2]) is not int or not 0 <= cursor[2] <= item['eventCount']):
+                    or type(cursor[2]) is not int or type(cursor[3]) is not int
+                    or not 0 <= cursor[3] <= cursor[2] <= item['eventCount']):
                 self.error('History cursor belongs to another Work item.')
-            after = cursor[2]
+            high_water, after = cursor[2:]
         rows = self.db.execute("""SELECT receipt FROM commands WHERE json_extract(receipt,'$.commandAction')=?
             AND json_extract(receipt,'$.workItemId')=? AND json_extract(receipt,'$.sequence')>?
-            ORDER BY json_extract(receipt,'$.sequence') LIMIT ?""", (EVENT, item['id'], after, limit + 1)).fetchall()
+            AND json_extract(receipt,'$.sequence')<=?
+            ORDER BY json_extract(receipt,'$.sequence') LIMIT ?""", (EVENT, item['id'], after, high_water, limit + 1)).fetchall()
         values = [json.loads(row[0]) for row in rows[:limit]]
         # Source body is deliberately separate from history summaries.
         values = [{**{k: row[k] for k in ('id', 'kind', 'sequence', 'promiseRevision', 'actor', 'recordedAt')},
                    'changedFields': list(row.get('changes', {})),
                    'eventRef': {'action': 'workspace.work.event', 'args': {
                        'workspaceId': workspace['id'], 'id': item['id'], 'eventId': row['id']}},
-                   **{k: copy.deepcopy(row[k]) for k in ('evidence', 'link', 'decision', 'disposition') if k in row},
+                   **{k: copy.deepcopy(row[k]) for k in ('evidence', 'link', 'decision', 'disposition', 'resource') if k in row},
                    'source': {k: v for k, v in row.get('source', {}).items() if k != 'text'},
                    'sourceRef': {'action': 'workspace.work.source', 'args': {
                        'workspaceId': workspace['id'], 'id': item['id'], 'sourceId': row['id']}}
                        if row.get('source') else None} for row in values]
-        return {'items': values, 'total': item['eventCount'], 'truncated': len(rows) > limit,
-                'nextAfter': _encode([workspace['id'], item['id'], values[-1]['sequence']]) if len(rows) > limit else None}
+        return {'items': values, 'total': high_water, 'snapshotEventCount': high_water,
+                'currentEventCount': item['eventCount'], 'snapshotIsCurrent': high_water == item['eventCount'],
+                'truncated': len(rows) > limit,
+                'nextAfter': _encode([workspace['id'], item['id'], high_water, values[-1]['sequence']]) if len(rows) > limit else None}
 
     def blocked_by(self, item):
         blocked = []
@@ -314,6 +366,13 @@ class WorkspaceWork:
     async def dispatch(self, action, args, origin, command_id, caller):
         verb = action.removeprefix('workspace.work.')
         workspace = self.workspace(args, origin, caller)
+        if verb == 'wait':
+            def observe():
+                current = self.workspace(args, origin, caller)
+                result = self.listing(current, args)
+                return {'accepted': True, 'result': result,
+                        'changed': result['observationVersion'] != args['afterVersion']}
+            return await self.service.coordination.signal.wait(observe, wait_ms=args.get('waitMs', 30000))
         if verb in {'coverage', 'reviewInput'}:
             from .workspace_work_coverage import read, review
             if verb == 'reviewInput':
@@ -335,7 +394,7 @@ class WorkspaceWork:
                     self.error('Event does not belong to this Work item.', 404)
                 value = {'event': {key: copy.deepcopy(event[key]) for key in
                     ('id', 'kind', 'sequence', 'promiseRevision', 'actor', 'recordedAt', 'changes',
-                     'evidence', 'link', 'decision', 'disposition') if key in event}}
+                     'evidence', 'link', 'decision', 'disposition', 'resource') if key in event}}
             else:
                 event = self.receipts.receipt(args['sourceId'] if verb == 'source' else item['originalSourceRef'])
                 if event.get('commandAction') != EVENT or event.get('workItemId') != item['id'] or not event.get('source'):
@@ -389,7 +448,7 @@ class WorkspaceWork:
                     identity = 'work:' + str(uuid.uuid5(uuid.NAMESPACE_URL, workspace['id'] + ':' + command_id))
                     item = {'id': identity, 'workspaceId': workspace['id'], 'originSessionId': captured['sessionId'],
                             'ownerSessionId': actor['id'], 'schemaVersion': 1, 'sourceKey': source_key,
-                            'revision': 1, 'promiseRevision': 1, 'commitment': args['commitment'],
+                            'revision': 1, 'promiseRevision': 1, 'promiseRevisedAt': now, 'commitment': args['commitment'],
                             'disposition': 'open', 'verification': 'not_verified', 'humanDecision': 'not_recorded',
                             'delivery': 'not_recorded', 'execution': 'not_started', 'links': [], 'criterionEvidence': {},
                             'eventCount': 1, 'createdAt': now, 'updatedAt': now,
@@ -410,8 +469,11 @@ class WorkspaceWork:
                     item.update(revision=item['revision'] + 1, eventCount=item['eventCount'] + 1, updatedAt=now)
                     if promise_change:
                         item['promiseRevision'] += 1
+                        item['promiseRevisedAt'] = now
                         item['verification'] = 'not_verified'
                         item['humanDecision'] = 'not_recorded'
+                        item['humanDecisionSequence'] = 0
+                        item['latestOutcome'] = 'not_run'
                         item['criterionEvidence'] = {}
                         item['execution'] = 'not_started'
                 else:
@@ -433,6 +495,8 @@ class WorkspaceWork:
                          'source': captured or {}, **event_extra,
                          'changes': {k: copy.deepcopy(args[k]) for k in changed_fields if k in args}}
                 self.receipts.insert(event_id, fingerprint(event), event)
+                if verb == 'create' or verb == 'revise' and promise_change:
+                    item['promiseEventRef'] = event_id
                 if captured:
                     from .workspace_work_coverage import mapped
                     mapped(self, captured, item)

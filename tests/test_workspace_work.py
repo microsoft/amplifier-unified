@@ -8,6 +8,7 @@ import base64
 import copy
 import hashlib
 import json
+import time
 
 import pytest
 
@@ -318,12 +319,16 @@ async def test_exact_check_receipt_and_distinct_root_are_required_for_verified_c
     # Synthetic canonical collection fixture; not evidence about any real build.
     collection = {'commandAction': 'integration.collect', 'result': {
         'id': 'collection-one', 'kind': 'collection', 'sessionId': reviewer['id'],
+        'capturedAt': time.time(), 'captureId': 'candidate-capture', 'validationIds': ['validation-one'],
         'status': 'passed', 'candidateStatus': 'matched',
         'repositories': [{'repositoryPath': '/synthetic/repo', 'status': 'passed',
                           'candidateStatus': 'matched', 'resultingSource': {'head': candidate, 'dirty': False},
                           'artifacts': [{'status': 'retained', 'sha256': 'c' * 64, 'outputId': 'test-output'}],
                           'operation': {'state': 'completed', 'returncode': 0}}]}}
     app.collaboration.insert('collection-one', 'fixture', collection)
+    app.collaboration.insert('validation-one', 'validation-fixture', {
+        'commandAction': 'integration.validate', 'result': {
+            'sessionId': reviewer['id'], 'captureId': 'candidate-capture', 'capturedAt': time.time()}})
     app.db.commit()
     with pytest.raises(AppError):
         await change_work(app, reviewer, 'report', item, 'wrong-candidate',
@@ -342,6 +347,16 @@ async def test_exact_check_receipt_and_distinct_root_are_required_for_verified_c
     history = (await app.dispatch('workspace.work.history', {
         'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
     assert len([row for row in history if row['kind'] == 'disposition']) == 2
+    corrected = (await revise(app, owner, reopened, 'correct-after-check',
+        source=source(app, owner, 'Now require a second cold reopen.'),
+        criteria=[{'id': 'retained', 'text': 'Two cold reopens preserve the source.'}]))['result']['item']
+    corrected = (await change_work(app, owner, 'link', corrected, 'review-new-promise',
+        linkedSessionId=reviewer['id'], role='reviewer', candidate=candidate))['result']['item']
+    with pytest.raises(AppError, match='predates'):
+        await change_work(app, reviewer, 'report', corrected, 'reuse-old-check',
+            promiseRevision=2, candidate=candidate, outcome='passed', report='Reuse old proof',
+            criteria=['retained'], checkReceiptId='collection-one')
+    assert (await read(app, owner, item['id']))['item']['verification'] == 'not_verified'
 
 
 async def test_contributor_context_uses_work_links_without_assignment_enrollment(app):
@@ -501,3 +516,93 @@ async def test_host_voice_origin_remains_human_without_promoting_peer_role(app):
     owner = app.state['sessions'][0]
     item = (await create(app, owner, source(app, owner, origin='voice')))['result']['item']
     assert (await read(app, owner, item['id']))['originalSource']['inputOrigin'] == 'voice'
+
+
+async def test_ui_decision_is_retained_but_new_failure_prevents_satisfied_closure(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    item = (await change_work(app, owner, 'report', item, 'ui-source-candidate',
+        promiseRevision=1, candidate='a' * 40, outcome='passed',
+        report='First return', criteria=['retained']))['result']['item']
+    item = (await app.dispatch('workspace.work.decision', {
+        'workspaceId': workspace_id(app, owner), 'sessionId': owner['id'],
+        'id': item['id'], 'expectedRevision': item['revision'], 'promiseRevision': 1,
+        'candidate': 'a' * 40, 'decision': 'accepted'}, command_id='actual-ui-acceptance'))['result']['item']
+    assert item['humanDecision'] == 'accepted' and item['humanDecisionCurrent']
+    item = (await change_work(app, owner, 'report', item, 'later-counterevidence',
+        promiseRevision=1, candidate='a' * 40, outcome='failed',
+        report='A later check failed.', criteria=['retained']))['result']['item']
+    assert item['humanDecision'] == 'accepted' and not item['humanDecisionCurrent']
+    assert item['latestOutcome'] == 'failed'
+    assert 'counterevidence_after_decision' in item['attentionReasons']
+    with pytest.raises(AppError, match='closure'):
+        await change_work(app, owner, 'disposition', item, 'close-with-old-decision',
+            disposition='closed', basis='satisfied', reason='Old acceptance is not current.')
+    # A new explicit human decision is different from silently preserving old approval.
+    item = (await app.dispatch('workspace.work.decision', {
+        'workspaceId': workspace_id(app, owner), 'sessionId': owner['id'],
+        'id': item['id'], 'expectedRevision': item['revision'], 'promiseRevision': 1,
+        'candidate': 'a' * 40, 'decision': 'accepted'}, command_id='new-ui-decision'))['result']['item']
+    closed = await change_work(app, owner, 'disposition', item, 'close-after-current-human',
+        disposition='closed', basis='satisfied', reason='The human explicitly decided after the retained failure.')
+    assert closed['result']['item']['disposition'] == 'closed'
+    assert closed['result']['item']['latestOutcome'] == 'failed'
+
+
+async def test_history_paging_keeps_immutable_initial_high_water_and_reads_prior_criteria(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    item = (await revise(app, owner, item, 'metadata-change', nextAction='Inspect history'))['result']['item']
+    args = {'workspaceId': workspace_id(app, owner), 'id': item['id'], 'limit': 1}
+    first = (await app.dispatch('workspace.work.history', args))['result']
+    await revise(app, owner, item, 'newer-change', nextAction='Still inspect old snapshot')
+    second = (await app.dispatch('workspace.work.history', {**args, 'after': first['nextAfter']}))['result']
+    assert second['snapshotEventCount'] == 2 and second['currentEventCount'] == 3
+    assert second['snapshotIsCurrent'] is False and second['nextAfter'] is None
+    event = first['items'][0]['eventRef']
+    original = (await app.dispatch(event['action'], event['args']))['result']['event']
+    assert original['changes']['criteria'][0]['text'] == 'The exact request survives a cold reopen.'
+
+
+async def test_coverage_facts_commit_with_source_save_not_unrelated_transaction(app):
+    owner = app.state['sessions'][0]
+    wid = workspace_id(app, owner)
+    app._message(owner, 'user', 'A pending source fact.', inputOrigin='ui')
+    app.db.rollback()
+    before = (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']
+    assert before['observedInputs'] == 0
+    app._save()
+    after = (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']
+    assert after['observedInputs'] == 1
+
+
+async def test_resource_report_stays_owner_attributed_and_never_implies_teardown(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    assert item['cleanup']['status'] == 'not_recorded'
+    item = (await change_work(app, owner, 'resource', item, 'resource-unknown',
+        resourceId='synthetic-operation-one', kind='container',
+        reportedState='unknown', evidenceReference='retained-original-request'))['result']['item']
+    cleanup = item['cleanup']['references'][0]
+    assert cleanup['ownerSessionId'] == owner['id'] and cleanup['attribution'] == 'owner_report'
+    assert cleanup['reportedState'] == 'unknown' and cleanup['independentlyVerified'] is False
+    assert not app.runtime.inputs
+
+
+async def test_attention_filter_and_wait_use_concrete_current_observations(app):
+    owner = app.state['sessions'][0]
+    original = source(app, owner, origin='agent')
+    await create(app, owner, original, command='proposal-only', commitment='proposed')
+    item = (await create(app, owner, command='accepted-no-attention'))['result']['item']
+    args = {'workspaceId': workspace_id(app, owner), 'filter': 'attention'}
+    empty = (await app.dispatch('workspace.work.list', args))['result']
+    assert empty['total'] == 0
+    before = copy.deepcopy(app.runtime.inputs)
+    waiting = asyncio.create_task(app.dispatch('workspace.work.wait', {
+        **args, 'afterVersion': empty['observationVersion'], 'waitMs': 1000}))
+    await asyncio.sleep(0)
+    await revise(app, owner, item, 'needs-check', nextAction='Check exact candidate.')
+    changed = await waiting
+    assert changed['changed'] and changed['result']['items'][0]['id'] == item['id']
+    assert changed['result']['items'][0]['attentionReasons'] == ['next_action']
+    assert app.runtime.inputs == before

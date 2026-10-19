@@ -11,6 +11,10 @@ def definitions(schema, string):
     required = ['workspaceId', 'sessionId', 'id', 'expectedRevision']
     candidate = {**string(100), 'minLength': 1}
     return {
+        'workspace.work.resource': ('Append the current linked owner\\'s bounded resource/cleanup report. Explicit attribution only; no resource scan, verified teardown claim or lifecycle action.', schema({**target,
+            'resourceId': {**string(500), 'minLength': 1}, 'kind': {**string(100), 'minLength': 1},
+            'reportedState': {'enum': ['active', 'unknown', 'reaped', 'observed_absent']},
+            'evidenceReference': {**string(2000), 'minLength': 1}}, [*required, 'resourceId', 'kind', 'reportedState', 'evidenceReference'])),
         'workspace.work.link': ('Owner links an existing same-workspace execution or reviewer without enrolling, starting or granting it authority. Links are not claims.', schema({**target,
             'linkedSessionId': string(200), 'role': {'enum': ['executor', 'reviewer']},
             'candidate': candidate, 'taskId': string(200), 'claimId': string(200)}, [*required, 'linkedSessionId', 'role', 'candidate'])),
@@ -59,6 +63,25 @@ def _qualification(work, actor, item, args):
     collection = receipt.get('result', {})
     if receipt.get('commandAction') != 'integration.collect' or collection.get('sessionId') != actor['id']:
         work.error('Use this verifier root\'s exact retained integration collection.', 403)
+    revised = item['promiseRevisedAt']
+    promise_row = work.db.execute('SELECT rowid FROM commands WHERE id=?', (item['promiseEventRef'],)).fetchone()
+    collection_row = work.db.execute('SELECT rowid FROM commands WHERE id=?', (identity,)).fetchone()
+    if not promise_row or not collection_row or collection_row[0] <= promise_row[0]:
+        work.error('The collection predates the current retained promise event.')
+    if not isinstance(collection.get('capturedAt'), (int, float)) or collection['capturedAt'] < revised:
+        work.error('The check receipt predates the current promise; retain it as an old report, not current verification.')
+    validation_ids = collection.get('validationIds', [])
+    if not validation_ids:
+        work.error('A check collection needs its exact retained validation invocations.')
+    for validation_id in validation_ids:
+        validation = work.receipts.receipt(validation_id)
+        run = validation.get('result', {})
+        run_row = work.db.execute('SELECT rowid FROM commands WHERE id=?', (validation_id,)).fetchone()
+        if (validation.get('commandAction') != 'integration.validate' or run.get('sessionId') != actor['id']
+                or run.get('captureId') != collection.get('captureId')
+                or not run_row or run_row[0] <= promise_row[0]
+                or not isinstance(run.get('capturedAt'), (int, float)) or run['capturedAt'] < revised):
+            work.error('The executed validation was not bound after this promise revision.')
     repositories = collection.get('repositories', [])
     matches = [r for r in repositories if r.get('resultingSource', {}).get('head') == args['candidate']]
     if len(matches) != 1:
@@ -91,7 +114,23 @@ def mutate(work, verb, item, args, actor, origin, workspace):
     extra = {}
     if verb in {'link', 'disposition'} and not owner:
         work.error('Only the accountable Work owner can change responsibility or disposition.', 403)
-    if verb == 'link':
+    if verb == 'resource':
+        if not owner and not any(l['sessionId'] == actor['id'] and _link_current(work, l, workspace) for l in item.get('links', [])):
+            work.error('Resource reports belong to the accountable or linked current owner.', 403)
+        resources = item.setdefault('resources', [])
+        match = next((i for i, r in enumerate(resources) if r['resourceId'] == args['resourceId']
+                      and r['ownerSessionId'] == actor['id']), None)
+        if match is None and len(resources) >= 32:
+            work.error('The bounded resource-reference capacity is reached; no prior evidence was discarded.', 429)
+        resource = {key: args[key] for key in ('resourceId', 'kind', 'reportedState', 'evidenceReference')}
+        resource.update(ownerSessionId=actor['id'], recordedAt=time.time(), attribution='owner_report',
+                        independentlyVerified=False)
+        if match is None:
+            resources.append(resource)
+        else:
+            resources[match] = resource
+        extra['resource'] = copy.deepcopy(resource)
+    elif verb == 'link':
         if item['disposition'] != 'open':
             work.error('Reopen closed Work explicitly before linking execution.')
         row = work.service._session(args['linkedSessionId'], hydrate=False)
@@ -123,7 +162,8 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         links.append(link)
         if args['role'] == 'executor' and item.get('candidate') != args['candidate']:
             item.update(candidate=args['candidate'], verification='not_verified', criterionEvidence={},
-                        humanDecision='not_recorded')
+                        humanDecision='not_recorded', humanDecisionSequence=0,
+                        latestOutcome='not_run', execution='not_started')
         extra['link'] = copy.deepcopy(link)
     elif verb == 'report':
         event_promise = args['promiseRevision']
@@ -150,6 +190,7 @@ def mutate(work, verb, item, args, actor, origin, workspace):
                 if args['outcome'] in {'failed', 'unknown', 'not_run'}:
                     item['verification'] = 'not_verified'
                     item['criterionEvidence'] = {}
+                    item['counterevidenceSequence'] = item['eventCount'] + 1
                 elif qualification != 'participant_report':
                     checks = item.setdefault('criterionEvidence', {})
                     for criterion in args['criteria']:
@@ -165,6 +206,7 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         if args['promiseRevision'] != item['promiseRevision'] or args['candidate'] != item.get('candidate'):
             work.error('Human decision must name the current exact promise and candidate.')
         item['humanDecision'] = args['decision']
+        item['humanDecisionSequence'] = item['eventCount'] + 1
         extra['decision'] = {key: args[key] for key in ('decision', 'candidate', 'promiseRevision')}
     elif verb == 'disposition':
         if not args['reason'].strip():
@@ -174,7 +216,9 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         if args['disposition'] == 'closed':
             if args['basis'] == 'reopened':
                 work.error('Closing needs a closure basis.', 400)
-            if args['basis'] == 'satisfied' and item['verification'] != 'independent_checks_passed' and item['humanDecision'] != 'accepted':
+            accepted_current = (item['humanDecision'] == 'accepted'
+                                and item.get('humanDecisionSequence', 0) > item.get('counterevidenceSequence', 0))
+            if args['basis'] == 'satisfied' and item['verification'] != 'independent_checks_passed' and not accepted_current:
                 work.error('Satisfied closure requires qualified criteria or an actual human acceptance decision.')
             if args['basis'] == 'satisfied' and (work.blocked_by(item) or item.get('blockedReason')):
                 work.error('Blocked dependencies must be resolved before satisfied closure.')
@@ -186,7 +230,8 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         item['dispositionReason'] = args['reason']
         item['dispositionBasis'] = args['basis']
         if args['disposition'] == 'open':
-            item.update(verification='not_verified', criterionEvidence={}, humanDecision='not_recorded')
+            item.update(verification='not_verified', criterionEvidence={}, humanDecision='not_recorded',
+                        humanDecisionSequence=0)
     else:
         work.error('Unsupported Work mutation.', 400)
     item.update(revision=item['revision'] + 1, eventCount=item['eventCount'] + 1, updatedAt=time.time())

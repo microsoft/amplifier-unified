@@ -43,8 +43,28 @@ def observe(work, session, message):
            'workspace': session.get('workspace'), 'messageId': message['id'],
            'sourceSha256': hashlib.sha256(message.get('text', '').encode()).hexdigest(),
            'inputOrigin': message['inputOrigin'], 'observedAt': time.time()}
-    if not work.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
-        work.receipts.insert(identity, fingerprint(row), row)
+    # Queue only until the existing source-session save commits. Do not leave
+    # uncommitted facts on the shared SQLite connection for an unrelated writer.
+    work.pending_input_facts[identity] = (row, message)
+
+
+def stage_saved_inputs(work, sessions, admitted):
+    staged = []
+    for identity, (row, message) in list(work.pending_input_facts.items()):
+        if row['sessionId'] not in admitted:
+            continue
+        session = sessions.get(row['sessionId'])
+        if session is None or not any(m is message for m in session.get('messages', [])):
+            continue
+        if not work.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
+            work.receipts.insert(identity, fingerprint(row), row)
+        staged.append(identity)
+    return staged
+
+
+def acknowledge_saved_inputs(work, identities):
+    for identity in identities:
+        work.pending_input_facts.pop(identity, None)
 
 
 def mapped(work, captured, item):
@@ -80,7 +100,8 @@ def read(work, workspace, args):
         if not isinstance(cursor, list) or len(cursor) != 4 or cursor[:3] != [workspace['id'], root, version] or not isinstance(cursor[3], str):
             work.error('Capture coverage changed; refresh its bounded page.')
         after_id = cursor[3]
-    unresolved = " NOT EXISTS (SELECT 1 FROM commands r WHERE json_extract(r.receipt,'$.commandAction')=? AND json_extract(r.receipt,'$.inputId')=i.id AND json_extract(r.receipt,'$.sourceSha256')=json_extract(i.receipt,'$.sourceSha256') AND json_extract(r.receipt,'$.disposition') IN ('mapped','ordinary_conversation'))"
+    latest = "(SELECT json_extract(r.receipt,'$.disposition') FROM commands r WHERE json_extract(r.receipt,'$.commandAction')=? AND json_extract(r.receipt,'$.inputId')=i.id AND json_extract(r.receipt,'$.sourceSha256')=json_extract(i.receipt,'$.sourceSha256') ORDER BY r.rowid DESC LIMIT 1)"
+    unresolved = "coalesce(" + latest + ",'unreviewed') NOT IN ('mapped','ordinary_conversation')"
     total = work.db.execute('SELECT count(*) FROM commands i WHERE ' + where, params).fetchone()[0]
     remaining = work.db.execute('SELECT count(*) FROM commands i WHERE ' + where + ' AND ' + unresolved, [*params, REVIEW]).fetchone()[0]
     limit = args.get('limit', 20)
@@ -91,6 +112,9 @@ def read(work, workspace, args):
         item.pop('commandAction', None)
         item.pop('workspace', None)
         item['readRef'] = {'action': 'coordination.read', 'args': {'sessionId': item['sessionId'], 'messageId': item['messageId']}}
+        review = work.db.execute("SELECT receipt FROM commands WHERE json_extract(receipt,'$.commandAction')=? "
+            "AND json_extract(receipt,'$.inputId')=? ORDER BY rowid DESC LIMIT 1", (REVIEW, item['id'])).fetchone()
+        item['reviewDisposition'] = json.loads(review[0])['disposition'] if review else 'unreviewed'
     return {'observedInputs': total, 'unreviewedInputs': remaining, 'items': items,
             'truncated': len(rows) > limit,
             'nextAfter': _encode([workspace['id'], root, version, items[-1]['id']]) if len(rows) > limit else None,

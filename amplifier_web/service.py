@@ -1001,6 +1001,10 @@ class AppService:
         # Private client acknowledgements and SQLite overlays become current
         # only after commit. A failed transaction retains all retry scopes.
         try:
+            staged_work_inputs = []
+            if getattr(self, 'workspace_work', None):
+                from .workspace_work_coverage import stage_saved_inputs
+                staged_work_inputs = stage_saved_inputs(self.workspace_work, admitted_index, admitted_ids)
             with self.performance_diagnostics.measure('state.serialize', synchronous=True):
                 normalize_state(normalized, self.db, undo=normalization_undo)
                 saved = persist(self.data_dir, self._state, pending_views,
@@ -1024,6 +1028,9 @@ class AppService:
                                 deleted=(admitted_ids - pending_references.keys()) | deleted_ids)
             self.directory.finish_migration()
             self.db.commit()
+            if getattr(self, 'workspace_work', None):
+                from .workspace_work_coverage import acknowledge_saved_inputs
+                acknowledge_saved_inputs(self.workspace_work, staged_work_inputs)
         except BaseException:
             self.db.rollback()
             for record, key, value in reversed(normalization_undo):
