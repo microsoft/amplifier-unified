@@ -708,3 +708,155 @@ async def test_attention_retains_counterevidence_after_unverified_pass(app):
         'workspaceId': workspace_id(app, owner), 'filter': 'attention'}))['result']
     assert page['total'] == 1 and page['items'][0]['id'] == item['id']
     assert not page['items'][0]['humanDecisionCurrent']
+
+
+def retained_check(app, actor, candidate, name, *, validation=None, status='passed'):
+    """Synthetic canonical association fixture, never real acceptance evidence."""
+    validation = validation or name + '-validation'
+    if not app.db.execute('SELECT 1 FROM commands WHERE id=?', (validation,)).fetchone():
+        app.collaboration.insert(validation, 'fixture', {
+            'commandAction': 'integration.validate', 'result': {
+                'sessionId': actor['id'], 'captureId': 'synthetic-capture', 'capturedAt': time.time()}})
+    app.collaboration.insert(name, 'fixture', {'commandAction': 'integration.collect', 'result': {
+        'id': name, 'sessionId': actor['id'], 'captureId': 'synthetic-capture',
+        'capturedAt': time.time(), 'validationIds': [validation],
+        'status': status, 'candidateStatus': 'matched',
+        'repositories': [{'status': status, 'candidateStatus': 'matched',
+            'resultingSource': {'head': candidate, 'dirty': False},
+            'operation': {'state': 'completed', 'returncode': 0 if status == 'passed' else 1},
+            'artifacts': [{'status': 'retained', 'sha256': 'c' * 64, 'outputId': name + '-output'}]}]}})
+    app.db.commit()
+    return name
+
+
+async def linked_check_subject(app):
+    owner, reviewer = app.state['sessions']
+    item = (await create(app, owner))['result']['item']
+    candidate = 'b' * 40
+    for role, actor in [('executor', owner), ('reviewer', reviewer)]:
+        item = (await change_work(app, owner, 'link', item, 'link-' + role,
+            linkedSessionId=actor['id'], role=role, candidate=candidate))['result']['item']
+    await generation(app, reviewer, 'reviewer-turn', ['review-input'])
+    return owner, reviewer, item, candidate
+
+
+@pytest.mark.parametrize('counterevidence', ['failed', 'unknown', 'not_run'])
+async def test_old_check_cannot_overwrite_later_counterevidence(app, counterevidence):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    check = retained_check(app, reviewer, candidate, 'old-independent-check')
+    item = (await change_work(app, reviewer, 'report', item, 'first-check',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Original check.',
+        criteria=['retained'], checkReceiptId=check))['result']['item']
+    assert item['verification'] == 'independent_checks_passed'
+    item = (await change_work(app, owner, 'report', item, 'later-counterevidence',
+        promiseRevision=1, candidate=candidate, outcome=counterevidence,
+        report='New counterevidence.', criteria=['retained']))['result']['item']
+    with pytest.raises(AppError, match='predates|boundary'):
+        await change_work(app, reviewer, 'report', item, 're-report-old-check',
+            promiseRevision=1, candidate=candidate, outcome='passed', report='Old proof again.',
+            criteria=['retained'], checkReceiptId=check)
+    stale_run = retained_check(app, reviewer, candidate, 'new-collection-old-validation',
+                               validation='old-independent-check-validation')
+    with pytest.raises(AppError, match='validation|boundary'):
+        await change_work(app, reviewer, 'report', item, 'new-collection-old-check',
+            promiseRevision=1, candidate=candidate, outcome='passed', report='Old validation again.',
+            criteria=['retained'], checkReceiptId=stale_run)
+    assert (await read(app, owner, item['id']))['item']['verification'] == 'not_verified'
+    with pytest.raises(AppError, match='closure'):
+        await change_work(app, owner, 'disposition', item, 'close-with-old-check',
+            disposition='closed', basis='satisfied', reason='Old evidence is insufficient.')
+    fresh = retained_check(app, reviewer, candidate, 'fresh-independent-check')
+    item = (await change_work(app, reviewer, 'report', item, 'fresh-check',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Fresh check after counterevidence.',
+        criteria=['retained'], checkReceiptId=fresh))['result']['item']
+    assert item['verification'] == 'independent_checks_passed'
+    closed = await change_work(app, owner, 'disposition', item, 'close-with-fresh-check',
+        disposition='closed', basis='satisfied', reason='Fresh check covers current criteria.')
+    assert closed['result']['item']['disposition'] == 'closed'
+
+
+async def test_old_promise_collection_retained_without_current_qualification(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    check = retained_check(app, reviewer, candidate, 'old-promise-collection')
+    item = (await revise(app, owner, item, 'new-promise',
+        source=source(app, owner, 'Require two cold reopens.'),
+        criteria=[{'id': 'retained', 'text': 'Two cold reopens.'}]))['result']['item']
+    result = await change_work(app, reviewer, 'report', item, 'historical-check',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Old promise only.',
+        criteria=['retained'], checkReceiptId=check)
+    assert result['result']['item']['verification'] == 'not_verified'
+    history = (await app.dispatch('workspace.work.history', {
+        'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
+    evidence = history[-1]['evidence']
+    assert evidence['qualification'] == 'historical_check'
+    assert evidence['checkReceiptId'] == check and history[-1]['promiseRevision'] == 1
+
+
+async def test_missing_dependency_stays_visible_as_blocked(app):
+    owner = app.state['sessions'][0]
+    parent = (await create(app, owner, command='parent'))['result']['item']
+    item = (await create(app, owner, command='dependent', intent='dependent',
+                         dependsOn=[parent['id']]))['result']['item']
+    app.db.execute('DELETE FROM commands WHERE id=?', (parent['id'],))
+    app.db.commit()  # Synthetic retention fault, not a product deletion action.
+    page = (await app.dispatch('workspace.work.list', {
+        'workspaceId': workspace_id(app, owner), 'filter': 'attention'}))['result']
+    assert page['total'] == 1 and page['items'][0]['id'] == item['id']
+    assert page['items'][0]['blockedBy'] == [parent['id']]
+    assert (await read(app, owner, item['id']))['item']['disposition'] == 'open'
+
+
+async def test_scoped_source_save_matches_exact_message_not_python_object(app):
+    owner, other = app.state['sessions']
+    app._message(owner, 'user', 'Save this source through a copied projection.', inputOrigin='ui')
+    app._message(other, 'user', 'This other source has not been saved.', inputOrigin='ui')
+    owner['messages'] = copy.deepcopy(owner['messages'])
+    app._save(session_ids={owner['id']}, record_only=True)
+    coverage = (await app.dispatch('workspace.work.coverage', {
+        'workspaceId': workspace_id(app, owner)}))['result']
+    assert coverage['observedInputs'] == 1
+    assert coverage['items'][0]['sessionId'] == owner['id']
+    assert len(app.workspace_work.pending_input_facts) == 1
+
+
+async def test_pending_coverage_does_not_retain_discarded_message_body(app):
+    owner = app.state['sessions'][0]
+    message = app._message(owner, 'user', 'Discarded source text.', inputOrigin='ui')
+    pending = list(app.workspace_work.pending_input_facts.values())
+    assert all(isinstance(row, dict) and 'text' not in row for row in pending)
+    owner['messages'].remove(message)
+    app._save(session_ids={owner['id']}, record_only=True)
+    assert not app.workspace_work.pending_input_facts
+    assert (await app.dispatch('workspace.work.coverage', {
+        'workspaceId': workspace_id(app, owner)}))['result']['observedInputs'] == 0
+
+
+async def test_not_reported_is_distinct_from_explicit_not_run(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    assert item['latestOutcome'] == 'not_reported' and not item['attentionReasons']
+    item = (await change_work(app, owner, 'report', item, 'not-run-report',
+        promiseRevision=1, candidate='a' * 40, outcome='not_run',
+        report='The requested test could not run.', criteria=['retained']))['result']['item']
+    assert item['latestOutcome'] == 'not_run' and 'not_run' in item['attentionReasons']
+
+
+async def test_executor_check_is_not_independent_or_closable(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    check = retained_check(app, owner, candidate, 'builder-check')
+    item = (await change_work(app, owner, 'report', item, 'owner-check-report',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Builder check.',
+        criteria=['retained'], checkReceiptId=check))['result']['item']
+    assert item['verification'] == 'owner_checks_recorded'
+    with pytest.raises(AppError, match='closure'):
+        await change_work(app, owner, 'disposition', item, 'owner-check-close',
+            disposition='closed', basis='satisfied', reason='Builder cannot independently verify itself.')
+
+
+async def test_failed_canonical_collection_cannot_support_passed_report(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    check = retained_check(app, reviewer, candidate, 'failed-check', status='failed')
+    with pytest.raises(AppError, match='Passing verification'):
+        await change_work(app, reviewer, 'report', item, 'false-pass',
+            promiseRevision=1, candidate=candidate, outcome='passed', report='Contradict collection.',
+            criteria=['retained'], checkReceiptId=check)
