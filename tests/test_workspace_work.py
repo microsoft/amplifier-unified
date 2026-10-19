@@ -4,6 +4,7 @@ Test-first contract for workspace.work. Synthetic records only. Runtime acceptan
 requires the separately registered persisted browser/installed-candidate journey.
 """
 import asyncio
+import base64
 import copy
 import hashlib
 import json
@@ -205,3 +206,56 @@ async def test_context_marks_overflow_without_copying_source_or_correction_bodie
     assert len(result['items']) <= 20
     assert b'Private source body' not in encoded
     assert all(row['id'] and row['readRef'] and row['promiseRevision'] for row in result['items'])
+
+
+@pytest.mark.parametrize('verb', ['list', 'read', 'source', 'history', 'context'])
+async def test_child_cannot_borrow_root_for_passive_work_reads(app, verb):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    detail = await read(app, owner, item['id'])
+    args = {'workspaceId': workspace_id(app, owner)}
+    if verb in {'read', 'source', 'history'}:
+        args['id'] = item['id']
+    if verb == 'source':
+        args['sourceId'] = detail['item']['originalSourceRef']
+    if verb == 'context':
+        args = {'sessionId': owner['id']}
+    with pytest.raises(AppError, match='child'):
+        await app.app_bridge('dispatch', {'action': 'workspace.work.' + verb, 'args': args,
+            '_runtimeSessionId': 'native-child', '_generationId': owner['collaborationGeneration']['id']}, owner['id'])
+
+
+@pytest.mark.parametrize('sequence', [-1, 2**63, True, '1'])
+async def test_history_cursor_range_is_a_bounded_domain_error(app, sequence):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    wid = workspace_id(app, owner)
+    cursor = base64.urlsafe_b64encode(json.dumps([wid, item['id'], sequence]).encode()).decode()
+    with pytest.raises(AppError, match='cursor'):
+        await app.dispatch('workspace.work.history', {'workspaceId': wid, 'id': item['id'], 'after': cursor})
+
+
+@pytest.mark.parametrize('native_input,retained_input', [('peer-input', 'human-input'), (None, 'human-input')])
+async def test_native_source_never_inherits_human_origin_from_index_only(app, monkeypatch, native_input, retained_input):
+    owner = app.state['sessions'][0]
+    owner['nativeProject'] = 'synthetic-native-project'
+    app._message(owner, 'user', 'Same text does not prove identity.', inputOrigin='ui',
+                 inputId=retained_input, nativeIndex=7)
+    native = {'id': 'native-seven', 'role': 'user', 'text': 'Same text does not prove identity.',
+              'nativeInputId': native_input, 'nativeIndex': 7}
+    import amplifier_web.automatic_history as history
+    monkeypatch.setattr(history, 'read_transcript', lambda *a, **k: {'messages': [native]})
+    async def no_load(*a, **k):
+        return None
+    monkeypatch.setattr(app.history, 'ensure_loaded', no_load)
+    with pytest.raises(AppError):
+        await create(app, owner, {'sessionId': owner['id'], 'messageId': 'native-seven'})
+
+
+async def test_stop_blocks_mutation_but_not_passive_read(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    await app.dispatch('conversation.stop', {'sessionId': owner['id']}, command_id='stop-owner')
+    assert (await read(app, owner, item['id']))['item']['disposition'] == 'open'
+    with pytest.raises(AppError):
+        await revise(app, owner, item, 'after-stop', nextAction='Resume without authority')

@@ -101,6 +101,10 @@ class WorkspaceWork:
             self.error('Work requires an available registered workspace.', 404)
         if origin not in {'ui', 'user'} and (not owner or owner['workspace'] != workspace['path']):
             self.error('Work is outside the calling workspace.', 403)
+        if origin not in {'ui', 'user'}:
+            # Passive reads do not need an active generation, but a delegated
+            # child cannot borrow the transport's root identity.
+            self.receipts.source({}, origin, caller, hydrate=False)
         return workspace
 
     def actor(self, args, origin, caller, workspace):
@@ -202,7 +206,9 @@ class WorkspaceWork:
         after = 0
         if args.get('after'):
             cursor = _decode(args['after'])
-            if not isinstance(cursor, list) or len(cursor) != 3 or cursor[:2] != [workspace['id'], item['id']] or type(cursor[2]) is not int:
+            if (not isinstance(cursor, list) or len(cursor) != 3
+                    or cursor[:2] != [workspace['id'], item['id']]
+                    or type(cursor[2]) is not int or not 0 <= cursor[2] <= item['eventCount']):
                 self.error('History cursor belongs to another Work item.')
             after = cursor[2]
         rows = self.db.execute("""SELECT receipt FROM commands WHERE json_extract(receipt,'$.commandAction')=?
@@ -227,7 +233,7 @@ class WorkspaceWork:
         require(self.service, actor['id'], target['id'], 'workspace')
         if target.get('workspace') != workspace['path']:
             self.error('Source changed workspace during capture.', 403)
-        message = self.receipts.resolve_message(target, reference['messageId'])
+        message = self.receipts.resolve_message(target, reference['messageId'], strict_source=True)
         if not message or not isinstance(message.get('text'), str):
             self.error('The exact original source is unavailable.', 404)
         text = message['text']

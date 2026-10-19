@@ -476,7 +476,7 @@ class Collaboration:
                 and self.service._session(sid, hydrate=False)['workspace'] != reader['workspace']):
             self.error("This result is outside the caller's request and workspace scope.")
 
-    def resolve_message(self, session, identity):
+    def resolve_message(self, session, identity, *, strict_source=False):
         def correlated(row):
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
                            if item["messageId"] == identity and item["nativeIndex"] == row.get("nativeIndex")), None)
@@ -501,6 +501,15 @@ class Collaboration:
             if len(candidates) != 1:
                 self.error("The exact saved message cannot be reconciled unambiguously.", 409)
             retained = candidates[0]
+            if strict_source and (
+                    native.get("nativeInputId") and retained.get("inputId")
+                    and native["nativeInputId"] != retained["inputId"]
+                    or retained.get("text") != native.get("text")):
+                self.error("The retained source conflicts with its exact native input.", 409)
+            if (strict_source and native.get("role") == "user"
+                    and not (native.get("nativeInputId") and retained.get("inputId") == native["nativeInputId"])):
+                # An index alone is not host input provenance for accepted Work.
+                retained = {**retained, "inputOrigin": "unknown"}
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
                            if item["messageId"] == identity and item["nativeIndex"] == native.get("nativeIndex")), None)
             if (retained.get("role") != native.get("role")
