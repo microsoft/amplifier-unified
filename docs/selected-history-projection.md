@@ -461,3 +461,181 @@ The host/client integration distinguishes window availability from the complete
 reader receipt above, keeps unproven observations separate, and preserves live
 accounting and explicit complete-read APIs. Primitive tests alone do not qualify
 integrated chat opening or complete historical Work; each needs its own proof.
+
+## Durability and inline-read candidate — qualification pending
+
+An explicit, joinable root proof now joins the existing Diagnostics flush lock
+before its first source/index baseline. It drains the currently queued batch once
+through the existing writer and checks storage-ready/error, configuration-error,
+stopping and pending state while still holding that lock. A normal `_flush`
+return alone is not successful persistence. No failed batch is reconstructed or
+requeued. A reader-only owner without a Diagnostics writer still has to pass the
+worker's independent source and attestation checks.
+
+Lock waiting, persistence, page work and publication share the same 20-second
+aggregate deadline. A timed-out physical writer remains owned in the existing
+draining set; a waiter that acquires the writer lock only after expiry cannot
+start another drain. Canonical owner, source and original epoch are rechecked
+after the await. A legitimate publication during readiness still refuses the
+stale operation; the client may explicitly reopen, but the host does not retry
+until success or silently adopt a newer fence. Failed readiness produces an
+incomplete proof and noncurrent, unavailable display. Passive state, sync and
+field requests do not flush, discover or reopen proofs.
+
+Latest resident node requests classify only the existing bounded group slice.
+Inline-only rows retain the established client/group/position/version route
+without a mandatory canonical proof. Metadata-only observer or recorded-field
+rows still require the exact canonical proof route. This is decided before a
+lookup, never as a fallback from a failed canonical field or weaker ownership
+comparison. Existing field, cursor, sync and post-await checks are unchanged.
+
+The synthetic ordinary-detail fixture now establishes valid CI metadata before
+its authored event file becomes visible, following the existing metadata format
+and append-lock contract without appending fake ownership records or flushing.
+The test observer records only the first persistence exception's allowlisted
+class and innermost repository function/line. The earlier diagnostic did not
+capture that exception, so the fixture hazard is not a claimed measured cause.
+
+These source changes and their added controls have not executed. In particular,
+joining persistence does **not** resolve later index-revision expiry. The physical
+DB/WAL fence remains intact; the proposed authority contract below is separate
+and not implemented.
+
+## PROPOSED index-authority contract — NOT RATIFIED
+
+**Contract plan only. No schema, writer or reader change is admitted by this
+section. Retain the existing source and DB/WAL physical fences pending review
+and qualification.** The reported `5e38b29e7` diagnostic observed an index
+mismatch at large-cold request 124, input offset zero, with six supporting pages,
+owner and epoch still matching and two persistence returns. This was the first
+chunk of that field, not the first field overall. The changed physical stamp
+component and affected authority rows remain unknown; this does not establish
+that a checkpoint or an unrelated write caused the refusal.
+
+### Minimal authority and mutation rules
+
+Propose metadata in the **existing diagnostics `events.sqlite3` only**, not a
+new store or payload archive. A revision proves currentness, never receipt
+authenticity: retain `_host_receipts`' exact event/stream/session/workspace and
+path/offset/length/hash/event-ID match, canonical source checks, complete-root
+predicate, owner fences and supporting-page checks.
+
+| Proposed metadata | Key and invariant |
+| --- | --- |
+| `binding_meta(singleton, schema, epoch)` | One row: `singleton=1`, `schema=1`, `epoch` a non-null random 16-byte BLOB issued by the trusted writer. New installation, rebuild or authority-schema migration issues a new epoch atomically; never infer one from record counts or timestamps. |
+| `binding_owner(workspace, session, revision)` | Composite primary key of exact, non-null TEXT values using BINARY comparison; session is the canonical capture identity used by the receipt query, not a browser alias or call ID. `revision` is a positive SQLite INTEGER, with explicit type/overflow checks. A missing owner means revision zero only within a validated epoch/snapshot. |
+
+The private dependency is `(physical DB instance, schema fingerprint, epoch,
+workspace, session, revision)`, in addition to the existing canonical owner,
+source and window dependencies. The physical instance includes the trusted
+resolved path and device/inode binding; epoch equality alone cannot identify it.
+Schema validation includes the actual table, unique-index and trigger definitions,
+not only `user_version` or a declared schema number.
+
+All successful `records` mutations must change authority **in their own SQL
+transaction**, including direct SQL outside `Diagnostics._persist`:
+
+- Database triggers cover INSERT, UPDATE and DELETE. INSERT advances the new
+  owner; DELETE advances the old owner; a changed UPDATE advances each distinct
+  old/new owner. Compare every stored column, including `seq`, `id`, `at` and
+  receipt data, with null-safe comparisons; a byte/value-identical UPDATE is a
+  no-op. Do not filter triggers to currently recognized event types.
+- Keep owner rows as tombstones after the last receipt is deleted. Delete/reinsert
+  and A→B→A ownership changes cannot recover an old revision. An aborted statement
+  or rolled-back transaction cannot publish a revision. Overflow must abort,
+  never wrap or promote to REAL. Null/unkeyable legacy owners require explicit
+  migration disposition, not silent exclusion.
+- Cover startup legacy-reference UPDATEs, capture repair/replacement DELETEs and
+  INSERTs, retention, and `managed_deletion`'s independent direct SQL. Install and
+  seed metadata/triggers under one explicit migration transaction **before** any
+  reference rewrite; do not assume the current `executescript`/context-manager
+  sequence supplies that atomicity. Table rebuilds rotate the epoch.
+- **Conflict policy:** reject conflicting INSERTs and conflicting key-changing
+  UPDATEs in BEFORE triggers using `RAISE(ABORT)`, before implicit deletion can
+  occur. This deliberately also rejects conflicting `OR IGNORE` and
+  `ON CONFLICT DO UPDATE`; duplicates must become an explicit transactional
+  existence check plus INSERT/UPDATE. SQLite REPLACE can delete a different
+  owner without DELETE triggers when `recursive_triggers` is off; setting that
+  PRAGMA on one connection is not coverage for another. Qualify both settings
+  and every `id`/`seq` conflict, including UPDATE OR REPLACE. Revision bumps use
+  guarded UPDATE then INSERT-if-absent, not a nested conflict clause that an outer
+  OR policy can override. Invalid metadata/owners and overflow require explicit
+  `RAISE(ABORT)`; a CHECK silently skipped by OR IGNORE is not atomic coverage.
+- `deliveries`, outbox counters, capture scan offsets and no-op maintenance do
+  not advance receipt-owner revisions. Record changes they accompany still do.
+  Never advance revisions from a timer, flush invocation/return, pending count,
+  or periodic summary. Tombstone pruning requires an epoch rollover and
+  invalidation of all old proofs, not deletion followed by revision-one reuse.
+
+This conflict policy requires a reviewed change to `capture_index`'s duplicate
+handling; it is not permission to edit that writer now. A smaller policy must
+demonstrate equivalent coverage with raw SQL and recursive triggers disabled.
+`MAX(seq)`, row counts and hashes of currently present receipts miss revoke/ABA;
+connection-local `PRAGMA data_version` is database-wide and cannot be compared
+across newly opened connections. None alone supplies this owner-scoped contract.
+
+### Fresh-read protocol and physical continuity
+
+An explicit canonical read stays within its existing aggregate deadline and
+budgets. Passive snapshots do no new IO; ordinary raw pages remain independent
+of index authority. Missing metadata, corrupt schema or unavailable validation
+refuses binding; it never grants weaker association or starts a retry loop.
+
+1. Resolve the host-owned DB path and validate regular-file/no-symlink physical
+   identity. Initialize the read-only pager as today, discard its snapshot, then
+   establish a new baseline. Retain physical checks for both DB and WAL.
+2. In a fresh read transaction, read epoch/schema/owner revision and the bounded
+   receipt rows from **one snapshot**. Bracket queries with physical checks.
+   A second revision SELECT inside that same transaction cannot detect a
+   concurrent WAL commit and is not fresh validation.
+3. End the authority transaction and close its connection. In a fresh transaction
+   on a fresh read-only connection, validate physical instance, schema, epoch and owner revision
+   again; close and check physical state again. Only unchanged authority can
+   retain the original receipt result. Never relabel old rows with a newer token.
+   Complete misses carry the same negative dependency, including revision zero.
+4. Bracket host acceptance/publication with fresh validation; repeat before and
+   after every awaited canonical field read, along with source, owner,
+   invalidation and support-page checks. All cumulative proof pages share one token.
+   A mismatch discards the candidate/chunk; prior successful fields do not
+   authorize a later field. Post-publication invalidation cannot repair an
+   already-delivered stale claim; the publication ordering constraint below
+   must be resolved, not hidden by a later successful check.
+
+**Do not replace the physical fence with counter equality.** DB replacement,
+restore or epoch/schema loss invalidates old references even if copied rows and
+counters are equal. WAL truncation/removal, checkpoint and maintenance may be
+authority-neutral only after physical continuity and fresh authority are proven;
+an unexplained transition still refuses. Unrelated-owner writes should not
+expire a proof in the qualified design, but neither their existence nor a
+successful flush identifies the cause of the measured mismatch.
+
+Admission remains blocked on two enforcement details: a copied old epoch and
+counter cannot detect same-inode restore, and validating today's trigger text
+cannot detect drop-trigger/mutate/recreate sabotage between reads. Trusted
+schema/restore control or an independently validated continuity mechanism must
+close those gaps; otherwise retain the conservative physical refusal. Likewise,
+fresh reads alone leave a commit gap before publication: the final fresh check
+can define a linearization point, but a stronger current-at-publication claim
+needs enforced writer serialization, including direct SQL. A service lock or
+WAL read transaction alone is not that barrier. Review must fix this boundary
+and test commits on both sides of publication before admitting reader changes.
+
+### Discriminating checks required before admission — ALL UNRUN
+
+| Synthetic case | Required observation |
+| --- | --- |
+| Delete/reinsert identical receipt; owner A→B→A; change then restore receipt data | Old proof stays invalid despite identical final rows. Both old/new owners advance; last-row deletion keeps a tombstone. Rollback preserves the old token; overflow refuses the write. |
+| Other-owner INSERT/UPDATE/DELETE; no-op UPDATE, empty flush, delivery update and offset maintenance | Selected owner revision stays equal; qualified continuity preserves its proof. Same-owner receipt mutation invalidates it. Current physical-fence refusal is not a passing continuity result. |
+| Raw SQL retention/deletion, legacy migration and capture replacement | Every affected owner advances atomically with its records. Failed migration leaves the prior usable schema/token or explicit refusal, never partially trusted authority. Rebuild/compaction changes epoch. |
+| INSERT OR REPLACE, UPDATE OR REPLACE, OR IGNORE and UPSERT conflicts on `id` and `seq`, with recursive triggers ON and OFF | Conflicts abort without unnoticed deletion or partial authority change; explicit supported UPDATE/INSERT succeeds with correct old/new revisions. Outer conflict policies cannot suppress a failed revision bump or overflow guard. |
+| Checkpoint, WAL TRUNCATE/removal, atomic DB replacement and same-inode backup restore carrying identical epoch/revisions | Proven neutral maintenance can retain authority; replacement/restore cannot reuse a prior proof. Unknown physical continuity refuses. Test equal size/mtime and a still-open old connection, not just a changed filename. |
+| Missing/altered triggers, weakened uniqueness, metadata reset, drop/mutate/recreate schema | No accepted binding. A current-schema fingerprint alone is insufficient for the restored-schema case; failure to enforce this blocks physical-fence relaxation. |
+| Commits before/during query, at rollback/close, between fresh check and publication, and during field await | Reads never mix snapshots or publish a stale currentness claim under the reviewed publication boundary. Changed authority refuses the affected page/chunk; unrelated-owner commits exercise continuity rather than a weaker fallback. |
+| Missing-owner revision zero, later insertion; proof support eviction or canonical source/owner change with unchanged DB revision | Negative dependency becomes stale on insertion. Existing source/owner/support guards still refuse; unchanged counter cannot rescue a revoked reference. |
+
+**Recommendation:** review this metadata-only, trigger-enforced design, but keep
+the current physical fence until the continuity/publication boundary is resolved
+and qualified. Set a bounded tombstone/epoch-compaction and deletion-privacy policy
+before schema admission. No implementation, migration, database access, test or
+runtime pass is claimed here; the exact cause of the observed stamp change remains
+an investigation constraint, not a reason to weaken authority.
