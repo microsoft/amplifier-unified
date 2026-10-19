@@ -468,7 +468,8 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
             schema({'kind': {'const': 'workspace'}, 'workspaceId': string(200)}, ['kind', 'workspaceId']),
         ]}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
-    if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
+    if (_action != 'workspace.environments.removal.read'
+            and ('sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS)):
         _spec['properties']['nativeProject'] = string(4000)
 
 
@@ -1748,6 +1749,15 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
+        if action == 'workspace.environments.removal.read':
+            # Exact retained IDs only. General alias resolution can refresh
+            # history and admit a dormant owner before the passive read runs.
+            try:
+                validate(args, ACTION_DEFINITIONS[action][1])
+            except ValidationError as exc:
+                raise AppError(exc.message) from None
+            from .task_environments import dispatch as environment_dispatch
+            return await environment_dispatch(self, action, args, origin, caller_session_id, None)
         for key in ("sessionId", "id") if action in SESSION_ID_ACTIONS else ("sessionId",):
             if key == "sessionId" and args.get(key) is None and action in {
                     "canvas.visibility", "view.update", "attachment.add", "attachment.remove"}:
@@ -4614,6 +4624,11 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
+            if args['action'] == 'workspace.environments.removal.read':
+                # Do not infer nativeProject through _session: even hydrate=False
+                # admits cold owners. The read validates the exact transport root.
+                return await self.dispatch(args['action'], action_args, origin='agent',
+                    command_id=args.get('id'), include_state=False, caller_session_id=session_id)
             # Resolve native aliases before the existing caller-ownership checks;
             # aliases never authorize a different conversation.
             from .session_identity import resolve

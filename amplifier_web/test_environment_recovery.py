@@ -1,13 +1,137 @@
 """Explicit owner-scoped reconciliation; backend inspection never repeats effects."""
 from __future__ import annotations
 
+from contextlib import closing
+import json
+import os
 import re
 import sqlite3
+import stat
 import time
+import uuid
 
 from filelock import FileLock
 
 ACTION = 'workspace.environments.reconcile'
+
+
+def read_removal(app, args, origin, caller):
+    """Read one retained pair, never infer a historical binding or repair it.
+
+    No await or mutation admission occurs here. The existing physical lock and
+    a read-only ledger connection delimit the snapshot; duplicate reads do not
+    create operation records. A mutation grant is irrelevant to this read.
+    """
+    from . import task_resources as storage
+    from .collaboration import PRINCIPAL
+    from .service import AppError
+
+    def root_binding():
+        sid = args['sessionId']
+        if origin not in {'ui', 'user'} and sid != caller:
+            raise AppError('Removal inspection requires the recorded root owner.', 403)
+        fields = ('id', 'sessionKind', 'workspace', 'workingDirectory', 'executionRevision',
+                  'interruptionRevision', 'runtimeSessionId', 'nativeIdentity', 'nativeProject',
+                  'nativeParentId')
+        try:
+            source, = app._session_read_sources([sid], fields)
+            if (not isinstance(source, dict) or source.get('id') != sid or not isinstance(source.get('workspace'), str)
+                    or not source['workspace']
+                    or source.get('sessionKind') not in (None, 'root')
+                    or source.get('sessionKind') is None and source.get('nativeParentId')
+                    or any(k in source and (not isinstance(source[k], str) or not source[k])
+                           for k in ('runtimeSessionId', 'nativeIdentity', 'nativeProject', 'workingDirectory'))
+                    or any(k in source and (type(source[k]) is not int or source[k] < 0)
+                           for k in ('executionRevision', 'interruptionRevision'))):
+                raise ValueError('incomplete owner metadata')
+            # Local app roots legitimately start without native/placement fields.
+            # Keep absent fields absent in the snapshot, not inferred proof of
+            # revision zero. A native owner must supply its full placement facts.
+            if source.get('runtimeSessionId') or source.get('nativeIdentity'):
+                required = ('id', 'sessionKind', 'workspace', 'workingDirectory',
+                            'executionRevision', 'interruptionRevision')
+                if any(k not in source for k in required):
+                    raise ValueError('native placement metadata unavailable')
+                if not any(row['id'] == sid for row in app.state['sessions']):
+                    # Saved directory summaries default missing revisions to 0.
+                    # Confirm native-owner facts in the exact canonical record;
+                    # select only these scalars, never runtime/config/history.
+                    columns = ','.join(f"json_type(value,'$.{k}'),json_extract(value,'$.{k}')"
+                                       for k in required)
+                    saved = app.db.execute(f"SELECT {columns} FROM state_records "
+                                           "WHERE kind='session' AND id=?", (sid,)).fetchone()
+                    if saved is None or any(saved[2*i] != ('integer' if k.endswith('Revision') else 'text')
+                                            or saved[2*i+1] != source[k] for i, k in enumerate(required)):
+                        raise ValueError('native saved placement facts unavailable')
+        except (AppError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+            raise AppError('Removal inspection requires the recorded root owner.', 403) from None
+        principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or sid
+        workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
+        if (origin not in {'ui', 'user'} and PRINCIPAL.get() != principal
+                or not workspace or source['workspace'] != workspace['path']):
+            raise AppError('Removal inspection requires the recorded root owner.', 403)
+        return (principal, *((k in source, source.get(k)) for k in fields))
+
+    captured = root_binding()
+    sid, rid = args['sessionId'], args['id']
+    try:
+        import fcntl  # Same POSIX lock as the managed Linux environment owner.
+        if str(uuid.UUID(rid)) != rid:
+            raise ValueError('invalid resource identity')
+        folder = app.data_dir / 'workspace-resources'
+        target = folder / 'reservations.sqlite3'
+        if folder.is_symlink() or not stat.S_ISDIR(folder.stat().st_mode) or not stat.S_ISREG(target.lstat().st_mode):
+            raise ValueError('unavailable ledger')
+        # FileLock's acquire can create/truncate its file. Open the already-owned
+        # lock read-only instead; closing releases the same flock without writes.
+        descriptor = os.open(folder / ('environment-' + rid + '.lock'),
+                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, 'rb') as lock:
+            if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
+                raise ValueError('invalid lock')
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # storage.connect initializes tables/chmods even on a read. Reuse its
+            # exact row reader, but never its writable connection initializer.
+            with closing(sqlite3.connect(target.as_uri() + '?mode=ro', uri=True, timeout=0)) as db:
+                row = storage.get(db, sid, rid)
+                if (not isinstance(row, dict) or row.get('id') != rid or row.get('sessionId') != sid
+                        or row.get('workspaceId') != args['workspaceId']
+                        or row.get('kind') != 'test-environment'
+                        or row.get('owner') != {'sessionId': sid, 'principal': captured[0]}):
+                    raise AppError('Removal inspection requires the recorded root owner.', 403)
+                if type(row.get('revision')) is not int or row['revision'] != args['expectedRevision']:
+                    raise AppError('Removal inspection changed or is busy.', 409)
+                try:
+                    original = app.operations.requests.read(sid, args['originalRequestId'])
+                except ValueError:
+                    raise AppError('Original removal record is unavailable.', 404) from None
+                if (not isinstance(original, dict) or original.get('sessionId') != sid or original.get('requestId') != args['originalRequestId']
+                        or original.get('action') != 'workspace.environments.remove'
+                        or original.get('resourceId') not in (None, rid)):
+                    raise AppError('Original removal is not bound to this resource.', 409)
+                state = original.get('state')
+                if state not in ('admitting', 'running', 'completed', 'failed', 'outcome_unknown'):
+                    raise ValueError('unsupported retained state')
+                if (storage.get(db, sid, rid) != row
+                        or app.operations.requests.read(sid, args['originalRequestId']) != original
+                        or root_binding() != captured):
+                    raise AppError('Removal inspection changed or is busy.', 409)
+                # Even a matching cb5 resourceId lacks the immutable original
+                # admission and executor proof required for safe continuation.
+                result = {
+                    'version': 1, 'sessionId': sid, 'id': rid, 'revision': row['revision'],
+                    'original': {'requestId': args['originalRequestId'], 'state': state},
+                    'status': 'held',
+                    'code': 'original_binding_missing' if original.get('resourceId') is None
+                            else 'original_binding_unverified',
+                    'executor': 'unobserved', 'physical': 'not_observed',
+                    'continuationAvailable': False, 'riskDecisionAvailable': False,
+                }
+                if len(json.dumps(result).encode()) > 4096:
+                    raise ValueError('projection exceeds bound')
+                return result
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error, ImportError):
+        raise AppError('Removal inspection changed or is busy.', 409) from None
 
 
 def backend_identity(value):

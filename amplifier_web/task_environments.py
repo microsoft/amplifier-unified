@@ -47,6 +47,9 @@ def definitions(schema, string):
     return {
         **setup.definitions(schema, string),
         'workspace.environments.read': ('Inspect this task’s test environments, retained results and current backend availability. Does not launch, resume or replay work.', schema(scope)),
+        'workspace.environments.removal.read': ('Read this root’s exact retained removal binding at the current resource revision. Strictly passive: no backend probe, configuration lookup, repair, operation admission or continuation. Missing original evidence remains held.', schema({
+            **scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1},
+            'originalRequestId': {**string(200), 'minLength': 1}})),
         'workspace.environments.start': ('Copy this task’s current Git working area into one approved isolated test environment and prepare locked dependencies for the selected profile. No original writable mounts or injected credentials. Keep requestId stable; unknown launches never replay.', schema({**request, 'profileId': {'enum': [item['id'] for item in profiles.catalog()]}})),
         'workspace.environments.execute': ('Run an approved command in this task’s environment, retaining bounded output. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 300}}, [*owned, 'command'])),
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
@@ -227,6 +230,8 @@ def invoke(config, home, row, action, args):
                'operationId': row.get('launchOperationId'), 'universeId': row.get('universeId'),
                'dockerHost': config.get('dockerHost'), 'image': config.get('image'),
                'rootOwner': row.get('sessionId'),
+               'resourceId': row.get('id'), 'resourceRevision': row.get('revision'),
+               'admissionRevision': args.get('expectedRevision'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
                'jobId': args.get('jobId', args.get('requestId')),
                'profileId': row.get('profileId', PROFILE),
@@ -304,6 +309,50 @@ def confirmed_result(row, request):
             and isinstance(request.get('result'), dict))
 
 
+def require_resolved_removal(app, row, exclude_request_id=None):
+    """A new identity cannot escape any retained unresolved removal.
+
+    lastOperation can be a later stop/read; the bounded request-list page is not
+    the history. An unbound removal cannot be assigned to a resource after a
+    crash, so it holds this root only; another root's history cannot hold it.
+    """
+    journal = app.operations.requests.journal
+    with journal.lock:
+        found = journal.db.execute(
+            "SELECT id,value FROM operation_requests WHERE session_id=? "
+            "AND (json_extract(value,'$.resourceId')=? "
+            "OR COALESCE(json_type(value,'$.resourceId'),'null')!='text' "
+            "OR json_extract(value,'$.resourceId')='') "
+            "AND json_extract(value,'$.action')='workspace.environments.remove' "
+            "AND COALESCE(json_extract(value,'$.state'),'outcome_unknown') NOT IN ('completed','failed') "
+            "AND (? IS NULL OR id!=?) ORDER BY rowid LIMIT 1",
+            (row['sessionId'], row['id'], exclude_request_id, exclude_request_id)).fetchone()
+    if found:
+        raise ValueError('The original removal remains unresolved. Inspect its retained evidence; a new request cannot repeat it.')
+
+
+def begin_removal(app, row, action, args, actor):
+    """Serialize fresh admission with the physical owner without awaiting."""
+    lock = FileLock(str(app.data_dir / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
+    try:
+        lock.acquire()
+    except LockTimeout:
+        # Preserve existing concurrent-admission receipts: effect() will refuse
+        # under the same lock without modifying the active owner's resource.
+        return app.operations.requests.begin(row['sessionId'], action, args, actor)
+    try:
+        current = get(app.data_dir, row['sessionId'], row['id'])
+        if current['revision'] != args['expectedRevision']:
+            raise ValueError('The environment changed. Inspect its current revision.')
+        require_resolved_removal(app, current, args['requestId'])
+        request, fresh = app.operations.requests.begin(row['sessionId'], action, args, actor)
+        if fresh:
+            request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'])
+        return request, fresh
+    finally:
+        lock.release()
+
+
 def project_result(home, row, request):
     """Rebuild resource metadata from its exact receipt without another effect."""
     result = request['result']
@@ -368,7 +417,8 @@ def resume_preparation_removal(app, row, config):
 def effect(app, row, action, args, config, request, admit):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
-    locked = admitted = False
+    locked = admitted = binding_pending = False
+    result = None
     try:
         lock.acquire()
         locked = True
@@ -376,6 +426,26 @@ def effect(app, row, action, args, config, request, admit):
         row = get(home, sid, row['id'])
         if action != 'start' and row['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
+        if action == 'remove':
+            # The queue calls this common route without public begin_removal.
+            # Persist the trusted row binding before any projection or helper,
+            # not merely in the final result after an effect may have occurred.
+            binding_pending = True
+            recorded = app.operations.requests.read(sid, request['requestId'])
+            if (recorded.get('sessionId') != sid or recorded.get('requestId') != request['requestId']
+                    or recorded.get('action') != 'workspace.environments.remove'
+                    or recorded.get('state') != 'admitting'
+                    or recorded.get('resourceId') not in (None, row['id'])):
+                raise ValueError('The original removal admission cannot be rebound or replayed.')
+            request = recorded
+            binding_pending = False
+            # Also covers the queue's direct route, before projection/config
+            # writes. Never let this refusal rewrite an already-retained UNKNOWN.
+            require_resolved_removal(app, row, request['requestId'])
+            binding_pending = True
+            if recorded.get('resourceId') is None:
+                request = app.operations.requests.finish(recorded, 'admitting', resourceId=row['id'])
+            binding_pending = False
         if row.get('pendingRequest') and row['pendingRequest'] != request['requestId']:
             prior = app.operations.requests.read(sid, row['pendingRequest'])
             if confirmed_result(row, prior):
@@ -463,6 +533,11 @@ def effect(app, row, action, args, config, request, admit):
         row = project_result(home, row, request)
         return {'resource': public(home, row), 'request': request}
     except BaseException as exc:
+        if binding_pending:
+            # A failed binding publication or non-admitting retained request
+            # must not be rewritten by the generic failure-result handler.
+            # Restart leaves uncertainty held, including legacy unbound rows.
+            raise
         # Hold the physical owner lock through final persistence. A rejected
         # competing request must never change the active owner's resource.
         # A returned terminal commit is already proof. A subsequent read fault
@@ -473,6 +548,14 @@ def effect(app, row, action, args, config, request, admit):
                 recorded = app.operations.requests.read(sid, request['requestId'])
             except (OSError, ValueError, sqlite3.Error):
                 recorded = {}
+        if action == 'remove' and result is None and (
+                recorded.get('state') != 'admitting'
+                or recorded.get('sessionId') != sid
+                or recorded.get('action') != 'workspace.environments.remove'
+                or recorded.get('resourceId') not in (None, row['id'])):
+            # Lock/admission/revision can fail before the binding check above.
+            # They cannot terminalize or attach an older uncertain request.
+            raise
         if confirmed_result(row, recorded):
             # The receipt and resource projection have separate commit points.
             # Retry only the projection; never downgrade or replay a known effect.
@@ -491,9 +574,16 @@ def effect(app, row, action, args, config, request, admit):
             row = get(home, sid, row['id'])
             if row.get('preparationPending'):
                 row, preparation_cleanup = cleanup_preparation(home, row, config)
+        confirmation = (action == 'remove' and isinstance(result, dict) and (
+            result.get('ok') is True and result.get('status') == 'removed'
+            or isinstance(result.get('removal'), dict) and result['removal'].get('destroyEffect') == 'confirmed'
+            or result.get('code') == 'receipt_unavailable' and result.get('destroyEffect') == 'confirmed'))
         request = app.operations.requests.finish(request, 'outcome_unknown' if admitted or row.get('preparationPending') else 'failed', resourceId=row['id'],
             result={'ok': False, 'status': 'not-started' if not admitted else 'unknown',
-                    'preparationCleanup': preparation_cleanup, 'message': str(exc)[:500]},
+                    'preparationCleanup': preparation_cleanup,
+                    **({'removal': {'version': 1, 'phase': 'host-persistence',
+                                    'code': 'metadata_unconfirmed', 'destroyEffect': 'confirmed'}} if confirmation else {}),
+                    'message': 'Removal did not complete; inspect the original retained evidence.' if action == 'remove' else str(exc)[:500]},
             message=('The operation did not finish with a confirmed result. Inspect retained state; do not repeat it automatically.'
                      if admitted else 'The operation was not admitted. Read the current environment and authority before trying a new request.'))
         if locked and (admitted or action == 'start'):
@@ -662,6 +752,8 @@ def read(app, sid, config):
 
 
 async def dispatch(app, action, args, origin, caller, authority):
+    if action == 'workspace.environments.removal.read':
+        return {'accepted': True, 'result': recovery.read_removal(app, args, origin, caller)}
     from .service import AppError
     from .collaboration import PRINCIPAL
     sid, user = args['sessionId'], origin in {'ui', 'user'}
@@ -734,7 +826,8 @@ async def dispatch(app, action, args, origin, caller, authority):
         if action.endswith('.remove') and args.get('retentionMode') == 'full' and config.get('backend', 'docker') != 'incus':
             raise AppError('Full environment retention is available only for this environment’s original Incus backend.', 409)
         guard()
-        request, fresh = app.operations.requests.begin(sid, action, args, actor)
+        request, fresh = (begin_removal(app, row, action, args, actor) if action.endswith('.remove')
+                          else app.operations.requests.begin(sid, action, args, actor))
         if not fresh:
             return {'accepted': True, 'duplicate': True, 'result': {'request': request, 'resource': None}}
         try:
