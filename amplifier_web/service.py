@@ -328,6 +328,8 @@ from .assignments import definitions as assignment_definitions
 ACTION_DEFINITIONS.update(assignment_definitions(schema, string))
 from .workspace_awareness import definitions as workspace_awareness_definitions
 ACTION_DEFINITIONS.update(workspace_awareness_definitions(schema, string))
+from .workspace_work import definitions as workspace_work_definitions
+ACTION_DEFINITIONS.update(workspace_work_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
     ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
         "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
@@ -420,6 +422,7 @@ for _access, _actions in {
         *environment_definitions(schema, string),
         *test_queue_definitions(schema, string),
         *assignment_definitions(schema, string),
+        *workspace_work_definitions(schema, string),
         *handoff_definitions(schema, string),
     },
 }.items():
@@ -700,6 +703,8 @@ class AppService:
         self.access_mode = AccessMode(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
+        from .workspace_work import WorkspaceWork
+        self.workspace_work = WorkspaceWork(self)
         from .test_queue import TestQueue
         self.test_queue = TestQueue(self)
         from .peer_attribution import PeerAttribution
@@ -1864,6 +1869,8 @@ class AppService:
                 admission_check=admission_check, expected_revision=expected_revision)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
+        if action.startswith("workspace.work."):
+            return await self.workspace_work.dispatch(action, args, origin, command_id, caller_session_id)
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)

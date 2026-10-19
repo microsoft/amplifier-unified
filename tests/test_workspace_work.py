@@ -109,6 +109,10 @@ async def test_correction_preserves_original_and_rejects_stale_write(app):
     history = (await app.dispatch('workspace.work.history', {
         'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']
     assert any(row.get('source', {}).get('messageId') == correction['messageId'] for row in history['items'])
+    change = next(row for row in history['items'] if row.get('source', {}).get('messageId') == correction['messageId'])
+    ref = change['sourceRef']
+    retained = await app.dispatch(ref['action'], ref['args'])
+    assert retained['result']['source']['text'] == 'Also retain paused workers; do not infer completion from idle.'
     assert (await read(app, owner, item['id']))['item']['promiseRevision'] == 2
 
 
