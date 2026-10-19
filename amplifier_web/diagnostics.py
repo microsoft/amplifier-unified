@@ -149,15 +149,27 @@ class Diagnostics:
         """Never delete/replace an unreadable capture database; retry after repair."""
         self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         with self._db() as db:
-            db.executescript('''
-              PRAGMA journal_mode=WAL;
-              CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE,at REAL,stream TEXT,session TEXT,workspace TEXT,event TEXT,data TEXT);
-              CREATE INDEX IF NOT EXISTS record_session ON records(session,seq);
-              CREATE TABLE IF NOT EXISTS deliveries(record_id TEXT,destination TEXT,revision TEXT,payload TEXT,status TEXT,attempts INTEGER DEFAULT 0,next_at REAL DEFAULT 0,error TEXT,updated REAL,PRIMARY KEY(record_id,destination));
-              CREATE INDEX IF NOT EXISTS delivery_ready ON deliveries(destination,status,next_at);
-              CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER);
-              CREATE TABLE IF NOT EXISTS captures(path TEXT PRIMARY KEY,offset INTEGER,inode INTEGER);
-            ''')
+            # executescript commits an existing transaction. Keep DDL, authority
+            # installation and every legacy reference rewrite in one transaction.
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('BEGIN IMMEDIATE')
+            from .receipt_authority import initialize
+            existing = db.execute("SELECT 1 FROM sqlite_master WHERE name='records' OR name GLOB 'binding_*' LIMIT 1").fetchone()
+            if existing:
+                # Validate before CREATE IF NOT EXISTS can repair a missing base
+                # table/index under an existing epoch. Partial authority refuses.
+                initialize(db)
+            for statement in (
+                'CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE,at REAL,stream TEXT,session TEXT,workspace TEXT,event TEXT,data TEXT)',
+                'CREATE INDEX IF NOT EXISTS record_session ON records(session,seq)',
+                'CREATE TABLE IF NOT EXISTS deliveries(record_id TEXT,destination TEXT,revision TEXT,payload TEXT,status TEXT,attempts INTEGER DEFAULT 0,next_at REAL DEFAULT 0,error TEXT,updated REAL,PRIMARY KEY(record_id,destination))',
+                'CREATE INDEX IF NOT EXISTS delivery_ready ON deliveries(destination,status,next_at)',
+                'CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER)',
+                'CREATE TABLE IF NOT EXISTS captures(path TEXT PRIMARY KEY,offset INTEGER,inode INTEGER)',
+            ):
+                db.execute(statement)
+            if not existing:
+                initialize(db)
             # The original database stored another event archive. Export it once
             # into the shared CI capture, then keep only bounded offset indexes.
             from .session_files import capture_dir, event_index, append_event
@@ -300,6 +312,12 @@ class Diagnostics:
                 count=db.execute("SELECT count(*) FROM deliveries WHERE record_id=? AND status IN ('pending','failed')",(identity,)).fetchone()[0]
                 if count: db.execute("INSERT INTO counters VALUES('expiredPending',?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value",(count,))
                 db.execute('DELETE FROM deliveries WHERE record_id=?',(identity,));db.execute('DELETE FROM records WHERE id=?',(identity,))
+            from .receipt_authority import maintain
+            # Empty flushes also maintain the bound. An explicit transaction is
+            # required even when no earlier statement happened to start one.
+            if not db.in_transaction:
+                db.execute('BEGIN IMMEDIATE')
+            maintain(db,cfg['maxRecords'])
             # Revocation applies on restart too. Accepted rows remain as receipts.
             for row in db.execute("SELECT DISTINCT destination,revision FROM deliveries WHERE status IN ('pending','failed')").fetchall():
                 if revisions.get(row['destination'])!=row['revision']:

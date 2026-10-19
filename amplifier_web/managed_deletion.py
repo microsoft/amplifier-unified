@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -468,9 +469,24 @@ def _cleanup_aux(home, plan):
                     db.execute('UPDATE schedule_commands SET result=? WHERE id=?', (_json({'deleted': True}), identity))
     diagnostics = home/'diagnostics'/'events.sqlite3'
     if diagnostics.exists():
-        with connect(diagnostics) as db:
+        from .diagnostics import DEFAULT, validate_config
+        config_path = _safe(diagnostics.with_name('config.json'))
+        try:
+            config = validate_config(json.loads(config_path.read_text())) if config_path.exists() else DEFAULT
+        except (OSError, ValueError):
+            # Same effective retention fallback as Diagnostics initialization.
+            config = DEFAULT
+        with closing(connect(diagnostics)) as db, db:
+            from .receipt_authority import initialize, maintain
+            db.execute('BEGIN IMMEDIATE')
+            initialize(db)
             db.execute('DELETE FROM deliveries WHERE record_id IN (SELECT id FROM records WHERE session IN ('+marks+') OR workspace=?)', [*ids, None if plan.get('preserveWorkspace') else plan['workspace']])
             db.execute('DELETE FROM records WHERE session IN ('+marks+') OR workspace=?', [*ids, None if plan.get('preserveWorkspace') else plan['workspace']])
+            # Privacy deletion removes authority identifiers in the SAME records
+            # transaction and rotates epoch before pruning, using the existing
+            # diagnostics maxRecords setting rather than a second retention policy.
+            maintain(db,config['maxRecords'],forget_sessions=ids,
+                     forget_workspace=None if plan.get('preserveWorkspace') else plan['workspace'])
             for path, in db.execute('SELECT path FROM captures').fetchall():
                 if any(Path(path).is_relative_to(item['path']) for item in plan['paths']):
                     db.execute('DELETE FROM captures WHERE path=?', (path,))
