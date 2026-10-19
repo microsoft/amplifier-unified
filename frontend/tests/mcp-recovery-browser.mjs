@@ -42,6 +42,30 @@ async function start(port=0){
 }
 async function stop(){if(fixture&&fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');await exited}fixture=null}
 const mutations=async()=>((await readFile(callsPath,'utf8')).trim().split('\n').filter(Boolean)).length;
+const unwrap=raw=>raw?.action==='shell.command'?(raw.args.command||raw.args):raw;
+async function dismissFixtureSetup(page,boundary){
+ // Like mcp-clients, this credential-free fixture must settle real discovery
+ // before closing setup. Reloads remount the per-client setup prompt as well.
+ await page.evaluate(()=>window.amplifier.dispatch('providers.list',{sessionId:window.amplifier.getState().selectedSessionId}));
+ await expect.poll(()=>page.evaluate(()=>{
+  const state=window.amplifier.getState(),setup=state.setup||{};
+  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
+  const workspace=session?.workspace||state.settings?.workspace;
+  return Boolean(setup.providersLoadedAt&&(setup.providersWorkspace===workspace||!session&&setup.providersLocation?.kind==='managed'));
+ })).toBe(true);
+ assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().setup.providers),[],'Recovery fixture has no AI connections');
+ const setup=page.locator('.a-settings-experience');await expect(setup).toBeVisible();
+ await expect(setup).toContainText('Connect one AI service to start.');
+ const saved=page.waitForResponse(response=>{
+  if(!response.url().endsWith('/api/actions')||response.request().method()!=='POST')return false;
+  const body=unwrap(response.request().postDataJSON());return body?.action==='view.update'&&body.args?.patch?.panel===null;
+ });
+ await page.locator('.a-settings-overlay').getByRole('button',{name:/^Close (?:settings|panel)$/}).click();
+ const response=await saved;assert.ok(response.ok());const receipt=await response.json();assert.equal(receipt.accepted,true,JSON.stringify(receipt));
+ await expect(setup).toHaveCount(0);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.panel)).toBe(null);
+ console.log('MCP recovery setup boundary: '+boundary+'; empty catalog loaded, real close accepted, rendered setup absent.');
+}
 try{
  const url=await start();
  browser=await chromium.launch({headless:true});
@@ -62,6 +86,7 @@ try{
   throw Error('Operation did not finish: '+name);
  };
  await action('session.create');
+ await dismissFixtureSetup(page,'initial client');
  await action('view.update',{patch:{canvasControlsPinned:true}});
  await operation('smartTools.configure',{id:'recovery',name:'Recovery fixture',command:python,args:[root+'tests/fixtures/canvas_recovery_mcp_server.py',htmlPath,callsPath,modePath]});
  await operation('smartTools.connect',{id:'recovery'});
@@ -80,6 +105,7 @@ try{
  await page.reload();
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep the unsent message');
  await expect(frame.getByRole('heading',{name:'Original saved document'})).toBeVisible();
+ await dismissFixtureSetup(page,'disconnect reload');
  await expect(page.getByRole('status').filter({hasText:'Saved document available.'})).toBeVisible();
  await frame.getByRole('textbox',{name:'Unfinished tool input'}).fill('Keep me through reconnect');
  await frame.locator('body').evaluate(body=>body.dataset.retained='yes');
@@ -116,6 +142,7 @@ try{
  await expect(frame.getByRole('heading',{name:'Original saved document'})).toBeVisible();
  await expect(frame.locator('#count')).toHaveText('7');
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep the unsent message');
+ await dismissFixtureSetup(page,'host restart reload');
  await page.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(frame.locator('#recovered')).toHaveText('8');
@@ -128,6 +155,7 @@ try{
  await operation('smartTools.disconnect',{id:'recovery'});
  await writeFile(modePath,'changed');await page.reload();
  await expect(frame.getByRole('heading',{name:'Original saved document'})).toBeVisible();
+ await dismissFixtureSetup(page,'changed schema reload');
  await page.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(page.locator('.a-mcp-status')).toContainText('action schemas changed');
  assert.equal(await mutations(),2);
@@ -147,11 +175,13 @@ try{
  const second=await secondContext.newPage();await second.goto(url);
  await second.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await second.evaluate(async before=>{await window.amplifier.dispatch('session.select',{id:before.session});await window.amplifier.dispatch('canvas.select',{id:before.id});},before);
+ await dismissFixtureSetup(second,'second client');
  const other=second.frameLocator('.a-mcp-app-viewer iframe');
  await expect(other.getByRole('heading',{name:'Original saved document'})).toBeVisible();
  await other.getByRole('textbox',{name:'Unfinished tool input'}).fill('Other client keeps this');
  await other.locator('body').evaluate(body=>body.dataset.preserved='original-node');
  await frame.getByRole('textbox',{name:'Unfinished tool input'}).fill('Current client keeps this on contract-only approval');
+ await expect(page.locator('.a-settings-experience')).toHaveCount(0);
  await page.getByRole('button',{name:'Review tool changes',exact:true}).click();
  const review=page.getByRole('region',{name:'Review tool changes'});
  await expect(review).toContainText('counter_extra');

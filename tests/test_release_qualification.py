@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 
 import pytest
 import yaml
@@ -257,6 +258,120 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert 'git diff --exit-code -- amplifier_web/static' in frontend
 
 
+def test_installed_media_diagnostic_is_explicit_full_scenario_and_cannot_replace_readiness():
+    workflow = yaml.load((ROOT / '.github/workflows/public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    choice = workflow['on']['workflow_dispatch']['inputs']['installed_media_diagnostic']
+    assert choice['type'] == 'boolean' and choice['default'] == 'false'
+    assert set(workflow['on']['workflow_call']['inputs']) == {'revision'}
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert workflow['jobs']['critical']['if'] == '${{ !inputs.installed_media_diagnostic }}'
+    job = workflow['jobs']['installed-media-diagnostic']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.installed_media_diagnostic }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '30'
+    assert job['env'] == {'INLINE_MEDIA_MODE': 'installed'}
+    assert 'INLINE_MEDIA_PHASES' not in job['env']
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}
+    assert "'git', 'diff', '--name-only', '-z'" in steps[1]['run']
+    assert "'a5d1ab2397a00f76495c591835b5c9194e09f5a8', 'HEAD'" in steps[1]['run']
+    assert 'assert changed <= allowed' in steps[1]['run']
+    assert "'git', 'status', '--porcelain'" in steps[1]['run']
+    # runner context is unavailable in job-level env. Use the runner's shell
+    # variables in an ordinary step, before any path consumer executes.
+    initialize = next(i for i, step in enumerate(steps)
+                      if step.get('name') == 'Initialize owned diagnostic paths')
+    assert initialize == 2 and steps[initialize]['shell'] == 'bash'
+    assert steps[initialize]['run'].splitlines() == [
+        "printf '%s\\n' \\",
+        '  "INLINE_MEDIA_EVIDENCE_DIR=$RUNNER_TEMP/inline-media-diagnostic" \\',
+        '  "INLINE_MEDIA_MP4=$RUNNER_TEMP/inline-media-diagnostic/synthetic.mp4" >> "$GITHUB_ENV"',
+    ]
+    assert '${{' not in steps[initialize]['run']
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    assert 'uv sync --locked --group dev --group artifacts' in commands
+    assert 'npm run build --prefix frontend' in commands
+    assert 'e4a71c46fd41ecf6' in commands and 'staticSha256' in commands
+    assert 'assert len(files) == 311' in commands
+    assert "assert payload.hexdigest() == '1b4c114ffe44d4c7a5dcf8a2136fb363847feb4ec4b27aa5bbc5fe2435deb337'" in commands
+    assert 'uv pip install --python .venv/bin/python --no-deps --reinstall .' in commands
+    assert commands.count('node frontend/tests/inline-media-browser.mjs') == 1
+    assert "result['fullScenario'] and result['coreChecks'] == 'PASS'" in commands
+    assert 'INLINE_MEDIA_PHASES' not in commands and 'secrets.' not in str(job)
+    upload = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
+    assert upload['if'] == "always() && steps.diagnostic-evidence.outcome == 'success'"
+    assert upload['with']['path'].splitlines() == [
+        '${{ runner.temp }}/inline-media-diagnostic/*.json',
+        '${{ runner.temp }}/inline-media-diagnostic/*.png']
+    assert upload['with']['if-no-files-found'] == 'error'
+
+
+@pytest.mark.parametrize('extra', [None, 'amplifier_outputs/__init__.py',
+                                  'frontend/index.html', 'assets/logo.svg', 'bundle.yaml'])
+def test_media_diagnostic_product_guard_rejects_unlisted_changes(monkeypatch, extra):
+    import subprocess
+    workflow = yaml.load((ROOT / '.github/workflows/public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    guard = workflow['jobs']['installed-media-diagnostic']['steps'][1]['run']
+    script = compile('\n'.join(guard.splitlines()[1:-1]), 'diagnostic-source-guard', 'exec')
+    changed = ['.github/workflows/public-readiness.yml',
+               'frontend/tests/inline-media-browser.mjs', 'tests/test_release_qualification.py']
+    if extra:
+        changed.append(extra)
+    def git(args, **kwargs):
+        assert args[:2] in (['git', 'diff'], ['git', 'status'])
+        return '\0'.join(changed) + '\0' if args[1] == 'diff' else ''
+    monkeypatch.setattr(subprocess, 'check_output', git)
+    if extra:
+        with pytest.raises(AssertionError):
+            exec(script, {})
+    else:
+        exec(script, {})
+
+
+@pytest.mark.parametrize(('click_attempted', 'primary_failed', 'click_settled', 'allowed'), [
+    (False, False, None, True),
+    (False, True, None, True),
+    (True, False, None, False),
+    (True, False, False, False),
+    (True, False, True, True),
+    (True, True, False, False),
+    (True, True, True, False),
+])
+def test_media_diagnostic_cleanup_refuses_unknown_ui_command(
+    click_attempted, primary_failed, click_settled, allowed,
+):
+    import re
+    import subprocess
+    source = (ROOT / 'frontend/tests/inline-media-browser.mjs').read_text()
+    helper = re.search(r'function gifCanvasCleanupAllowed\([^)]*\)\{\n.*?\n\}', source, re.S)
+    assert helper, 'Exercise the actual harness cleanup decision, not a copied predicate'
+    args = json.dumps([click_attempted, primary_failed, click_settled])
+    result = subprocess.run(
+        ['node', '--input-type=module', '-e',
+         helper.group(0) + '\nconsole.log(JSON.stringify(gifCanvasCleanupAllowed(...' + args + ')));'],
+        capture_output=True, text=True, check=True, timeout=10,
+    )
+    assert json.loads(result.stdout) is allowed
+
+
+def test_media_diagnostic_applies_ui_guard_before_cleanup_mutations():
+    source = (ROOT / 'frontend/tests/inline-media-browser.mjs').read_text()
+    phase = source.split("await phase('gif-canvas-errors',async()=>{", 1)[1].split(
+        "await phase('endpoints'", 1)[0]
+    click = "await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();"
+    assert phase.count(click) == 3
+    assert phase.count('clickAttempted=true;clickSettled=null;\n    ' + click) == 3
+    assert 'clickOwned:{attempted:clickAttempted,settled:clickSettled,primaryFailed:!!primaryError}' in phase
+    cleanup = phase.split('}finally{', 1)[1]
+    guard = cleanup.index('if(!gifCanvasCleanupAllowed(clickAttempted,!!primaryError,clickSettled))')
+    clear = cleanup.index("if(settled)settled=await cleanup('clear owned dirty view'")
+    unmount = cleanup.index("if(settled)settled=await cleanup('unmount and close owned client'")
+    assert guard < cleanup.index('blockedApplicationCleanup.add(page)') < clear < unmount
+    assert 'if(clickAttempted&&!primaryError)' in cleanup
+    assert "getByRole('button',{name:'Open in Canvas',exact:true})).toBeEnabled()" in cleanup
+    final = source.split("await phase('cleanup',async()=>{", 1)[1]
+    assert final.index('blockedApplicationCleanup.has(page)') < final.index("await action(page,'session.create'")
+
+
 def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     workflows = ROOT / '.github/workflows'
     manual = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
@@ -287,6 +402,201 @@ def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     assert 'dist/*.whl' in package and 'from amplifier_web.app_updates import PROBE' in package
     runtime = '\n'.join(step.get('run', '') for step in release['jobs']['runtime']['steps'])
     assert 'tests/test_runtime_module_cache.py' in runtime
+
+
+def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    selection = workflow['on']['workflow_dispatch']['inputs']['suite']
+    assert selection['type'] == 'choice' and selection['default'] == 'full'
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery']
+    assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
+    assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    jobs = workflow['jobs']
+    assert jobs['python']['if'] == '${{ !inputs.core_wheels }}'
+    assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
+    assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
+    rejected = jobs['incompatible-selection']
+    assert rejected['if'] == "${{ inputs.core_wheels && inputs.suite && inputs.suite != 'full' }}"
+    assert 'exit 1' in rejected['steps'][0]['run']
+    steps = jobs['python']['steps']
+    assert steps[1]['name'] == 'Record and validate the fixed Python selection'
+    native = next(step for step in steps if step.get('name') == 'Select the prepared native-controls interpreter')
+    assert native['if'] == "${{ env.CHECK_SUITE == 'patch-placement-native' }}"
+    assert native['run'] == 'echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"'
+    complete = next(step for step in steps if step.get('name') == 'Run the complete Python suite')
+    focused = next(step for step in steps if step.get('name') == 'Run the selected repair suite')
+    assert complete['if'] == "${{ env.CHECK_SUITE == 'full' }}"
+    assert focused['if'] == "${{ env.CHECK_SUITE != 'full' }}" and focused['shell'] == 'bash'
+    assert 'mapfile -t targets < output/python-checks/targets.txt' in focused['run']
+    assert 'test "${#targets[@]}" -gt 0' in focused['run']
+    assert '"${targets[@]}"' in focused['run'] and 'set -o pipefail' in focused['run']
+    assert '--junitxml=output/python-checks/junit.xml' in focused['run']
+    assert 'tee output/python-checks/pytest.log' in focused['run']
+    assert '${{' not in focused['run'] and '${{' not in steps[1]['run']
+
+
+@pytest.mark.parametrize(('suite', 'targets'), [
+    ('full', []),
+    ('inline-chat-card', ['tests/test_chat_references.py']),
+    ('queued-configuration', ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py']),
+    ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
+    ('patch-placement-recovery', ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py']),
+    ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
+    ('managed-removal-recovery', ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
+])
+@pytest.mark.parametrize('missing', [False, True])
+def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):
+    import subprocess
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    run = workflow['jobs']['python']['steps'][1]['run']
+    lines = run.splitlines()
+    assert lines[0] == "python - <<'PY'" and lines[-1] == 'PY'
+    script = compile('\n'.join(lines[1:-1]), 'workflow-python-selection', 'exec')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('CHECK_SUITE', suite)
+    monkeypatch.setenv('GITHUB_RUN_ID', 'synthetic-run')
+    monkeypatch.setenv('GITHUB_RUN_ATTEMPT', '1')
+    def git(args, **kwargs):
+        assert args[:2] == ['git', 'rev-parse']
+        assert args[2] in ('HEAD', 'HEAD^{tree}')
+        return ('a' if args[2] == 'HEAD' else 'b') * 40 + '\n'
+    monkeypatch.setattr(subprocess, 'check_output', git)
+    for target in targets[1:] if missing else targets:
+        path = tmp_path / target
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    if missing and targets:
+        with pytest.raises(SystemExit, match='Selected tests are missing: ' + targets[0]):
+            exec(script, {})
+    else:
+        exec(script, {})
+    record = json.loads((tmp_path / 'output/python-checks/selection.json').read_text())
+    assert record == {'suite': suite, 'fullSuite': suite == 'full', 'targets': targets,
+                      'revision': 'a' * 40, 'tree': 'b' * 40, 'runId': 'synthetic-run', 'runAttempt': '1',
+                      'missing': targets[:1] if missing else []}
+    assert (tmp_path / 'output/python-checks/targets.txt').read_text().splitlines() == targets
+
+
+@pytest.mark.parametrize('suite', ['unknown', 'tests/test_service.py', 'full; echo unexpected'])
+def test_python_selection_rejects_arbitrary_input_before_commands(tmp_path, monkeypatch, suite):
+    import subprocess
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    script = '\n'.join(workflow['jobs']['python']['steps'][1]['run'].splitlines()[1:-1])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('CHECK_SUITE', suite)
+    monkeypatch.setattr(subprocess, 'check_output', lambda *a, **kw: pytest.fail('Invalid selection ran a command'))
+    with pytest.raises(SystemExit, match='Unknown fixed Python suite:'):
+        exec(compile(script, 'workflow-python-selection', 'exec'), {})
+    assert not (tmp_path / 'output').exists()
+
+
+def test_browser_retains_only_the_successfully_built_public_web_payload():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['permissions'] == {'contents': 'read'}
+    steps = workflow['jobs']['browser']['steps']
+    identity = next(index for index, step in enumerate(steps) if step.get('id') == 'build-source')
+    assert steps[identity - 1]['uses'] == 'actions/checkout@v4'
+    assert steps[identity]['run'] == 'echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"'
+    build = next(index for index, step in enumerate(steps) if step.get('id') == 'frontend-build')
+    assert identity < build
+    assert steps[build]['run'] == 'npm run build --prefix frontend'
+    upload = steps[build + 1]
+    assert upload['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
+    assert upload['uses'] == 'actions/upload-artifact@v4'
+    assert upload['with'] == {
+        'name': 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}',
+        'path': 'amplifier_web/static/', 'include-hidden-files': 'true', 'if-no-files-found': 'error'}
+    assert steps[build + 2]['name'] == 'Install browser dependencies'
+    # The artifact includes the builder's metadata and is retained before later
+    # scenario failure; an unrun/failed build cannot upload the old tracked tree.
+    vite = (ROOT / 'frontend/vite.config.js').read_text()
+    assert 'emptyOutDir:true' in vite and 'static/build.json' in vite
+
+
+def browser_runner_commands(steps):
+    invocation = r'(?m)^(?:uv run --no-sync )?python scripts/browser_check_runner\.py(?:[ \t]|$)'
+    return [step['run'] for step in steps if re.search(invocation, step.get('run', ''))]
+
+
+def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocations():
+    initialize = 'python scripts/browser_check_runner.py --initialize'
+    execute = 'uv run --no-sync python scripts/browser_check_runner.py --budget-seconds 1500'
+    decoys = [
+        'set -o pipefail\nuv run --no-sync pytest tests/test_browser_check_runner.py tests/test_release_qualification.py',
+        'echo python scripts/browser_check_runner.py',
+        'python scripts/browser_check_runner.py.backup',
+    ]
+    steps = [{'run': text} for text in (initialize, *decoys, execute)]
+    assert browser_runner_commands(steps) == [initialize, execute]
+    # A duplicate remains visible to the caller's exact two-command assertions.
+    assert browser_runner_commands([*steps, {'run': execute}]) == [initialize, execute, execute]
+    joined = initialize + '\n' + execute
+    assert browser_runner_commands([{'run': joined}]) == [joined]
+
+
+def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary'}
+    assert inputs['app004_qualification']['type'] == 'boolean'
+    assert inputs['app004_qualification']['default'] == 'false'
+    assert inputs['mcp_boundary']['type'] == 'boolean'
+    assert inputs['mcp_boundary']['default'] == 'false'
+    assert workflow['on']['workflow_call'] == {
+        'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    job = workflow['jobs']['browser']
+    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    assert job['timeout-minutes'] == '30'
+    mcp = workflow['jobs']['mcp-boundary']
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}"
+    # Both opt-ins must fail visibly before setup, not silently drop APP004.
+    incompatible = mcp['steps'][1]
+    assert incompatible['name'] == 'Reject incompatible browser proof selections'
+    assert incompatible['if'] == '${{ inputs.app004_qualification }}'
+    assert incompatible['run'].splitlines() == [
+        "echo 'MCP boundary and APP004 qualification are separate selections; neither proof was run.'",
+        'exit 1',
+    ]
+    steps = job['steps']
+    commands = browser_runner_commands(steps)
+    assert len(commands) == 2
+    flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
+    assert all(command.count(flag) == 1 for command in commands)
+    # Empty/default selection executes exactly the preexisting plan and budget.
+    assert commands[0].replace(flag, '').strip() == (
+        'python scripts/browser_check_runner.py --plan frontend/tests/browser-checks.json '
+        '--output output/browser-checks --initialize')
+    assert commands[1].replace(flag, '').strip() == (
+        'uv run --no-sync python scripts/browser_check_runner.py '
+        '--plan frontend/tests/browser-checks.json --output output/browser-checks --budget-seconds 1500')
+    assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
+        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@v5')
+    contracts = [s for s in steps if s.get('name') == 'Verify fixed APP004 qualification contracts']
+    assert len(contracts) == 1
+    contract = contracts[0]
+    assert contract['if'] == '${{ inputs.app004_qualification }}'
+    assert contract['run'].splitlines() == [
+        'set -o pipefail',
+        'uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py '
+        'tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml '
+        '2>&1 | tee output/browser-checks/app004-contracts.log',
+    ]
+    before = steps[:steps.index(contract)]
+    assert any(s.get('uses') == 'actions/setup-node@v4' for s in before)
+    assert any(s.get('run') == 'npm ci --prefix frontend' for s in before)
+    assert any(s.get('run') == 'uv sync --locked --group dev --group artifacts' for s in before)
+    assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
+    next_step = steps[steps.index(contract) + 1]
+    assert next_step['name'] == 'Run all extended browser scenarios serially'
+    assert 'if' not in next_step  # Implicit success gate leaves initialized rows unrun on failure.
+    # Opt-in can neither mask a failed step nor bypass the existing always upload.
+    assert not any('continue-on-error' in step for step in steps)
+    diagnostics = steps[-1]
+    assert diagnostics['if'] == 'always()'
+    assert diagnostics['uses'] == 'actions/upload-artifact@v4'
+    assert 'output/browser-checks/' in diagnostics['with']['path']
 
 
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
@@ -321,6 +631,22 @@ def test_native_core_qualification_is_manual_and_cannot_publish():
     assert 'tests/test_runtime_module_cache.py' in commands
     assert 'runtime-snapshot' in commands and 'cmp ' in commands
     assert 'publish' not in commands
+    assert job['timeout-minutes'] == '20'
+    steps = job['steps']
+    host = next(step['run'] for step in steps if step.get('name') == 'Install and record the released host Core wheel')
+    runtime = next(step['run'] for step in steps if step.get('name') == 'Qualify real runtime behavior without model calls')
+    assert host.count('--junitxml="$RUNNER_TEMP/host-core-junit.xml"') == 1
+    assert runtime.count('--junitxml="$RUNNER_TEMP/runtime-core-junit.xml"') == 1
+    assert runtime.index('cp ') < runtime.index('runtime-snapshot') < runtime.index('cmp ') < runtime.index('git rev-parse HEAD')
+    retained = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
+    assert retained['if'] == 'always()'
+    assert set(retained['with']['path'].splitlines()) == {
+        '${{ runner.temp }}/' + name for name in (
+            'app-revision.txt', 'host-core-wheel.json', 'host-core-junit.xml',
+            'runtime-core-junit.xml', 'before-tests.json', 'core-runtime/pyproject.toml',
+            'core-runtime/uv.lock', 'core-runtime/build-constraints.txt',
+            'core-runtime/build-identity.json', 'core-runtime/qualified-runtime.json')
+    }
 
 
 @pytest.mark.parametrize('workflow', ['release.yml', 'core-wheels.yml'])

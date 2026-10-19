@@ -1,4 +1,5 @@
 import io
+import copy
 import json
 import tarfile
 
@@ -214,6 +215,47 @@ def test_artifact_recovery_requires_complete_safe_bounded_selection(tmp_path, ch
             (tmp_path / 'artifacts.tar').write_bytes((tmp_path / 'artifacts.tar').read_bytes()[:512])
         retention.verify_artifacts(archives)
     assert not (tmp_path / 'artifacts-retention.json').exists()
+
+
+@pytest.mark.parametrize('existing_receipt', [False, True])
+def test_verifying_existing_exports_is_read_only_and_never_republishes(tmp_path, existing_receipt):
+    """Proposed publish=False permits inspection, never continuation authority."""
+    selected = tmp_path / 'retained'; selected.mkdir()
+    archives = retention.filter_incus_stream(backup(ROOTS), selected, 'owned')
+    (tmp_path / 'source.tar').write_bytes(b'original source snapshot')
+    if existing_receipt:
+        retention.verify_retention(tmp_path, archives)
+    before = {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in selected.iterdir()}
+    original = copy.deepcopy(archives)
+    inspected = retention.verify_retention(tmp_path, archives, publish=False)
+    assert inspected['verified'] and inspected['selection'] == ['/workspace', '/artifacts']
+    assert archives == original
+    assert before == {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in selected.iterdir()}
+
+
+def test_forged_verified_bit_never_replaces_archive_verification(tmp_path):
+    archives = retention.filter_incus_stream(backup(ROOTS), tmp_path, 'owned')
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    for row in archives:
+        row['verified'] = True
+    path = tmp_path / 'artifacts.tar'
+    path.write_bytes(b'not a tar archive')
+    with pytest.raises((ValueError, tarfile.TarError)):
+        retention.verify_retention(tmp_path, archives)
+    assert path.read_bytes() == b'not a tar archive'
+    assert not (tmp_path / 'retention.json').exists()
+
+
+def test_complete_retention_publication_never_overwrites_prior_receipt(tmp_path):
+    archives = retention.filter_incus_stream(backup(ROOTS), tmp_path, 'owned')
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    first = retention.verify_retention(tmp_path, archives)
+    before = (tmp_path / 'retention.json').read_bytes()
+    with pytest.raises(FileExistsError):
+        retention.verify_retention(tmp_path, archives)
+    assert (tmp_path / 'retention.json').read_bytes() == before
+    assert retention.verify_retention(tmp_path, archives, publish=False) == first
+    assert not list(tmp_path.glob('.retention-*'))
 
 
 def test_recovery_archives_preserve_pytest_absolute_links_without_following_them(tmp_path):

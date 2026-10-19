@@ -31,6 +31,8 @@ def definitions(schema,string):
         'outputs.attach':('Attach a file/dataset snapshot, exact saved canvas body, PR or external document reference. Does not publish, fetch remote contents or change selection. File snapshots stay within this conversation workspace.',schema({**common,**origin,'kind':{'enum':['file','dataset','canvas','pull_request','external_document']},'title':string(200),'path':string(4000),'url':string(4000),'canvasId':string(100),'version':string(500),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','kind','title'])),
         'outputs.attachImage':('Save an exact generated PNG from a completed image-tool receipt in this workspace. Verifies bytes and SHA-256. Edits require parentId matching the target input hash. Shares the saved image with Canvas; messageId publishes it inline at that original turn, otherwise library-only. Preserves originals and producer-reported provenance; does not generate, spend, fetch or publish externally.',schema({**common,**origin,'title':string(200),'receiptPath':string(4000)},['sessionId','title','receiptPath'])),
         'outputs.attachMedia':('Save exact GIF bytes up to64MiB or MP4 up to32MiB at an existing assistant message. Supply its saved messageId and inspected SHA-256; saving is not browser playback proof.',schema({**common,'messageId':string(200),'title':string(200),'path':string(4000),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','messageId','title','path','expectedSha256'])),
+        'outputs.attachChatReference':('Attach a fixed Open chat card below an exact saved assistant reply in the calling conversation. The host resolves the existing ordinary chat title and workspace. Does not select, create, send, approve or start work. Opening requires an explicit click in that browser.',schema({**common,'messageId':string(200),'targetSessionId':string(200),'targetNativeProject':string(4000)},['sessionId','messageId','targetSessionId'])),
+        'outputs.chatReferences':('Read bounded host-resolved chat cards for an exact assistant reply in the attached browser. Does not navigate or start work.',schema({**common,'messageId':string(200)},['sessionId','messageId'])),
         'outputs.mediaReport':('Authenticated UI media observation, not model attestation; never attaches or starts work. Control state alone does not prove advancement; presentedFrames/mediaTime describe actual presentation callbacks.',schema({**identity,'messageId':string(200),'version':{'type':'integer','minimum':1},'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'},'generation':{'type':'integer','minimum':1},'sequence':{'type':'integer','minimum':1},'renderState':{'enum':['loading','ready','error']},'playback':{'enum':['paused','playing','ended']},'presentedFrames':{'type':'integer','minimum':0},'mediaTime':{'type':'number','minimum':0},'detail':string(500)},['sessionId','id','messageId','version','sha256','generation','sequence','renderState','playback'])),
         'outputs.write':('Save a reusable writing output or an immutable next version. Does not send, publish or overwrite any original.',schema({**common,**origin,**writing,'title':string(200)},['sessionId','title','content','variant'])),
         'outputs.review':('Snapshot a bounded read-only local Git diff for review. No changes applied; untracked and binary content excluded. Branch mode resolves existing base and HEAD commits.',schema({**common,**origin,'mode':{'enum':['unstaged','staged','branch']},'base':string(200),'path':string(4000),'title':string(200)},['sessionId','mode'])),
@@ -71,6 +73,8 @@ class Outputs:
         self.store=OutputRegistry(app.db)
         from .output_media import Media
         self.media=Media(self)
+        from .chat_references import ChatReferences
+        self.chat_references=ChatReferences(self)
 
     def record(self,sid,identity):
         record=self.store.read(identity)
@@ -144,6 +148,10 @@ class Outputs:
             original=json.loads(saved)
             if not original.get('linked'):
                 continue
+            if original.get('kind') == 'chat_reference':
+                # A fork/import is not new source authority. Preserve the
+                # original relationship only in its source; exports are inert.
+                continue
             message_id = original.get('origin', {}).get('messageId')
             if original.get('kind') == 'media':
                 if media_origins is not None:
@@ -175,6 +183,10 @@ class Outputs:
     async def dispatch(self,action,args,origin,command_id,*,image_identity=None):
         from .service import AppError
         try:
+            if action == 'outputs.attachChatReference':
+                return await self.chat_references.attach(args, origin, command_id)
+            if action == 'outputs.chatReferences':
+                return await self.chat_references.describe(args['sessionId'], args['messageId'], origin)
             if action == 'outputs.attachMedia':
                 return await self.media.attach(args, origin, command_id)
             if action == 'outputs.mediaReport':
@@ -193,6 +205,10 @@ class Outputs:
                     return {'accepted':True,'result':result}
                 if action=='outputs.read':
                     record=self.record(session['id'],args['id'])
+                    if record.get('kind') == 'chat_reference':
+                        return {'accepted':True,'result':{
+                            **self.chat_references.descriptor(record),
+                            'kind':'chat_reference','linked':bool(record.get('linked'))}}
                     if record.get('kind') == 'media':
                         observation = self.media.observation(record)
                         return {'accepted':True,'result':{**self.media.descriptor(record),
@@ -300,7 +316,9 @@ class Outputs:
                         return {'accepted':True,'result':result}
                 if action in {'outputs.unlink','outputs.relink'}:
                     linked_record = self.record(session['id'],args['id'])
-                    if linked_record.get('kind') == 'media':
+                    if action == 'outputs.relink' and linked_record.get('kind') == 'chat_reference' and linked_record.get('referenceImported'):
+                        raise ValueError('Imported chat references require a new validated attachment.')
+                    if linked_record.get('kind') in {'media', 'chat_reference'}:
                         self.media.authority(current, origin)
                     result=self.store.link(args['id'],args['expectedRevision'],action=='outputs.relink')
                 elif action=='outputs.comment':
@@ -328,8 +346,9 @@ class Outputs:
                         from .canvas_library import image_output
                         image_output(self.app.state, current, result)
                 self.store.remember(identity,request,result)
-                if action in {'outputs.unlink','outputs.relink'} and result.get('kind') == 'media':
-                    current['mediaRevision'] = current.get('mediaRevision', 0) + 1
+                if action in {'outputs.unlink','outputs.relink'} and result.get('kind') in {'media', 'chat_reference'}:
+                    key = 'mediaRevision' if result['kind'] == 'media' else 'chatReferenceVersion'
+                    current[key] = current.get(key, 0) + 1
                     self.app._publish_changes(sessions={current['id']})
                 elif action == 'outputs.attachImage':
                     self.app._publish_changes(globals={'canvasArtifacts'})

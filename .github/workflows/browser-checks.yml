@@ -2,6 +2,15 @@ name: Extended browser checks
 # Local/manual qualification and post-release coverage; never a publication gate.
 on:
   workflow_dispatch:
+    inputs:
+      mcp_boundary:
+        description: Run only three MCP recovery repeats, adjacent clients and the omit-close control
+        type: boolean
+        default: false
+      app004_qualification:
+        description: Append fixed chat-card units and the deliberate reload control
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -11,17 +20,91 @@ permissions:
   contents: read
 jobs:
   browser:
+    if: ${{ !inputs.mcp_boundary }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
+      - name: Record the checked-out build source
+        id: build-source
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Record intended coverage before dependency setup
         run: >-
           python scripts/browser_check_runner.py
           --plan frontend/tests/browser-checks.json
           --output output/browser-checks --initialize
+          ${{ inputs.app004_qualification && '--app004-qualification' || '' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev --group artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+        id: frontend-build
+      - name: Retain the successful production web build
+        if: ${{ steps.frontend-build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}
+          path: amplifier_web/static/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Install browser dependencies
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Verify fixed APP004 qualification contracts
+        if: ${{ inputs.app004_qualification }}
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml 2>&1 | tee output/browser-checks/app004-contracts.log
+      - name: Run all extended browser scenarios serially
+        run: >-
+          uv run --no-sync python scripts/browser_check_runner.py
+          --plan frontend/tests/browser-checks.json
+          --output output/browser-checks
+          --budget-seconds 1500
+          ${{ inputs.app004_qualification && '--app004-qualification' || '' }}
+      - name: Retain scenario coverage and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extended-browser-evidence-${{ github.run_attempt }}
+          path: |
+            output/browser-checks/
+            output/active-client-performance/
+            output/state-transport-browser/
+            output/scoped-navigation/
+            output/selected-context/
+          if-no-files-found: warn
+  mcp-boundary:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Reject incompatible browser proof selections
+        if: ${{ inputs.app004_qualification }}
+        run: |
+          echo 'MCP boundary and APP004 qualification are separate selections; neither proof was run.'
+          exit 1
+      - name: Record the fixed proof before setup
+        run: |
+          mkdir -p output/browser-checks/mcp-boundary
+          git rev-parse HEAD > output/browser-checks/mcp-boundary/revision.txt
+          sha256sum scripts/mcp_boundary_checks.sh scripts/browser_check_runner.py \
+            frontend/tests/mcp-recovery-browser.mjs frontend/tests/mcp-clients-browser.mjs \
+            uv.lock frontend/package-lock.json > output/browser-checks/mcp-boundary/inputs.sha256
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -37,21 +120,107 @@ jobs:
       - name: Install browser dependencies
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Run all extended browser scenarios serially
-        run: >-
-          uv run --no-sync python scripts/browser_check_runner.py
-          --plan frontend/tests/browser-checks.json
-          --output output/browser-checks
-          --budget-seconds 1500
-      - name: Retain scenario coverage and diagnostics
+      - name: Run the fixed MCP boundary proof
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: bash scripts/mcp_boundary_checks.sh
+      - name: Stage safe owned evidence before upload
+        id: mcp-evidence
         if: always()
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, re, socket, struct, zlib
+          from pathlib import Path
+          root = Path('output/browser-checks/mcp-boundary')
+          output = Path('output/browser-checks/mcp-boundary-public')
+          output.mkdir(parents=True, exist_ok=False)
+          private = sorted([os.environ['GITHUB_WORKSPACE'], os.environ['RUNNER_TEMP'],
+                            str(Path.home()), socket.gethostname()], key=len, reverse=True)
+          def clean(text):
+              for value in private:
+                  text = text.replace(value, '<private>')
+              return re.sub(r'/home/[^\s"\'<>]+|/Users/[^\s"\'<>]+|[A-Za-z]:\\Users\\[^\s"\'<>]+',
+                            '<private-path>', text)
+          def clean_json(value):
+              if isinstance(value, str):
+                  return clean(value)
+              if isinstance(value, list):
+                  return [clean_json(item) for item in value]
+              if isinstance(value, dict):
+                  return {clean(key): clean_json(item) for key, item in value.items()}
+              return value
+          def png_complete(data):
+              assert data.startswith(b'\x89PNG\r\n\x1a\n')
+              cursor, chunks = 8, []
+              while cursor < len(data):
+                  assert cursor + 12 <= len(data)
+                  size = struct.unpack('>I', data[cursor:cursor + 4])[0]
+                  end = cursor + 12 + size
+                  assert end <= len(data)
+                  kind = data[cursor + 4:cursor + 8]
+                  assert zlib.crc32(data[cursor + 4:end - 4]) & 0xffffffff == struct.unpack('>I', data[end - 4:end])[0]
+                  if not chunks:
+                      assert kind == b'IHDR' and size == 13
+                  chunks.append(kind)
+                  cursor = end
+                  if kind == b'IEND':
+                      assert size == 0 and cursor == len(data) and b'IDAT' in chunks
+                      return
+              raise AssertionError('Missing PNG end')
+          retained, rejected = [], []
+          files = sorted(root.rglob('*')) if root.is_dir() and not root.is_symlink() else []
+          for path in files:
+              name = str(path.relative_to(root))
+              if path.is_dir() and not path.is_symlink():
+                  continue
+              reason = 'unsafe-path-or-type'
+              try:
+                  assert not path.is_symlink() and not any(parent.is_symlink() for parent in path.parents)
+                  assert path.is_file() and clean(name) == name
+                  assert path.suffix in {'.json', '.log', '.txt', '.sha256', '.mjs', '.png'}
+                  reason = 'oversized'
+                  assert path.stat().st_size <= 16 * 1024 * 1024
+                  data = path.read_bytes()
+                  original_sha256 = hashlib.sha256(data).hexdigest()
+                  reason = 'invalid-content'
+                  if path.suffix == '.png':
+                      png_complete(data)  # Structural integrity, not pixel review.
+                  elif path.suffix == '.json':
+                      parsed = json.loads(data)
+                      redacted = clean_json(parsed)
+                      if redacted != parsed:
+                          data = (json.dumps(redacted, indent=2) + '\n').encode()
+                  else:
+                      data = clean(data.decode()).encode()
+                  target = output / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(data)
+                  published_sha256 = hashlib.sha256(data).hexdigest()
+                  retained.append({'path': name, 'originalSha256': original_sha256,
+                                   'publishedSha256': published_sha256,
+                                   'redacted': original_sha256 != published_sha256})
+              except (AssertionError, OSError, ValueError, UnicodeError, struct.error):
+                  rejected.append({'path': clean(name), 'reason': reason})
+          if not retained:
+              rejected.append({'path': '.', 'reason': 'no-safe-evidence'})
+          (output / 'retention.json').write_text(json.dumps({
+              'retained': retained, 'rejected': rejected,
+              'note': 'Unsafe or incomplete originals withheld; raw scenario verdicts not changed.'}, indent=2))
+          PY
+      - name: Retain positive and rejected negative evidence
+        if: always() && steps.mcp-evidence.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: extended-browser-evidence-${{ github.run_attempt }}
-          path: |
-            output/browser-checks/
-            output/active-client-performance/
-            output/state-transport-browser/
-            output/scoped-navigation/
-            output/selected-context/
-          if-no-files-found: warn
+          name: mcp-boundary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/browser-checks/mcp-boundary-public/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Reject incomplete evidence after retaining safe diagnostics
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          record = json.loads(Path('output/browser-checks/mcp-boundary-public/retention.json').read_text())
+          assert record['retained'] and not record['rejected'], 'MCP proof evidence incomplete'
+          PY

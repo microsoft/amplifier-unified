@@ -68,7 +68,7 @@ def requirement(action, args):
         return 'bundles', 'global'
     if action in {'bundle.switch', 'bundle.fork'}:
         return 'bundles', 'session'
-    if action == 'configuration.apply':
+    if action in {'configuration.apply', 'configuration.patchPlacement.bind'}:
         return 'runtime_configuration', 'session'
     if action == 'runtime.control' and args.get('operation') == 'configuration.providerLogin':
         return 'connections', 'session'
