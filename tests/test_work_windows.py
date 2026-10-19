@@ -747,6 +747,34 @@ async def test_current_raw_display_is_distinct_from_association_completeness(tmp
 
 
 @pytest.mark.asyncio
+async def test_unpublished_proof_page_cannot_reuse_a_raw_display_receipt(tmp_path, monkeypatch):
+    from amplifier_web.diagnostics import Diagnostics
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=140)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostics = Diagnostics(service)
+    try:
+        await owner.read('s')
+        old_receipt = dict(owner.project(session)['workProjection']['receipt'])
+        proof = await owner.prove('s')
+        assert proof['status'] == 'complete'
+        page = owner.pages[owner.current['s']]
+        assert page['_rootProofId'] == proof['id']
+        assert '_consumerProof' not in page and 'receipt' not in page
+        projected = owner.project(session)
+        assert projected['workProjection']['current'] is False
+        assert projected['workProjection']['receipt'] == old_receipt
+        assert all(g.get('observationWindow') for g in projected['execution']['segments'])
+        before = len(owner.projector.inputs)
+        selected = await owner.read_selected('s')  # Publish the existing proof, no new scan.
+        assert selected['rootProof']['id'] == proof['id']
+        assert owner.project(session)['workProjection']['current'] is True
+        assert len(owner.projector.inputs) == before
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('change', ['source', 'index'])
 async def test_known_physical_proof_refusal_is_visible_without_snapshot_io(tmp_path, monkeypatch, change):
     from amplifier_web.diagnostics import Diagnostics
