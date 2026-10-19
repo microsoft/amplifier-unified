@@ -606,3 +606,70 @@ async def test_attention_filter_and_wait_use_concrete_current_observations(app):
     assert changed['changed'] and changed['result']['items'][0]['id'] == item['id']
     assert changed['result']['items'][0]['attentionReasons'] == ['next_action']
     assert app.runtime.inputs == before
+
+
+async def test_attention_page_rejects_changed_owner_membership_without_work_edits(app):
+    owner, peer = app.state['sessions']
+    await create(app, owner, command='first-attention', nextAction='Inspect this one.')
+    await create(app, owner, command='second-attention', intent='second', nextAction='Inspect this too.')
+    await generation(app, peer, 'other-owner', ['other-input'])
+    await create(app, peer, command='other-owned-work')
+    args = {'workspaceId': workspace_id(app, owner), 'filter': 'attention', 'limit': 1}
+    first = (await app.dispatch('workspace.work.list', args))['result']
+    peer['status'] = 'stopped'  # Host observation changes attention, not the Work record.
+    with pytest.raises(AppError, match='attention changed'):
+        await app.dispatch('workspace.work.list', {**args, 'after': first['nextAfter']})
+
+
+async def test_cross_root_source_dedup_retains_origin_owner_and_no_permission_transfer(app):
+    owner, peer = app.state['sessions']
+    original = source(app, owner)
+    first = (await create(app, owner, original))['result']['item']
+    await generation(app, peer, 'peer-capture', ['peer-input'])
+    same = await create(app, peer, original, command='peer-capture')
+    assert same['sourceDuplicate']
+    assert same['result']['item']['id'] == first['id']
+    assert same['result']['item']['ownerSessionId'] == owner['id']
+    assert same['result']['item']['originSessionId'] == owner['id']
+    with pytest.raises(AppError, match='owner'):
+        await revise(app, peer, first, 'dedup-is-not-custody', nextAction='Take over')
+
+
+async def test_ui_proposal_to_accepted_and_exact_long_source_pages(app):
+    owner = app.state['sessions'][0]
+    wid = workspace_id(app, owner)
+    proposal = source(app, owner, 'An agent suggestion', origin='agent')
+    item = (await app.dispatch('workspace.work.create', {
+        'workspaceId': wid, 'sessionId': owner['id'], 'source': proposal,
+        'intentKey': 'ui-proposal', 'title': 'UI proposal', 'commitment': 'proposed',
+        'criteria': []}, command_id='ui-create'))['result']['item']
+    text = 'Exact Unicode source: \u03bb\n' * 600
+    human = source(app, owner, text)
+    item = (await app.dispatch('workspace.work.revise', {
+        'workspaceId': wid, 'sessionId': owner['id'], 'id': item['id'],
+        'expectedRevision': item['revision'], 'expectedPromiseRevision': 1,
+        'source': human, 'commitment': 'accepted',
+        'criteria': [{'id': 'source', 'text': 'Preserve full exact source.'}]},
+        command_id='ui-accept-scope'))['result']['item']
+    history = (await app.dispatch('workspace.work.history', {'workspaceId': wid, 'id': item['id']}))['result']
+    correction = next(row for row in history['items'] if row['kind'] == 'revise')['sourceRef']
+    first = (await app.dispatch(correction['action'], correction['args']))['result']['source']
+    second = (await app.dispatch(correction['action'], {**correction['args'], 'offset': first['nextOffset']}))['result']['source']
+    assert first['text'] + second['text'] == text
+    assert first['sha256'] == hashlib.sha256(text.encode()).hexdigest()
+    assert item['commitment'] == 'accepted' and item['humanDecision'] == 'not_recorded'
+
+
+async def test_failed_source_save_keeps_pending_coverage_for_successful_same_source_save(app, monkeypatch):
+    import amplifier_web.state_records as records
+    owner = app.state['sessions'][0]
+    wid = workspace_id(app, owner)
+    app._message(owner, 'user', 'Source must commit with its coverage fact.', inputOrigin='ui')
+    original = records.save_working
+    monkeypatch.setattr(records, 'save_working', lambda *a, **k: (_ for _ in ()).throw(OSError('Synthetic source-save failure')))
+    with pytest.raises(OSError):
+        app._save()
+    assert (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']['observedInputs'] == 0
+    monkeypatch.setattr(records, 'save_working', original)
+    app._save()
+    assert (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']['observedInputs'] == 1

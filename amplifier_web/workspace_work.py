@@ -202,11 +202,13 @@ class WorkspaceWork:
         query = args.get('query', '').casefold()
         scope = [workspace['id'], owner, selected, query, 'context' if context else 'list']
         after_id = ''
+        cursor = None
         if args.get('after'):
             cursor = _decode(args['after'])
-            if not isinstance(cursor, list) or len(cursor) != 3 or cursor[0] != scope or cursor[1] != version or not isinstance(cursor[2], str):
+            if not isinstance(cursor, list) or len(cursor) != 3 or cursor[0] != scope or not isinstance(cursor[2], str):
                 self.error('Work changed or this page belongs to another scope; refresh the list.')
             after_id = cursor[2]
+        owners = {}
         where = ["json_extract(receipt,'$.commandAction')=?", "json_extract(receipt,'$.result.workspaceId')=?"]
         params = [RECORD, workspace['id']]
         if owner:
@@ -221,7 +223,6 @@ class WorkspaceWork:
         elif selected == 'closed':
             where.append("json_extract(receipt,'$.result.disposition')='closed'")
         elif selected == 'attention':
-            owners = {}
             def owner_attention(sid):
                 if sid not in owners:
                     owners[sid] = self.owner_observation(sid)['needsReview']
@@ -237,6 +238,9 @@ class WorkspaceWork:
             params.append(query)
         condition = ' AND '.join(where)
         total = self.db.execute('SELECT count(*) FROM commands WHERE ' + condition, params).fetchone()[0]
+        snapshot_version = fingerprint([version, sorted(owners.items())])
+        if cursor and cursor[1] != snapshot_version:
+            self.error('Work or owner attention changed; refresh the list before continuing pages.')
         raw = self.db.execute('SELECT receipt FROM commands WHERE ' + condition + ' AND id>? ORDER BY id LIMIT ?',
                               [*params, after_id, limit + 1]).fetchall()
         items = [self.summary(json.loads(row[0])['result']) for row in raw[:limit]]
@@ -250,8 +254,9 @@ class WorkspaceWork:
                 row['blockedReason'] = row['blockedReason'][:200]
         def result():
             more = len(raw) > len(items)
-            return {'workspaceId': workspace['id'], 'version': version, 'items': items, 'total': total,
-                    'truncated': more, 'nextAfter': _encode([scope, version, items[-1]['id']]) if more and items else None,
+            return {'workspaceId': workspace['id'], 'version': version, 'snapshotVersion': snapshot_version,
+                    'items': items, 'total': total,
+                    'truncated': more, 'nextAfter': _encode([scope, snapshot_version, items[-1]['id']]) if more and items else None,
                     'observedAt': time.time(), 'coverage': 'Recorded Work only; historical reconciliation is incomplete.',
                     'detailRequired': bool(context), 'authority': 'Reference data; current constraints and execution permissions remain binding.'}
         page = result()
