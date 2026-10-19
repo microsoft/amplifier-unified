@@ -953,3 +953,106 @@ async def test_historical_criterion_reference_is_explicitly_unvalidated(app):
         'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
     assert history[-1]['evidence']['criteriaValidated'] is False
     assert (await read(app, owner, item['id']))['item']['verification'] == 'not_verified'
+
+
+async def publication_report(app, actor, item, command='publication-report', **patch):
+    return await change_work(app, actor, 'publication', item, command,
+        **{'promiseRevision': item['promiseRevision'], 'candidate': item['candidate'],
+           'outcome': 'published', 'destination': 'https://example.invalid/releases',
+           'references': ['synthetic-release:release-one'],
+           'report': 'The publisher reports this candidate was released.', **patch})
+
+
+@pytest.mark.parametrize('outcome', ['published', 'failed', 'unknown', 'not_run'])
+async def test_publication_report_is_attributed_and_never_verification_or_effect(app, outcome, monkeypatch):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    before = copy.deepcopy((await read(app, owner, item['id']))['item'])
+    def forbidden(*a, **k):
+        pytest.fail('Recording a publication report called the publisher')
+    monkeypatch.setattr(app.publishing, 'dispatch', forbidden)
+    result = await publication_report(app, owner, item, outcome=outcome)
+    current = result['result']['item']
+    assert current['delivery'] == 'reported_' + outcome
+    assert current['deliveryReport']['reportedBy'] == owner['id']
+    assert current['deliveryReport']['hostObserved'] is False
+    assert current['deliveryReport']['independentlyVerified'] is False
+    assert current['verification'] == before['verification']
+    assert current['humanDecision'] == before['humanDecision']
+    assert current['execution'] == before['execution']
+    assert current['latestOutcome'] == before['latestOutcome']
+    history = (await app.dispatch('workspace.work.history', {
+        'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
+    last = history[-1]
+    assert last['publication']['outcome'] == outcome
+    assert last['publication']['references'] == ['synthetic-release:release-one']
+    assert last['publication']['promiseRevision'] == item['promiseRevision']
+    assert last['publication']['candidate'] == candidate
+    assert last['publication']['attribution'] == 'participant_report'
+    event = (await app.dispatch(last['eventRef']['action'], last['eventRef']['args']))['result']['event']
+    assert event['publication'] == last['publication']
+    retry = await publication_report(app, owner, item, outcome=outcome)
+    assert retry['duplicate'] and retry['result'] == result['result']
+    assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize('patch', [
+    {'candidate': 'c' * 40}, {'promiseRevision': 2}, {'promiseRevision': 0},
+    {'hostObserved': True}, {'references': []}, {'destination': ' '},
+])
+async def test_publication_report_rejects_stale_or_forged_binding(app, patch):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    before = await read(app, owner, item['id'])
+    with pytest.raises(AppError):
+        await publication_report(app, owner, item, **patch)
+    assert await read(app, owner, item['id']) == before
+    assert not app.runtime.inputs
+
+
+async def test_publication_report_obeys_link_stop_and_promise_change(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    result = await publication_report(app, reviewer, item)
+    item = result['result']['item']
+    assert item['deliveryReport']['reportedBy'] == reviewer['id']
+    await app.dispatch('conversation.stop', {'sessionId': reviewer['id']}, command_id='stop-publisher-report')
+    with pytest.raises(AppError):
+        await publication_report(app, reviewer, item, command='after-stop')
+    item = (await revise(app, owner, item, 'new-promise-after-publication',
+        source=source(app, owner, 'Require a corrected publication.'),
+        constraints=['The next release must meet the corrected scope.']))['result']['item']
+    assert item['delivery'] == 'not_recorded' and item['deliveryReport'] is None
+    with pytest.raises(AppError):
+        await publication_report(app, owner, item, command='old-promise-publication', promiseRevision=1)
+    history = (await app.dispatch('workspace.work.history', {
+        'workspaceId': workspace_id(app, owner), 'id': item['id']}))['result']['items']
+    assert any(row.get('publication', {}).get('outcome') == 'published' for row in history)
+
+
+async def test_publication_changes_no_accepted_candidate_and_new_candidate_resets_display(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    item = (await publication_report(app, owner, item))['result']['item']
+    with pytest.raises(AppError, match='closure'):
+        await change_work(app, owner, 'disposition', item, 'published-is-not-accepted',
+            disposition='closed', basis='satisfied', reason='Publication is not qualified acceptance.')
+    item = (await change_work(app, owner, 'link', item, 'next-candidate',
+        linkedSessionId=owner['id'], role='executor', candidate='d' * 40))['result']['item']
+    assert item['delivery'] == 'not_recorded' and item['deliveryReport'] is None
+
+
+async def test_collection_publication_report_and_human_acceptance_do_not_imply_shipment(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    check = retained_check(app, reviewer, candidate, 'checks-with-publication-claim')
+    receipt = app.collaboration.receipt(check)
+    receipt['result']['publication'] = {'status': 'published', 'reference': 'https://example.invalid/release',
+        'evidence': 'reported', 'ownerConfirmed': False, 'reportedBy': reviewer['id']}
+    app.collaboration.save(check, receipt)
+    app.db.commit()
+    item = (await change_work(app, reviewer, 'report', item, 'verified-not-shipped',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Check evidence with a publication claim.',
+        criteria=['retained'], checkReceiptId=check))['result']['item']
+    item = (await app.dispatch('workspace.work.decision', {
+        'workspaceId': workspace_id(app, owner), 'sessionId': owner['id'],
+        'id': item['id'], 'expectedRevision': item['revision'], 'promiseRevision': 1,
+        'candidate': candidate, 'decision': 'accepted'}, command_id='accepted-not-shipped'))['result']['item']
+    assert item['verification'] == 'independent_checks_passed'
+    assert item['humanDecision'] == 'accepted'
+    assert item['delivery'] == 'not_recorded'
