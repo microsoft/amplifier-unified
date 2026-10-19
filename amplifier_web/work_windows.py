@@ -831,7 +831,8 @@ class WorkWindows:
         root_proof = self._proof_state(session['id'], session)
         page_current = bool(page is not None and not self.closed and not self.service.closed
                             and self.epochs.get(session['id']) == page.get('_bindingFence'))
-        support_id = (page.get('_consumerProof') or page.get('_consumerSupport')) if page else None
+        support_id = (page.get('_consumerProof') or page.get('_consumerSupport')
+                      or page.get('_rootProofId')) if page else None
         if support_id:
             proof = self._root_proofs.get(session['id'])
             # Incomplete association can still describe a current bounded raw
@@ -849,7 +850,8 @@ class WorkWindows:
             if root_proof is None:
                 root_proof = {'id': support_id, 'status': 'stale',
                               'reason': 'operation-expired', 'boundCount': 0}
-        bindings = page_current and (not support_id or root_proof['status'] == 'complete')
+        bindings = page_current and (not support_id or (
+            page.get('_consumerProof') == support_id and root_proof['status'] == 'complete'))
         groups = self._groups(page, bindings=bindings) if page else {'items': [], 'turns': [], 'mode': 'cursor',
             'offset': None, 'total': None, 'before': None, 'hasEarlier': False,
             'coverage': {'kind': 'event-window', 'historyComplete': False}}
