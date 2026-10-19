@@ -728,6 +728,149 @@ class FakeProjector:
         self.closed = True
 
 
+@pytest.mark.asyncio
+async def test_explicit_proof_joins_writer_once_before_capturing_baseline(tmp_path, monkeypatch):
+    from amplifier_web.diagnostics import Diagnostics
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=3)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostic = Diagnostics(service)
+    service.diagnostics = diagnostic
+    entered, release, second_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original_flush = diagnostic._flush
+    calls = []
+    async def observed_flush():
+        calls.append('flush')
+        entered.set()
+        await release.wait()
+        await original_flush()
+    monkeypatch.setattr(diagnostic, '_flush', observed_flush)
+    original_await = owner._await_proof
+    async def joined(identity, task, record):
+        if entered.is_set():
+            second_entered.set()
+        return await original_await(identity, task, record)
+    monkeypatch.setattr(owner, '_await_proof', joined)
+    first = asyncio.create_task(owner.prove('s'))
+    second = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert diagnostic.flush_lock.locked()
+        assert not owner.pages and not owner.projector.inputs
+        second = asyncio.create_task(owner.prove('s'))
+        await asyncio.wait_for(second_entered.wait(), 2)
+        assert calls == ['flush']
+        release.set()
+        a, b = await asyncio.wait_for(asyncio.gather(first, second), 3)
+        assert a == b and a['status'] == 'complete'
+        assert len(owner.projector.inputs) == 1
+        assert owner.projector.inputs[0]['deadline'] == owner._root_proofs['s']['deadline']
+        before = len(calls)
+        owner.project(session)
+        assert owner.request('s') is None
+        assert (await owner.prove('s'))['id'] == a['id']
+        assert len(calls) == before
+    finally:
+        release.set()
+        await asyncio.gather(*(t for t in (first, second) if t is not None), return_exceptions=True)
+        await owner.close()
+        await diagnostic.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('state', ['storage-error', 'not-ready', 'pending', 'configuration-error', 'stopping'])
+async def test_writer_return_is_not_successful_proof_readiness(tmp_path, monkeypatch, state):
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=3)
+    diagnostic = SimpleNamespace(flush_lock=asyncio.Lock(), storage_ready=True, storage_error=False,
+                                 configuration_error=False, stopping=False, pending=[])
+    calls = []
+    async def flush():
+        calls.append(True)
+        assert diagnostic.flush_lock.locked()
+        if state == 'storage-error':
+            diagnostic.storage_error = True
+        elif state == 'not-ready':
+            diagnostic.storage_ready = False
+        elif state == 'pending':
+            diagnostic.pending.append(object())
+        elif state == 'configuration-error':
+            diagnostic.configuration_error = True
+        else:
+            diagnostic.stopping = True
+    diagnostic._flush = flush
+    service.diagnostics = diagnostic
+    try:
+        result = await owner.read_selected('s')
+        assert result['rootProof']['status'] == 'incomplete'
+        assert result['rootProof']['reason'] == 'diagnostics-unavailable'
+        assert not result['items'] and not owner.projector.inputs
+        assert owner.project(session)['workProjection']['current'] is False
+        assert calls == [True]
+        assert (await owner.prove('s'))['status'] == 'incomplete'
+        assert calls == [True]  # No automatic flush retry from a status/read.
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['epoch', 'owner', 'source'])
+async def test_writer_boundary_retains_original_owner_and_epoch_refusal(tmp_path, monkeypatch, change):
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=3)
+    entered, release = asyncio.Event(), asyncio.Event()
+    diagnostic = SimpleNamespace(flush_lock=asyncio.Lock(), storage_ready=True, storage_error=False,
+                                 configuration_error=False, stopping=False, pending=[])
+    async def flush():
+        entered.set()
+        await release.wait()
+    diagnostic._flush = flush
+    service.diagnostics = diagnostic
+    task = asyncio.create_task(owner.prove('s'))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if change == 'epoch':
+            owner.invalidate({'s'})
+        elif change == 'owner':
+            replacement = dict(session)
+            service._session = lambda identity, hydrate=False: replacement
+        else:
+            session['nativeIdentity'] = 'changed'
+        release.set()
+        result = await asyncio.wait_for(asyncio.shield(task), 2)
+        assert result['status'] == 'stale'
+        assert not owner.pages and not owner.projector.inputs
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_writer_wait_and_late_drain_share_the_existing_proof_deadline(tmp_path, monkeypatch):
+    import amplifier_web.work_windows as module
+    owner, _, _, service = fixture(tmp_path, monkeypatch, count=3)
+    entered, release = asyncio.Event(), asyncio.Event()
+    diagnostic = SimpleNamespace(flush_lock=asyncio.Lock(), storage_ready=True, storage_error=False,
+                                 configuration_error=False, stopping=False, pending=[])
+    async def flush():
+        entered.set()
+        await release.wait()
+    diagnostic._flush = flush
+    service.diagnostics = diagnostic
+    monkeypatch.setattr(module, 'PROOF_SECONDS', .05)
+    task = asyncio.create_task(owner.prove('s'))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        result = await asyncio.wait_for(asyncio.shield(task), 1)
+        assert result['status'] == 'incomplete' and result['reason'] == 'deadline'
+        assert owner._proof_draining and not owner.projector.inputs and not owner.pages
+        release.set()
+        await asyncio.gather(*tuple(owner._proof_draining), return_exceptions=True)
+        assert not owner.pages and not owner.projector.inputs
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+
+
 def fixture(tmp_path, monkeypatch, count=140):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
     monkeypatch.delenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', raising=False)

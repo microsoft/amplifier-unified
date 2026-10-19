@@ -13,6 +13,76 @@ def live_fixture(tmp_path, monkeypatch, count=126):
     return owner, session, service
 
 
+@pytest.mark.parametrize('shape,expected', [
+    ('inline', False), ('metadata', True), ('foreign-group', False),
+    ('canonical-alias', True), ('mixed', True),
+])
+def test_latest_resident_requirement_is_bounded_and_never_resolves_proof(tmp_path, monkeypatch, shape, expected):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch)
+    nodes = session['execution']['nodes']
+    if shape in {'metadata', 'canonical-alias', 'mixed'}:
+        selected = nodes if shape != 'mixed' else nodes[-1:]
+        for row in selected:
+            row.pop('output')
+            row['liveObservation'] = True
+            if shape == 'canonical-alias':
+                row['_eventFields'] = {'output': {'untrusted': 'not-inline'}}
+    elif shape == 'foreign-group':
+        nodes.append({'id': 'foreign', 'turnId': 'other', 'kind': 'tool',
+                      'liveObservation': True, 'startedAt': 1, 'phase': 'completed'})
+    class Bounded(list):
+        def __iter__(self):
+            raise AssertionError('Requirement classification scanned the whole resident graph')
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                start, end, _ = key.indices(len(self))
+                assert end - start <= 100
+            return super().__getitem__(key)
+    session['execution']['nodes'] = Bounded(nodes)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Requirement classification read canonical evidence')
+    monkeypatch.setattr(owner, 'live_binding', forbidden)
+    monkeypatch.setattr(owner, '_worker', forbidden)
+    assert owner.live_pages.needs_canonical(session, 't@user') is expected
+
+
+@pytest.mark.asyncio
+async def test_registered_inline_latest_uses_no_writer_or_canonical_read(
+        authenticated_client, tmp_path, monkeypatch):
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    app = await create_app(tmp_path / 'inline-only', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False, preload_providers=False)
+    service = app['service']
+    await service.dispatch('session.create', {})
+    session = service._session()
+    _, source, _ = live_fixture(tmp_path, monkeypatch)
+    session.update(messages=source['messages'], execution=source['execution'])
+    service.clients.attach('inline-browser', kind='web')
+    client = await authenticated_client(app)
+    client.session.headers['X-Amplifier-Client'] = 'inline-browser'
+    windows = service.event_log_view.windows
+    original = service._session
+    def resident(identity=None, *, hydrate=True):
+        assert hydrate is False
+        return original(identity, hydrate=False)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('Inline-only latest Work requested canonical proof')
+    monkeypatch.setattr(service, '_session', resident)
+    monkeypatch.setattr(windows, 'read_selected', forbidden)
+    try:
+        response = await client.get('/api/conversation/detail', params={
+            'sessionId': session['id'], 'part': 'nodes', 'group': 't@user'})
+        assert response.status == 200, await response.text()
+        page = await response.json()
+        assert len(page['items']) == 100 and page['before']
+        assert not windows._root_proofs
+        assert all(row['outputDetail']['windowKey'].startswith('resident-work:') for row in page['items'])
+    finally:
+        monkeypatch.setattr(service, '_session', original)
+        await client.close()
+
+
 @pytest.mark.asyncio
 async def test_explicit_older_steps_and_live_sync_preserve_all_opened_rows_without_full_scan(tmp_path, monkeypatch):
     owner, session, _ = live_fixture(tmp_path, monkeypatch)
