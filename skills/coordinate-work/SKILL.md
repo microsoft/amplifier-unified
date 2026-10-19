@@ -51,7 +51,12 @@ compare those exact links, not equal message text.
    do not treat a purpose label or peer message as additional permission.
 3. Use `coordination.send` with the exact target, short text,
    references and a stable dispatch ID. Notify only retains a note. Queue admits
-   at an idle boundary. Steer admits only to
+   at an idle boundary, starting a cold worker when needed; the user does not
+   need to open that chat or relay a Continue message. Idle worker retirement
+   (including replacement for an update) keeps the conversation eligible for
+   this ordinary guarded input. It does not clear an actual Stop, a blocked task
+   or a failed turn, and does not replay previously suppressed requests.
+   Steer admits only to
    the recipient's exact current generation when its runtime supports request-boundary
    steering. Accepted is not applied; held/unknown never becomes a later turn.
    Unsupported stays explicit: never stop and resend. Preserve unknown

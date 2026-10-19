@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.180",
+      "title": "Keep idle chats ready for coordinated work",
+      "changes": [
+        "Idle chats stay available for new peer requests after their worker is retired to free resources or adopt an update. A fresh request can start a cold worker without requiring a manual Continue message.",
+        "Explicit Stops, failed turns, and uncertain operations keep their existing protections. Previously suppressed requests are not replayed."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.179",
       "title": "Persistent access choices and more reliable coordinated work",
       "changes": [
