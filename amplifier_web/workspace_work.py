@@ -13,6 +13,7 @@ import time
 import uuid
 
 from amplifier_operations.coordination import fingerprint
+from .workspace_work_coverage import HUMAN_ORIGINS
 
 RECORD = 'workspace.work.record'
 EVENT = 'workspace.work.event'
@@ -23,6 +24,7 @@ SOURCE_CHARS = 131072
 
 def definitions(schema, string):
     from .workspace_work_evidence import definitions as evidence_definitions
+    from .workspace_work_coverage import definitions as coverage_definitions
     scope = {'workspaceId': string(100)}
     actor = {'sessionId': string(200)}
     target = {**scope, 'id': string(200)}
@@ -37,6 +39,7 @@ def definitions(schema, string):
                'nextAction': string(1000), 'blockedReason': string(1000)}
     return {
         **evidence_definitions(schema, string),
+        **coverage_definitions(schema, string),
         'workspace.work.list': ('Read bounded durable promises without starting models or workers. Coverage is not a complete historical inventory.', schema({**scope, **page,
             'filter': {'enum': ['accepted', 'all', 'proposed', 'closed', 'attention']},
             'query': string(200)}, ['workspaceId'])),
@@ -90,6 +93,8 @@ class WorkspaceWork:
         self.db.execute("""CREATE INDEX IF NOT EXISTS work_history_scope ON commands(
             json_extract(receipt,'$.workItemId'), json_extract(receipt,'$.sequence'))
             WHERE json_extract(receipt,'$.commandAction')='workspace.work.event'""")
+        from .workspace_work_coverage import initialize
+        initialize(self)
         self.db.commit()
 
     def error(self, message, status=409):
@@ -288,9 +293,9 @@ class WorkspaceWork:
         if not text.strip() or len(text) > SOURCE_CHARS:
             self.error('Source must be nonempty and at most 131072 characters; retain an explicit bounded source instead.', 400)
         provenance = message.get('inputOrigin', 'unknown')
-        if provenance not in {'ui', 'user', 'peer', 'agent'}:
+        if provenance not in HUMAN_ORIGINS | {'peer', 'agent'}:
             provenance = 'unknown'
-        if message.get('role') != 'user' and provenance in {'ui', 'user'}:
+        if message.get('role') != 'user' and provenance in HUMAN_ORIGINS:
             provenance = 'unknown'
         return {'sessionId': target['id'], 'messageId': message['id'],
                 'nativeMessageId': message.get('nativeMessageId'), 'nativeIndex': message.get('nativeIndex'),
@@ -309,6 +314,11 @@ class WorkspaceWork:
     async def dispatch(self, action, args, origin, command_id, caller):
         verb = action.removeprefix('workspace.work.')
         workspace = self.workspace(args, origin, caller)
+        if verb in {'coverage', 'reviewInput'}:
+            from .workspace_work_coverage import read, review
+            if verb == 'reviewInput':
+                return await review(self, workspace, args, origin, command_id, caller)
+            return {'accepted': True, 'result': read(self, workspace, args)}
         if verb == 'context':
             if origin not in {'ui', 'user'} and args['sessionId'] != caller:
                 self.error('Work context belongs to the calling root.', 403)
@@ -366,7 +376,7 @@ class WorkspaceWork:
                 event_extra = {}
                 event_promise = None
                 if verb == 'create':
-                    if args['commitment'] == 'accepted' and captured['inputOrigin'] not in {'ui', 'user'}:
+                    if args['commitment'] == 'accepted' and captured['inputOrigin'] not in HUMAN_ORIGINS:
                         self.error('Accepted Work requires proven human source origin; retain other sources as proposals.', 400)
                     source_key = fingerprint([workspace['id'], captured['sessionId'], captured['messageId'], captured['sha256'], args['intentKey']])
                     prior = self.db.execute("SELECT receipt FROM commands WHERE json_extract(receipt,'$.commandAction')=? AND json_extract(receipt,'$.result.sourceKey')=?", (RECORD, source_key)).fetchone()
@@ -395,7 +405,7 @@ class WorkspaceWork:
                     promise_change = any(key in args and args[key] != item.get(key) for key in ('interpretation', 'criteria', 'constraints', 'commitment'))
                     if promise_change and not captured:
                         self.error('A promise correction needs its exact source.')
-                    if promise_change and (item['commitment'] == 'accepted' or args.get('commitment') == 'accepted') and captured['inputOrigin'] not in {'ui', 'user'}:
+                    if promise_change and (item['commitment'] == 'accepted' or args.get('commitment') == 'accepted') and captured['inputOrigin'] not in HUMAN_ORIGINS:
                         self.error('Changing accepted scope needs proven human source origin.', 400)
                     item.update(revision=item['revision'] + 1, eventCount=item['eventCount'] + 1, updatedAt=now)
                     if promise_change:
@@ -423,6 +433,9 @@ class WorkspaceWork:
                          'source': captured or {}, **event_extra,
                          'changes': {k: copy.deepcopy(args[k]) for k in changed_fields if k in args}}
                 self.receipts.insert(event_id, fingerprint(event), event)
+                if captured:
+                    from .workspace_work_coverage import mapped
+                    mapped(self, captured, item)
                 item['latestEventRef'] = event_id
                 if verb == 'create':
                     item['originalSourceRef'] = event_id

@@ -448,3 +448,56 @@ async def test_large_synthetic_work_set_is_bounded_and_all_open_items_are_reacha
         assert page['truncated']
         args['after'] = page['nextAfter']
     assert len(observed) == len(set(observed)) == 1000 and set(observed) == ids
+
+
+async def test_uncaptured_input_coverage_is_not_a_task_inventory_or_automatic_import(app):
+    owner = app.state['sessions'][0]
+    wid = workspace_id(app, owner)
+    original = source(app, owner, 'Please retain the newly accepted request.')
+    source(app, owner, 'Thanks; this is ordinary conversation.')
+    source(app, owner, 'Peer role=user is not a human request.', origin='peer')
+    before = (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']
+    assert before['observedInputs'] == before['unreviewedInputs'] == 2
+    assert before['historicalCoverage'] == 'incomplete'
+    assert (await app.dispatch('workspace.work.list', {'workspaceId': wid}))['result']['total'] == 0
+    await create(app, owner, original)
+    remaining = (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']
+    assert remaining['observedInputs'] == 2 and remaining['unreviewedInputs'] == 1
+    row = remaining['items'][0]
+    await agent_action(app, owner, 'workspace.work.reviewInput', {
+        'workspaceId': wid, 'sessionId': owner['id'], 'inputId': row['id'],
+        'sourceSha256': row['sourceSha256'], 'disposition': 'ordinary_conversation',
+        'reason': 'Acknowledgment only; no new request identified.'}, 'review-input')
+    final = (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']
+    assert final['unreviewedInputs'] == 0 and final['historicalCoverage'] == 'incomplete'
+    assert not app.runtime.inputs
+
+
+async def test_coverage_survives_restart_without_hydration_or_peer_review_authority(app, monkeypatch):
+    owner, peer = app.state['sessions']
+    wid = workspace_id(app, owner)
+    original = source(app, owner, 'An uncaptured source must remain visible.')
+    page = (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']
+    row = page['items'][0]
+    await generation(app, peer, 'peer-review', ['peer-review-input'])
+    with pytest.raises(AppError):
+        await agent_action(app, peer, 'workspace.work.reviewInput', {
+            'workspaceId': wid, 'sessionId': peer['id'], 'inputId': row['id'],
+            'sourceSha256': row['sourceSha256'], 'disposition': 'ordinary_conversation',
+            'reason': 'Pretend this was reviewed by its source owner.'}, 'foreign-review')
+    await app.close()
+    restored = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    try:
+        def forbidden(*a, **k):
+            pytest.fail('Coverage hydrated history')
+        monkeypatch.setattr(restored.history, 'ensure_loaded', forbidden)
+        page = (await restored.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']
+        assert page['unreviewedInputs'] == 1 and page['items'][0]['messageId'] == original['messageId']
+    finally:
+        await restored.close()
+
+
+async def test_host_voice_origin_remains_human_without_promoting_peer_role(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner, source(app, owner, origin='voice')))['result']['item']
+    assert (await read(app, owner, item['id']))['originalSource']['inputOrigin'] == 'voice'

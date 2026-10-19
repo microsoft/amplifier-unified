@@ -1608,6 +1608,9 @@ class AppService:
     def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
+        if getattr(self, 'workspace_work', None):
+            from .workspace_work_coverage import observe
+            observe(self.workspace_work, session, message)
         from .chat_navigation import touch, touch_independent_activity
         # Only ordinary send has prepared a trusted UI admission. Other inputs,
         # including UI host actions, must retain their own raw progress truth.
