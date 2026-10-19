@@ -15,7 +15,7 @@ def live_fixture(tmp_path, monkeypatch, count=126):
 
 @pytest.mark.parametrize('shape,expected', [
     ('inline', False), ('metadata', True), ('foreign-group', False),
-    ('canonical-alias', True), ('mixed', True),
+    ('canonical-alias', True), ('canonical-alias-preview', True), ('mixed', True),
 ])
 def test_latest_resident_requirement_is_bounded_and_never_resolves_proof(tmp_path, monkeypatch, shape, expected):
     owner, session, _ = live_fixture(tmp_path, monkeypatch)
@@ -27,6 +27,10 @@ def test_latest_resident_requirement_is_bounded_and_never_resolves_proof(tmp_pat
             row['liveObservation'] = True
             if shape == 'canonical-alias':
                 row['_eventFields'] = {'output': {'untrusted': 'not-inline'}}
+    elif shape == 'canonical-alias-preview':
+        for row in nodes:
+            row['output'] = 'Short preview, not the complete canonical result'
+            row['_eventFields'] = {'output': {'untrusted': 'not-inline'}}
     elif shape == 'foreign-group':
         nodes.append({'id': 'foreign', 'turnId': 'other', 'kind': 'tool',
                       'liveObservation': True, 'startedAt': 1, 'phase': 'completed'})
