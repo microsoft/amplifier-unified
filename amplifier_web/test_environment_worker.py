@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -382,33 +383,65 @@ class RemovalFailure(OSError):
         self.receipt = receipt
 
 
-def remove_owned(payload, identity, backend, config, lib, backend_error):
+def remove_owned(payload, identity, backend, config, lib, backend_error, binding_source):
     phase, effect, destination, started = 'observe-stopped', 'not_dispatched', None, False
+    recovering, cleanup = payload.get('action') == 'finishCleanup', None
     try:
         universe = lib.status(identity, config=config)
         if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
             return {'ok': False, 'universeId': identity, 'status': 'unknown',
                     'message': 'Removal requires observed stopped containers. No data was removed.'}
+        if recovering:
+            cleanup = 'rechecking'
+            if docker_backend(payload) != backend:
+                raise ValueError('The actual backend changed before cleanup.')
+            observed = docker_reconcile(payload, identity, backend, binding_source)
+            if (observed.get('status') != 'stopped'
+                    or observed.get('observation', {}).get('ownership') != 'matched'):
+                raise ValueError('The stopped cleanup owner is unverified.')
         phase = 'prepare-retention'
         destination = removal_directory(payload)
         original = removal_binding(payload, identity, backend)
+        cleanup = 'preserving'
+        if recovering:
+            cleanup_phase(payload, cleanup)
+            if shutil.disk_usage(Path(payload['root'])).free < 2 * retention.RECOVERY_LIMIT + 1024 ** 3:
+                return {**cleanup_failure(payload, cleanup, identity, 'retention_storage'),
+                        'removal': {'version': 1, 'phase': phase, 'code': 'phase_failed',
+                                    'destroyEffect': effect}}
         destination.mkdir(mode=0o700)  # Existing/partial exports are never reused by removal.
         write_private_record(destination / 'removal-started.json',
             {'version': 1, 'phase': 'started', 'binding': original})
         started = True
         archives = []
+        options = {'max_bytes': retention.RECOVERY_LIMIT, 'timeout_seconds': 300} if recovering else {}
         for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]:
             phase = 'export-' + source.strip('/')
-            archives.append(serialize(lib.export_files(identity, source, destination / name, config=config)))
+            archives.append(serialize(lib.export_files(identity, source, destination / name, config=config, **options)))
         phase = 'verify-exports'
+        cleanup = 'verifying'
+        if recovering:
+            cleanup_phase(payload, cleanup)
         for archive, source, name in zip(archives, ('/workspace', '/artifacts'), ('workspace.tar', 'artifacts.tar')):
             if (archive.get('id') != identity or archive.get('source') != source
                     or archive.get('destination') != str(destination / name)):
                 raise ValueError('The exported selection does not match the original removal.')
-        retained = retention.verify_retention(Path(payload['root']), archives)
+        retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if recovering else 'files')
         phase = 'publish-manifest'
         retain_manifest(destination, archives)
+        if recovering:
+            phase, cleanup = 'recheck-stopped', 'rechecking'
+            cleanup_phase(payload, cleanup)
+            if docker_backend(payload) != backend:
+                raise ValueError('The actual backend changed before removal.')
+            observed = docker_reconcile(payload, identity, backend, binding_source)
+            if (observed.get('status') != 'stopped'
+                    or observed.get('observation', {}).get('ownership') != 'matched'):
+                raise ValueError('The stopped cleanup owner changed before removal.')
         phase = 'record-dispatch'
+        if recovering:
+            cleanup = 'removing'
+            cleanup_phase(payload, cleanup)
         intent = {'version': 1, 'phase': 'destroy-dispatched', 'binding': original,
             'startedSha256': retention.digest(destination / 'removal-started.json')[0],
             'manifestSha256': retention.digest(destination / 'manifest.json')[0],
@@ -419,7 +452,23 @@ def remove_owned(payload, identity, backend, config, lib, backend_error):
         # Its presence never proves completion or authorizes another destroy.
         phase, effect = 'destroy', 'unknown'
         result = lib.destroy(identity, config=config)
-        if result.complete:
+        complete = bool(result.complete)
+        if complete:
+            effect = 'confirmed'
+        if recovering:
+            phase, cleanup = 'observe-absence', 'observing'
+            cleanup_phase(payload, cleanup)
+            if docker_backend(payload) != backend:
+                raise ValueError('The actual backend changed while observing removal.')
+            observed = docker_reconcile(payload, identity, backend, binding_source)
+            if (observed.get('status') != 'absent'
+                    or observed.get('observation', {}).get('absenceConfirmed') is not True):
+                return {**cleanup_failure(payload, cleanup, identity),
+                        'archives': archives, 'retention': retained,
+                        'removal': {'version': 1, 'phase': phase, 'code': 'unconfirmed',
+                                    'destroyEffect': effect}}
+            complete = True
+        if complete:
             phase, effect = 'settle', 'confirmed'
             try:
                 write_private_record(destination / 'destroy-confirmed.json', {
@@ -430,18 +479,27 @@ def remove_owned(payload, identity, backend, config, lib, backend_error):
                 # admission cleanup/settlement after confirmed destruction.
                 release_admission(payload, identity)
                 retain_settlement(payload, identity, backend, 'removed')
-        return {'ok': bool(result.complete), 'universeId': identity,
-                'status': 'removed' if result.complete else 'unknown',
-                'result': {'complete': bool(result.complete), 'outcome': 'removed' if result.complete else 'unknown'},
+        return {'ok': complete, 'universeId': identity,
+                'status': 'removed' if complete else 'unknown',
+                'result': {'complete': complete, 'outcome': 'removed' if complete else 'unknown'},
                 'archives': archives, 'retention': retained,
-                'removal': {'version': 1, 'phase': phase, 'code': 'complete' if result.complete else 'unconfirmed',
+                'removal': {'version': 1, 'phase': phase, 'code': 'complete' if complete else 'unconfirmed',
                             'destroyEffect': effect},
-                'message': 'Source and artifacts were retained before removal.' if result.complete
+                'message': 'Source and artifacts were retained before removal.' if complete
                            else 'Artifacts were retained; teardown is not confirmed.'}
     except Exception as exc:
         diagnostic = {'version': 1, 'phase': phase, 'code': 'phase_failed', 'destroyEffect': effect}
         receipt = {'ok': False, 'status': 'unknown', 'universeId': identity, 'removal': diagnostic,
                    'message': 'Removal did not complete. Preserve the original request and inspect retained evidence; do not replay.'}
+        if effect == 'not_dispatched':
+            if isinstance(exc, backend_error) and phase in {'export-workspace', 'export-artifacts'}:
+                # Only a synchronous library export rejection is a known
+                # preservation failure. Publication/validation OSErrors remain
+                # unknown under the original removal boundary.
+                receipt = {**cleanup_failure(payload, 'preserving', identity, getattr(exc, 'code', None)),
+                           'removal': diagnostic}
+            elif recovering and cleanup == 'rechecking':
+                receipt = {**cleanup_failure(payload, cleanup, identity), 'removal': diagnostic}
         if started:
             try:
                 write_private_record(destination / 'removal-failed.json', {
@@ -449,7 +507,7 @@ def remove_owned(payload, identity, backend, config, lib, backend_error):
                     'startedSha256': retention.digest(destination / 'removal-started.json')[0]})
             except Exception:
                 pass  # Diagnostic persistence cannot change the known external outcome.
-        if isinstance(exc, backend_error):
+        if isinstance(exc, backend_error) or (recovering and cleanup == 'rechecking'):
             return receipt
         raise RemovalFailure(receipt) from None
 
@@ -492,8 +550,12 @@ def inspect_removal(payload):
                 return held
         if intent.get('archives') != [{k: a[k] for k in ('source', 'sha256', 'bytes')} for a in archives]:
             return held
-        checked = retention.verify_retention(Path(payload['root']), archives, publish=False)
-        if checked != read_private_record(directory / 'retention.json'):
+        accounting = read_private_record(directory / 'retention.json')
+        mode = accounting.get('policy') if isinstance(accounting, dict) else None
+        if mode not in {'files', 'archive-only'}:
+            return held
+        checked = retention.verify_retention(Path(payload['root']), archives, mode, publish=False)
+        if checked != accounting:
             return held
         confirmed = read_private_record(directory / 'destroy-confirmed.json')
         if confirmed is None:
@@ -504,6 +566,38 @@ def inspect_removal(payload):
         return {**held, 'code': 'destroy_confirmation_recorded'}
     except (OSError, ValueError, TypeError, KeyError, retention.tarfile.TarError):
         return held
+
+
+def cleanup_phase(payload, phase):
+    """Immutable phase evidence distinguishes preservation from destructive work."""
+    root = Path(payload['root']) / ('cleanup-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
+    root.mkdir(mode=0o700, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError('The cleanup evidence directory is unsafe.')
+    write_private_record(root / (phase + '.json'), {
+        'requestId': payload['requestId'], 'operationId': payload['operationId'],
+        'rootOwner': payload['rootOwner'], 'phase': phase})
+
+
+def cleanup_failure(payload, phase, identity, code='preservation_failed'):
+    if not isinstance(code, str) or code not in {
+            'preservation_failed', 'retention_storage', 'archive_verification_failed',
+            'owner_unverified', 'owner_changed', 'ownership_conflict', 'backend_changed'}:
+        code = 'preservation_failed'
+    before_removal = phase in {'preserving', 'verifying', 'rechecking'}
+    changed_owner = phase == 'rechecking' or code in {'owner_unverified', 'owner_changed', 'ownership_conflict', 'backend_changed'}
+    if phase == 'rechecking' and code == 'preservation_failed':
+        code = 'owner_unverified'
+    if phase == 'verifying' and code == 'preservation_failed':
+        code = 'archive_verification_failed'
+    return {'ok': False, 'status': 'stopped' if before_removal and not changed_owner else 'unknown',
+            'universeId': identity, 'code': code, 'phase': phase,
+            'effectAdmitted': not before_removal,
+            'message': ('The environment owner or backend could not be verified. No removal was attempted; inspect the exact environment before continuing cleanup.'
+                        if before_removal and changed_owner else
+                        'Files could not be completely preserved. The stopped environment is unchanged; no removal was attempted.'
+                        if before_removal else 'Files were preserved, but removal is not confirmed. Inspect the exact environment before continuing cleanup.')}
 
 
 def profile(image, payload=None):
@@ -601,7 +695,7 @@ def execute_call(payload):
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
             identity = lib.launch_id(payload['operationId'], config=config)
-        if action in {'read', 'execute', 'stop', 'remove', 'exportArtifacts'} | jobs.JOB_ACTIONS:
+        if action in {'read', 'execute', 'stop', 'remove', 'finishCleanup', 'exportArtifacts'} | jobs.JOB_ACTIONS:
             docker_owner(payload, identity, backend, binding_source)
         if action in jobs.JOB_ACTIONS:
             if not source_ready(root, identity, snapshot):
@@ -632,11 +726,12 @@ def execute_call(payload):
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'stopped' if result.complete else 'unknown', 'result': serialize(result),
                     'message': 'Containers stopped; source and artifacts are retained.' if result.complete else 'Stop was requested but not confirmed. Inspect current state.'}
-        if action == 'remove':
-            if payload.get('retentionMode', 'files') != 'files':
+        if action in {'remove', 'finishCleanup'}:
+            recovering = action == 'finishCleanup'
+            if not recovering and payload.get('retentionMode', 'files') != 'files':
                 return {'ok': False, 'status': 'unknown', 'universeId': identity, 'code': 'retention_unsupported',
                         'message': 'Full environment retention is unavailable for this backend. The stopped environment was preserved.'}
-            return remove_owned(payload, identity, backend, config, lib, DigitalTwinUniverseError)
+            return remove_owned(payload, identity, backend, config, lib, DigitalTwinUniverseError, binding_source)
         if action == 'exportArtifacts':
             universe = lib.status(identity, config=config)
             if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
@@ -652,8 +747,10 @@ def execute_call(payload):
             return {'ok': True, 'universeId': identity, 'status': 'stopped', 'archives': archives,
                     'artifactExport': retained, 'message': 'Artifacts retained. The stopped environment and workspace are unchanged; removal is not authorized.'}
         raise ValueError('Unsupported managed test environment action.')
+    except RemovalFailure:
+        raise  # Preserve the inner bounded receipt, including confirmed destruction.
     except DigitalTwinUniverseError as exc:
-        if action == 'remove':
+        if action in {'remove', 'finishCleanup'}:
             return {'ok': False, 'status': 'unknown', 'code': 'backend_unconfirmed',
                     'message': 'The original removal could not be confirmed. Inspect retained evidence; do not replay.'}
         return {'ok': False, 'status': 'unknown', 'universeId': identity or exc.universe_id,

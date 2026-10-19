@@ -256,3 +256,32 @@ async def test_queued_completion_rechecks_replaced_source_after_lock(app):
     with pytest.raises(AppError, match='current transport-bound'):
         await waiting
     assert app.assignments.current(replacement)['tasks'][task['id']]['status'] == 'claimed'
+
+
+@pytest.mark.parametrize('state,label', [('blocked', 'Work blocked'), ('paused', 'Task paused'),
+    ('stopped', 'Stopped'), ('error', 'Needs attention'), ('approval', 'Approval requested')])
+async def test_worker_observation_is_live_but_never_changes_claim_or_readiness(app, monkeypatch, state, label):
+    owner = app.state['sessions'][0]; peer, _ = await child(app, owner)
+    task = await create(app, owner)
+    claimed = (await change(app, peer, 'claim', task, agent=True))['result']['task']
+    before = copy.deepcopy(app.assignments.current(owner))
+    initial = (await app.dispatch('assignment.tasks.list', {'sessionId': owner['id']}))['result']
+    monkeypatch.setattr(app.cold_display, 'hydrate', lambda *a: (_ for _ in ()).throw(AssertionError('No history hydration')))
+    waiting = asyncio.create_task(app.dispatch('assignment.tasks.wait', {
+        'sessionId': owner['id'], 'afterVersion': initial['version'], 'waitMs': 1000}))
+    await asyncio.sleep(0)
+    peer['status'] = state if state in {'stopped', 'error'} else 'idle'
+    if state in {'blocked', 'paused'}:
+        peer['task'] = {'id': 'goal', 'revision': 2, 'status': state, 'blockedReason': 'Waiting for owner decision'}
+    elif state == 'approval':
+        peer['approvals'] = [{'id': 'pending', 'status': 'pending'}]
+    app.coordination.notify()
+    observed = await waiting
+    projected = observed['result']['tasks'][0]
+    assert observed['changed'] and not observed['timedOut']
+    assert projected['worker']['label'] == label
+    assert projected['worker']['blockedReason'] == ('Waiting for owner decision' if state == 'blocked' else '')
+    assert projected['status'] == 'claimed' and projected['readiness'] == 'ready'
+    assert projected['claim'] == claimed['claim']
+    assert observed['result']['assignmentRevision'] == initial['assignmentRevision']
+    assert app.assignments.current(owner) == before

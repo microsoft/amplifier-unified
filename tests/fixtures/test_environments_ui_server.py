@@ -48,7 +48,8 @@ async def main(home, port, backend='docker'):
     (workspace / 'check.py').write_text("print('workspace check passed')\n")
     calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True,
                                  'backendAvailable': True, 'longOutput': False, 'executeFailure': False,
-                                 'setupRequired': False, 'artifactTimeout': False, 'removeUnknown': False}
+                                 'setupRequired': False, 'artifactTimeout': False,
+                                 'removeUnknown': False, 'removeFailure': False}
     setup_calls = []
     probes = Counter()
     lock = threading.Lock()
@@ -56,6 +57,8 @@ async def main(home, port, backend='docker'):
     if backend == 'incus':
         config = {'python': '/fixture/managed/python', 'backend': 'incus',
                   'incus': {'project': 'fixture-project', 'daemonFingerprint': 'a' * 64}}
+    # The controlled transport models a qualified Linux backend on every test host.
+    environments.SUPPORTED_HOST = True
     def configuration(app):
         probes['configuration'] += 1
         return (None, 'disabled', 'Set up the controlled test runner.') if mode['setupRequired'] else (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
@@ -98,10 +101,12 @@ async def main(home, port, backend='docker'):
                 states[row['id']] = 'running'
             elif action == 'stop':
                 states[row['id']] = 'stopped'
-            elif action == 'remove':
-                if mode['removeUnknown']:
-                    return {'ok': False, 'status': 'unknown', 'universeId': identity,
-                            'message': 'Synthetic removal outcome unknown; no retry is implied.'}
+            elif action == 'remove' and mode['removeUnknown']:
+                return {'ok': False, 'status': 'unknown', 'universeId': identity,
+                        'message': 'Synthetic removal outcome unknown; no retry is implied.'}
+            elif action == 'remove' and mode['removeFailure']:
+                return {'ok': False, 'status': 'stopped', 'effectAdmitted': False, 'phase': 'verifying', 'code': 'archive_verification_failed'}
+            elif action in {'remove', 'finishCleanup'}:
                 states[row['id']] = 'removed'
             elif action == 'execute' and mode['executeTimeout']:
                 return {'ok': False, 'status': 'unknown', 'universeId': identity,
@@ -127,9 +132,9 @@ async def main(home, port, backend='docker'):
                 value['artifactExport'] = {'verified': True, 'selection': ['/artifacts'],
                     'archiveBytes': 1024, 'logicalBytes': 24, 'format': 'tar'}
                 value['archives'] = []  # Controlled transport: no real archive claim.
-            if action == 'remove':
+            if action in {'remove', 'finishCleanup'}:
                 value['retention'] = {'verified': True, 'sourceBytes': 23, 'archiveBytes': 2025,
-                    'totalBytes': 2048, 'format': 'tar',
+                    'totalBytes': 2048, 'format': 'tar', 'archiveOnly': action == 'finishCleanup',
                     'policy': args.get('retentionMode', config.get('retentionMode', 'files'))}
             return value
     environments.invoke = invoke
@@ -176,7 +181,7 @@ async def main(home, port, backend='docker'):
                 mode['capacityAvailable'] = bool(value['capacityAvailable'])
             if 'backendAvailable' in value:
                 mode['backendAvailable'] = bool(value['backendAvailable'])
-            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout', 'removeUnknown'):
+            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout', 'removeUnknown', 'removeFailure'):
                 if key in value:
                     if type(value[key]) is not bool:
                         raise web.HTTPBadRequest(text=key + ' must be boolean')

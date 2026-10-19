@@ -501,3 +501,34 @@ test('inspection started while refresh is pending cannot wedge the refreshed row
   assert.equal(calls.filter(x=>x.action===removalRead).length,0);
  }finally{await act(async()=>root?.unmount())}
 });
+
+test('known pre-removal failure offers exact-owner recovery with original request identity',async()=>{
+ let root;const calls=[],resource={id:'env',sessionId:'a',workspaceId:'w',revision:12,status:'stopped',recovery:{available:true},lastOperation:{action:'workspace.environments.remove',requestId:'original-remove',state:'failed',result:{effectAdmitted:false,phase:'verifying',code:'archive_verification_failed'}}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action===read.action?{items:[resource]}:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+  await act(async()=>button(root,'Preserve files and finish cleanup').props.onClick());
+  const [mutation]=calls.filter(row=>row.action!==read.action);
+  assert.equal(mutation.action,'workspace.environments.finishCleanup');
+  assert.equal(mutation.args.previousRequestId,'original-remove');
+  assert.equal(mutation.args.id,'env');assert.equal(mutation.args.expectedRevision,12);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const failure of [
+ {state:'outcome_unknown',result:{effectAdmitted:false,phase:'verifying',code:'archive_verification_failed'}},
+ {state:'failed',result:{phase:'verifying',code:'archive_verification_failed'}},
+ {state:'failed',result:{effectAdmitted:false,phase:'verifying',code:'owner_changed'}},
+ {state:'failed',result:{effectAdmitted:true,phase:'removing',code:'preservation_failed'}},
+]){
+ test(`cleanup remains held for ${failure.state}/${failure.result.code}/${failure.result.effectAdmitted}`,async()=>{
+  let root;const calls=[],resource={id:'env',sessionId:'a',workspaceId:'w',revision:12,status:'stopped',recovery:{available:true},lastOperation:{action:'workspace.environments.remove',requestId:'original-remove',...failure}};
+  const dispatch=async(action,args)=>{calls.push({action,args});return accepted({items:[resource]})};
+  try{
+   await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+   assert.equal(button(root,'Preserve files and finish cleanup'),undefined);
+   assert.ok(button(root,'Inspect original removal'));
+   assert.deepEqual(calls.map(row=>row.action),[read.action]);
+  }finally{await act(async()=>root?.unmount())}
+ });
+}

@@ -1,6 +1,7 @@
 import {RecallSettings} from './recall';
 import {MaintenanceSettings} from './maintenance';
 import {ChatFileAccess} from './chat-file-access';
+import {AccessMode} from './access-mode';
 import React,{useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ChevronRight} from 'lucide-react';
 import {ConversationName,ConversationDetails,ConversationFailure} from './conversation-controls';
@@ -25,7 +26,7 @@ export const chatPageTitles={
  'chat-error':'Error details','session-details':'Chat info','chat-rename':'Rename','chat-share':'Share or save',
  'chat-help':'Help & diagnostics','chat-advanced':'Advanced',
  'chat-work':'Work & automation','chat-models':'Model & tools',
- 'chat-memory':'Memory & past work','chat-files':'Project file access','chat-write-files':'Files this chat can edit','chat-context':'Context & recovery','chat-computer':'Computer access',
+ 'chat-memory':'Memory & past work','chat-files':'Project file access','chat-write-files':'Access & approvals','chat-context':'Context & recovery','chat-computer':'Computer access',
 };
 const groups=[
  ['chat-work','Work & automation','Saved tasks, goals, schedules, workers and execution folders','direction'],
@@ -55,6 +56,7 @@ function Info({session,act,open}){
    {error&&<p role="alert">{error}</p>}
   </details>
   <details><summary>Questions &amp; answers</summary><Questions session={session} dispatch={act} history/></details>
+  <button type="button" className="a-link" onClick={()=>open('chat-write-files')}>Access &amp; approvals</button>
   <ConversationUsage sessionId={session.id} act={act}/>
  </div>;
 }
@@ -81,9 +83,9 @@ export function ChatPages({page,state,session,act,dispatch=act,open,working,comp
   {show('chat-share')&&<div hidden={page!=='chat-share'}><details open><summary>Save to a file</summary><ConversationExport session={session} state={state} act={act}/></details><details><summary>Share a copy</summary><ConversationSharing session={session} act={act}/></details></div>}
   {show('chat-help')&&<div hidden={page!=='chat-help'}><Help state={state} act={act} open={open}/></div>}
   {show('chat-memory')&&<div hidden={page!=='chat-memory'}><RecallSettings session={session} act={act}/></div>}
-  {show('chat-write-files')&&<div hidden={page!=='chat-write-files'}><ChatFileAccess key={session.id} state={state} session={session} act={act}/></div>}
-  {show('chat-files')&&<div hidden={page!=='chat-files'}><p>Shared by chats in this workspace. To change only this chat, use <button type="button" className="a-link" onClick={()=>open('chat-write-files')}>Files this chat can edit</button>.</p><SettingsPageContext.Provider value="permissions"><MaintenanceSettings state={state} act={act} projectOnly/></SettingsPageContext.Provider></div>}
-  {page==='chat-advanced'&&<nav className="a-chat-destinations" aria-label="Advanced chat options"><button type="button" onClick={()=>open('chat-memory')}>Memory &amp; past work<ChevronRight/></button><button type="button" onClick={()=>open('chat-write-files')}>Files this chat can edit<ChevronRight/></button><button type="button" onClick={()=>open('chat-files')}>Project file access<ChevronRight/></button>{groups.map(([id,title,description])=><button type="button" key={id} onClick={()=>open(id)}><span><strong>{title}</strong><small>{description}</small></span><ChevronRight/></button>)}</nav>}
+  {show('chat-write-files')&&<div hidden={page!=='chat-write-files'}><AccessMode key={'access-'+session.id} session={session} act={act}/><details><summary>File restrictions when asking for permission</summary><ChatFileAccess key={session.id} state={state} session={session} act={act}/></details></div>}
+  {show('chat-files')&&<div hidden={page!=='chat-files'}><p>Shared by chats in this workspace. To change only this chat, use <button type="button" className="a-link" onClick={()=>open('chat-write-files')}>Access &amp; approvals</button>.</p><SettingsPageContext.Provider value="permissions"><MaintenanceSettings state={state} act={act} projectOnly/></SettingsPageContext.Provider></div>}
+  {page==='chat-advanced'&&<nav className="a-chat-destinations" aria-label="Advanced chat options"><button type="button" onClick={()=>open('chat-memory')}>Memory &amp; past work<ChevronRight/></button><button type="button" onClick={()=>open('chat-write-files')}>Access &amp; approvals<ChevronRight/></button><button type="button" onClick={()=>open('chat-files')}>Project file access<ChevronRight/></button>{groups.map(([id,title,description])=><button type="button" key={id} onClick={()=>open(id)}><span><strong>{title}</strong><small>{description}</small></span><ChevronRight/></button>)}</nav>}
   {groups.filter(row=>runtimeSeen.current.has(row[0])).map(activeGroup=><div key={activeGroup[0]} hidden={group?.[0]!==activeGroup[0]}>{back}{page==='runtime'&&<h3>{activeGroup[1]}</h3>}<RuntimeSettings state={state} session={session} act={act} group={activeGroup[3]} computerControls={computerControls} extras={<>
    {activeGroup[3]==='direction'&&<section className="a-settings-section"><h3>Tasks &amp; workers</h3><div className="a-dialog-actions"><SubagentHistoryButton state={state} session={session} act={act}/><button type="button" className="a-soft" onClick={()=>open('coordination')}>Tasks and workers</button><button type="button" className="a-soft" onClick={()=>open('worker')}>Delegate work</button></div></section>}
    {activeGroup[3]==='tools'&&<><details><summary>Conversation bundle</summary><BundleControl state={state} session={session} act={act} working={working}/></details><details><summary>Conversation modules</summary><SettingsPageContext.Provider value="loaded-modules"><BundleSettings state={state} session={session} act={act}/></SettingsPageContext.Provider></details><details><summary>Save &amp; share a bundle</summary><SettingsPageContext.Provider value="share-bundle"><BundleSettings state={state} session={session} act={act}/></SettingsPageContext.Provider></details></>}

@@ -137,3 +137,32 @@ async def test_downgraded_runtime_restores_record_without_enabling_unsafe_goal(t
     assert snapshot['goal'] is None and not snapshot['continuationSupported']
     assert not await old.tasks.continuation_allowed()
     await first.close(); await old.close()
+
+
+async def test_observation_epoch_survives_progress_but_fences_changed_authority(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        record = (await create(worker))['task']
+        epoch = record['continuationEpoch']
+        for changes in ({'artifactRefs': ['verified-report.md']},
+                        {'constraints': ['Preserve originals', 'Review findings before publishing'],
+                         'correction': 'Use the latest findings, do not replay the check'},
+                        {'maxTurns': 2}):
+            record = (await worker.perform('task.update', {'commandId': str(record['revision']),
+                'expectedRevision': record['revision'], **changes}))['task']
+            assert record['continuationEpoch'] == epoch
+        restored = controls(); await restored.restore()
+        assert restored.tasks.record()['continuationEpoch'] == epoch
+        await restored.close()
+        for operation, changes in [('task.update', {'objective': 'A different objective'}),
+                                   ('task.pause', {}), ('task.resume', {}),
+                                   ('task.block', {'reason': 'Waiting for a decision'}),
+                                   ('task.resume', {}),
+                                   ('task.complete', {'condition': 'A different objective', 'evidence': ['Finished']})]:
+            record = (await worker.perform(operation, {'commandId': operation + str(record['revision']),
+                'expectedRevision': record['revision'], **changes}))['task']
+            assert record['continuationEpoch'] > epoch
+            epoch = record['continuationEpoch']
+    finally:
+        await worker.close()

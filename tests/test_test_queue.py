@@ -354,3 +354,46 @@ async def test_pending_completed_removal_repairs_before_next_queue_check(app, qu
     await drive(queue)
     assert record(queue, app, 'after-repair')['job']['status'] == 'passed'
     assert [action for action, _ in backend].count('execute') == 2
+
+
+async def test_known_preservation_failure_uses_separate_cleanup_without_repeating_check(app, queue, backend, monkeypatch):
+    original = environments.invoke
+    def invoke(config, home, row, action, args):
+        if action in {'remove','finishCleanup'}:
+            backend.append((action, dict(args)))
+            if action == 'remove':
+                return {'ok': False, 'status': 'stopped', 'effectAdmitted': False,
+                        'phase': 'verifying', 'code': 'archive_verification_failed'}
+            return {'ok': True, 'status': 'removed'}
+        return original(config, home, row, action, args)
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    await submit(app)
+    await drive(queue)
+    receipt = record(queue, app)
+    assert receipt['job']['status'] == 'passed'
+    assert receipt['job']['previousRemoval']['state'] == 'failed'
+    assert [action for action, _ in backend] == ['prepare','start','execute','stop','remove','finishCleanup']
+    assert backend[-1][1]['previousRequestId'].endswith(':remove')
+    await submit(app, 'next')
+    await drive(queue)
+    assert record(queue, app, 'next')['job']['status'] == 'passed'
+
+
+@pytest.mark.parametrize('phase,code', [
+    ('rechecking', 'ownership_conflict'), ('verifying', 'owner_unverified'),
+    ('verifying', 'retention_storage'), ('verifying', 'unrecognized_failure'),
+    ('verifying', None),
+])
+async def test_owner_recheck_failure_does_not_admit_cleanup_continuation(app, queue, backend, monkeypatch, phase, code):
+    original = environments.invoke
+    def invoke(config, home, row, action, args):
+        if action == 'remove':
+            backend.append((action, dict(args)))
+            return {'ok': False, 'status': 'unknown', 'effectAdmitted': False,
+                    'phase': phase, 'code': code}
+        return original(config, home, row, action, args)
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    await submit(app)
+    await drive(queue)
+    assert record(queue, app)['job']['status'] == 'unknown'
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']

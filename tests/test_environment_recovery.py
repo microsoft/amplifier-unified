@@ -1892,3 +1892,95 @@ async def test_removal_discovery_rejects_unrepresentable_page_offset_without_eff
         await app.dispatch(REMOVAL_LIST, removal_list_args(app, row, offset=10**100), include_state=False)
     assert caught.value.status == 409 and calls == []
     assert removal_read_snapshot(app, row) == before
+
+
+async def test_finish_cleanup_preserves_original_unknown_and_keeps_owner(app, backend, monkeypatch):
+    # Integration contract deliberately differs from the upstream positive
+    # UNKNOWN continuation: stopped inventory cannot settle an old executor.
+    original = owner.invoke
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    monkeypatch.setattr(owner, 'invoke', lambda *args: {'ok': False, 'status': 'unknown'})
+    failed = await act(app, 'remove', row, 'lost-removal')
+    calls = observer(monkeypatch, 'stopped')
+    row = (await act(app, 'reconcile', failed['resource'], 'inspect-stopped'))['resource']
+    def finish(config, home, current, action, args):
+        assert action == 'finishCleanup'
+        calls.append(action)
+        return {'ok': True, 'status': 'removed', 'retention': {'verified': True, 'archiveOnly': True}}
+    monkeypatch.setattr(owner, 'invoke', finish)
+    before = owner.get(app.data_dir, row['sessionId'], row['id'])
+    with pytest.raises(AppError, match='original removal remains unresolved'):
+        await act(app, 'finishCleanup', row, 'finish-cleanup', previousRequestId='lost-removal')
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
+    assert app.operations.requests.read(row['sessionId'], 'lost-removal') == failed['request']
+    assert calls == ['reconcile']
+    monkeypatch.setattr(owner, 'invoke', original)
+    with pytest.raises(AppError, match='already owns'):
+        await start(app, 'next-check')
+
+
+async def test_cleanup_recovery_rejects_unrelated_request_before_effect(app, backend):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    result = await act(app, 'finishCleanup', row, 'bad-recovery', previousRequestId='stop')
+    assert result['request']['state'] == 'failed'
+    assert [name for name, _ in backend] == ['prepare', 'start', 'stop']
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
+
+
+async def test_finish_cleanup_after_known_preservation_failure_keeps_original_receipt(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    monkeypatch.setattr(owner, 'invoke', lambda *a: {
+        'ok': False, 'status': 'stopped', 'phase': 'verifying',
+        'effectAdmitted': False, 'code': 'archive_verification_failed'})
+    failed = await act(app, 'remove', row, 'known-export-failure')
+    assert failed['request']['state'] == 'failed'
+    calls = []
+    def finish(config, home, current, action, args):
+        calls.append(action)
+        bound = app.operations.requests.read(current['sessionId'], args['requestId'])
+        assert bound['state'] == 'admitting' and bound['resourceId'] == current['id']
+        return {'ok': True, 'status': 'removed', 'universeId': current['universeId'],
+                'retention': {'verified': True, 'archiveOnly': True}}
+    monkeypatch.setattr(owner, 'invoke', finish)
+    result = await act(app, 'finishCleanup', failed['resource'], 'finish-known',
+                       previousRequestId='known-export-failure')
+    assert result['request']['state'] == 'completed' and result['resource']['status'] == 'removed'
+    assert result['resource']['previousCleanup'] == failed['request']
+    assert app.operations.requests.read(row['sessionId'], 'known-export-failure') == failed['request']
+    duplicate = await act(app, 'finishCleanup', failed['resource'], 'finish-known',
+                          previousRequestId='known-export-failure')
+    assert duplicate['request'] == result['request'] and calls == ['finishCleanup']
+
+
+@pytest.mark.parametrize('original_action', ['remove', 'finishCleanup'])
+@pytest.mark.parametrize('binding', ['resource', 'unbound'])
+@pytest.mark.parametrize('route', ['public', 'common'])
+async def test_cleanup_alias_cannot_escape_full_journal_hold(app, backend, monkeypatch, original_action, binding, route):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'alias-stop'))['resource']
+    prior, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.' + original_action,
+        {'requestId': 'original-alias'}, {})
+    prior = app.operations.requests.finish(prior, 'outcome_unknown',
+        **({'resourceId': row['id']} if binding == 'resource' else {}))
+    for n in range(105):
+        later, _ = app.operations.requests.begin(row['sessionId'], 'fixture.later', {'requestId': f'later-{n}'}, {})
+        app.operations.requests.finish(later, 'completed')
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    calls = []
+    monkeypatch.setattr(owner, 'invoke', lambda *args: calls.append(args))
+    args = {**scope(app), 'id': row['id'], 'expectedRevision': raw['revision'],
+            'requestId': 'new-cleanup-alias', 'previousRequestId': prior['requestId']}
+    if route == 'public':
+        with pytest.raises(AppError, match='original removal remains unresolved'):
+            await app.dispatch('workspace.environments.finishCleanup', args)
+    else:
+        request, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.finishCleanup', args, {})
+        request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'])
+        result = await asyncio.to_thread(owner.effect, app, raw, 'finishCleanup', args,
+            owner.configuration(app)[0], request, lambda: None)
+        assert result['request']['state'] == 'failed'
+    assert not calls and owner.get(app.data_dir, row['sessionId'], row['id']) == raw
+    assert app.operations.requests.read(row['sessionId'], prior['requestId']) == prior

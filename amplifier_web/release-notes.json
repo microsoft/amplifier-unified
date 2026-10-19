@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.179",
+      "title": "Persistent access choices and more reliable coordinated work",
+      "changes": [
+        "Choose Full access for a chat, a workspace, or the app default in Chat info \u2192 Access & approvals. The choice persists until changed; narrower overrides and restoring restrictions remain available. Existing preferences are unchanged.",
+        "Coordination replies survive routine updates to the same task objective, and task boards show observed worker activity.",
+        "Recover owned test environments after artifact-preservation failures. Cleanup preserves artifacts, distinguishes known failures from uncertain effects, and releases ownership only after the environment is confirmed absent.",
+        "The accompanying context-managed component update supports compaction after unambiguous interrupted tool calls without replaying tools or rewriting saved history. Existing active workers adopt component changes when safely replaced."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.178",
       "title": "Restore saved model recordings and improve everyday reliability",
       "changes": [
