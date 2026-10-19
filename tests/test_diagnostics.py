@@ -247,6 +247,8 @@ async def test_retention_preserves_count_age_boundaries_and_pending_loss_account
     collector=service.diagnostics
     now=100000.0
     monkeypatch.setattr('amplifier_web.diagnostics.time.time',lambda:now)
+    # Small positive internal cap for exact accounting; public configuration
+    # still requires maxRecords>=100 and is checked separately below.
     cfg={**copy.deepcopy(DEFAULT),'retentionDays':1,'maxRecords':3}
     cutoff=now-86400
     # Non-contiguous insertion order and out-of-order event timestamps are
@@ -259,8 +261,9 @@ async def test_retention_preserves_count_age_boundaries_and_pending_loss_account
                 ('old-two-routes','b','failed'),('recent-but-expired','a','pending'),
                 ('boundary','a','accepted'),('unknown-time','a','accepted')]
     with collector._db() as db:
-        db.executemany('INSERT INTO records(seq,id,at,data) VALUES(?,?,?,?)',
-                       [(seq,identity,at,'{}') for seq,identity,at in rows])
+        db.executemany('INSERT INTO records(seq,id,at,data,workspace,session) VALUES(?,?,?,?,?,?)',
+                       [(seq,identity,at,'{}','/synthetic/retention-workspace','retention-fixture')
+                        for seq,identity,at in rows])
         db.executemany('INSERT INTO deliveries(record_id,destination,status) VALUES(?,?,?)',deliveries)
     collector._persist([],cfg)
     with collector._db() as db:
@@ -277,17 +280,52 @@ async def test_retention_preserves_count_age_boundaries_and_pending_loss_account
         assert db.execute("SELECT value FROM counters WHERE name='expiredPending'").fetchone()[0]==5
 
 
+def _retention_boundary_sql(collector):
+    """Exercise the actual retention query without bypassing writer validation."""
+    queries = [value for value in collector._persist.__func__.__code__.co_consts
+               if isinstance(value, str) and value.startswith('SELECT id FROM records WHERE at<')]
+    assert len(queries) == 1, 'Keep this SQL-boundary control tied to the production query'
+    return queries[0]
+
+
 @pytest.mark.parametrize('limit,expected',[(0,set()),(1,{'newer'}),(2,{'older','newer'}),(10,{'older','newer'}),(-1,{'older','newer'})])
 async def test_retention_count_empty_exact_and_unlimited_boundaries(service,limit,expected):
     collector=service.diagnostics
     cfg={**copy.deepcopy(DEFAULT),'maxRecords':limit}
-    collector._persist([],cfg)  # An empty database has no boundary row.
+    # These are internal SQL boundaries, not valid public configuration caps:
+    # public maxRecords starts at100. Positive small caps still exercise the
+    # actual persistence path. Zero/negative caps must not become production
+    # empty/unlimited modes merely to retain useful query-boundary coverage.
+    with pytest.raises(ValueError, match='maxRecords'):
+        validate_config(cfg)
+    sql = _retention_boundary_sql(collector)
+    cutoff = 0  # Synthetic row ages are NULL; this case isolates count semantics.
     with collector._db() as db:
-        db.executemany('INSERT INTO records(seq,id,at,data) VALUES(?,?,?,?)',
-                       [(2,'older',None,'{}'),(19,'newer',None,'{}')])
-    collector._persist([],cfg)
+        assert db.execute(sql, (cutoff, limit, limit)).fetchall() == []
+    if limit > 0:
+        collector._persist([],cfg)  # An empty database has no boundary row.
+    else:
+        with pytest.raises(ValueError, match='retention bound'):
+            collector._persist([],cfg)
     with collector._db() as db:
-        assert {r[0] for r in db.execute('SELECT id FROM records')}==expected
+        db.executemany('INSERT INTO records(seq,id,at,data,workspace,session) VALUES(?,?,?,?,?,?)',
+                       [(2,'older',None,'{}','/synthetic/retention-workspace','retention-fixture'),
+                        (19,'newer',None,'{}','/synthetic/retention-workspace','retention-fixture')])
+        stored = [tuple(row) for row in db.execute('SELECT * FROM records ORDER BY seq')]
+        obsolete = {row[0] for row in db.execute(sql, (cutoff, limit, limit))}
+        assert {row[1] for row in stored} - obsolete == expected
+    if limit > 0:
+        collector._persist([],cfg)
+        with collector._db() as db:
+            assert {r[0] for r in db.execute('SELECT id FROM records')}==expected
+    else:
+        # The exact query retains its empty/unlimited boundary meanings, while
+        # the unsupported writer configuration must abort and roll back even
+        # when the zero-cap query would have selected every existing record.
+        with pytest.raises(ValueError, match='retention bound'):
+            collector._persist([],cfg)
+        with collector._db() as db:
+            assert [tuple(row) for row in db.execute('SELECT * FROM records ORDER BY seq')] == stored
 
 
 async def test_disabling_after_queue_read_cannot_send_detached_cancelled_payload(service,monkeypatch):

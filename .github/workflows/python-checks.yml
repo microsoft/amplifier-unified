@@ -90,7 +90,8 @@ jobs:
             tests/test_work_windows.py \
             tests/test_resident_work_pages.py \
             tests/test_regular_work_details.py \
-            tests/test_receipt_authority.py 2>&1 | tee output/python-checks/pytest.log
+            tests/test_receipt_authority.py \
+            tests/test_diagnostics.py 2>&1 | tee output/python-checks/pytest.log
       - name: Retain complete and partial Python results
         if: always()
         uses: actions/upload-artifact@v4
