@@ -892,3 +892,240 @@ def test_fixed_wheel_baseline_precedes_install_and_attestation_uses_both_maps():
     assert "verify_wheel_directory(GUEST / 'wheels', preparation['wheels']" in actual
     assert "baseline=preparation['wheelDirectory']" in actual
     assert 'snapshot == json.loads(before.read_text())' in actual
+
+
+def prepared_browser_tree(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    root, evidence = tmp_path / 'browsers', tmp_path / 'evidence'
+    folder = root / 'chromium/chrome'
+    folder.mkdir(parents=True)
+    evidence.mkdir()
+    (tmp_path / 'run').mkdir()
+    (folder / 'deb.deps').write_bytes(b'synthetic browser dependencies')
+    (folder / 'deb.deps').chmod(0o600)
+    (folder / 'browser').write_bytes(b'synthetic executable')
+    (folder / 'browser').chmod(0o750)
+    (evidence / 'before.json').write_text(json.dumps({'browsers': adapter.inventory(root)}))
+    return root, evidence
+
+
+@pytest.mark.parametrize('denied', ['file', 'directory'])
+def test_browser_probe_refuses_target_access_even_when_preparation_could_read(tmp_path, monkeypatch, denied):
+    root, evidence = prepared_browser_tree(tmp_path, monkeypatch)
+    original = adapter.browser_access_tree(root)
+    assert original['failure'] is None
+    expected = {'files': original['files'], 'directories': original['directories']}
+    monkeypatch.setattr(adapter, 'in_container', lambda: True)
+    for name in ('getuid', 'geteuid', 'getgid', 'getegid'):
+        monkeypatch.setattr(adapter.os, name, lambda: 65532)
+    monkeypatch.setattr(adapter.os, 'getgroups', lambda: [])
+    if denied == 'file':
+        real_digest = adapter.digest
+
+        def digest(path):
+            if Path(path).name == 'deb.deps':
+                raise PermissionError(13, 'synthetic private error must not escape')
+            return real_digest(path)
+
+        monkeypatch.setattr(adapter, 'digest', digest)
+    else:
+        real_access = adapter.os.access
+        monkeypatch.setattr(adapter.os, 'access',
+                            lambda path, *a, **k: False if Path(path).name == 'chrome'
+                            else real_access(path, *a, **k))
+    result = adapter.browser_readiness_probe(expected)
+    assert result['passed'] is False and result['identity']['uid'] == 65532
+    assert result['failure']['errno'] == 13
+    assert result['failure']['operation'] == ('read' if denied == 'file' else 'enumerate')
+    assert {'path', 'kind', 'mode', 'uid', 'gid'} <= result['failure'].keys()
+    assert str(tmp_path) not in json.dumps(result)
+    assert 'synthetic private error' not in json.dumps(result)
+    assert list(evidence.iterdir()) == [evidence / 'before.json']  # Read-only child.
+
+
+@pytest.mark.parametrize('unsafe', ['file-link', 'directory-link', 'escape-link', 'fifo', 'setuid'])
+def test_browser_preparation_refuses_unsafe_entries_before_ownership(tmp_path, monkeypatch, unsafe):
+    root, evidence = prepared_browser_tree(tmp_path, monkeypatch)
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'outside bytes must stay unchanged')
+    if unsafe == 'fifo':
+        adapter.os.mkfifo(root / 'unsafe')
+    elif unsafe == 'setuid':
+        (root / 'chromium/chrome/browser').chmod(0o4750)
+    else:
+        target = (outside if unsafe == 'escape-link' else
+                  root / 'chromium' if unsafe == 'directory-link' else root / 'chromium/chrome/deb.deps')
+        (root / 'unsafe').symlink_to(target)
+    monkeypatch.setattr(adapter, 'in_container', lambda: True)
+    monkeypatch.setattr(adapter.os, 'getuid', lambda: 0)
+    monkeypatch.setattr(adapter.os, 'fchown', lambda *a: pytest.fail('No mutation before full inspection'))
+    monkeypatch.setattr(adapter.subprocess, 'run', lambda *a, **k: pytest.fail('No child for unsafe tree'))
+    with pytest.raises(ValueError, match='complete browser tree'):
+        adapter.prepare_pwa_browser_access(tmp_path / '.venv/bin/python')
+    report = json.loads((evidence / 'browser-readability.json').read_text())
+    assert report['passed'] is False and report['beforeFailure']
+    assert outside.read_bytes() == b'outside bytes must stay unchanged'
+
+
+@pytest.mark.parametrize('outcome', ['passed', 'nonzero', 'wrong-identity', 'read-denied',
+                                     'timeout', 'malformed', 'oversized', 'nested-content',
+                                     'absolute-path', 'invalid-identity'])
+def test_browser_preparation_is_scoped_and_requires_actual_identity_receipt(tmp_path, monkeypatch, outcome):
+    root, evidence = prepared_browser_tree(tmp_path, monkeypatch)
+    original = adapter.browser_access_tree(root)
+    original_hashes = dict(original['files'])
+    original_modes = {name: row['mode'] for name, row in original['entries'].items()}
+    # Simulate only ownership/identity and child launch; chmod, traversal,
+    # content hashing and the production comparison path use real files.
+    real_fstat, real_lstat = adapter.os.fstat, Path.lstat
+    browser_inodes = {real_lstat(root / name).st_ino for name in original['entries']}
+    owners, touched = {}, []
+
+    def observed_stat(info):
+        values = list(info)
+        if info.st_ino in browser_inodes:
+            values[4:6] = owners.get(info.st_ino, (0, 0))
+        return adapter.os.stat_result(values)
+
+    def fchown(fd, uid, gid):
+        info = real_fstat(fd)
+        assert info.st_ino in browser_inodes and (uid, gid) == (65532, 65532)
+        owners[info.st_ino] = (uid, gid)
+        touched.append(info.st_ino)
+
+    monkeypatch.setattr(adapter.os, 'fstat', lambda fd: observed_stat(real_fstat(fd)))
+    monkeypatch.setattr(Path, 'lstat', lambda path, *a, **k: observed_stat(real_lstat(path, *a, **k)))
+    monkeypatch.setattr(adapter.os, 'fchown', fchown)
+    monkeypatch.setattr(adapter, 'in_container', lambda: True)
+    monkeypatch.setattr(adapter.os, 'getuid', lambda: 0)
+    python = tmp_path / '.venv/bin/python'
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert argv == [str(python), '-I', '-B', str(ROOT / 'scripts/qualify_default_installed.py'),
+                        'guest-browser-readiness']
+        assert kwargs['user'] == kwargs['group'] == 65532 and kwargs['extra_groups'] == ()
+        assert kwargs['cwd'] == tmp_path / 'run' and kwargs['timeout'] == 120
+        assert kwargs['env'] == adapter.clean_env()
+        assert 'PYTHONPATH' not in kwargs['env'] and '/usr/sbin' not in kwargs['env']['PATH']
+        expected = json.loads(kwargs['input'])
+        assert expected == {'files': original_hashes, 'directories': original['directories']}
+        if outcome == 'timeout':
+            raise subprocess.TimeoutExpired(argv, 120)
+        if outcome in {'malformed', 'oversized'}:
+            return subprocess.CompletedProcess(argv, 0, '{}' if outcome == 'malformed' else 'x' * 16385, '')
+        with monkeypatch.context() as child:
+            for name in ('getuid', 'geteuid', 'getgid', 'getegid'):
+                child.setattr(adapter.os, name, lambda: 65532)
+            child.setattr(adapter.os, 'getgroups', lambda: [])
+            if outcome == 'wrong-identity':
+                child.setattr(adapter.os, 'geteuid', lambda: 0)
+            receipt = adapter.browser_readiness_probe(expected)
+        assert receipt['passed'] is (outcome != 'wrong-identity')
+        if outcome == 'read-denied':
+            receipt['passed'] = False
+            receipt['failure'] = {
+                'path': 'chromium/chrome/deb.deps', 'pathTruncated': False,
+                'pathSha256': '0' * 64, 'kind': 'file', 'mode': 0o600,
+                'uid': 0, 'gid': 0, 'operation': 'read', 'errno': 13}
+        elif outcome in {'nested-content', 'absolute-path'}:
+            receipt['passed'] = False
+            receipt['failure'] = {
+                'path': '/synthetic-private/path', 'pathTruncated': False,
+                'pathSha256': '0' * 64, 'kind': 'file', 'operation': 'read', 'errno': 13}
+            if outcome == 'nested-content':
+                receipt['failure']['content'] = 'synthetic-private-content'
+        elif outcome == 'invalid-identity':
+            receipt['identity']['groups'] = ['synthetic-private-content']
+        return subprocess.CompletedProcess(argv, 1 if outcome == 'nonzero' else 0,
+                                           json.dumps(receipt), '')
+
+    monkeypatch.setattr(adapter.subprocess, 'run', run)
+    if outcome == 'passed':
+        adapter.prepare_pwa_browser_access(python)
+    else:
+        with pytest.raises((ValueError, subprocess.TimeoutExpired)):
+            adapter.prepare_pwa_browser_access(python)
+    report = json.loads((evidence / 'browser-readability.json').read_text())
+    assert report['passed'] is (outcome == 'passed') and len(calls) == 1
+    assert set(touched) == browser_inodes and len(touched) == len(browser_inodes)
+    after = adapter.browser_access_tree(root)
+    assert after['files'] == original_hashes
+    for name, row in after['entries'].items():
+        assert (row['uid'], row['gid']) == (65532, 65532)
+        assert row['mode'] == original_modes[name] | (0o500 if row['kind'] == 'directory' else 0o400)
+        if row['kind'] == 'file':
+            assert row['mode'] & 0o111 == original_modes[name] & 0o111
+    assert (evidence / 'before.json').read_text() == json.dumps({'browsers': original_hashes})
+    assert not (evidence / 'after.json').exists()
+    assert 'synthetic-private' not in json.dumps(report)
+    if outcome == 'wrong-identity':
+        assert report['probe']['identity']['euid'] == 0
+        assert report['probe']['failure'] == {'operation': 'identity'}
+    elif outcome == 'read-denied':
+        assert report['probe']['failure']['errno'] == 13
+    elif outcome in {'malformed', 'nested-content', 'absolute-path', 'invalid-identity'}:
+        assert report['probe'] == {'valid': False, 'reason': 'malformed-receipt'}
+
+
+@pytest.mark.parametrize('identity_change', ['uid', 'euid', 'groups'])
+def test_browser_readiness_identity_refusal_has_complete_safe_schema(tmp_path, monkeypatch, identity_change):
+    root, _ = prepared_browser_tree(tmp_path, monkeypatch)
+    before = adapter.browser_access_tree(root)
+    monkeypatch.setattr(adapter, 'in_container', lambda: True)
+    for name in ('getuid', 'geteuid', 'getgid', 'getegid'):
+        monkeypatch.setattr(adapter.os, name, lambda: 65532)
+    monkeypatch.setattr(adapter.os, 'getgroups', lambda: [])
+    if identity_change == 'groups':
+        monkeypatch.setattr(adapter.os, 'getgroups', lambda: [1])
+    else:
+        monkeypatch.setattr(adapter.os, 'get' + identity_change, lambda: 0)
+    monkeypatch.setattr(adapter, 'browser_access_tree', lambda *a, **k: pytest.fail('Identity checked before reads'))
+    result = adapter.browser_readiness_probe({'files': before['files'], 'directories': before['directories']})
+    assert not result['passed'] and result['failure'] == {'operation': 'identity'}
+    assert result['fileCount'] == result['directoryCount'] == 0
+    assert adapter.validated_browser_receipt(result) == result
+
+
+@pytest.mark.parametrize('layout', ['flat', 'nested'])
+def test_browser_tree_bounds_enumeration_before_materializing_oversized_directory(tmp_path, monkeypatch, layout):
+    root = tmp_path / 'browsers'
+    root.mkdir()
+    folders = [root] if layout == 'flat' else [root / 'a', root / 'b']
+    for folder in folders:
+        folder.mkdir(exist_ok=True)
+        for index in range(4100 if layout == 'flat' else 2050):
+            (folder / f'entry-{index:04}').write_bytes(b'')
+    real_scan = adapter.os.scandir
+    consumed = 0
+
+    class CountedScan:
+        def __init__(self, path):
+            self.scan = real_scan(path)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.scan.close()
+        def __iter__(self):
+            for entry in self.scan:
+                nonlocal consumed
+                consumed += 1
+                yield entry
+
+    monkeypatch.setattr(adapter.os, 'scandir', CountedScan)
+    result = adapter.browser_access_tree(root)
+    assert result['failure']['operation'] == 'enumerate'
+    assert len(result['entries']) <= 4096 and consumed <= 4096
+
+
+def test_browser_readability_hook_is_pwa_only_before_preparation_handoff():
+    import ast
+    tree = ast.parse((ROOT / 'scripts/qualify_default_installed.py').read_text())
+    prepare = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'guest_prepare')
+    guards = [n for n in ast.walk(prepare) if isinstance(n, ast.If)
+              and 'prepare_pwa_browser_access(python)' in ast.unparse(n)]
+    assert len(guards) == 1 and ast.unparse(guards[0].test) == "stage == 'installed-pwa'"
+    source = ast.unparse(prepare)
+    assert source.index("'guest-attest'") < source.index('prepare_pwa_browser_access(python)')
+    assert source.index('prepare_pwa_browser_access(python)') < source.index(".rename(GUEST / 'prepared-evidence')")

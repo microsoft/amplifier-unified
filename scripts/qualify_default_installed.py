@@ -270,6 +270,196 @@ def verify_wheel_directory(root, wheel_hashes, evidence, *, baseline=None):
     return actual
 
 
+def browser_access_tree(root, *, check_access=False):
+    """Enumerate every entry without following links or hiding traversal errors."""
+    files, directories, entries = {}, [], {}
+    pending, path, operation = [root], root, 'inspect'
+    failure = None
+    try:
+        while pending:
+            path = pending.pop()
+            operation = 'inspect'
+            relative = path.relative_to(root).as_posix()
+            info = path.lstat()
+            kind = ('directory' if stat.S_ISDIR(info.st_mode) else
+                    'file' if stat.S_ISREG(info.st_mode) else 'unsafe')
+            entry = {'kind': kind, 'mode': stat.S_IMODE(info.st_mode),
+                     'uid': info.st_uid, 'gid': info.st_gid}
+            entries[relative] = entry
+            require(len(entries) <= 4096, 'Browser entry limit exceeded')
+            require(kind != 'unsafe' and not info.st_mode & 0o7000, 'Unsafe browser entry')
+            if kind == 'directory':
+                operation = 'enumerate'
+                if check_access and not os.access(path, os.R_OK | os.X_OK, effective_ids=True):
+                    raise PermissionError(13, 'Browser directory access denied')
+                directories.append(relative)
+                children = []
+                with os.scandir(path) as scan:
+                    for child in scan:
+                        require(len(entries) + len(pending) + len(children) < 4096,
+                                'Browser entry limit exceeded')
+                        children.append(path / child.name)
+                pending.extend(reversed(sorted(children)))
+            else:
+                operation = 'read'
+                files[relative] = digest(path)
+        require(files, 'Empty browser installation')
+    except (OSError, ValueError) as error:
+        relative = path.relative_to(root).as_posix()
+        failure = {
+            'path': relative[:256], 'pathTruncated': len(relative) > 256,
+            'pathSha256': hashlib.sha256(relative.encode('utf-8', 'surrogatepass')).hexdigest(),
+            **entries.get(relative, {'kind': 'unobserved'}),
+            'operation': operation, 'errno': error.errno if isinstance(error, OSError) else None}
+    return {'files': files, 'directories': sorted(directories), 'entries': entries, 'failure': failure}
+
+
+def browser_readiness_probe(expected):
+    """Read-only probe executed by the prepared interpreter as the test identity."""
+    identity = {'uid': os.getuid(), 'euid': os.geteuid(), 'gid': os.getgid(),
+                'egid': os.getegid(), 'groups': os.getgroups()}
+    require(in_container(), 'Browser readiness requires the owned container')
+    target = {'uid': 65532, 'euid': 65532, 'gid': 65532, 'egid': 65532, 'groups': []}
+    if identity != target:
+        return {
+            'passed': False, 'identity': identity, 'failure': {'operation': 'identity'},
+            'fileCount': 0, 'directoryCount': 0,
+            'filesSha256': hashlib.sha256(b'{}').hexdigest(),
+            'directoriesSha256': hashlib.sha256(b'[]').hexdigest()}
+    actual = browser_access_tree(GUEST / 'browsers', check_access=True)
+    files, directories = actual['files'], actual['directories']
+    passed = (actual['failure'] is None and files == expected['files']
+              and directories == expected['directories'])
+    return {
+        'passed': passed, 'identity': identity, 'failure': actual['failure'],
+        'fileCount': len(files), 'directoryCount': len(directories),
+        'filesSha256': hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest(),
+        'directoriesSha256': hashlib.sha256(json.dumps(directories).encode()).hexdigest()}
+
+
+def validated_browser_receipt(value):
+    """Refuse unexpected nested data instead of retaining arbitrary child output."""
+    def number(item, maximum):
+        return type(item) is int and 0 <= item <= maximum
+
+    def sha256(item):
+        return isinstance(item, str) and re.fullmatch('[a-f0-9]{64}', item) is not None
+
+    if not isinstance(value, dict) or set(value) != {
+            'passed', 'identity', 'failure', 'fileCount', 'directoryCount',
+            'filesSha256', 'directoriesSha256'}:
+        return None
+    identity = value['identity']
+    if (type(value['passed']) is not bool or not isinstance(identity, dict)
+            or set(identity) != {'uid', 'euid', 'gid', 'egid', 'groups'}
+            or not all(number(identity[key], 2**32 - 1) for key in ('uid', 'euid', 'gid', 'egid'))
+            or not isinstance(identity['groups'], list) or len(identity['groups']) > 32
+            or not all(number(group, 2**32 - 1) for group in identity['groups'])
+            or not number(value['fileCount'], 4096) or not number(value['directoryCount'], 4096)
+            or not sha256(value['filesSha256']) or not sha256(value['directoriesSha256'])):
+        return None
+    failure = value['failure']
+    if failure is not None and failure != {'operation': 'identity'}:
+        required = {'path', 'pathTruncated', 'pathSha256', 'kind', 'operation', 'errno'}
+        if not isinstance(failure, dict) or not required <= set(failure) <= required | {'mode', 'uid', 'gid'}:
+            return None
+        path = failure['path']
+        if (not isinstance(path, str) or len(path) > 256 or Path(path).is_absolute()
+                or '..' in Path(path).parts or '\\' in path
+                or type(failure['pathTruncated']) is not bool or not sha256(failure['pathSha256'])
+                or failure['kind'] not in ('file', 'directory', 'unsafe', 'unobserved')
+                or failure['operation'] not in ('inspect', 'enumerate', 'read')
+                or (failure['errno'] is not None and not number(failure['errno'], 4095))
+                or any(not number(failure[key], 0o7777 if key == 'mode' else 2**32 - 1)
+                       for key in ('mode', 'uid', 'gid') if key in failure)):
+            return None
+    return value
+
+
+def prepare_pwa_browser_access(python):
+    """Change only owned browser metadata, then prove reads as UID/GID 65532."""
+    require(in_container() and os.getuid() == 0, 'Browser preparation requires owned root container')
+    root, evidence = GUEST / 'browsers', GUEST / 'evidence'
+    report = {'passed': False, 'targetUid': 65532, 'targetGid': 65532, 'changes': [],
+              'changedCount': 0, 'changesTruncated': False}
+    try:
+        before = browser_access_tree(root)
+        report['beforeFailure'] = before['failure']
+        require(before['failure'] is None, 'Cannot inspect complete browser tree')
+        expected_files = json.loads((evidence / 'before.json').read_text())['browsers']
+        require(before['files'] == expected_files, 'Browser bytes changed before ownership preparation')
+        report.update(fileCount=len(before['files']), directoryCount=len(before['directories']))
+        # Freeze diagnostics before any mutation. No path outside this tree is
+        # adjusted; descriptors refuse links and retain the inspected inode.
+        save(evidence / 'browser-readability.json', report)
+        for relative, entry in before['entries'].items():
+            path = root / relative
+            mode = entry['mode']
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            if entry['kind'] == 'directory':
+                flags |= os.O_DIRECTORY
+            info = path.lstat()
+            fd = os.open(path, flags)
+            try:
+                opened = os.fstat(fd)
+                require((info.st_dev, info.st_ino) == (opened.st_dev, opened.st_ino)
+                        and stat.S_IMODE(opened.st_mode) == mode
+                        and (opened.st_uid, opened.st_gid) == (entry['uid'], entry['gid']),
+                        'Browser entry changed during preparation')
+                new_mode = mode | (0o500 if entry['kind'] == 'directory' else 0o400)
+                os.fchown(fd, 65532, 65532)
+                os.fchmod(fd, new_mode)
+                current = os.fstat(fd)
+                require(stat.S_IMODE(current.st_mode) == new_mode
+                        and (entry['kind'] != 'file' or current.st_mode & 0o111 == mode & 0o111),
+                        'Browser executable bits changed')
+            finally:
+                os.close(fd)
+            report['changedCount'] += 1
+            if len(report['changes']) < 32:
+                report['changes'].append({
+                    'path': relative[:256], 'pathTruncated': len(relative) > 256,
+                    'pathSha256': hashlib.sha256(relative.encode('utf-8', 'surrogatepass')).hexdigest(),
+                    'kind': entry['kind'], 'beforeMode': mode, 'beforeUid': entry['uid'],
+                    'beforeGid': entry['gid'], 'afterMode': new_mode,
+                    'afterUid': current.st_uid, 'afterGid': current.st_gid})
+        report['changesTruncated'] = report['changedCount'] > len(report['changes'])
+        after = browser_access_tree(root)
+        require(after['failure'] is None and after['files'] == before['files']
+                and after['directories'] == before['directories'], 'Browser content changed during preparation')
+        require(all(row['uid'] == row['gid'] == 65532 for row in after['entries'].values()),
+                'Browser ownership did not match target')
+        expected = {'files': before['files'], 'directories': before['directories']}
+        # No full guest-attest here: its evidence writes are intentionally root
+        # owned during preparation. This child only reads browsers and stdout.
+        probe = subprocess.run(
+            [str(python), '-I', '-B', __file__, 'guest-browser-readiness'],
+            input=json.dumps(expected), text=True, capture_output=True, check=False,
+            user=65532, group=65532, extra_groups=(), cwd=GUEST / 'run',
+            env=clean_env(), timeout=120)
+        report['probeExit'] = probe.returncode
+        require(len(probe.stdout) <= 16384, 'Oversized browser readiness receipt')
+        observed = validated_browser_receipt(json.loads(probe.stdout))
+        if observed is None:
+            report['probe'] = {'valid': False, 'reason': 'malformed-receipt'}
+            raise ValueError('Malformed browser readiness receipt')
+        report['probe'] = observed
+        require(probe.returncode == 0 and observed == {
+            'passed': True,
+            'identity': {'uid': 65532, 'euid': 65532, 'gid': 65532, 'egid': 65532, 'groups': []},
+            'failure': None, 'fileCount': len(expected['files']),
+            'directoryCount': len(expected['directories']),
+            'filesSha256': hashlib.sha256(json.dumps(expected['files'], sort_keys=True).encode()).hexdigest(),
+            'directoriesSha256': hashlib.sha256(json.dumps(expected['directories']).encode()).hexdigest()},
+            'Browser tree is not readable by the actual test identity')
+        report['passed'] = True
+    except BaseException as error:
+        report['errorType'] = type(error).__name__
+        raise
+    finally:
+        save(evidence / 'browser-readability.json', report)
+
+
 def download(spec, destination):
     with urllib.request.urlopen(spec['url'], timeout=60) as response, destination.open('xb') as output:
         shutil.copyfileobj(response, output)
@@ -473,6 +663,8 @@ def guest_prepare():
         command(['chown', '-R', '65532:65532', GUEST / 'repos'], env=env)
     else:
         (GUEST / 'evidence').chmod(0o700)
+    if stage == 'installed-pwa':
+        prepare_pwa_browser_access(python)
     (GUEST / 'evidence').rename(GUEST / 'prepared-evidence')
     (GUEST / 'evidence').mkdir()
 
@@ -1106,7 +1298,8 @@ def hosted_run(work, output, loop_source, desktop_safety=False, root_guest=False
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['run', 'guest-prepare', 'guest-attest', 'guest-test'])
+    parser.add_argument('command', choices=['run', 'guest-prepare', 'guest-attest', 'guest-test',
+                                           'guest-browser-readiness'])
     parser.add_argument('--work', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--loop-source', type=Path)
@@ -1122,6 +1315,14 @@ def main():
                    args.desktop_safety, args.root_guest, args.installed_pwa)
     elif args.command == 'guest-test':
         guest_test(args.desktop_safety, args.root_guest, args.installed_pwa)
+    elif args.command == 'guest-browser-readiness':
+        require(not (args.desktop_safety or args.root_guest or args.installed_pwa),
+                'No stage override for the read-only browser probe')
+        raw = sys.stdin.read(2 * 1024 * 1024 + 1)
+        require(len(raw) <= 2 * 1024 * 1024, 'Oversized browser readiness input')
+        result = browser_readiness_probe(json.loads(raw))
+        print(json.dumps(result))
+        raise SystemExit(0 if result['passed'] else 1)
     else:
         require(not (args.desktop_safety or args.root_guest or args.installed_pwa),
                 'Stage flags apply only to run/guest-test')
