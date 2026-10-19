@@ -659,6 +659,126 @@ async def test_requested_root_proof_uses_existing_eight_page_budget_and_never_po
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['epoch', 'owner', 'source-identity', 'first-page',
+                                  'older-page', 'replaced-page', 'receipt-digest',
+                                  'proof-retired', 'closed'])
+async def test_selected_projection_never_redeems_lost_support_or_rescans(tmp_path, monkeypatch, change):
+    from amplifier_web.diagnostics import Diagnostics
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=140)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostics = Diagnostics(service)
+    try:
+        selected = await owner.read_selected('s')
+        assert selected['rootProof']['status'] == 'complete'
+        assert owner.project(session)['workProjection']['current'] is True
+        proof = owner._root_proofs['s']
+        page = owner.pages[proof['pages'][0][0]]
+        if change == 'epoch':
+            owner.invalidate({'s'})
+        elif change == 'owner':
+            session = dict(session)
+            service._session = lambda identity, hydrate=False: session
+        elif change == 'source-identity':
+            session['nativeIdentity'] = 'another-root'
+        elif change in {'first-page', 'older-page'}:
+            owner.pages.pop(proof['pages'][0 if change == 'first-page' else -1][0])
+        elif change == 'replaced-page':
+            owner.pages[page['group']] = dict(page)
+        elif change == 'receipt-digest':
+            page['_proof']['receiptDigest'] = 'invalid'
+        elif change == 'proof-retired':
+            owner._root_proofs.pop('s')
+        else:
+            service.closed = True
+        calls = len(owner.projector.inputs)
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Passive Work projection started source/index IO')
+        with monkeypatch.context() as guard:
+            guard.setattr(owner, '_matches', forbidden)
+            guard.setattr(owner, '_binding_current', forbidden)
+            guard.setattr(owner, '_worker', forbidden)
+            for _ in range(3):
+                projected = owner.project(session)
+                assert projected['workProjection']['current'] is False
+                assert not any(group.get('bindingProvenance')
+                               for group in projected['execution']['segments'])
+        assert len(owner.projector.inputs) == calls
+        # A projected false result must not overwrite a newer status or mint a
+        # replacement receipt. No user operation was performed by the snapshot.
+        assert owner.status['s']['receipt'] == page['receipt']
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('limit', ['complete', 'incomplete'])
+async def test_current_raw_display_is_distinct_from_association_completeness(tmp_path, monkeypatch, limit):
+    from amplifier_web.diagnostics import Diagnostics
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=901 if limit == 'incomplete' else 140)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostics = Diagnostics(service)
+    try:
+        await owner.read('s')
+        raw = owner.project(session)['workProjection']
+        assert raw['current'] is True and raw['receipt']['scope'] == 'recent-events'
+        selected = await owner.read_selected('s')
+        assert selected['rootProof']['status'] == limit
+        assert selected['rootProof']['boundCount'] == 0  # Body-only records have no attested ownership.
+        projection = owner.project(session)
+        assert projection['workProjection']['current'] is True
+        receipt = projection['workProjection']['receipt']
+        assert receipt == owner.pages[owner.current['s']]['receipt']
+        assert receipt['scope'] == 'root-proof' and receipt['historyComplete'] is False
+        assert receipt['proofId'] == selected['rootProof']['id']
+        assert set(receipt) == {'hostInstanceId', 'sessionId', 'generation', 'scope',
+                                'windowKey', 'historyComplete', 'proofId', 'itemCount'}
+        assert projection['execution']['segments']
+        assert all(row.get('observationWindow') for row in projection['execution']['segments'])
+        before = len(owner.projector.inputs)
+        owner.pages.pop(owner._root_proofs['s']['pages'][-1][0])
+        # An incomplete proof can describe current raw bytes, but NOT after a
+        # supporting page disappears. Completion status alone is not a fence.
+        assert owner.project(session)['workProjection']['current'] is False
+        assert len(owner.projector.inputs) == before
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['source', 'index'])
+async def test_known_physical_proof_refusal_is_visible_without_snapshot_io(tmp_path, monkeypatch, change):
+    from amplifier_web.diagnostics import Diagnostics
+    owner, session, path, service = fixture(tmp_path, monkeypatch, count=140)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostics = Diagnostics(service)
+    try:
+        selected = await owner.read_selected('s')
+        proof_id = selected['rootProof']['id']
+        if change == 'source':
+            with path.open('a') as stream:
+                stream.write('{}\n')
+        else:
+            with diagnostics._db() as db:
+                db.execute("INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES('new',0,'tools','s','/fixture','tool:post','{}')")
+        with pytest.raises(ValueError, match='root proof'):
+            owner.proof_nodes('s', proof_id)  # An explicit read detects the physical change.
+        before = len(owner.projector.inputs)
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Snapshot repeated the physical proof check')
+        with monkeypatch.context() as guard:
+            guard.setattr(owner, '_matches', forbidden)
+            guard.setattr(owner, '_binding_current', forbidden)
+            projected = owner.project(session)['workProjection']
+            assert projected['current'] is False and projected['rootProof']['status'] == 'stale'
+        assert len(owner.projector.inputs) == before
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
 async def test_root_proof_ninth_page_is_incomplete_and_explicit_reopen_is_bounded(tmp_path, monkeypatch):
     owner, session, _, service = fixture(tmp_path, monkeypatch, count=901)
     from amplifier_web.diagnostics import Diagnostics

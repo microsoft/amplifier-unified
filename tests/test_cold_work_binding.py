@@ -1884,3 +1884,62 @@ async def test_registered_selected_root_uses_one_exact_public_revision_for_evide
             assert rejected.status == 400, await rejected.text()
             await rejected.read()
         assert page['generation'] == generation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['invalidate', 'evict-support'])
+async def test_composed_web_currentness_requires_support_then_one_explicit_reopen(
+        source, authenticated_client, monkeypatch, change):
+    async with _ready_cold_web(source, authenticated_client, monkeypatch) as (service, client):
+        windows = service.event_log_view.windows
+        worker, calls = windows._worker(), []
+        original = worker.project
+        async def counted(inputs, *, key):
+            calls.append(inputs['operation'])
+            return await original(inputs, key=key)
+        monkeypatch.setattr(worker, 'project', counted)
+        response = await client.get('/api/conversation/detail',
+            params={'sessionId': 'root', 'part': 'groups'})
+        assert response.status == 200, await response.text()
+        selected = await response.json()
+        group, _ = await _assert_cold_web_details(client, selected, source)
+        root = service._session('root', hydrate=False)
+        with service.clients.bind('cold-web'):
+            composed = service.projections.detail(root)
+        accepted = composed['workProjection']
+        assert accepted['current'] is True and accepted['receipt']['scope'] == 'root-proof'
+        assert accepted['receipt']['proofId'] == selected['rootProof']['id']
+        if change == 'invalidate':
+            windows.invalidate({'root'})
+        else:
+            windows.pages.pop(windows._root_proofs['root']['pages'][-1][0])
+        # This is the real selected-body composition under a registered web
+        # client. Guards prove it neither starts a worker nor stats dependencies.
+        before = len(calls)
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Passive web composition issued source/index IO')
+        with monkeypatch.context() as guard:
+            guard.setattr(windows, '_matches', forbidden)
+            guard.setattr(windows, '_binding_current', forbidden)
+            guard.setattr(windows, '_worker', forbidden)
+            with service.clients.bind('cold-web'):
+                for _ in range(3):
+                    composed = service.projections.detail(root)
+                    assert composed['workProjection']['current'] is False
+                    assert not any(g.get('id') == group['id']
+                                   for g in composed['execution']['segments'])
+        assert len(calls) == before
+        # No polling/automatic retry: one supported latest groups request must
+        # acquire a fresh proof; its exact nodes/full Unicode/sync still qualify.
+        response = await client.get('/api/conversation/detail',
+            params={'sessionId': 'root', 'part': 'groups'})
+        assert response.status == 200, await response.text()
+        reopened = await response.json()
+        assert reopened['rootProof']['status'] == 'complete'
+        assert reopened['rootProof']['id'] != selected['rootProof']['id']
+        assert calls[before:] == ['proof-step']
+        await _assert_cold_web_details(client, reopened, source)
+        with service.clients.bind('cold-web'):
+            composed = service.projections.detail(root)
+        assert composed['workProjection']['current'] is True
+        assert composed['workProjection']['receipt']['proofId'] == reopened['rootProof']['id']
