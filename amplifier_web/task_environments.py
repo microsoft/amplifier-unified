@@ -47,6 +47,9 @@ def definitions(schema, string):
     return {
         **setup.definitions(schema, string),
         'workspace.environments.read': ('Inspect this task’s test environments, retained results and current backend availability. Does not launch, resume or replay work.', schema(scope)),
+        'workspace.environments.removal.read': ('Read this root’s exact retained removal binding at the current resource revision. Strictly passive: no backend probe, configuration lookup, repair, operation admission or continuation. Missing original evidence remains held.', schema({
+            **scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1},
+            'originalRequestId': {**string(200), 'minLength': 1}})),
         'workspace.environments.start': ('Copy this task’s current Git working area into one approved isolated test environment and prepare locked dependencies for the selected profile. No original writable mounts or injected credentials. Keep requestId stable; unknown launches never replay.', schema({**request, 'profileId': {'enum': [item['id'] for item in profiles.catalog()]}})),
         'workspace.environments.execute': ('Run an approved command in this task’s environment, retaining bounded output. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 300}}, [*owned, 'command'])),
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
@@ -726,6 +729,8 @@ def read(app, sid, config):
 
 
 async def dispatch(app, action, args, origin, caller, authority):
+    if action == 'workspace.environments.removal.read':
+        return {'accepted': True, 'result': recovery.read_removal(app, args, origin, caller)}
     from .service import AppError
     from .collaboration import PRINCIPAL
     sid, user = args['sessionId'], origin in {'ui', 'user'}

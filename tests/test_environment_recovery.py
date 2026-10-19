@@ -895,9 +895,9 @@ async def test_early_common_refusal_never_rewrites_original_unknown(app, backend
         reopened.read(row['sessionId'], 'early-new-request')
 
 
-# Proposed public boundary, not an existing API. These additive tests must fail
-# visibly until the bounded read is implemented; do not register it in a fixture
-# or substitute environments.read/reconcile (both can observe/repair resources).
+# Test-first public boundary. A missing action must fail visibly: do not register
+# it in a fixture or substitute environments.read/reconcile, which can observe
+# and repair resources rather than merely inspect the retained removal binding.
 REMOVAL_READ = 'workspace.environments.removal.read'
 
 
@@ -1102,3 +1102,216 @@ async def test_public_removal_read_accepts_no_caller_proof_path_or_risk_choice(a
         await app.dispatch(REMOVAL_READ, {**removal_read_args(app, row, original), **extra}, include_state=False)
     assert caught.value.status == 400
     assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+async def test_public_removal_read_keeps_ledger_lock_and_original_revisions_unchanged(app, backend, monkeypatch):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    original = app.operations.requests.finish(original, original['state'],
+        resourceRevision=2, admissionRevision=1)
+    before = removal_read_snapshot(app, row)
+    folder = app.data_dir / 'workspace-resources'
+    paths = [folder / 'reservations.sqlite3', folder / ('environment-' + row['id'] + '.lock')]
+    def metadata():
+        return [(p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ctime_ns, p.stat().st_mode)
+                for p in paths]
+    ledger_before = metadata()
+    connect, opened, prohibited = recovery.sqlite3.connect, [], []
+    def observed_connect(uri, **kwargs):
+        opened.append((uri, kwargs))
+        assert uri.endswith('reservations.sqlite3?mode=ro') and kwargs == {'uri': True, 'timeout': 0}
+        return connect(uri, **kwargs)
+    def forbidden(*args, **kwargs):
+        prohibited.append('write-or-phase-scan')
+        raise AssertionError('No initializing connection or phase inference is permitted')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        guard.setattr(owner.storage, 'connect', forbidden)
+        guard.setattr(owner.storage, 'save', forbidden)
+        guard.setattr(worker, 'inspect_removal', forbidden)
+        guard.setattr(recovery.sqlite3, 'connect', observed_connect)
+        result = await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+    assert len(opened) == 1 and prohibited == calls == []
+    assert_unverified_removal_read(result['result'], row, original)
+    assert metadata() == ledger_before and removal_read_snapshot(app, row) == before
+    retained = app.operations.requests.read(row['sessionId'], original['requestId'])
+    assert retained['resourceRevision'] == 2 and retained['admissionRevision'] == 1
+    assert result['result']['revision'] == row['revision'] != retained['resourceRevision']
+
+
+async def test_public_removal_read_missing_owner_storage_does_not_initialize_it(app, monkeypatch):
+    require_removal_read_contract()
+    folder = app.data_dir / 'workspace-resources'
+    assert not folder.exists()
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError, match='Removal inspection changed or is busy') as caught:
+        await app.dispatch(REMOVAL_READ, {**scope(app),
+            'id': '00000000-0000-4000-8000-000000000001',
+            'expectedRevision': 1, 'originalRequestId': 'absent-original'}, include_state=False)
+    assert caught.value.status == 409 and not folder.exists() and calls == []
+
+
+async def test_public_removal_read_missing_request_is_bounded_and_does_not_admit(app, backend, monkeypatch):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError, match='Original removal record is unavailable') as caught:
+        await app.dispatch(REMOVAL_READ, {
+            **removal_read_args(app, row, original), 'originalRequestId': 'absent-original'}, include_state=False)
+    assert caught.value.status == 404
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('target,field,value,status', [
+    ('row', 'owner', {'sessionId': 'other-root', 'principal': 'other-root'}, 403),
+    ('row', 'sessionId', 'other-root', 403),
+    ('row', 'workspaceId', 'other-workspace', 403),
+    ('row', 'kind', 'scratch-directory', 403),
+    ('original', 'sessionId', 'other-root', 409),
+    ('original', 'requestId', 'other-request', 409),
+    ('original', 'state', 'SYNTHETIC_PRIVATE_UNSUPPORTED_STATE', 409),
+])
+async def test_public_removal_read_rejects_malformed_retained_identity_without_echo(app, backend, monkeypatch, target, field, value, status):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    before = removal_read_snapshot(app, row)
+    count = []
+    get, read = owner.storage.get, app.operations.requests.read
+    with monkeypatch.context() as fault:
+        calls = forbid_removal_read_effects(app, fault)
+        if target == 'row':
+            def altered(db, sid, identity):
+                count.append('row')
+                return {**get(db, sid, identity), field: value}
+            fault.setattr(owner.storage, 'get', altered)
+        else:
+            def altered(sid, identity):
+                count.append('original')
+                return {**read(sid, identity), field: value}
+            fault.setattr(app.operations.requests, 'read', altered)
+        with pytest.raises(AppError) as caught:
+            await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+    assert count == [target] and calls == []
+    assert caught.value.status == status and 'SYNTHETIC_' not in str(caught.value)
+    assert str(caught.value) in {
+        'Removal inspection requires the recorded root owner.',
+        'Original removal is not bound to this resource.',
+        'Removal inspection changed or is busy.'}
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('drift', ['resource', 'request', 'execution', 'interruption'])
+async def test_public_removal_read_rechecks_snapshot_before_returning(app, backend, monkeypatch, drift):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    before = removal_read_snapshot(app, row)
+    source = app.state['sessions'][0]
+    get, read = owner.storage.get, app.operations.requests.read
+    observations = []
+    with monkeypatch.context() as fault:
+        calls = forbid_removal_read_effects(app, fault)
+        if drift == 'resource':
+            def changing_row(db, sid, identity):
+                result = get(db, sid, identity)
+                observations.append('resource')
+                return {**result, 'revision': result['revision'] + 1} if len(observations) == 2 else result
+            fault.setattr(owner.storage, 'get', changing_row)
+        else:
+            def changing_request(sid, identity):
+                result = read(sid, identity)
+                observations.append('request')
+                if len(observations) == 1 and drift != 'request':
+                    key = 'executionRevision' if drift == 'execution' else 'interruptionRevision'
+                    fault.setitem(source, key, source.get(key, 0) + 1)
+                return {**result, 'updatedAt': result['updatedAt'] + 1} if drift == 'request' and len(observations) == 2 else result
+            fault.setattr(app.operations.requests, 'read', changing_request)
+        with pytest.raises(AppError, match='Removal inspection changed or is busy') as caught:
+            await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+    assert caught.value.status == 409 and len(observations) == 2 and calls == []
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('boundary', ['ledger', 'journal'])
+async def test_public_removal_read_storage_errors_stay_secret_free(app, backend, monkeypatch, boundary):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    before = removal_read_snapshot(app, row)
+    entered = []
+    def fail(*args, **kwargs):
+        entered.append(boundary)
+        raise OSError('SYNTHETIC_PRIVATE_STORAGE_PATH_OR_CREDENTIAL')
+    with monkeypatch.context() as fault:
+        calls = forbid_removal_read_effects(app, fault)
+        if boundary == 'ledger':
+            fault.setattr(recovery.sqlite3, 'connect', fail)
+        else:
+            fault.setattr(app.operations.requests, 'read', fail)
+        with pytest.raises(AppError, match='Removal inspection changed or is busy') as caught:
+            await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+    assert caught.value.status == 409 and 'SYNTHETIC_' not in str(caught.value)
+    assert entered == [boundary] and calls == []
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('alias', ['ledger', 'lock', 'directory'])
+async def test_public_removal_read_rejects_storage_aliases_without_following_or_repair(app, backend, monkeypatch, alias):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    before = removal_read_snapshot(app, row)
+    folder = app.data_dir / 'workspace-resources'
+    path = (folder if alias == 'directory' else folder / 'reservations.sqlite3'
+            if alias == 'ledger' else folder / ('environment-' + row['id'] + '.lock'))
+    moved = path.with_name(path.name + '.synthetic-original')
+    path.rename(moved)
+    path.symlink_to(moved, target_is_directory=alias == 'directory')
+    try:
+        calls = forbid_removal_read_effects(app, monkeypatch)
+        with pytest.raises(AppError, match='Removal inspection changed or is busy') as caught:
+            await app.dispatch(REMOVAL_READ, removal_read_args(app, row, original), include_state=False)
+        assert caught.value.status == 409 and calls == [] and path.is_symlink()
+    finally:
+        path.unlink()
+        moved.rename(path)
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('transport', ['ui', 'agent'])
+async def test_public_removal_read_dormant_root_never_admits_repairs_or_persists(app, backend, monkeypatch, transport):
+    """Expose the upstream admission seam; resident-only tests cannot prove this."""
+    require_removal_read_contract()
+    from amplifier_web import state_records
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source, peer = app.state['sessions']
+    args = removal_read_args(app, row, original)
+    app._save()
+    saved, controls = state_records.load_owner(app.db, source['id'])
+    assert saved is not None
+    app._state['sessions'].remove(source)  # Evict only, retain the real saved owner.
+    app._state['selectedSessionId'] = peer['id']
+    app.projections.invalidate()
+    assert app.directory.resolve(source['id']) is not None
+    assert source['id'] not in [s['id'] for s in app._state['sessions']]
+    before = removal_read_snapshot(app, row)
+    overlay = [s['id'] for s in app._state['sessions']]
+    changes = app.db.total_changes
+    attempted = []
+    def forbidden(*args, **kwargs):
+        attempted.append('dormant-admission-or-persistence')
+        raise AssertionError('Passive removal read attempted dormant owner admission or persistence')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        guard.setattr(app, '_admit_session', forbidden)
+        guard.setattr(app, '_save', forbidden)
+        guard.setattr(app.cold_display, 'hydrate', forbidden)
+        if transport == 'agent':
+            result = await agent(app, source, REMOVAL_READ, args, 'cold-original-read')
+        else:
+            result = await app.dispatch(REMOVAL_READ, args, include_state=False)
+    assert_unverified_removal_read(result['result'], row, original)
+    assert attempted == calls == []
+    assert app.db.total_changes == changes
+    assert [s['id'] for s in app._state['sessions']] == overlay
+    assert app._state['selectedSessionId'] == peer['id']
+    assert state_records.load_owner(app.db, source['id']) == (saved, controls)
+    assert removal_read_snapshot(app, row) == before
