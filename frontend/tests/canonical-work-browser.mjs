@@ -6,6 +6,7 @@ import {readFile,writeFile,mkdir,mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
+import {workProjectionReceipt} from '../src/work-projection-receipt.js';
 const outputDir=process.env.AMPLIFIER_TEST_OUTPUT_DIR||(process.env.AMPLIFIER_TEST_ARTIFACTS?join(process.env.AMPLIFIER_TEST_ARTIFACTS,'canonical-work'):null)||await mkdtemp(join(tmpdir(),'amplifier-canonical-work-'));
 await mkdir(outputDir,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
@@ -18,8 +19,8 @@ let page;
 const browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});
 try{
  page=await browser.newPage({viewport:{width:1280,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers});
- const errors=[],requestReads=[],responseReads=[];
- page.on('request',r=>{if(r.url().includes('/api/conversation/detail?')){const field=new URL(r.url()).searchParams.get('field');if(field==='request')requestReads.push(r.url());if(field==='response')responseReads.push(r.url())}});
+ const errors=[],requestReads=[],responseReads=[],groupReads=[];
+ page.on('request',r=>{if(r.url().includes('/api/conversation/detail?')){const query=new URL(r.url()).searchParams,field=query.get('field');if(field==='request')requestReads.push(r.url());if(field==='response')responseReads.push(r.url());if(query.get('part')==='groups')groupReads.push(r.url())}});
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
  // Browser-managed downloads use the real signed session cookie; Chromium
  // does not forward Playwright's extra Authorization header to downloads.
@@ -30,7 +31,39 @@ try{
  // Wait for that real receipt rather than racing its arrival with UI clicks.
  const saved=page.locator('[data-group-id^="event-window:"]');
  const checkGroups=async expected=>{
-  await page.waitForFunction(()=>{try{const receipt=JSON.parse(document.querySelector('.a-messages')?.dataset.workProjection);return receipt.status==='ready'&&receipt.current===true&&receipt.receipt?.scope==='recent-events'}catch{return false}});
+  await page.waitForFunction(()=>{try{const receipt=JSON.parse(document.querySelector('.a-messages')?.dataset.workProjection);return receipt.status==='ready'&&receipt.current===true&&receipt.receipt?.scope==='root-proof'}catch{return false}});
+  const {dom,projection,host,sessionId}=await page.evaluate(()=>{
+   const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);
+   return {dom:JSON.parse(document.querySelector('.a-messages').dataset.workProjection),projection:session.workProjection,host:state.client.hostInstanceId,sessionId:session.id};
+  });
+  const supplied=projection.receipt,proof=projection.rootProof;
+  assert.equal(projection.status,'ready');assert.equal(projection.current,true);
+  assert.equal(dom.status,'ready');assert.equal(dom.current,true);
+  assert.equal(typeof host,'string');assert.ok(host.length>0);
+  assert.equal(dom.hostInstanceId,host);assert.equal(supplied.hostInstanceId,host);
+  assert.equal(dom.sessionId,sessionId);assert.equal(supplied.sessionId,sessionId);
+  assert.equal(supplied.scope,'root-proof');assert.equal(supplied.historyComplete,false);
+  assert.ok(Number.isSafeInteger(supplied.generation)&&supplied.generation>0);
+  assert.match(supplied.windowKey,/^[a-f0-9]{64}$/);assert.match(supplied.proofId,/^[a-f0-9]{32}$/);
+  assert.equal(supplied.proofId,proof.id);assert.ok(['complete','incomplete'].includes(proof.status),'raw display readiness does not assert complete association');
+  assert.ok(Number.isSafeInteger(supplied.itemCount)&&supplied.itemCount>=0&&supplied.itemCount<=100);
+  assert.deepEqual(dom.receipt,{generation:supplied.generation,scope:'root-proof',windowKey:supplied.windowKey,
+   historyComplete:false,proofId:proof.id,itemCount:supplied.itemCount});
+  assert.ok(new TextEncoder().encode(JSON.stringify(dom)).byteLength<=1024);
+  // Feed the actual producer payload through the shipped decoder too. These
+  // negative copies stay local to the test: they never mutate browser state or
+  // mint alternate host facts to make a readiness assertion pass.
+  const produced={id:sessionId,workProjection:projection};
+  assert.deepEqual(JSON.parse(workProjectionReceipt(produced,host)),dom);
+  for(const patch of [
+   {hostInstanceId:'wrong-host'},{sessionId:'wrong-session'},{generation:0},
+   {windowKey:''},{proofId:'not-a-proof'},{historyComplete:true},{itemCount:101},
+   {scope:'unknown',sourceCount:1,nodeCount:1,turnCount:1},
+  ]){
+   const invalid={...produced,workProjection:{...projection,receipt:{...supplied,...patch}}};
+   const rejected=JSON.parse(workProjectionReceipt(invalid,host));
+   assert.equal(rejected.current,false);assert.equal(rejected.receipt,null);
+  }
   await expect(saved).toHaveCount(1);
   await expect(saved).toContainText('Recent saved work');
   await expect(groups).toHaveCount(expected.length+1);
@@ -115,10 +148,17 @@ try{
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await expect(model.getByRole('button',{name:/^View request/})).toBeVisible();assert.equal(responseReads.length,1);
  const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
- const priorWindow=await saved.getAttribute('data-group-id');
+ const priorWindow=await saved.getAttribute('data-group-id'),priorGroupReads=groupReads.length;
+ const priorReceipt=JSON.parse(await page.locator('.a-messages').getAttribute('data-work-projection')).receipt;
  await control({op:'canonical-append'});
+ await expect.poll(()=>page.evaluate(()=>{const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId).workProjection.current})).toBe(false);
+ assert.equal(groupReads.length,priorGroupReads,'append publication must not automatically restart the proof');
+ await page.getByRole('button',{name:'Open latest work',exact:true}).click();
  await expect(saved).not.toHaveAttribute('data-group-id',priorWindow,{timeout:15000});
  await checkGroups(['canonical@before','canonical@interim','canonical@final']);
+ const appendedReceipt=JSON.parse(await page.locator('.a-messages').getAttribute('data-work-projection')).receipt;
+ assert.notEqual(appendedReceipt.proofId,priorReceipt.proofId);assert.ok(appendedReceipt.generation>priorReceipt.generation);
+ assert.equal(groupReads.length,priorGroupReads+1,'one explicit reopen admits one new selected summary read');
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  const finalGroup=page.locator('[data-group-id$="@final"]'),finalToggle=finalGroup.locator('button.a-execution-turn-line');
  await expect(finalToggle).toHaveAttribute('aria-expanded','false');await finalToggle.click();

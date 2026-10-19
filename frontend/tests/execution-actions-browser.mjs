@@ -23,7 +23,25 @@ try{
  await expect.poll(async()=>{
   const value=await page.locator('.a-messages').getAttribute('data-work-projection');
   return value?JSON.parse(value):null;
- }).toMatchObject({status:'ready',current:true,receipt:{scope:'recent-events'}});
+ }).toMatchObject({status:'ready',current:true,receipt:{scope:'root-proof',historyComplete:false}});
+ const {dom,projection,host,sessionId}=await page.evaluate(()=>{
+  const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);
+  return {dom:JSON.parse(document.querySelector('.a-messages').dataset.workProjection),projection:session.workProjection,host:state.client.hostInstanceId,sessionId:session.id};
+ });
+ const supplied=projection.receipt,proof=projection.rootProof;
+ assert.equal(projection.status,'ready');assert.equal(projection.current,true);
+ assert.equal(dom.status,'ready');assert.equal(dom.current,true);
+ assert.equal(typeof host,'string');assert.ok(host.length>0);
+ assert.equal(dom.hostInstanceId,host);assert.equal(supplied.hostInstanceId,host);
+ assert.equal(dom.sessionId,sessionId);assert.equal(supplied.sessionId,sessionId);
+ assert.equal(supplied.scope,'root-proof');assert.equal(supplied.historyComplete,false);
+ assert.ok(Number.isSafeInteger(supplied.generation)&&supplied.generation>0);
+ assert.match(supplied.windowKey,/^[a-f0-9]{64}$/);assert.match(supplied.proofId,/^[a-f0-9]{32}$/);
+ assert.equal(supplied.proofId,proof.id);assert.ok(['complete','incomplete'].includes(proof.status),'raw display readiness does not assert complete association');
+ assert.ok(Number.isSafeInteger(supplied.itemCount)&&supplied.itemCount>=0&&supplied.itemCount<=100);
+ assert.deepEqual(dom.receipt,{generation:supplied.generation,scope:'root-proof',windowKey:supplied.windowKey,
+  historyComplete:false,proofId:proof.id,itemCount:supplied.itemCount});
+ assert.ok(new TextEncoder().encode(JSON.stringify(dom)).byteLength<=1024);
  for(const id of ['inspect@question','inspect@long-answer']){
   const group=page.locator(`[data-group-id="${id}"] > button.a-execution-turn-line`);
   await group.waitFor();

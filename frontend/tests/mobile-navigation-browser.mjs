@@ -138,23 +138,69 @@ try{
  await page.getByText('Fixture visibility save failed',{exact:true}).waitFor();assert.equal(await page.locator('#workspace-canvas').isVisible(),true);
  await page.getByRole('button',{name:'Dismiss error',exact:true}).click();await page.unroute('**/api/actions',reject);
  if(fixture){
-  // Reproduce a delayed Work retry finishing while Canvas covers the chat.
-  // The same message must stay at the same position even though the notice
-  // disappears and raw scrollTop must decrease by its height plus the gap.
+  // A failed finite proof is reopened explicitly, never by a passive retry.
+  // Releasing that admitted read while Canvas covers the chat must retain the
+  // same message anchor as the loading/association notices change height.
   await page.getByRole('button',{name:'Close canvas',exact:true}).click();
   await workReady();
   const sessionId=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
-  const work=async operation=>{const response=await page.request.post(base+'/api/fixture/work-reader',{data:{operation,sessionId}});assert.equal(response.ok(),true)};
-  await work('retry');
+  const work=async operation=>{const response=await page.request.post(base+'/api/fixture/work-reader',{data:{operation,sessionId}});assert.equal(response.ok(),true);return response.json()};
+  const armed=await work('retry'),initialAttempts=armed.attempts.length;
+  const reopen=page.getByRole('button',{name:'Open latest work',exact:true});
+  await expect(reopen).toBeVisible();
+  assert.equal(armed.rootProof.status,'stale');
+  assert.equal((await work('status')).attempts.length,initialAttempts,'invalidation alone must not start another proof');
+  await reopen.click();
+  await page.waitForFunction(()=>{const state=window.amplifier.getState(),proof=state.sessions.find(row=>row.id===state.selectedSessionId)?.workProjection?.rootProof;return proof?.status==='incomplete'&&proof.reason==='fixture-reader-failed'});
+  const failed=await work('status');
+  assert.equal(failed.attempts.length,initialAttempts+1);
+  assert.notEqual(failed.rootProof.id,armed.rootProof.id);
+  assert.equal(failed.attempts.at(-1).key,`${sessionId}:root-proof:${failed.rootProof.id}:0`);
+  await expect(reopen).toBeVisible();
+  assert.equal((await work('status')).attempts.length,initialAttempts+1,'failure must remain held until explicit reopening');
+  await reopen.click();
+  await page.waitForFunction(()=>{const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId)?.workProjection?.rootProof?.status==='pending'});
+  await expect.poll(async()=>(await work('status')).attempts.length).toBe(initialAttempts+2);
+  const pending=await work('status');
+  assert.notEqual(pending.rootProof.id,failed.rootProof.id);
+  assert.equal(pending.attempts.at(-1).key,`${sessionId}:root-proof:${pending.rootProof.id}:0`);
   const notice=page.locator('[data-part="work-projection-status"]');
-  await expect(notice).toHaveText('Work details could not finish loading. Retrying shortly. You can keep reading this chat.');
-  const removedHeight=await notice.evaluate(node=>node.getBoundingClientRect().height+parseFloat(getComputedStyle(node.parentElement).rowGap));
+  await expect(notice).toHaveText('Loading work details…');
+  const noticeHeight=()=>page.locator('.a-messages').evaluate(pane=>{
+   const gap=parseFloat(getComputedStyle(pane).rowGap);
+   return [...pane.children].filter(node=>node.matches('.a-session-history')||
+    node.matches('p[role="status"]')&&node.textContent.startsWith('Work association ')).reduce((height,node)=>height+node.getBoundingClientRect().height+gap,0);
+  });
+  const pendingHeight=await noticeHeight();
   await page.locator('.a-messages').evaluate(el=>{el.dispatchEvent(new WheelEvent('wheel',{deltaY:-500}));el.scrollTop=150});
   await expect.poll(async()=>(await readingPosition()).scrollTop).toBe(150);
   const retryBefore=await readingPosition();
   await page.getByRole('button',{name:'Open canvas',exact:true}).click();
   await work('release');await workReady();
+  const settled=await work('status');
+  assert.equal(settled.rootProof.id,pending.rootProof.id,'release completes the admitted proof, not a new automatic attempt');
+  assert.equal(settled.attempts.length,initialAttempts+2);
+  const {dom,projection,host}=await page.evaluate(()=>{
+   const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);
+   return {dom:JSON.parse(document.querySelector('.a-messages').dataset.workProjection),projection:session.workProjection,host:state.client.hostInstanceId};
+  });
+  const supplied=projection.receipt;
+  assert.equal(dom.current,true);assert.equal(dom.status,'ready');assert.equal(projection.current,true);
+  assert.equal(typeof host,'string');assert.ok(host.length>0);
+  assert.equal(dom.hostInstanceId,host);assert.equal(supplied.hostInstanceId,host);
+  assert.equal(dom.sessionId,sessionId);assert.equal(supplied.sessionId,sessionId);
+  assert.equal(supplied.scope,'root-proof');assert.equal(supplied.historyComplete,false);
+  assert.ok(Number.isSafeInteger(supplied.generation)&&supplied.generation>0);
+  assert.match(supplied.windowKey,/^[a-f0-9]{64}$/);assert.match(supplied.proofId,/^[a-f0-9]{32}$/);
+  assert.equal(supplied.proofId,settled.rootProof.id);assert.equal(supplied.proofId,projection.rootProof.id);
+  assert.ok(['complete','incomplete'].includes(projection.rootProof.status),'raw display readiness does not assert complete association');
+  assert.ok(Number.isSafeInteger(supplied.itemCount)&&supplied.itemCount>=0&&supplied.itemCount<=100);
+  assert.deepEqual(dom.receipt,{generation:supplied.generation,scope:'root-proof',windowKey:supplied.windowKey,
+   historyComplete:false,proofId:supplied.proofId,itemCount:supplied.itemCount});
+  assert.ok(new TextEncoder().encode(JSON.stringify(dom)).byteLength<=1024);
   await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+  const settledHeight=await noticeHeight(),removedHeight=pendingHeight-settledHeight;
+  assert.ok(removedHeight>0,'settling removes loading height, including any association-status geometry change');
   await expect.poll(async()=>Math.abs((await readingPosition()).offset-retryBefore.offset)).toBeLessThan(1);
   const retryAfter=await readingPosition();
   assert.equal(retryAfter.id,retryBefore.id);
@@ -162,7 +208,7 @@ try{
   assert.ok(Math.abs(retryAfter.contentTop-retryBefore.contentTop+removedHeight)<1);
   assert.ok(Math.abs(retryAfter.scrollTop-retryBefore.scrollTop+removedHeight)<1);
   assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
-  results.push({reading:'retry-to-ready',removedHeight,before:retryBefore,after:retryAfter});
+  results.push({reading:'explicit-proof-reopen-to-ready',pendingHeight,settledHeight,removedHeight,before:retryBefore,after:retryAfter,proofAttempts:settled.attempts,workProjection:dom});
  }
  assert.deepEqual(errors,[]);await writeFile(`${out}/results.json`,JSON.stringify({results,errors},null,2));console.log('Responsive layouts, drawer focus, sheets, typography, delayed rapid toggles, retained viewer, draft and reload passed');
 }finally{await browser.close();fixture?.kill()}

@@ -13,14 +13,35 @@ try{
  const page=await browser.newPage({viewport:{width:1300,height:950},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers}),errors=[],detailReads=[];
  page.setDefaultTimeout(15000);
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().includes('/api/conversation/detail?'))detailReads.push(new URL(r.url()))});
- // Exercise a live selected-chat reader, including its accepted native-window
- // receipt. A fixture that closes this reader cannot recover a terminal refresh.
- const expectCurrentWork=()=>expect.poll(async()=>{
-  const value=await page.locator('.a-messages').getAttribute('data-work-projection');
-  return value?JSON.parse(value):null;
- }).toMatchObject({status:'ready',current:true,receipt:{scope:'recent-events'}});
+ // A current bounded raw display is not a complete association/history proof.
+ // Check the actual producer identity, not a scope label with invented counts.
+ const expectCurrentWork=async()=>{
+  await expect.poll(async()=>{
+   const value=await page.locator('.a-messages').getAttribute('data-work-projection');
+   return value?JSON.parse(value):null;
+  }).toMatchObject({status:'ready',current:true,receipt:{scope:'root-proof',historyComplete:false}});
+  const {dom,projection,host,sessionId}=await page.evaluate(()=>{
+   const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);
+   return {dom:JSON.parse(document.querySelector('.a-messages').dataset.workProjection),projection:session.workProjection,host:state.client.hostInstanceId,sessionId:session.id};
+  });
+  const supplied=projection.receipt,proof=projection.rootProof;
+  assert.equal(projection.status,'ready');assert.equal(projection.current,true);
+  assert.equal(dom.status,'ready');assert.equal(dom.current,true);
+  assert.equal(typeof host,'string');assert.ok(host.length>0);
+  assert.equal(dom.hostInstanceId,host);assert.equal(supplied.hostInstanceId,host);
+  assert.equal(dom.sessionId,sessionId);assert.equal(supplied.sessionId,sessionId);
+  assert.equal(supplied.scope,'root-proof');assert.equal(supplied.historyComplete,false);
+  assert.ok(Number.isSafeInteger(supplied.generation)&&supplied.generation>0);
+  assert.match(supplied.windowKey,/^[a-f0-9]{64}$/);assert.match(supplied.proofId,/^[a-f0-9]{32}$/);
+  assert.equal(supplied.proofId,proof.id);assert.ok(['complete','incomplete'].includes(proof.status));
+  assert.ok(Number.isSafeInteger(supplied.itemCount)&&supplied.itemCount>=0&&supplied.itemCount<=100);
+  assert.deepEqual(dom.receipt,{generation:supplied.generation,scope:'root-proof',windowKey:supplied.windowKey,
+   historyComplete:false,proofId:proof.id,itemCount:supplied.itemCount});
+  assert.ok(new TextEncoder().encode(JSON.stringify(dom)).byteLength<=1024);
+  return supplied;
+ };
  await page.goto(base);const answer=page.locator('[data-message-id="long-answer"]');
- await expectCurrentWork();
+ const initialReceipt=await expectCurrentWork();
  await answer.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();console.log('Assistant body loaded');
  assert.equal(await answer.getByRole('button',{name:'Show full text'}).count(),0);
  assert.equal(detailReads.filter(url=>url.searchParams.get('id')==='long-answer').length,2);
@@ -59,7 +80,12 @@ try{
  await expect(tool.getByRole('status')).toHaveText('Copied');
  assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/RESULT-END/);
  assert.equal(detailReads.filter(url=>url.searchParams.get('field')==='output').length,2);
- await control({op:'inspection-finish'});await expectCurrentWork();await expect(modelLine).toContainText('120 tokens');
+ await control({op:'inspection-finish'});
+ await expect.poll(()=>page.evaluate(()=>{const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId).workProjection.current})).toBe(false);
+ await page.getByRole('button',{name:'Open latest work',exact:true}).click();
+ const finishedReceipt=await expectCurrentWork();
+ assert.notEqual(finishedReceipt.proofId,initialReceipt.proofId);assert.ok(finishedReceipt.generation>initialReceipt.generation);
+ await expect(modelLine).toContainText('120 tokens');
  assert.match(await page.locator('[data-group-id="inspect@question"] > .a-execution-turn-line').innerText(),/120 tokens · \$0.004/);
  const finalTimer=await modelLine.innerText();await new Promise(resolve=>setTimeout(resolve,1200));assert.equal(await modelLine.innerText(),finalTimer);
  let failDetail=true;await page.route('**/api/conversation/detail?**',route=>{if(failDetail&&new URL(route.request().url()).searchParams.get('id')==='long-answer'){failDetail=false;return route.fulfill({status:503,json:{error:'Fixture detail temporarily unavailable'}})}return route.continue()});

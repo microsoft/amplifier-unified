@@ -5,14 +5,24 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 const fixture=spawn(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/demand_ui_server.py',import.meta.url))],{stdio:'inherit'});
 let browser;
+const reads=[],errors=[];
 try{
  for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
- const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),reads=[],errors=[];
+ const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().includes('/api/conversation/detail'))reads.push(r.url())});
+ const readKind=url=>{const query=new URL(url).searchParams;return query.has('field')?'fields':['groups','nodes'].includes(query.get('part'))?query.get('part'):'other'};
+ const readCounts=()=>Object.fromEntries(['groups','nodes','fields','other'].map(kind=>[kind,reads.filter(url=>readKind(url)===kind).length]));
+ const selectedRead=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/conversation/detail'&&new URL(response.url()).searchParams.get('part')==='groups');
  await page.goto('http://127.0.0.1:8958/');
  const third=page.locator('[data-turn-id="voice:third"]'),toggle=third.locator('button.a-execution-turn-line');await toggle.waitFor();
- assert.equal(reads.length,0,'collapsed groups do not read steps');
+ assert.equal((await selectedRead).ok(),true,'the explicit selected summary read must succeed');
+ assert.deepEqual(readCounts(),{groups:1,nodes:0,fields:0,other:0},'selected summaries are allowed; hidden steps and bodies are not');
+ const selectedGroupReads=readCounts().groups;
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workerDraft:'Demand publication probe'}}));
+ await page.waitForFunction(()=>window.amplifier.getState().view.workerDraft==='Demand publication probe');
+ assert.deepEqual(readCounts(),{groups:selectedGroupReads,nodes:0,fields:0,other:0},'a state publication must not rescan selected Work or fetch hidden details');
+ assert.equal(await third.locator('.a-execution-node,.a-execution-body').count(),0);
  const execution=await page.evaluate(()=>{const s=window.amplifier.getState();return s.sessions.find(x=>x.id===s.selectedSessionId).execution});
  assert.deepEqual(execution.nodes,[]);assert.equal(execution.detailsDeferred,true);
  let reject=true;
@@ -64,6 +74,7 @@ try{
  assert.ok(await page.evaluate(()=>window.savedWorkRow===document.querySelector('[data-node-id="bulk-124"]')));
  assert.equal(await third.locator('[data-node-id="bulk-124"] button.a-execution-action-line').getAttribute('aria-expanded'),'true');
  assert.deepEqual(await third.locator('.a-execution-node').evaluateAll(nodes=>nodes.map(node=>node.dataset.nodeId)),loadedStepIds,'live sync retains all explicitly loaded steps in order');
+ assert.equal(readCounts().groups,selectedGroupReads,'node, field and overlapping live publications must not restart the selected proof');
  await page.unroute('**/api/conversation/work-sync');
  // Visit a second chat, then delay returning to the cached first chat.
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),identities.second);
@@ -95,5 +106,5 @@ try{
  assert.equal(continuations.length,1,'Reload must not replay the rejected continuation');
  await page.unroute('**/api/actions');
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,collapsedStepReads:0,initialNodes:execution.nodes.length,summaryBytes:JSON.stringify(execution).length,checks:['lazy steps','bounded paging','lazy bodies','error retry','collapse race','bounded reopen','delta-only live refresh','no blanking under overlapping revisions','expanded DOM retained','fresh navigation','explicit continuation and retry']}));
-}finally{await browser?.close();fixture.kill()}
+ console.log(JSON.stringify({passed:true,collapsedStepReads:0,selectedGroupReads,detailReadCounts:readCounts(),detailReads:reads,initialNodes:execution.nodes.length,summaryBytes:JSON.stringify(execution).length,checks:['selected summaries without publication-triggered rescan','lazy steps','bounded paging','lazy bodies','error retry','collapse race','bounded reopen','delta-only live refresh','no blanking under overlapping revisions','expanded DOM retained','fresh navigation','explicit continuation and retry']}));
+}catch(error){console.error(JSON.stringify({detailReads:reads,errors}));throw error}finally{await browser?.close();fixture.kill()}
