@@ -639,3 +639,17 @@ A delayed real terminal frame must not be mistaken for settled browser layout.
 Keep the existing zero-folded-group while reading and one-group after the user's
 return-to-latest assertions. [The diagnostic](interim-browser-terminal832.md)
 preserves the forced failing ordering separately; no folding behavior changed.
+
+### Incremental history classification (October 18)
+
+**HISTORY-840** keeps the existing automatic-history classification owner in
+Full Python checks. Change a saved legacy chat's canonical metadata to internal,
+then require bounded reconciliation to hide it from ordinary navigation while
+preserving diagnostic access, purpose, transcript bytes, and restart behavior.
+Exercise both normal discovery and one-step reconciliation without watcher
+notifications; neither path may start or send to a runtime. A bounded refresh
+may return before the changed session is visited, so assert convergence across
+slices instead of assuming one refresh exhausts the catalog. Preserve the exact
+classification, counts, read-only, and unchanged-file assertions. See
+[classification qualification](history-classification840.md). This extends the
+existing Python owner; no additional browser scenario or frozen inventory change.
