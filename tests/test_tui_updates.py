@@ -185,6 +185,7 @@ def test_real_isolated_probe_validates_selected_features_without_observing_deskt
     source = Path(app_updates.__file__).parent
     shutil.copy2(source / 'runtime_bootstrap.py', package)
     shutil.copy2(source / 'collaboration_input.py', package)
+    shutil.copy2(source / 'task_binding.py', package)
     shutil.copytree(source.parent / 'amplifier_operations', tmp_path / 'amplifier_operations')
     shutil.copytree(source.parent / 'amplifier_kernels', tmp_path / 'amplifier_kernels')
     (tmp_path / 'pam.py').write_text('def authenticate(*args): pass\n')
