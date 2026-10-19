@@ -231,6 +231,14 @@ class WorkspaceWork:
             where.append("(json_extract(receipt,'$.result.blockedReason')!='' "
                          "OR json_extract(receipt,'$.result.latestOutcome') IN ('failed','unknown','not_run') "
                          "OR (json_extract(receipt,'$.result.disposition')='open' AND json_extract(receipt,'$.result.nextAction')!='') "
+                         "OR (coalesce(json_extract(receipt,'$.result.humanDecisionSequence'),0)>0 "
+                         "AND json_extract(receipt,'$.result.humanDecisionSequence')<=coalesce(json_extract(receipt,'$.result.counterevidenceSequence'),0)) "
+                         "OR EXISTS (SELECT 1 FROM json_each(json_extract(commands.receipt,'$.result.dependsOn')) dependency "
+                         "WHERE NOT EXISTS (SELECT 1 FROM commands parent WHERE parent.id=dependency.value "
+                         "AND json_extract(parent.receipt,'$.commandAction')='workspace.work.record' "
+                         "AND json_extract(parent.receipt,'$.result.workspaceId')=json_extract(commands.receipt,'$.result.workspaceId') "
+                         "AND json_extract(parent.receipt,'$.result.disposition')='closed' "
+                         "AND json_extract(parent.receipt,'$.result.dispositionBasis')='satisfied')) "
                          "OR work_owner_attention(json_extract(receipt,'$.result.ownerSessionId'))=1)")
         if query:
             self.db.create_function('work_casefold', 1, lambda s: str(s or '').casefold(), deterministic=True)
