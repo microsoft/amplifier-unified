@@ -1,5 +1,6 @@
 """Guarded peer input through ordinary native queue and anchored steering."""
 from amplifier_operations.coordination import peer_input
+from .task_binding import matches as task_matches
 
 
 def checkpoint_anchors(rows, runtime):
@@ -30,7 +31,7 @@ async def admit(controls, runtime, args, activation, authorize, stop_epoch=lambd
     if not permission.get("admitted"):
         return {"accepted": False, "reason": permission.get("reason")}
     task = controls.tasks.record()
-    if (task or {}).get("id") != args.get("taskId") or (task or {}).get("revision") != args.get("taskRevision"):
+    if not task_matches(task, args):
         return {"accepted": False, "reason": "The saved task changed before native admission."}
     if not await controls.tasks.continuation_allowed():
         return {"accepted": False, "reason": "The saved task or current budget prevents automatic input."}
@@ -49,7 +50,7 @@ async def admit(controls, runtime, args, activation, authorize, stop_epoch=lambd
     if not await controls.tasks.continuation_allowed() or stop_epoch() != epoch:
         return {"accepted": False, "reason": "Stop, task or budget changed during peer admission."}
     current = controls.tasks.record() or {}
-    if (current.get("id"), current.get("revision")) != (args.get("taskId"), args.get("taskRevision")):
+    if not task_matches(current, args):
         return {"accepted": False, "reason": "The task changed during final authorization."}
     goal = controls.coordinator.session_state.get("goal") or {}
     if goal.get("cap") is not None and goal.get("turns_used", 0) >= goal["cap"]:

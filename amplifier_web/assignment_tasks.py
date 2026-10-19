@@ -19,7 +19,7 @@ def definitions(schema, string):
                'dependsOn': {'type': 'array', 'maxItems': 32, 'uniqueItems': True, 'items': string(200)}}
     claim = {**revision, 'claimId': string(200)}
     return {
-        'assignment.tasks.list': ('Read optional assignment tasks without loading history or starting work. Independent chats are not enrolled. Completion is a participant report, not verified artifact success.', schema(source, ['sessionId'])),
+        'assignment.tasks.list': ('Read optional assignment tasks and observed holder activity without loading history or starting work. Readiness, ownership and worker activity are separate. A stopped or blocked holder keeps its claim; no automatic takeover. Independent chats are not enrolled. Completion is a participant report, not verified artifact success.', schema(source, ['sessionId'])),
         'assignment.tasks.wait': ('Passively wait for a scoped task-list change; rechecks membership after every wait. No execution or history reads.', schema({**source, 'afterVersion': string(64), 'waitMs': {'type': 'integer', 'minimum': 0, 'maximum': 30000}}, ['sessionId', 'afterVersion'])),
         'assignment.tasks.read': ('Read one task and its current claim authority. A historical claim receipt alone does not authorize completion.', schema(target, ['sessionId', 'taskId'])),
         'assignment.tasks.create': ('Assignment owner creates a task. Dependencies must be existing assignment tasks. Does not commission or start work.', schema({**source, **content, 'expectedAssignmentRevision': {'type': 'integer', 'minimum': 1}}, ['sessionId', 'title', 'expectedAssignmentRevision'])),
@@ -75,10 +75,32 @@ class AssignmentTasks:
                    if tasks.get(identity, {}).get('status') != 'completed']
         return ('blocked' if blocked or task.get('blockedReason') else 'ready'), blocked
 
+    def worker(self, value, task):
+        """Observed holder state, never an implicit ownership transition."""
+        claim = task.get('claim')
+        if not claim or task.get('status') in {'completed', 'cancelled'}:
+            return None
+        holder = self.member(value, claim['sessionId'])
+        if holder is None:
+            return {'sessionId': claim['sessionId'], 'status': 'unavailable',
+                    'label': 'Unavailable', 'attention': True, 'blockedReason': ''}
+        from .navigation_summary import activity
+        saved_task = holder.get('task') or self.service.coordination.task(holder['id'])
+        status = holder.get('status', 'idle')
+        facts = activity(holder, blocked=saved_task.get('status') == 'blocked')
+        label = facts['label']
+        if facts['kind'] == 'idle':
+            label = {'paused': 'Task paused', 'completed': 'Task complete'}.get(saved_task.get('status'),
+                {'stopped': 'Stopped', 'interrupted': 'Interrupted', 'cancelled': 'Cancelled'}.get(status, label))
+        return {'sessionId': holder['id'], 'status': status, 'taskStatus': saved_task.get('status'),
+                'label': label, 'attention': facts['kind'] == 'attention',
+                'blockedReason': (saved_task.get('blockedReason') or '')[:1000]
+                    if saved_task.get('status') == 'blocked' else ''}
+
     def project(self, value, task):
         readiness, blocked = self.readiness(value.get('tasks', {}), task)
         return {**copy.deepcopy(task), 'readiness': readiness, 'blockedBy': blocked,
-                'claim': self.claim_status(value, task)}
+                'claim': self.claim_status(value, task), 'worker': self.worker(value, task)}
 
     def snapshot(self, source, task_id=None):
         value = self.assignments.current(source)
@@ -103,7 +125,7 @@ class AssignmentTasks:
             if row:
                 result['members'].append({'sessionId': sid, 'label': row.get('title') or 'Conversation'})
         result['version'] = fingerprint([value['id'], value['revision'],
-            [(t['id'], (t.get('claim') or {}).get('status')) for t in result['tasks']], result['members']])
+            [(t['id'], (t.get('claim') or {}).get('status'), t['worker']) for t in result['tasks']], result['members']])
         if task_id:
             result['task'] = self.project(value, tasks[task_id])
         return result
