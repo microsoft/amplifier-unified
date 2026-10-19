@@ -70,6 +70,28 @@ function installPreviewProbe(pane){
   disconnect();
   return{records,firstViolation,dropped,expired};
  };
+ // Fixed synthetic gallery/frame only. Keep absence distinct from an empty
+ // attribute; bounded diagnostics do not normalize the strict restoration check.
+ const attributeFact=value=>({present:value!==null,length:value?.length??0,
+  value:value===null?null:value.length<=512?value:null,bounded:value===null||value.length<=512});
+ const propertyFacts=node=>{
+  const present=node.hasAttribute('style'),value=node.style.getPropertyValue('transform'),priority=node.style.getPropertyPriority('transform');
+  return{present,transform:value.length<=128?value:null,transformLength:value.length,
+   priority:['','important'].includes(priority)?priority:null,
+   bounded:value.length<=128&&['','important'].includes(priority),
+   attributeAfterPropertyRead:attributeFact(node.getAttribute('style'))};
+ };
+ const restorationFacts=(node,style,scroll,properties,actualStyle,actualScroll)=>{
+  // These comparisons use the captured values from the original assertion
+  // point, before reading CSSOM properties for the diagnostic.
+  const facts={expectedAttribute:attributeFact(style),actualAttribute:attributeFact(actualStyle),
+   expectedScroll:scroll,actualScroll,scrollExact:actualScroll===scroll,
+   attributeExact:actualStyle===style,expectedProperties:properties,actualProperties:propertyFacts(node)};
+  facts.bounded=facts.expectedAttribute.bounded&&facts.actualAttribute.bounded&&
+   properties.bounded&&properties.attributeAfterPropertyRead.bounded&&
+   facts.actualProperties.bounded&&facts.actualProperties.attributeAfterPropertyRead.bounded;
+  return facts;
+ };
  const controls=async()=>{
   const results=[],original=snapshot(),add=(name,before,after,expected)=>results.push({name,before,after,problem:compare(before,after),expected});
   add('unchanged',original,snapshot(),null);
@@ -83,6 +105,7 @@ function installPreviewProbe(pane){
   add('malformed',original,malformed,'invalid-geometry');
   for(const kind of ['scroll','gallery','frame']){
    const before=snapshot(),node=kind==='gallery'?gallery:frame,style=node.getAttribute('style'),scroll=pane.scrollTop;
+   const properties=propertyFacts(node);
    try{
     if(kind==='scroll')pane.scrollTop-=8;
     else node.style.transform='translateY(8px)';
@@ -91,10 +114,12 @@ function installPreviewProbe(pane){
     if(kind==='scroll')pane.scrollTop=scroll;
     else if(style===null)node.removeAttribute('style');else node.setAttribute('style',style);
     add(kind+'-restored',before,snapshot(),null);
-    results.at(-1).restorationExact=pane.scrollTop===scroll&&node.getAttribute('style')===style;
+    const actualScroll=pane.scrollTop,actualStyle=node.getAttribute('style');
+    results.at(-1).restorationExact=actualScroll===scroll&&actualStyle===style;
+    results.at(-1).restorationFacts=restorationFacts(node,style,scroll,properties,actualStyle,actualScroll);
    }
   }
-  const before=snapshot(),style=gallery.getAttribute('style');
+  const before=snapshot(),style=gallery.getAttribute('style'),properties=propertyFacts(gallery);
   begin(before);
   try{
    gallery.style.transform='translateY(8px)';
@@ -103,7 +128,9 @@ function installPreviewProbe(pane){
    if(style===null)gallery.removeAttribute('style');else gallery.setAttribute('style',style);
    await Promise.resolve();
    add('shift-return-restored',before,snapshot(),null);
-   results.at(-1).restorationExact=gallery.getAttribute('style')===style&&pane.scrollTop===before.pane.scrollTop;
+   const actualStyle=gallery.getAttribute('style'),actualScroll=pane.scrollTop;
+   results.at(-1).restorationExact=actualStyle===style&&actualScroll===before.pane.scrollTop;
+   results.at(-1).restorationFacts=restorationFacts(gallery,style,before.pane.scrollTop,properties,actualStyle,actualScroll);
   }
   const transient=finish();
   results.push({name:'shift-return-first-violation',problem:transient.firstViolation?.problem??null,expected:'gallery-position',boundaries:transient});
@@ -195,6 +222,7 @@ try{
  await page.locator('.a-messages').evaluate(installPreviewProbe);
  swapDiagnostic.controls=await page.evaluate(()=>window.imagePreviewProbe.controls());
  for(const result of swapDiagnostic.controls){
+  if(result.name.endsWith('-restored'))assert.equal(result.restorationFacts.bounded,true,'Bounded restoration facts: '+result.name);
   if(result.name.endsWith('-restored'))assert.equal(result.restorationExact,true,'Restore original scroll/style: '+result.name);
   if(result.expected===null)assertPlacement(result,'Placement control: '+result.name);
   else assert.throws(()=>assertPlacement(result,'Placement control: '+result.name),
