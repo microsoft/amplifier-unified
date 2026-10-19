@@ -1979,3 +1979,135 @@ async def test_explicit_proof_joins_actual_queued_receipts_without_fixture_flush
         assert calls == [True]  # Field and passive projection do not flush/rescan.
     finally:
         await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['other-owner', 'delivery', 'checkpoint', 'same-owner',
+                                     'delete-reinsert', 'owner-aba'])
+async def test_owner_authority_survives_only_unrelated_index_changes(source, mutation):
+    import sqlite3
+    source.call('one')
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        view = await owner.read_selected('root')
+        proof_id = view['rootProof']['id']
+        before = owner.proof_nodes('root', proof_id)
+        assert len(before) == 1
+        with source.diagnostics._db() as db:
+            record = db.execute("SELECT * FROM records WHERE session='root' LIMIT 1").fetchone()
+            if mutation == 'other-owner':
+                db.execute('INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES(?,?,?,?,?,?,?)',
+                           ('other', 1, 'tools', 'other-root', str(source.workspace), 'tool:post', '{}'))
+            elif mutation == 'delivery':
+                db.execute("INSERT INTO counters VALUES('unrelated-delivery',1)")
+            elif mutation == 'same-owner':
+                db.execute('UPDATE records SET data=? WHERE id=?', ('{}', record['id']))
+            elif mutation == 'delete-reinsert':
+                db.execute('DELETE FROM records WHERE id=?', (record['id'],))
+                db.execute('INSERT INTO records VALUES(?,?,?,?,?,?,?,?)', tuple(record))
+            elif mutation == 'owner-aba':
+                db.execute('UPDATE records SET session=? WHERE id=?', ('other-root', record['id']))
+                db.execute('UPDATE records SET session=? WHERE id=?', ('root', record['id']))
+        if mutation == 'checkpoint':
+            db = sqlite3.connect(source.diagnostics.path)
+            try:
+                db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+            finally:
+                db.close()
+        if mutation in {'same-owner', 'delete-reinsert', 'owner-aba'}:
+            with pytest.raises(ValueError, match='root proof'):
+                owner.proof_nodes('root', proof_id)
+        else:
+            assert owner.proof_nodes('root', proof_id) == before
+            field = before[0]['inputDetail']
+            result = await owner.read_proven_field('root', proof_id, before[0]['id'],
+                                                   {**field, 'offset': 0, 'limit': 4096})
+            assert result['value'] and result['nextOffset'] == 4096
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['selected', 'unrelated'])
+async def test_field_await_revalidates_same_owner_authority_not_database_churn(source, mutation):
+    source.call('one')
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            value = self.model.project(inputs, check_budget=lambda: None)
+            if inputs['operation'] == 'field':
+                entered.set()
+                await asyncio.wait_for(release.wait(), 5)
+            return value
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    task = None
+    try:
+        selected = await owner.read_selected('root')
+        bound = owner.proof_nodes('root', selected['rootProof']['id'])[0]
+        task = asyncio.create_task(owner.read_proven_field('root', selected['rootProof']['id'],
+            bound['id'], {**bound['inputDetail'], 'offset': 0, 'limit': 4096}))
+        await asyncio.wait_for(entered.wait(), 5)
+        with source.diagnostics._db() as db:
+            if mutation == 'selected':
+                db.execute("DELETE FROM records WHERE session='root'")
+            else:
+                db.execute('INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES(?,?,?,?,?,?,?)',
+                           ('different', 1, 'tools', 'another', str(source.workspace), 'tool:post', '{}'))
+        release.set()
+        if mutation == 'selected':
+            with pytest.raises(ValueError, match='proof'):
+                await asyncio.wait_for(asyncio.shield(task), 5)
+        else:
+            assert (await asyncio.wait_for(asyncio.shield(task), 5))['nextOffset'] == 4096
+    finally:
+        release.set()
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_accepted_publication_is_linearized_before_later_revocation(source, monkeypatch):
+    source.call('one')
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    original_state, published = owner._state, []
+    def publish_then_revoke(identity, value):
+        original_state(identity, value)
+        if value.get('current') and value.get('receipt', {}).get('scope') == 'root-proof':
+            published.append(value)
+            # A later independent commit is not excluded until network delivery.
+            # It MUST be caught by the next explicit read of these references.
+            with source.diagnostics._db() as db:
+                db.execute("DELETE FROM records WHERE session='root'")
+    monkeypatch.setattr(owner, '_state', publish_then_revoke)
+    try:
+        result = await owner.read_selected('root')
+        assert len(published) == 1 and result['rootProof']['status'] == 'complete'
+        with pytest.raises(ValueError, match='root proof'):
+            owner.proof_nodes('root', result['rootProof']['id'])
+        assert owner.project(source.session)['workProjection']['current'] is False
+    finally:
+        await owner.close()
