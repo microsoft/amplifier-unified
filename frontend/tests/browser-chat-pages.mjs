@@ -1,3 +1,17 @@
+// Feature fixtures exercise their preselected chat/panel. Fresh web clients now
+// arrive at Home, so establish that surface explicitly without selecting a chat,
+// clearing a draft, or dismissing the fixture's panel. Home arrival has its own
+// acceptance coverage; these scenarios retain their original feature assertions.
+export async function showFixtureConversation(page){
+ await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
+ await page.evaluate(async()=>{
+  const selected=window.amplifier.getState().selectedSessionId;
+  const result=await window.amplifier.dispatch('view.update',{patch:{workSurface:'chat'}});
+  if(!result.accepted)throw Error('Could not open the fixture conversation surface');
+  if(window.amplifier.getState().selectedSessionId!==selected)throw Error('Fixture selection changed');
+ });
+}
+
 // Enter the selected chat's current public controls, not a removed Settings page.
 export async function openChatAdvancedPage(page,title){
  await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
