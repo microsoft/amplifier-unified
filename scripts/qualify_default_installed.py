@@ -648,6 +648,58 @@ def run_fixed_stage(python, env, evidence, stage):
                 save(evidence / 'fixed-stage-result.json', report)
 
 
+RESIDUAL_HELPER_COUNTS = {
+    'tests.test_integration_clients': 15,
+    'tests.test_integration_checks': 43,
+}
+
+
+def residual_helper_result(path, exit_code):
+    """The two changed helper suites have their own receipt, never product counts."""
+    root = ET.parse(path).getroot()
+    cases = list(root.iter('testcase'))
+    identities = [(case.get('classname', ''), case.get('name', '')) for case in cases]
+    counts = {}
+    rows = []
+    for case, (module, name) in zip(cases, identities):
+        counts[module] = counts.get(module, 0) + 1
+        rows.append({'classname': module, 'name': name, 'outcome': next(
+            (key for key in ('error', 'failure', 'skipped') if case.find(key) is not None), 'passed')})
+    clean = not any(node.tag in {'error', 'failure', 'skipped'} for node in root.iter())
+    clean = clean and all(not int(suite.get(key, '0')) for suite in root.iter('testsuite')
+                          for key in ('errors', 'failures', 'skipped'))
+    identities_valid = len(identities) == len(set(identities)) and counts == RESIDUAL_HELPER_COUNTS
+    return {'passed': exit_code == 0 and clean and identities_valid,
+            'exitCode': exit_code, 'counts': counts, 'expectedCounts': RESIDUAL_HELPER_COUNTS,
+            'identitiesValid': identities_valid, 'cases': rows}
+
+
+def run_residual_helpers(python, env, evidence):
+    junit = evidence / 'helper-contracts.xml'
+    require(not junit.exists(), 'Existing helper evidence; reconcile, never replay')
+    report = {'passed': False, 'exitCode': None, 'expectedCounts': RESIDUAL_HELPER_COUNTS}
+    try:
+        result = subprocess.run([str(python), '-I', '-B', '-m', 'pytest', '--noconftest',
+            '--import-mode=importlib', '-c', '/dev/null', '-p', 'no:cacheprovider', '-q',
+            '--rootdir=' + str(GUEST / 'candidate'),
+            # Only these source-helper contracts import scripts.*. The separate
+            # installed-product pytest process receives no pythonpath override.
+            '-o', 'pythonpath=' + str(GUEST / 'candidate'),
+            '--basetemp=' + str(GUEST / 'tmp/helper-pytest'), '--junitxml=' + str(junit),
+            str(GUEST / 'candidate/tests/test_integration_clients.py'),
+            str(GUEST / 'candidate/tests/test_integration_checks.py')],
+            env=env, cwd=GUEST / 'run', stdin=subprocess.DEVNULL, timeout=120)
+        report['exitCode'] = result.returncode
+        report.update(residual_helper_result(junit, result.returncode))
+        require(report['passed'], 'Client/owner helper contracts failed or incomplete')
+        return report
+    except BaseException as error:
+        report.update(passed=False, error=type(error).__name__ + ': ' + str(error))
+        raise
+    finally:
+        save(evidence / 'helper-contracts-result.json', report)
+
+
 def guest_test(desktop_safety=False, root_guest=False, installed_pwa=False):
     stage = selected_stage(desktop_safety, root_guest, installed_pwa)
     require(in_container() and os.getuid() == (0 if root_guest else 65532),
@@ -674,6 +726,7 @@ def guest_test(desktop_safety=False, root_guest=False, installed_pwa=False):
                 env=env, cwd=GUEST / 'run')
         result['adapterExit'] = 0
         if stage in FIXED_CASES:
+            result['helperContracts'] = run_residual_helpers(python, env, evidence)
             run_fixed_stage(python, env, evidence, stage)
             result.update(passed=True, testExit=0, checkExit=0)
             return
@@ -745,9 +798,12 @@ def verify_test_isolation(info, stage):
     config = info['HostConfig']
     caps = {name.removeprefix('CAP_') for name in config.get('CapAdd') or []}
     expected_caps = {'SETUID', 'SETGID', 'KILL'} if root else set()
-    expected_mounts = {str(GUEST / name) for name in ('home', 'tmp', 'run', 'cache', 'evidence')}
-    if stage == 'installed-pwa':
-        expected_mounts.add('/tmp')
+    options = test_container_options(stage)
+    expected_tmpfs = dict(options[index + 1].split(':', 1)
+                          for index, option in enumerate(options) if option == '--tmpfs')
+    # Docker records --tmpfs in HostConfig.Tmpfs. Pre-start Mounts may be empty;
+    # it is not the authoritative destination/options map for these flags.
+    mounts = info.get('Mounts', [])
     require(config['NetworkMode'] == 'none' and config['ReadonlyRootfs']
             and not config.get('Binds') and not config['Privileged']
             and config.get('PidMode', '') in ('', 'private')
@@ -756,9 +812,11 @@ def verify_test_isolation(info, stage):
             and config['Memory'] == 4 * 1024 ** 3 and config['NanoCpus'] == 2 * 10 ** 9
             and config['PidsLimit'] == 256
             and 'no-new-privileges' in config['SecurityOpt']
-            and len(info['Mounts']) == len(expected_mounts)
-            and {m['Destination'] for m in info['Mounts']} == expected_mounts
-            and all(m['Type'] == 'tmpfs' for m in info['Mounts']),
+            and config.get('Tmpfs') == expected_tmpfs
+            and not config.get('Mounts') and not config.get('VolumesFrom')
+            and len(mounts) == len({m.get('Destination') for m in mounts})
+            and all(m.get('Type') == 'tmpfs' and m.get('Destination') in expected_tmpfs
+                    and not m.get('Source') for m in mounts),
             'Unexpected test container isolation')
     return {key: config.get(key) for key in
             ('NetworkMode', 'ReadonlyRootfs', 'Memory', 'NanoCpus', 'PidsLimit',

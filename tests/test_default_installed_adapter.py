@@ -342,19 +342,30 @@ def test_container_default_options_remain_unprivileged_and_unchanged():
 
 
 @pytest.mark.parametrize('stage', ['ic13', 'desktop-safety', 'root-guest', 'installed-pwa'])
-@pytest.mark.parametrize('change', ['none', 'privileged', 'host-pid', 'capability', 'bind', 'mount', 'user'])
+@pytest.mark.parametrize('change', [
+    'none', 'reported-tmpfs', 'privileged', 'host-pid', 'capability', 'bind', 'mount', 'user',
+    'missing-tmpfs', 'extra-tmpfs', 'wrong-mode', 'wrong-uid', 'wrong-gid', 'wrong-size',
+    'missing-tmpfs-options', 'extra-tmpfs-option', 'volume', 'extra-mount', 'duplicate-mount',
+    'host-config-mount', 'volumes-from', 'tmpfs-with-source',
+])
 def test_actual_container_inspection_refuses_widened_stage(stage, change):
     root = stage == 'root-guest'
-    mounts = [str(adapter.GUEST / name) for name in ('home', 'tmp', 'run', 'cache', 'evidence')]
+    owner = '0' if root else '65532'
+    tmpfs = {str(adapter.GUEST / name):
+             f"rw,uid={owner},gid={owner},mode={'0755' if root and name == 'tmp' else '0700'},size=512m"
+             for name in ('home', 'tmp', 'run', 'cache', 'evidence')}
     if stage == 'installed-pwa':
-        mounts.append('/tmp')
+        tmpfs['/tmp'] = 'rw,uid=0,gid=0,mode=1777,size=512m'
     host = {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False, 'Binds': None,
             'PidMode': '', 'CapDrop': ['ALL'], 'CapAdd': ['SETUID', 'SETGID', 'KILL'] if root else None,
             'Memory': 4 * 1024 ** 3, 'NanoCpus': 2 * 10 ** 9, 'PidsLimit': 256,
-            'SecurityOpt': ['no-new-privileges'], 'Tmpfs': {}}
+            'SecurityOpt': ['no-new-privileges'], 'Tmpfs': tmpfs}
     info = {'HostConfig': host, 'Config': {'User': '0:0' if root else '65532:65532'},
-            'Mounts': [{'Type': 'tmpfs', 'Destination': path} for path in mounts]}
-    if change == 'privileged':
+            'Mounts': []}
+    destination = str(adapter.GUEST / 'evidence')
+    if change == 'reported-tmpfs':
+        info['Mounts'] = [{'Type': 'tmpfs', 'Destination': path} for path in tmpfs]
+    elif change == 'privileged':
         host['Privileged'] = True
     elif change == 'host-pid':
         host['PidMode'] = 'host'
@@ -363,11 +374,37 @@ def test_actual_container_inspection_refuses_widened_stage(stage, change):
     elif change == 'bind':
         host['Binds'] = ['/private:/private']
     elif change == 'mount':
-        info['Mounts'][0]['Type'] = 'bind'
+        info['Mounts'] = [{'Type': 'bind', 'Destination': destination, 'Source': '/private'}]
     elif change == 'user':
         info['Config']['User'] = '65534:65534'
-    if change == 'none':
+    elif change == 'missing-tmpfs':
+        del tmpfs[destination]
+    elif change == 'extra-tmpfs':
+        tmpfs['/extra'] = tmpfs[destination]
+    elif change.startswith('wrong-'):
+        key, value = {'wrong-mode': ('mode', '0777'), 'wrong-uid': ('uid', '65534'),
+                      'wrong-gid': ('gid', '65534'), 'wrong-size': ('size', '1g')}[change]
+        tmpfs[destination] = ','.join(key + '=' + value if option.startswith(key + '=') else option
+                                     for option in tmpfs[destination].split(','))
+    elif change == 'missing-tmpfs-options':
+        tmpfs[destination] = 'rw'
+    elif change == 'extra-tmpfs-option':
+        tmpfs[destination] += ',exec'
+    elif change == 'volume':
+        info['Mounts'] = [{'Type': 'volume', 'Destination': destination}]
+    elif change == 'extra-mount':
+        info['Mounts'] = [{'Type': 'tmpfs', 'Destination': '/extra'}]
+    elif change == 'duplicate-mount':
+        info['Mounts'] = [{'Type': 'tmpfs', 'Destination': destination}] * 2
+    elif change == 'host-config-mount':
+        host['Mounts'] = [{'Type': 'bind', 'Source': '/private', 'Target': destination}]
+    elif change == 'volumes-from':
+        host['VolumesFrom'] = ['unrelated-container']
+    elif change == 'tmpfs-with-source':
+        info['Mounts'] = [{'Type': 'tmpfs', 'Destination': destination, 'Source': '/private'}]
+    if change in {'none', 'reported-tmpfs'}:
         assert adapter.verify_test_isolation(info, stage)['NetworkMode'] == 'none'
+        assert adapter.verify_test_isolation(info, stage)['Tmpfs'] == tmpfs
     else:
         with pytest.raises(ValueError, match='isolation'):
             adapter.verify_test_isolation(info, stage)
@@ -426,6 +463,7 @@ def test_failed_fixed_stage_preserves_raw_result_and_outer_attestation(monkeypat
                 raise subprocess.CalledProcessError(1, argv)
     monkeypatch.setattr(adapter, 'command', command)
     monkeypatch.setattr(adapter, 'root_guest_preflight', lambda env: {'fixture': True})
+    monkeypatch.setattr(adapter, 'run_residual_helpers', lambda *args: {'passed': True})
 
     def run(argv, **kwargs):
         path = tmp_path / 'evidence/junit.xml'
@@ -527,3 +565,139 @@ def test_pwa_preflight_records_effective_environment_and_lock(tmp_path, monkeypa
     actual['prerequisites']['playwright_version'] = '0.0.0'
     with pytest.raises(ValueError, match='lock-matched'):
         adapter.pwa_preflight_receipt(actual, env, python)
+
+
+def residual_helper_junit(path):
+    root = ET.Element('testsuite')
+    for module, count in adapter.RESIDUAL_HELPER_COUNTS.items():
+        for index in range(count):
+            ET.SubElement(root, 'testcase', classname=module, name=f'test_contract_{index}')
+    ET.ElementTree(root).write(path)
+    return root
+
+
+@pytest.mark.parametrize('change', ['none', 'missing', 'duplicate', 'extra', 'wrong-module',
+                                    'skipped', 'failure', 'error', 'counter', 'exit'])
+def test_residual_helpers_keep_module_counts_separate_from_product(tmp_path, change):
+    path = tmp_path / 'helper-contracts.xml'
+    root = residual_helper_junit(path)
+    if change == 'missing':
+        root.remove(root[0])
+    elif change == 'duplicate':
+        root[1].set('name', root[0].get('name'))
+    elif change == 'extra':
+        ET.SubElement(root, 'testcase', classname='tests.test_integration_clients', name='test_extra')
+    elif change == 'wrong-module':
+        root[0].set('classname', 'tests.test_browser_auth')
+    elif change in {'skipped', 'failure', 'error'}:
+        ET.SubElement(root[0], change)
+    elif change == 'counter':
+        root.set('errors', '1')
+    ET.ElementTree(root).write(path)
+    report = adapter.residual_helper_result(path, 1 if change == 'exit' else 0)
+    assert report['passed'] is (change == 'none')
+    assert report['expectedCounts'] == {
+        'tests.test_integration_clients': 15, 'tests.test_integration_checks': 43}
+    assert report['exitCode'] == (1 if change == 'exit' else 0)
+    assert not (tmp_path / 'junit.xml').exists()
+    assert len(report['cases']) == len(list(root))
+
+
+@pytest.mark.parametrize('outcome', ['passed', 'skipped', 'failed-exit', 'launch-error'])
+def test_residual_helper_subprocess_has_scoped_import_path_and_retained_receipt(monkeypatch, tmp_path, outcome):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    evidence = tmp_path / 'evidence'
+    evidence.mkdir()
+    env = adapter.clean_env()
+    original = dict(env)
+    python = tmp_path / '.venv/bin/python'
+
+    def run(argv, **kwargs):
+        assert argv[:5] == [str(python), '-I', '-B', '-m', 'pytest']
+        assert '--noconftest' in argv and '--import-mode=importlib' in argv
+        assert argv[argv.index('-c') + 1] == '/dev/null'
+        assert argv[argv.index('-o') + 1] == 'pythonpath=' + str(tmp_path / 'candidate')
+        assert '--rootdir=' + str(tmp_path / 'candidate') in argv
+        assert argv[-2:] == [str(tmp_path / 'candidate/tests/test_integration_clients.py'),
+                             str(tmp_path / 'candidate/tests/test_integration_checks.py')]
+        assert kwargs['cwd'] == tmp_path / 'run' and kwargs['timeout'] == 120
+        assert kwargs['env'] == original and 'PYTHONPATH' not in kwargs['env']
+        if outcome == 'launch-error':
+            raise FileNotFoundError('synthetic interpreter unavailable')
+        path = evidence / 'helper-contracts.xml'
+        root = residual_helper_junit(path)
+        if outcome == 'skipped':
+            ET.SubElement(root[0], 'skipped')
+            ET.ElementTree(root).write(path)
+        return subprocess.CompletedProcess(argv, 1 if outcome == 'failed-exit' else 0)
+
+    monkeypatch.setattr(adapter.subprocess, 'run', run)
+    if outcome == 'passed':
+        report = adapter.run_residual_helpers(python, env, evidence)
+        assert report['counts'] == adapter.RESIDUAL_HELPER_COUNTS
+    else:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            adapter.run_residual_helpers(python, env, evidence)
+    retained = json.loads((evidence / 'helper-contracts-result.json').read_text())
+    assert retained['passed'] is (outcome == 'passed')
+    assert retained['exitCode'] == (None if outcome == 'launch-error' else 1 if outcome == 'failed-exit' else 0)
+    assert env == original and not (evidence / 'junit.xml').exists()
+    if outcome == 'skipped':
+        assert retained['cases'][0]['outcome'] == 'skipped'
+
+
+@pytest.mark.parametrize('stage', ['root-guest', 'installed-pwa'])
+@pytest.mark.parametrize('helper_passes', [False, True])
+def test_fixed_product_waits_for_changed_helper_contracts(monkeypatch, tmp_path, stage, helper_passes):
+    monkeypatch.setattr(adapter, 'GUEST', tmp_path)
+    monkeypatch.setattr(adapter, 'in_container', lambda: True)
+    monkeypatch.setattr(adapter.os, 'getuid', lambda: 0 if stage == 'root-guest' else 65532)
+    for name in ('prepared-evidence', 'evidence', 'run', 'tmp'):
+        (tmp_path / name).mkdir()
+    order = []
+
+    def command(argv, **kwargs):
+        order.append('attest' if 'guest-attest' in argv else 'adapter')
+        assert not any(str(arg).startswith('pythonpath=') for arg in argv)
+
+    def helpers(*args):
+        order.append('helpers')
+        if not helper_passes:
+            raise ValueError('helper contracts failed')
+        return {'passed': True, 'counts': adapter.RESIDUAL_HELPER_COUNTS}
+
+    monkeypatch.setattr(adapter, 'command', command)
+    monkeypatch.setattr(adapter, 'run_residual_helpers', helpers)
+    monkeypatch.setattr(adapter, 'run_fixed_stage', lambda *args: order.append('product'))
+    flags = {'root_guest': stage == 'root-guest', 'installed_pwa': stage == 'installed-pwa'}
+    if helper_passes:
+        adapter.guest_test(**flags)
+    else:
+        with pytest.raises(ValueError, match='helper contracts failed'):
+            adapter.guest_test(**flags)
+    assert order == ['attest', 'adapter', 'helpers', *(['product'] if helper_passes else []), 'attest']
+    result = json.loads((tmp_path / 'evidence/result.json').read_text())
+    assert result['passed'] is helper_passes and result['attestation']
+    assert result['baselineExecuted'] is False
+    if helper_passes:
+        assert result['helperContracts']['counts'] == adapter.RESIDUAL_HELPER_COUNTS
+    else:
+        assert result['testExit'] is None
+
+
+def test_residual_helper_expected_counts_match_the_two_unchanged_modules():
+    import ast
+    for module, expected in adapter.RESIDUAL_HELPER_COUNTS.items():
+        tree = ast.parse((ROOT / (module.replace('.', '/') + '.py')).read_text())
+        count = 0
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith('test_'):
+                continue
+            instances = 1
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute) and decorator.func.attr == 'parametrize':
+                    instances *= len(ast.literal_eval(decorator.args[1]))
+            count += instances
+        assert count == expected
+    assert set(adapter.RESIDUAL_HELPER_COUNTS) == {
+        'tests.test_integration_clients', 'tests.test_integration_checks'}
