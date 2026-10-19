@@ -194,6 +194,13 @@ def _observation(event, raw, offset, path, identity):
             row[target] = value
     row.setdefault('label', {'llm': 'Model observation', 'tool': 'Tool observation',
                             'worker': 'Worker observation', 'prompt': 'Saved input'}[kind])
+    if kind == 'llm' and name in {'llm:request', 'llm:response'}:
+        row['label'] = 'Provider request' if name == 'llm:request' else 'Provider response'
+        # Exact host context is stamped before canonical capture. A cut window
+        # cannot establish call identity from timing or apparent uniqueness.
+        call = _scalar(data.get('unified_call_id'))
+        if call is not None:
+            row['_hostCallId'] = call
     at = _time(event.get('timestamp') if event.get('timestamp') is not None else data.get('timestamp'))
     if at is not None:
         row['createdAt'] = at
@@ -210,6 +217,19 @@ def _observation(event, raw, offset, path, identity):
         row[field + 'Detail'] = {'part': 'nodes', 'id': row['id'], 'field': field,
             'digest': hashlib.sha256(('event-field-v1:' + sha + ':' + key).encode()).hexdigest(),
             'digestKind': 'event-field-v1'}
+        if field in {'request', 'response'}:
+            capture = data.get(field + '_capture', data.get('request_capture', {}))
+            if isinstance(capture, dict):
+                capture = {name: value for name, value in capture.items()
+                    if name in {'redacted', 'truncated'} and type(value) is bool
+                    or name == 'limit_chars' and type(value) is int}
+                if capture:
+                    row[field + 'Capture'] = capture
+            from .provider_payloads import metadata
+            files = data.get('provider_payloads')
+            recording = metadata(files.get(key)) if isinstance(files, dict) else None
+            if recording:
+                row[field + 'Recording'] = recording
         if field not in {'request', 'response'}:
             row[field] = _preview(data[key])
     # Neither usage nor lifecycle aggregates are derived from a partial range.

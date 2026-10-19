@@ -121,10 +121,17 @@ def install_request_redaction(coordinator, *, directory=None):
         return
     coordinator.register_capability('web.provider_request_redaction', True)
     async def observe(event, data):
+        from .execution_events import CURRENT_CALL
+        result = dict(data)
+        # This receipt comes from the wrapped host call, never from a provider.
+        # Clear an untrusted value even for summary-only/unrecorded events.
+        result.pop('unified_call_id', None)
+        call = CURRENT_CALL.get()
+        if isinstance(call, str) and call.startswith('llm:') and len(call) <= 512:
+            result['unified_call_id'] = call
         fields = [key for key in ('raw', 'raw_request', 'raw_response') if key in data]
         if not fields:
-            return HookResult()
-        result = dict(data)
+            return HookResult(action='modify', data=result)
         # A provider cannot supply trusted host file references.
         result.pop('provider_payloads', None)
         truncated = False

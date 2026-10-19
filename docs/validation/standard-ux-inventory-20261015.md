@@ -692,3 +692,27 @@ an artifacts-only archive and unchanged stopped guest. Existing retention and
 worker Python owners cover malformed archives, authority and replay boundaries.
 See [qualification and limits](stopped-artifact-recovery831.md). No new browser
 lane or frozen inventory count is added.
+
+### Diagnostic capture and paged recordings (October 18)
+
+**DIAGNOSTIC-CAPTURE** extends the existing `provider-recording-browser.mjs`
+focused smoke. Require capture autosave across reload, a completed model call
+whose request/response arrive later without another execution event, explicit
+payload disclosure, and full downloads through both live and saved observation
+owners. Use more than 100 live steps and two collapsed saved pages. The legacy
+shortcut must open the enclosing group and reach recordings on desktop and a
+390px viewport; provider/model, request/response labels and recorded time remain
+visible. A summary-only completion and the separate raw response are distinct
+valid observations. Neither timing nor apparent uniqueness may link legacy bytes
+to a call. The existing `canonical-work` smoke retains the complete-projection
+path and uses truthful unavailable/autosave copy.
+
+The recurring diagnostic notice is service/API-tested in
+`test_completion_attention.py`: acknowledging 39 losses stays acknowledged as
+healthy index rows/timestamps change; a 40th loss or current error resurfaces.
+Its existing visible/focused acknowledgement UI is unchanged and was not newly
+browser-qualified here. Python owners cover capture context through concurrent
+root/child and streaming/retry paths, cut-prefix ambiguity, root/native identity,
+download authority and late owner/reference changes, partial attempt replacement,
+and page eviction. See [qualification and limits](diagnostic-capture-20261018.md).
+This expands existing focused checks; no new frozen browser lane is claimed.
