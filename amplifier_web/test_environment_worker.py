@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -358,6 +359,34 @@ def retain_manifest(directory, archives):
             os.close(descriptor)
 
 
+def cleanup_phase(payload, phase):
+    """Immutable phase evidence distinguishes preservation from destructive work."""
+    root = Path(payload['root']) / ('cleanup-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
+    root.mkdir(mode=0o700, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError('The cleanup evidence directory is unsafe.')
+    write_private_record(root / (phase + '.json'), {
+        'requestId': payload['requestId'], 'operationId': payload['operationId'],
+        'rootOwner': payload['rootOwner'], 'phase': phase})
+
+
+def cleanup_failure(payload, phase, identity, code='preservation_failed'):
+    before_removal = phase in {'preserving', 'verifying', 'rechecking'}
+    changed_owner = phase == 'rechecking' or code in {'owner_changed', 'ownership_conflict', 'backend_changed'}
+    if phase == 'rechecking' and code == 'preservation_failed':
+        code = 'owner_unverified'
+    if phase == 'verifying' and code == 'preservation_failed':
+        code = 'archive_verification_failed'
+    return {'ok': False, 'status': 'stopped' if before_removal and not changed_owner else 'unknown',
+            'universeId': identity, 'code': code, 'phase': phase,
+            'effectAdmitted': not before_removal,
+            'message': ('The environment owner or backend could not be verified. No removal was attempted; inspect the exact environment before continuing cleanup.'
+                        if before_removal and changed_owner else
+                        'Files could not be completely preserved. The stopped environment is unchanged; no removal was attempted.'
+                        if before_removal else 'Files were preserved, but removal is not confirmed. Inspect the exact environment before continuing cleanup.')}
+
+
 def profile(image, payload=None):
     selected = selected_profile(payload or {})
     value = {
@@ -397,6 +426,7 @@ def execute_call(payload):
     action = payload['action']
     identity = payload.get('universeId')
     snapshot = payload.get('snapshot')
+    phase = None
     try:
         if action == 'capacity':
             return {'ok': True, 'capacity': docker_capacity(payload)}
@@ -453,7 +483,7 @@ def execute_call(payload):
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
             identity = lib.launch_id(payload['operationId'], config=config)
-        if action in {'read', 'execute', 'stop', 'remove', 'exportArtifacts'} | jobs.JOB_ACTIONS:
+        if action in {'read', 'execute', 'stop', 'remove', 'finishCleanup', 'exportArtifacts'} | jobs.JOB_ACTIONS:
             docker_owner(payload, identity, backend, binding_source)
         if action in jobs.JOB_ACTIONS:
             if not source_ready(root, identity, snapshot):
@@ -484,26 +514,55 @@ def execute_call(payload):
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'stopped' if result.complete else 'unknown', 'result': serialize(result),
                     'message': 'Containers stopped; source and artifacts are retained.' if result.complete else 'Stop was requested but not confirmed. Inspect current state.'}
-        if action == 'remove':
-            if payload.get('retentionMode', 'files') != 'files':
+        if action in {'remove', 'finishCleanup'}:
+            recovering = action == 'finishCleanup'
+            if not recovering and payload.get('retentionMode', 'files') != 'files':
                 return {'ok': False, 'status': 'unknown', 'universeId': identity, 'code': 'retention_unsupported',
                         'message': 'Full environment retention is unavailable for this backend. The stopped environment was preserved.'}
             universe = lib.status(identity, config=config)
             if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
                 return {'ok': False, 'universeId': identity, 'status': 'unknown', 'message': 'Removal requires observed stopped containers. No data was removed.'}
+            if recovering and docker_reconcile(payload, identity, backend, binding_source)['status'] != 'stopped':
+                return {'ok': False, 'status': 'unknown', 'effectAdmitted': False,
+                        'message': 'Cleanup requires a freshly observed stopped environment.'}
+            phase = 'preserving'
+            cleanup_phase(payload, phase)
+            if recovering and shutil.disk_usage(root).free < 2 * retention.RECOVERY_LIMIT + 1024 ** 3:
+                return cleanup_failure(payload, phase, identity, 'retention_storage')
             destination = root / ('retained-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
             destination.mkdir(mode=0o700)
-            archives = [serialize(lib.export_files(identity, source, destination / name, config=config))
+            options = {'max_bytes': retention.RECOVERY_LIMIT, 'timeout_seconds': 300} if recovering else {}
+            archives = [serialize(lib.export_files(identity, source, destination / name, config=config, **options))
                         for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]]
-            retained = retention.verify_retention(root, archives)
+            phase = 'verifying'
+            cleanup_phase(payload, phase)
+            retained = retention.verify_retention(root, archives, 'archive-only' if recovering else 'files')
             retain_manifest(destination, archives)
+            # Revalidate the physical stopped owner immediately before teardown.
+            if recovering:
+                phase = 'rechecking'
+                cleanup_phase(payload, phase)
+            observed = docker_reconcile(payload, identity, backend, binding_source) if recovering else None
+            if recovering and (observed.get('status') != 'stopped' or observed['observation']['ownership'] != 'matched'):
+                return cleanup_failure(payload, phase, identity, 'owner_changed')
+            phase = 'removing'
+            cleanup_phase(payload, phase)
             result = lib.destroy(identity, config=config)
-            if result.complete:
+            if result.complete and not recovering:
                 release_admission(payload, identity)
                 retain_settlement(payload, identity, backend, 'removed')
-            return {'ok': result.complete, 'universeId': identity,
-                    'status': 'removed' if result.complete else 'unknown', 'result': serialize(result),
-                    'archives': archives, 'retention': retained, 'message': 'Source and artifacts were retained before removal.' if result.complete else 'Artifacts were retained; teardown is not confirmed.'}
+            if recovering:
+                phase = 'observing'
+                cleanup_phase(payload, phase)
+                observed = docker_reconcile(payload, identity, backend, binding_source)
+                if observed['status'] != 'absent':
+                    return {**cleanup_failure(payload, phase, identity), 'archives': archives, 'retention': retained}
+                release_admission(payload, identity)
+                retain_settlement(payload, identity, backend, 'removed')
+            complete = observed['status'] == 'absent' if recovering else result.complete
+            return {'ok': complete, 'universeId': identity,
+                    'status': 'removed' if complete else 'unknown', 'result': serialize(result),
+                    'archives': archives, 'retention': retained, 'message': 'Source and artifacts were retained before removal.' if complete else 'Artifacts were retained; teardown is not confirmed.'}
         if action == 'exportArtifacts':
             universe = lib.status(identity, config=config)
             if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
@@ -520,9 +579,16 @@ def execute_call(payload):
                     'artifactExport': retained, 'message': 'Artifacts retained. The stopped environment and workspace are unchanged; removal is not authorized.'}
         raise ValueError('Unsupported managed test environment action.')
     except DigitalTwinUniverseError as exc:
+        if phase is not None:
+            return cleanup_failure(payload, phase, identity, exc.code)
         return {'ok': False, 'status': 'unknown', 'universeId': identity or exc.universe_id,
                 'snapshot': snapshot, 'code': exc.code,
                 'message': 'The backend did not confirm this operation. A command may still be running; inspect the retained environment without replaying the request.'}
+
+    except (OSError, ValueError, retention.tarfile.TarError):
+        if phase is not None:
+            return cleanup_failure(payload, phase, identity)
+        raise
 
 
 def main():

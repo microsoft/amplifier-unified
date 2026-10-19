@@ -13,6 +13,7 @@ import time
 import uuid
 
 from amplifier_operations.coordination import fingerprint
+from .task_binding import continuation_epoch, matches as task_matches
 
 PRINCIPAL = ContextVar("collaboration_principal", default=None)
 BINDING = ContextVar("collaboration_binding", default=None)
@@ -304,8 +305,12 @@ class Collaboration:
                 OR json_extract(receipt,'$.subscription.open')=1)
             AND json_extract(receipt,'$.subscription.interruptionRevision')=?
             AND json_extract(receipt,'$.subscription.taskId') IS ?
-            AND json_extract(receipt,'$.subscription.taskRevision') IS ?""",
-            (sid, session.get('interruptionRevision', 0), task.get('id'), task.get('revision'))).fetchone()[0]
+            AND ((json_type(receipt,'$.subscription.taskContinuationEpoch') IS NOT NULL
+                  AND json_extract(receipt,'$.subscription.taskContinuationEpoch') IS ?)
+                 OR (json_type(receipt,'$.subscription.taskContinuationEpoch') IS NULL
+                     AND json_extract(receipt,'$.subscription.taskRevision') IS ?))""",
+            (sid, session.get('interruptionRevision', 0), task.get('id'),
+             continuation_epoch(task), task.get('revision'))).fetchone()[0]
         if pending + waiting >= MAX_PENDING_INPUTS:
             self.error('This conversation inbox is full, including reserved replies. Wait for pending work to settle; no input was added.', 429)
         for key, value, limit, label in [('senderSessionId', sender, MAX_SENDER_INPUTS, 'sender'),
@@ -427,7 +432,7 @@ class Collaboration:
         if args['requestId'] not in delivered:
             if request.get('delivery') not in {'accepted', 'applied'}:
                 self.error('A later generation needs confirmed prior input admission.', 409)
-            reason = self.guard(request)
+            reason = self.guard(request, for_reply=True)
             if reason:
                 self.error('The original request boundary no longer permits a later reply: ' + reason, 409)
         self.validate_reply_message_ids(source, args.get('messageIds', []), active['id'])
@@ -532,6 +537,7 @@ class Collaboration:
     def saved_wait(self, source, request_id, *, status='waiting'):
         task = source.get('task') or self.service.coordination.task(source['id'])
         return {'requestId': request_id, 'taskId': task.get('id'), 'taskRevision': task.get('revision'),
+                'taskContinuationEpoch': continuation_epoch(task),
                 'interruptionRevision': source.get('interruptionRevision', 0), 'status': status,
                 'continuationId': str(uuid.uuid5(uuid.NAMESPACE_URL, 'collaboration-wait:' + source['id'] + ':' + request_id)),
                 'notificationVersion': 2, 'lastClaimedRevision': 0, 'open': True,
@@ -622,7 +628,7 @@ class Collaboration:
         active = target.get("collaborationGeneration") or {}
         return bool(hasattr(self.service.runtime, "collaboration_steer") and active.get("id") and not active.get("terminal"))
 
-    def guard(self, receipt):
+    def guard(self, receipt, *, for_reply=False):
         try:
             if receipt.get('delivery') == 'queued' and receipt.get('expiresAt', float('inf')) <= time.time():
                 return 'The queued request expired before runtime admission.'
@@ -653,6 +659,8 @@ class Collaboration:
                     return 'The one-shot watch was cancelled.'
                 if receipt.get('dependencyOutcomeRevision') and not self.claim_matches(dependency, receipt):
                     return 'This outcome notification was superseded or its qualification changed; inspect the current result.'
+            elif 'taskContinuationEpoch' in receipt:
+                return 'Only retained outcome notifications can follow a continuing objective.'
             target = self.authorize(source, {"sessionId": receipt["target"]["sessionId"]})
             if target.get('fileAccessPending'):
                 return 'The recipient has pending file-access settings; existing work must settle before new input.'
@@ -668,7 +676,10 @@ class Collaboration:
             task = target.get("task") or self.service.coordination.task(target["id"])
             if task.get("status") in {"paused", "blocked", "completed"}:
                 return "The recipient task is not active."
-            if (task.get("id"), task.get("revision")) != (receipt.get("taskId"), receipt.get("taskRevision")):
+            task_binding = receipt
+            if for_reply and 'replyTaskContinuationEpoch' in receipt:
+                task_binding = {**receipt, 'taskContinuationEpoch': receipt['replyTaskContinuationEpoch']}
+            if not task_matches(task, task_binding):
                 return "The recipient task changed."
             if target.get("ownership", {}).get("status") in {"blocked", "yielding", "yielded", "yield-failed", "taking-over"}:
                 return "The native owner is unavailable."
@@ -803,6 +814,8 @@ class Collaboration:
                     snapshot = copy.deepcopy(target)
                 arguments = {"inputId": identity,
                              "taskId": receipt.get("taskId"), "taskRevision": receipt.get("taskRevision")}
+                if 'taskContinuationEpoch' in receipt:
+                    arguments['taskContinuationEpoch'] = receipt['taskContinuationEpoch']
                 try:
                     result = await self.service.runtime.collaboration_input(
                         snapshot, arguments, lambda: self.guard(self.receipt(identity)), self.service.on_runtime_event)
@@ -836,7 +849,9 @@ class Collaboration:
         receipt = self.receipt(args["inputId"])
         if (receipt.get("commandAction") != "coordination.send" or receipt.get("delivery") != "submitting"
                 or receipt.get("protocol") != PROTOCOL or receipt["target"]["sessionId"] != sid
-                or args.get("taskId") != receipt.get("taskId") or args.get("taskRevision") != receipt.get("taskRevision")):
+                or args.get("taskId") != receipt.get("taskId") or args.get("taskRevision") != receipt.get("taskRevision")
+                or ('taskContinuationEpoch' in args) != ('taskContinuationEpoch' in receipt)
+                or args.get('taskContinuationEpoch') != receipt.get('taskContinuationEpoch')):
             return {"admitted": False, "reason": "The exact host request is no longer submitting."}
         if receipt.get("mode") == "steer" and args.get("targetGenerationId") != receipt.get("targetGenerationId"):
             return {"admitted": False, "reason": "The steering generation anchor changed."}
@@ -1101,6 +1116,8 @@ class Collaboration:
             if response.get('status') in {'rejected', 'unknown'}:
                 text = f"The request report has {response['status']} terminal evidence. This does not satisfy the dependency or authorize replay.\n"
             text += response["text"]
+            text += ('\nThis is a retained result for the same objective, not new execution authority. '
+                     'Apply the current task constraints and permissions; do not repeat completed or uncertain effects.')
             message = self.service._message(sender, "user", text, "peer", inputId=identity, inputOrigin="peer",
                                             peerEnvelope=envelope)
             receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity, "inputId": identity,
@@ -1108,6 +1125,8 @@ class Collaboration:
                        "target": {"sessionId": sender["id"]}, "protocol": PROTOCOL, "workspace": request["workspace"],
                        "mode": "queue", "delivery": "queued", "interruptionRevision": wait["interruptionRevision"],
                        "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"],
+                       **({'taskContinuationEpoch': wait['taskContinuationEpoch']}
+                          if 'taskContinuationEpoch' in wait else {}),
                        "dependencySatisfied": response.get("qualified") is True, "continuationReason": response.get('notificationOutcome') or response["outcome"],
                        'dependencyOutcomeRevision': revision, 'outcomeSnapshot': {key: copy.deepcopy(response[key]) for key in ('outcomeRevision', 'responseRevision', 'operationId', 'status', 'outcome', 'qualified', 'text') if key in response},
                        'expiresAt': time.time()+DEFAULT_QUEUE_SECONDS, 'causalDepth': depth,
@@ -1462,6 +1481,7 @@ class Collaboration:
                     "mode": mode, 'causalDepth': depth, "delivery": "notified" if mode == "notify" else "queued",
                     "interruptionRevision": target.get("interruptionRevision", 0),
                     "taskId": task.get("id"), "taskRevision": task.get("revision"),
+                    'replyTaskContinuationEpoch': continuation_epoch(task),
                     # Dispatcher provenance is host-owned. Never copy actor
                     # claims from args, message prose, or the peer envelope.
                     **({'expiresAt': time.time()+args.get('expiresInSeconds', DEFAULT_QUEUE_SECONDS)} if mode != 'notify' else {}),

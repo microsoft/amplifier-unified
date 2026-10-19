@@ -51,6 +51,7 @@ def definitions(schema, string):
         'workspace.environments.execute': ('Run an approved command in this task’s environment, retaining bounded output. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 300}}, [*owned, 'command'])),
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
         'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its source and artifacts. Optional full retention preserves the complete Incus environment; Docker supports files only. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
+        'workspace.environments.finishCleanup': ('Finish cleanup of an exact stopped owned environment after a failed or uncertain removal. Preserve complete bounded archives without following guest links, then verify removal and release ownership. The original request and test result stay unchanged. Requires its previousRequestId; keep the new requestId stable.', schema({**owned, 'previousRequestId': {**string(200), 'minLength': 1}})),
         'workspace.environments.reconcile': ('Inspect this exact owned environment and repair its metadata without starting, stopping, deleting or replaying backend work. Retire ownership only after the original backend proves physical absence; earlier uncertain operations stay uncertain.', schema(owned)),
         'workspace.environments.exportArtifacts': ('Recover a bounded, verified artifacts archive from this exact stopped owned environment. No workspace export, restart, command execution or deletion. Does not satisfy preservation required for removal. Unknown exports never replay.', schema(owned)),
     }
@@ -135,6 +136,7 @@ def public(home, row):
         'status': row.get('environmentState', 'unknown'), 'universeId': row.get('universeId'),
         'source': row['source'], 'snapshot': row.get('snapshot'), 'sourceReady': row.get('sourceReady'), 'services': row.get('services', []),
         'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
+        'previousCleanup': row.get('previousCleanup'),
         'artifactExport': row.get('artifactExport'), 'lastArtifactExport': row.get('lastArtifactExport'),
         'preparation': dependencies.status(storage.directory(home, row)) if row.get('preparationPending') or row.get('preparedDependencies') else None,
         'preparationCleanup': row.get('preparationCleanup'),
@@ -222,7 +224,7 @@ def invoke(config, home, row, action, args):
     payload = {'action': action, 'root': str(folder), 'source': row.get('source'),
                'backendKey': row.get('backendKey'),
                'expectedBackendIdentity': row.get('backendIdentity'),
-               'retentionMode': args.get('retentionMode', config.get('retentionMode', 'files')) if action == 'remove' else config.get('retentionMode', 'files'),
+               'retentionMode': args.get('retentionMode', config.get('retentionMode', 'files')) if action in {'remove', 'finishCleanup'} else config.get('retentionMode', 'files'),
                'snapshot': row.get('snapshot'),
                'operationId': row.get('launchOperationId'), 'universeId': row.get('universeId'),
                'dockerHost': config.get('dockerHost'), 'image': config.get('image'),
@@ -249,7 +251,7 @@ def invoke(config, home, row, action, args):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False
-    deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
         process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
@@ -300,7 +302,7 @@ def confirmed_result(row, request):
     return (request.get('state') in {'completed', 'failed'}
             and request.get('resourceId') == row['id']
             and request.get('sessionId') == row['sessionId']
-            and request.get('action') in {'workspace.environments.' + action for action in ('start', 'execute', 'stop', 'remove', 'exportArtifacts')}
+            and request.get('action') in {'workspace.environments.' + action for action in ('start', 'execute', 'stop', 'remove', 'finishCleanup', 'exportArtifacts')}
             and isinstance(request.get('result'), dict))
 
 
@@ -319,7 +321,7 @@ def project_result(home, row, request):
     if action == 'start' and (result.get('admissionDenied') or result.get('effectAdmitted') is False):
         changes['backendAdmitted'] = False
     environment_state = ('running' if result.get('ok') else 'unknown') if action == 'execute' else result.get('status', 'unknown')
-    if action == 'remove' and result.get('ok') and environment_state == 'removed':
+    if action in {'remove', 'finishCleanup'} and result.get('ok') and environment_state == 'removed':
         changes['status'] = 'retired'
         if isinstance(result.get('retention'), dict) and result['retention'].get('verified') is True:
             changes['retainedFiles'] = result['retention']
@@ -350,7 +352,7 @@ def resume_preparation_removal(app, row, config):
         if config_key(config) != row['backendKey'] or storage.observe(home, row)['observation'] != 'present':
             raise ValueError('The retained preparation cleanup owner changed.')
         request = app.operations.requests.read(sid, row.get('pendingRequest') or row['lastOperation']['requestId'])
-        if (request.get('action') != 'workspace.environments.remove' or request.get('resourceId') != row['id']
+        if (request.get('action') not in {'workspace.environments.remove', 'workspace.environments.finishCleanup'} or request.get('resourceId') != row['id']
                 or request.get('sessionId') != sid):
             raise ValueError('The guest removal receipt does not match its cleanup owner.')
         result = row.get('guestRemoval', {})
@@ -386,23 +388,30 @@ def effect(app, row, action, args, config, request, admit):
             row = recovery.bind_configuration(app, row, config)
         if action == 'start':
             row = storage.allocate(home, row, admit)
-        elif not (action == 'remove' and not row.get('backendAdmitted')) and storage.observe(home, row)['observation'] != 'present':
+        elif not (action in {'remove', 'finishCleanup'} and not row.get('backendAdmitted')) and storage.observe(home, row)['observation'] != 'present':
             raise ValueError('The retained environment directory changed; no external action was attempted.')
         if action == 'execute' and row.get('environmentState') != 'running':
             raise ValueError('Inspect a running environment before executing a command.')
         if action == 'execute' and row.get('durableJob'):
             raise ValueError('This environment already owns a durable check. Observe or cancel that exact job.')
-        if action == 'remove' and row.get('environmentState') not in {'stopped', 'not-started'}:
+        if action in {'remove', 'finishCleanup'} and row.get('environmentState') not in {'stopped', 'not-started'}:
             raise ValueError('Stop and inspect this environment before removing it.')
         if action == 'exportArtifacts' and (not row.get('backendAdmitted') or row.get('guestRemoved')
                                            or row.get('environmentState') != 'stopped'):
             raise ValueError('Artifact recovery requires a stopped owned environment.')
+        if action == 'finishCleanup':
+            prior = app.operations.requests.read(sid, args['previousRequestId'])
+            if (prior.get('action') not in {'workspace.environments.remove', 'workspace.environments.finishCleanup'}
+                    or prior.get('state') not in {'failed', 'outcome_unknown'}
+                    or prior.get('resourceId') != row['id'] or prior.get('sessionId') != sid):
+                raise ValueError('Choose this environment’s failed or uncertain cleanup request.')
+            row = save(home, row, previousCleanup=row.get('previousCleanup') or prior)
         if row['status'] == 'retired':
             raise ValueError('This environment has already been removed.')
         admit()
         row = save(home, row, pendingRequest=request['requestId'],
                    environmentState={'start': 'preparing', 'execute': 'running', 'stop': 'stopping',
-                                     'remove': 'removing', 'exportArtifacts': 'stopped'}[action])
+                                     'remove': 'removing', 'finishCleanup': 'removing', 'exportArtifacts': 'stopped'}[action])
         if action == 'start':
             prepared = invoke(config, home, row, 'prepare', args)
             if not prepared.get('ok'):
@@ -423,7 +432,7 @@ def effect(app, row, action, args, config, request, admit):
                 row = save(home, row, backendAdmitted=True, environmentState='starting')
                 admitted = True
                 result = invoke(config, home, row, 'start', args)
-        elif action == 'remove' and (not row.get('backendAdmitted') or row.get('guestRemoved')):
+        elif action in {'remove', 'finishCleanup'} and (not row.get('backendAdmitted') or row.get('guestRemoved')):
             result = row.get('guestRemoval') or {'ok': True, 'status': 'removed', 'message': 'The test guest is absent. All local source and evidence files were retained.'}
         else:
             admitted = True
@@ -436,7 +445,7 @@ def effect(app, row, action, args, config, request, admit):
                 result = invoke(config, home, row, action, args)
             else:
                 result = invoke(config, home, row, action, args)
-        if action == 'remove' and result.get('ok') and result.get('status') == 'removed':
+        if action in {'remove', 'finishCleanup'} and result.get('ok') and result.get('status') == 'removed':
             # Commit the guest result before removing its prepared image. A
             # restart can finish image cleanup without repeating guest teardown.
             row = save(home, row, guestRemoved=True, guestRemoval=result)
@@ -676,7 +685,7 @@ async def dispatch(app, action, args, origin, caller, authority):
         raise AppError('Choose this conversation’s current workspace.', 403)
     captured = tuple(source.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision'))
     config, availability, reason = configuration(app)
-    historical = action.rsplit('.', 1)[-1] in {'stop', 'remove', 'reconcile', 'exportArtifacts'}
+    historical = action.rsplit('.', 1)[-1] in {'stop', 'remove', 'finishCleanup', 'reconcile', 'exportArtifacts'}
     row = None
     def guard():
         current = app._session(sid, hydrate=False)

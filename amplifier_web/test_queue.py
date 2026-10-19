@@ -362,7 +362,7 @@ class TestQueue:
             capacities[key][1] -= 1
             self.tasks[identity] = asyncio.create_task(self.run(identity, config))
 
-    async def effect(self, receipt, config, action, *, cleanup=False, suffix=None):
+    async def effect(self, receipt, config, action, *, cleanup=False, suffix=None, previous_request=None):
         job, app = receipt['job'], self.app
         row = environments.get(app.data_dir, receipt['senderSessionId'], job['resourceId'])
         if cleanup:
@@ -377,6 +377,8 @@ class TestQueue:
             pass
         args = {'requestId': request_id, 'expectedRevision': row['revision'],
             'command': job['command'], 'timeoutSeconds': job['timeoutSeconds']}
+        if previous_request is not None:
+            args['previousRequestId'] = previous_request
         if action == 'execute' and job.get('durableVersion') == 1:
             args['durableJob'] = True
         request, fresh = app.operations.requests.begin(receipt['senderSessionId'],
@@ -493,6 +495,16 @@ class TestQueue:
             self.save(receipt)
             removal = await self.effect(receipt, config, 'remove', cleanup=True)
             receipt = self.get(identity)
+            if (removal['state'] == 'failed' and removal.get('result', {}).get('effectAdmitted') is False
+                    and removal['result'].get('phase') in {'preserving', 'verifying'}
+                    and removal['result'].get('code') not in {'owner_changed', 'ownership_conflict', 'backend_changed', 'retention_storage'}):
+                # A definitive pre-teardown failure permits the separately
+                # recorded preservation path, never replay of an unknown effect.
+                receipt['job']['previousRemoval'] = self.summary(removal)
+                self.save(receipt)
+                removal = await self.effect(receipt, config, 'finishCleanup', cleanup=True,
+                    previous_request=removal['requestId'])
+                receipt = self.get(identity)
             receipt['job']['removal'] = self.summary(removal)
             if removal['state'] != 'completed':
                 self.finish(receipt, 'unknown', 'The environment is stopped, but evidence export or removal was not confirmed. Its retained files and exact ownership remain available.')
@@ -603,7 +615,7 @@ class TestQueue:
             self.finish(self.get(identity), 'unknown', 'Recovery could not confirm cleanup: '+str(exc)[:500]+'. All evidence and ownership remain retained; no command was replayed.')
 
     def restore_operations(self, receipt):
-        for phase, operation in (('check', 'execute'), ('cleanup', 'stop'), ('removal', 'remove')):
+        for phase, operation in (('check', 'execute'), ('cleanup', 'stop'), ('removal', 'remove'), ('removal', 'finishCleanup')):
             try:
                 receipt['job'][phase] = self.summary(self.app.operations.requests.read(receipt['senderSessionId'], receipt['requestId']+':'+operation))
             except ValueError:

@@ -214,3 +214,30 @@ def test_artifact_recovery_requires_complete_safe_bounded_selection(tmp_path, ch
             (tmp_path / 'artifacts.tar').write_bytes((tmp_path / 'artifacts.tar').read_bytes()[:512])
         retention.verify_artifacts(archives)
     assert not (tmp_path / 'artifacts-retention.json').exists()
+
+
+def test_recovery_archives_preserve_pytest_absolute_links_without_following_them(tmp_path):
+    entries = ROOTS + [('artifacts/current', tarfile.SYMTYPE, '/artifacts/test-1'),
+                       ('artifacts/test-1', tarfile.DIRTYPE, ''),
+                       ('workspace/outside', tarfile.SYMTYPE, '/private/not-readable')]
+    archives = retention.filter_incus_stream(backup(entries), tmp_path, 'owned', archive_only=True)
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    result = retention.verify_retention(tmp_path, archives, 'archive-only')
+    assert result['verified'] and result['archiveOnly']
+    with tarfile.open(tmp_path / 'artifacts.tar') as value:
+        assert value.getmember('artifacts/current').linkname == '/artifacts/test-1'
+    with tarfile.open(tmp_path / 'workspace.tar') as value:
+        assert value.getmember('workspace/outside').linkname == '/private/not-readable'
+    assert not (tmp_path / 'test-1').exists()
+
+
+@pytest.mark.parametrize('entry', [
+    ('workspace/../escape', tarfile.REGTYPE, b'bad'),
+    ('workspace/socket', tarfile.FIFOTYPE, ''),
+    ('workspace/file', tarfile.REGTYPE, b'x' * 21),
+])
+def test_recovery_archive_keeps_path_type_and_size_bounds(tmp_path, monkeypatch, entry):
+    monkeypatch.setattr(retention, 'RECOVERY_LIMIT', 20)
+    with pytest.raises(ValueError):
+        retention.filter_incus_stream(backup(ROOTS + [entry]), tmp_path, 'owned', archive_only=True)
+    assert not (tmp_path / 'retention.json').exists()

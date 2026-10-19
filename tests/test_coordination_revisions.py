@@ -316,3 +316,22 @@ async def test_new_report_supersedes_unsubmitted_success_without_erasing_either_
     assert app.collaboration.receipt(newer_id)['delivery'] == 'accepted'
     assert not app.collaboration.receipt(newer_id)['dependencySatisfied']
     assert app.collaboration.receipt('declare-result-request')['result']['qualified']
+
+
+@pytest.mark.parametrize('change', ['progress', 'pause-resume', 'new-objective'])
+async def test_later_report_keeps_original_request_after_progress_only(app, change):
+    source, target = app.state['sessions']
+    target['task'] = {'id': 'objective', 'revision': 1, 'continuationEpoch': 1, 'status': 'active'}
+    await declared_result(app, kind='defer', outcome='deferred')
+    await finish(app, target, 'result-request')
+    await generation(app, target, 'later-report', ['new-input'])
+    target['task']['revision'] = 5
+    if change != 'progress':
+        target['task']['continuationEpoch'] = 5
+    if change == 'progress':
+        report = await revised(app, 'result-request', 1)
+        assert report['result']['responseRevision'] == 2
+    else:
+        with pytest.raises(AppError, match='original request boundary'):
+            await revised(app, 'result-request', 1)
+        assert app.collaboration.receipt('result-request')['responseRevision'] == 1
