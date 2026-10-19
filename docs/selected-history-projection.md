@@ -584,6 +584,45 @@ until exact-candidate execution. Existing two behind-tail failures and six
 historical browser failures remain open. This contract does not reinterpret a
 generic index-stamp failure as proven harmless churn.
 
+### Source implementation and writer map
+
+`receipt_authority.py` centralizes the metadata DDL/validation, trigger guards,
+owner token, bounded maintenance and fresh read-only snapshot protocol. It adds
+two metadata tables, one owner lookup index and six triggers. Legacy seeded
+owners start at revision one; a newly inserted owner receives revision two.
+Only change/equality matters, not revision distance. A missing owner is zero
+only when the validated snapshot also contains no records for that owner.
+
+| Existing path | Participation |
+| --- | --- |
+| `Diagnostics._initialize_storage` | Explicit transaction installs/validates authority before legacy reference rewrites; no implicit `executescript` commit. Corrupt/partial authority fails closed. |
+| `Diagnostics._persist` | Ordinary inserts and retention deletes use triggers. Maintenance rotates epoch before excess tombstone pruning, bounded by twice configured `maxRecords`. Empty flushes do not advance a live owner's revision. |
+| `capture_index.index_shared` | Unchanged INSERT OR IGNORE and capture-replacement deletes participate through triggers. Ignored duplicates preserve authority. |
+| `managed_deletion._cleanup_aux` | Existing records deletion and owner-metadata privacy pruning share one transaction; epoch rotates before keys are removed. The existing configured retention bound is reused. |
+
+`event_window._host_receipts` authenticates receipts and obtains their owner token
+from one fresh snapshot. The helper then closes and independently revalidates
+through another fresh connection; callers recheck before proof signing and
+return. `WorkWindows._binding_current` accepts only this typed dependency and
+freshly validates its exact owner. It never falls back to an unscoped physical
+stamp. The old unscoped `binding_revision(home)` shape remains only for the
+existing synthetic SQLite-lifecycle measurement; every production caller supplies
+an owner. Pure cumulative proof validation checks the typed dependency and its
+owner inside the existing HMAC, without performing database IO.
+
+Physical checks retain the host-resolved path, open regular-file descriptor and
+device/inode continuity, and reject nonregular/symlink DB, WAL or SHM shapes.
+WAL size/timestamps are no longer global receipt authority: fresh owner revision,
+epoch and exact validated schema identify successful logical mutations. SQL uses
+a 50 ms connection timeout and a shared 100,000-step allowance across receipt
+snapshot and post-close validation; the existing enclosing proof deadline and
+worker transport bounds remain.
+
+No tests, imports or migrations have executed in this source increment. New
+authority tests require explicit selection alongside the unchanged fixed
+diagnostic route before qualification; automatic full-suite collection alone
+is not a claim that the new cases ran.
+
 ### Superseded proposal (historical, not an implementation requirement)
 
 The text below records the earlier broader proposal for comparison only. Its

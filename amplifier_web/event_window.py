@@ -9,7 +9,6 @@ separate display bindings. Neither path invents accounting or execution authorit
 from __future__ import annotations
 
 import base64
-from contextlib import closing
 from datetime import datetime
 import hashlib
 import hmac
@@ -294,8 +293,19 @@ class _ReverseLines:
             self.buffer = data + self.buffer
 
 
-def binding_revision(cache_home):
-    """Bounded cache dependency for the existing index, including WAL commits."""
+def binding_revision(cache_home, session=None, *, check_budget=None):
+    """Fresh owner authority; unscoped use is physical diagnostic evidence only.
+
+    Production binding always supplies the canonical session descriptor.
+    Retain the unscoped physical stamp for the existing SQLite lifecycle probe,
+    never as a fallback authority for a missing/malformed owner revision.
+    """
+    if session is not None:
+        from .receipt_authority import read_token
+        try:
+            return read_token(cache_home, session, guard=check_budget)
+        except (OSError, sqlite3.Error, ValueError, TypeError):
+            return None
     if cache_home is None:
         return None
     home = Path(cache_home).resolve()
@@ -326,36 +336,18 @@ def _host_receipts(cache_home, session, path, identity, facts, guard):
     """
     if cache_home is None:
         return set(), None
+    from .receipt_authority import authority_snapshot
     home = Path(cache_home).resolve()
-    database = home / 'diagnostics' / 'events.sqlite3'
-    before = binding_revision(home)
-    if database.resolve() != database or not database.is_file():
-        return set(), before
+    before = binding_revision(home, session, check_budget=guard)
     accepted = set()
     try:
         if before is None:
             return set(), None
-        original_database = before[0]
-        with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=.05)) as db:
-            db.execute('PRAGMA query_only=ON')
-            steps = 0
-            def progress():
-                nonlocal steps
-                steps += 1000
-                guard()
-                return int(steps > 100000)
-            db.set_progress_handler(progress, 1000)
-            # A first read can create an empty WAL even in mode=ro. Initialize
-            # the pager before choosing the authority baseline, then discard
-            # that snapshot. No rows from this initialization attest anything.
-            db.execute('BEGIN')
-            db.execute('SELECT 1 FROM records LIMIT 1').fetchone()
-            db.rollback()
-            before = binding_revision(home)
-            if (before is None or before[0] is None or original_database is None
-                    or before[0][:2] != original_database[:2]):
-                return set(), None
-            db.execute('BEGIN')  # Fresh authority snapshot, never relabel old rows.
+        # The helper initializes/discards the pager snapshot, then yields a
+        # fresh transaction containing BOTH this owner token and its receipts.
+        # Its exit performs a fresh post-close validation, not an old-snapshot
+        # token SELECT that could miss a concurrent WAL commit.
+        with authority_snapshot(home, session, guard=guard) as (db, before):
             for fact in facts:
                 guard()
                 data = fact['data']
@@ -379,11 +371,7 @@ def _host_receipts(cache_home, session, path, identity, facts, guard):
                     'bytes': fact['bytes'], 'sha256': fact['sha256'], 'eventId': event_id}
                 if reference == expected:
                     accepted.add(fact['id'])
-            if binding_revision(home) != before:
-                return set(), before
-        # Teardown is part of the measured lifetime. Any writer/checkpoint or
-        # replacement changing this dependency still invalidates the result.
-        if binding_revision(home) != before:
+        if binding_revision(home, session, check_budget=guard) != before:
             return set(), before
     except (OSError, sqlite3.Error, ValueError, TypeError):
         return set(), before
@@ -525,9 +513,25 @@ def _proof_stamp(value):
             and all(type(part) is int for part in value) and value[2] >= 0)
 
 
-def _proof_index(value):
-    return (isinstance(value, list) and len(value) == 2 and _proof_stamp(value[0])
-            and (value[1] is None or _proof_stamp(value[1])))
+def _proof_index(value, session):
+    # Pure shape/owner check. Token authentication comes from the private page
+    # HMAC and host constructor; currentness still requires fresh DB validation.
+    database = value.get('database') if isinstance(value, dict) else None
+    return (isinstance(value, dict)
+            and set(value) == {'kind', 'database', 'schema', 'epoch', 'workspace', 'session', 'revision'}
+            and value.get('kind') == 'diagnostics-owner-v1'
+            and value.get('workspace') == session.get('workspace')
+            and value.get('session') == (session.get('nativeIdentity')
+                or session.get('runtimeSessionId') or session.get('id'))
+            and type(value.get('revision')) is int and 0 <= value['revision'] <= 2**63 - 1
+            and isinstance(value.get('epoch'), str) and len(value['epoch']) == 32
+            and all(c in '0123456789abcdef' for c in value['epoch'])
+            and isinstance(value.get('schema'), str) and len(value['schema']) == 64
+            and all(c in '0123456789abcdef' for c in value['schema'])
+            and isinstance(database, dict) and set(database) == {'path', 'device', 'inode'}
+            and isinstance(database['path'], str) and 0 < len(database['path']) <= 4096
+            and type(database['device']) is int and database['device'] >= 0
+            and type(database['inode']) is int and database['inode'] > 0)
 
 
 def validate_root_proof(session, pages, *, cursor_key, check_budget=None):
@@ -588,7 +592,7 @@ def validate_root_proof(session, pages, *, cursor_key, check_budget=None):
             stamp, revision, window = proof['sourceStamp'], proof['indexRevision'], proof['windowKey']
             if proof['missing'] or not _proof_stamp(stamp):
                 return refuse('missing_source')
-            if not _proof_index(revision):
+            if not _proof_index(revision, session):
                 return refuse('index_unavailable')
             if page.get('_bindingRevision') != revision:
                 return refuse('index_changed')
@@ -819,7 +823,7 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
         attested, index_revision = _host_receipts(cache_home, session, path, identity, facts, guard)
         if complete and index_revision is not None:
             bound = _bind_complete_root(session, path, identity, items, facts, attested, guard)
-        if binding_revision(cache_home) != index_revision:
+        if binding_revision(cache_home, session, check_budget=guard) != index_revision:
             raise StaleWindow('The binding index changed during its read')
         # Complete misses retain a dependency so an index-only commit is
         # reconsidered. Only private proof pages additionally consult authority
@@ -852,7 +856,7 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
         page['_proof']['receiptDigest'] = _proof_receipt(page, cursor_key, guard)
         if _stamp(path.stat()) != stamp:
             raise StaleWindow('The event source changed during proof signing')
-        if binding_revision(cache_home) != index_revision:
+        if binding_revision(cache_home, session, check_budget=guard) != index_revision:
             raise StaleWindow('The binding index changed during proof signing')
         guard()
     return page
@@ -877,7 +881,7 @@ def read_proof_step(session, *, window_key, cursor_key, before=None, limit=MAX_I
             raise StaleWindow('The proof source is no longer available') from exc
         if current != expected_source:
             raise StaleWindow('The cumulative proof source changed')
-    if expected_index is not None and binding_revision(cache_home) != expected_index:
+    if expected_index is not None and binding_revision(cache_home, session, check_budget=guard) != expected_index:
         raise StaleWindow('The cumulative proof binding index changed')
     page = read_window(session, window_key=window_key, cursor_key=cursor_key, before=before,
                        limit=limit, check_budget=guard, cache_home=cache_home, _proof=True)
@@ -894,7 +898,7 @@ def read_proof_step(session, *, window_key, cursor_key, before=None, limit=MAX_I
             raise StaleWindow('The proof source is no longer available') from exc
         if current != proof['sourceStamp'] or owner != proof['owner']:
             raise StaleWindow('The cumulative proof source changed')
-        if binding_revision(cache_home) != proof['indexRevision']:
+        if binding_revision(cache_home, session, check_budget=guard) != proof['indexRevision']:
             raise StaleWindow('The cumulative proof binding index changed')
     guard()
     return page

@@ -322,9 +322,20 @@ class WorkWindows:
 
     def _binding_current(self, page):
         from .event_window import binding_revision
-        # Old/no-source pages have no binding dependency and cannot place work.
-        return ('_bindingRevision' not in page or
-                page['_bindingRevision'] == binding_revision(self.service.data_dir))
+        # Unassociated partial raw pages have no authority dependency. Binding
+        # material requires the exact typed owner token, never a physical-stamp
+        # compatibility fallback or None == None.
+        if '_bindingRevision' not in page:
+            return True
+        previous = page['_bindingRevision']
+        # Raw worker pages have not yet received host display decoration. Their
+        # private typed dependency already carries the exact authenticated owner.
+        source = page.get('source') or (
+            {'id': previous.get('session'), 'workspace': previous.get('workspace')}
+            if isinstance(previous, dict) else None)
+        return (isinstance(previous, dict) and previous.get('kind') == 'diagnostics-owner-v1'
+                and isinstance(source, dict)
+                and previous == binding_revision(self.service.data_dir, source))
 
     def _bound_current(self, page):
         proof_id = page.get('_consumerProof') or page.get('_consumerSupport')
