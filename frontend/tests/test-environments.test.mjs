@@ -230,3 +230,16 @@ test('verified setup completion reuses original request and remains owner scoped
   assert.equal(button(root,'Clean up interrupted setup').props.disabled,true);
  }finally{await act(async()=>root?.unmount())}
 });
+
+test('incomplete cleanup offers exact-owner recovery with original request identity',async()=>{
+ let root;const calls=[],resource={id:'env',revision:12,status:'stopped',recovery:{available:true},lastOperation:{action:'workspace.environments.remove',requestId:'original-remove',state:'outcome_unknown'}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action===read.action?{items:[resource]}:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+  await act(async()=>button(root,'Preserve files and finish cleanup').props.onClick());
+  const [mutation]=calls.filter(row=>row.action!==read.action);
+  assert.equal(mutation.action,'workspace.environments.finishCleanup');
+  assert.equal(mutation.args.previousRequestId,'original-remove');
+  assert.equal(mutation.args.id,'env');assert.equal(mutation.args.expectedRevision,12);
+ }finally{await act(async()=>root?.unmount())}
+});

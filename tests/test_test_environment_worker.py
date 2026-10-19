@@ -194,15 +194,16 @@ def test_retention_persistence_failure_never_destroys(library, tmp_path, monkeyp
     def fail(directory, archives):
         raise OSError('cannot persist archive receipt')
     monkeypatch.setattr(worker, 'retain_manifest', fail)
-    with pytest.raises(OSError):
-        worker.execute_call(payload(tmp_path, 'remove'))
+    result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert result['phase'] == 'verifying' and result['effectAdmitted'] is False
     assert [name for name, _, _ in calls] == ['status', 'export', 'export']
 
 
-def test_remove_never_stops_or_removes_running_environment(library, tmp_path):
+@pytest.mark.parametrize('action', ['remove', 'finishCleanup'])
+def test_remove_never_stops_or_removes_running_environment(library, tmp_path, action):
     lib, calls = library
     lib.status = lambda *a, **k: Value(state='running', services=[])
-    result = worker.execute_call(payload(tmp_path, 'remove'))
+    result = worker.execute_call(payload(tmp_path, action))
     assert not result['ok'] and calls == []
 
 
@@ -389,3 +390,59 @@ def test_corrupt_settlement_never_proves_absence(library,tmp_path,monkeypatch):
     monkeypatch.setattr(worker.subprocess,'run',lambda *a,**k:SimpleNamespace(stdout=''))
     result=worker.execute_call(value)
     assert result['status']=='unknown' and not result['observation']['absenceConfirmed']
+
+
+def test_cleanup_recovery_preserves_all_files_and_verifies_absence(library, tmp_path, monkeypatch):
+    lib, calls = library
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    observations = iter(['stopped', 'stopped', 'absent'])
+    monkeypatch.setattr(worker, 'docker_reconcile', lambda *args: {'status': next(observations), 'observation': {'ownership': 'matched'}})
+    original = lib.export_files
+    def export(identity, source, destination, **kwargs):
+        if source == '/artifacts':
+            calls.append(('export', (identity, source, destination), kwargs))
+            with tarfile.open(destination, 'w') as archive:
+                item = tarfile.TarInfo('artifacts'); item.type = tarfile.DIRTYPE; archive.addfile(item)
+                item = tarfile.TarInfo('artifacts/current'); item.type = tarfile.SYMTYPE
+                item.linkname = '/artifacts/test-1'; archive.addfile(item)
+            return Value(source=source, destination=str(destination))
+        return original(identity, source, destination, **kwargs)
+    lib.export_files = export
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert result['ok'] and result['status'] == 'removed'
+    assert result['retention']['archiveOnly']
+    assert [name for name, *_ in calls if name in {'execute','stop','export','destroy'}] == ['export','export','destroy']
+    assert all(kwargs['max_bytes'] == worker.retention.RECOVERY_LIMIT for name, _, kwargs in calls if name == 'export')
+    assert {p.stem for p in next(tmp_path.glob('cleanup-*')).glob('*.json')} == {'preserving','verifying','removing','observing'}
+
+
+def test_failed_preservation_reports_known_phase_and_never_destroys(library, tmp_path):
+    lib, calls = library
+    def fail(*args, **kwargs):
+        raise Failure('export too large')
+    lib.export_files = fail
+    result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert result['phase'] == 'preserving'
+    assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+    assert not any(name == 'destroy' for name, *_ in calls)
+
+
+def test_cleanup_recovery_keeps_owner_until_physical_absence(library, tmp_path, monkeypatch):
+    _, calls = library
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    monkeypatch.setattr(worker, 'docker_reconcile', lambda *args: {'status': 'stopped', 'observation': {'ownership': 'matched'}})
+    released = []
+    monkeypatch.setattr(worker, 'release_admission', lambda *args: released.append(args))
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert any(name == 'destroy' for name, *_ in calls)
+    assert result['status'] == 'unknown' and result['phase'] == 'observing'
+    assert result['retention']['archiveOnly']
+    assert not released and not (tmp_path / 'backend-removed.json').exists()
+
+
+@pytest.mark.parametrize('code', ['owner_changed', 'backend_changed'])
+def test_cleanup_changed_owner_does_not_claim_stopped(code):
+    result = worker.cleanup_failure({}, 'verifying', 'owned', code)
+    assert result['status'] == 'unknown' and result['effectAdmitted'] is False
+    assert 'No removal was attempted' in result['message']
+    assert 'unchanged' not in result['message']

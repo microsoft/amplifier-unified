@@ -104,16 +104,19 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    <button type="submit" className="a-soft" disabled={blocked||!draft.command.trim()||!profile?.defaultTimeoutSeconds}>Queue check</button>
   </form>}
   {page&&rows.length===0&&<p>No test environment for this chat.</p>}
-  <ul>{rows.map(row=>{const cleanupBlocked=controlsBlocked||row.recovery?.available!==true,accounting=row.retention?.accounting,savedBytes=accounting?.verified?storageSize(accounting.totalBytes):null;return <li key={row.id} data-test-environment={row.id} style={{overflowWrap:'anywhere'}}>
+  <ul>{rows.map(row=>{const cleanupBlocked=controlsBlocked||row.recovery?.available!==true,failedCleanup=['workspace.environments.remove','workspace.environments.finishCleanup'].includes(row.lastOperation?.action)&&['failed','outcome_unknown'].includes(row.lastOperation?.state)?row.lastOperation:null,accounting=row.retention?.accounting,savedBytes=accounting?.verified?storageSize(accounting.totalBytes):null;return <li key={row.id} data-test-environment={row.id} style={{overflowWrap:'anywhere'}}>
    <strong>{row.label||'Test environment'}</strong><p role="status">{row.observation?.status==='unverified'?'Last known environment':'Environment'}: {row.status?.replaceAll('_',' ')||'unknown'}</p>
    {row.reason&&<p>{row.reason}</p>}
    {row.preparation&&<p role="status">Dependency preparation: {row.preparation.status?.replaceAll('_',' ')}. {row.preparation.phase} {row.preparation.reason}</p>}
    {row.observation?.status==='unverified'&&<p>Current state could not be verified. This is a saved observation.</p>}
    {['outcome_unknown','unknown'].includes(row.status)&&<p>The previous outcome is uncertain. Inspect the environment before taking another action.</p>}
+   {row.previousCleanup&&<p>Earlier cleanup: {row.previousCleanup.state?.replaceAll('_',' ')}. Its original receipt is retained.</p>}
+   {row.lastOperation?.result?.phase&&<p>Cleanup phase: {row.lastOperation.result.phase}. {row.lastOperation.result.effectAdmitted===false?'The environment was not removed.':''}</p>}
    {row.lastRecovery&&<p role="status">Last recovery check: {row.lastRecovery.state?.replaceAll('_',' ')||'unknown'}. {row.lastRecovery.message||'The original request result is kept separately.'}</p>}
    {row.lastArtifactExport&&<p role="status">Artifact recovery: {row.lastArtifactExport.state?.replaceAll('_',' ')||'unknown'}. {row.lastArtifactExport.message}</p>}
    {row.artifactExport?.verified&&<p>Artifact evidence saved: {storageSize(row.artifactExport.archiveBytes)}. This copy does not include the working folder or authorize removal.</p>}
    {savedBytes!==null&&<p>Latest saved copy: {savedBytes}. {accounting.policy==='full'?'Includes a complete environment export.':'Includes the source snapshot, working folder and artifacts.'} These files stay saved until deliberately removed.</p>}
+   {accounting?.archiveOnly&&<p>The saved archives preserve link metadata without following links. Restore them only in an isolated environment.</p>}
    {row.status==='removed'&&savedBytes===null&&<p>Previously saved files and results are kept. Their storage size has not been verified.</p>}
    <details><summary>Environment details</summary><pre className="a-state-view">{JSON.stringify(row,null,2)}</pre></details>
    {!readOnly&&row.status!=='removed'&&<>
@@ -127,6 +130,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     <button type="button" className="a-soft" disabled={cleanupBlocked||['stopped','not-started'].includes(row.status)} onClick={()=>mutate('workspace.environments.stop',{id:row.id,expectedRevision:row.revision})}>Stop and keep data</button>
     <button type="button" className="a-soft" disabled={cleanupBlocked||row.status!=='stopped'||row.lastArtifactExport?.state==='outcome_unknown'} onClick={()=>mutate('workspace.environments.exportArtifacts',{id:row.id,expectedRevision:row.revision})}>Save artifact evidence</button>
     {row.lastArtifactExport?.state==='outcome_unknown'&&<p>The artifact export is uncertain. Its original request and the stopped environment are retained; it will not be repeated automatically.</p>}
+    {failedCleanup&&<div><p>Finish the incomplete cleanup by saving the complete working folder and artifacts, then verifying removal. The test and original request will not run again.</p><button type="button" className="a-soft" disabled={cleanupBlocked||!['stopped','not-started'].includes(row.status)} onClick={()=>mutate('workspace.environments.finishCleanup',{id:row.id,expectedRevision:row.revision,previousRequestId:failedCleanup.requestId})}>Preserve files and finish cleanup</button></div>}
     {removing!==row.id?<button type="button" className="a-soft" disabled={cleanupBlocked||!['stopped','not-started'].includes(row.status)} onClick={()=>{setRemoving(row.id);setFullCopy(row.retention?.mode==='full')}}>Remove environment…</button>:<div role="group" aria-label="Confirm environment removal">
      <p>{fullCopy?'A complete environment export and saved check results will be retained.':'The working folder, artifacts and saved check results will be retained.'} The environment will be removed only after those files are saved. {!fullCopy?'Files elsewhere in the container are not retained.':''}</p>
      {row.retention?.fullAvailable&&<details><summary>Save more files</summary><label><input type="checkbox" checked={fullCopy} disabled={cleanupBlocked} onChange={event=>setFullCopy(event.target.checked)}/> Keep a complete copy of the environment</label><p>This uses more storage. Choose it if the smaller export could not preserve your files, or if you need files outside the working folder and artifacts.</p></details>}

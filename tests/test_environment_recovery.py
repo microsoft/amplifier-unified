@@ -401,3 +401,35 @@ def test_real_helper_receives_identity_and_retention_override_only_for_remove(tm
                           home, row, action, {'requestId': 'exact-request', 'retentionMode': 'full'})
     assert result == {'ok': True, 'mode': expected, 'identity': row['backendIdentity'],
                       'owner': row['sessionId'], 'operationId': row['launchOperationId']}
+
+
+async def test_finish_cleanup_preserves_original_unknown_and_releases_owner(app, backend, monkeypatch):
+    original = owner.invoke
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    monkeypatch.setattr(owner, 'invoke', lambda *args: {'ok': False, 'status': 'unknown'})
+    failed = await act(app, 'remove', row, 'lost-removal')
+    calls = observer(monkeypatch, 'stopped')
+    row = (await act(app, 'reconcile', failed['resource'], 'inspect-stopped'))['resource']
+    def finish(config, home, current, action, args):
+        assert action == 'finishCleanup'
+        calls.append(action)
+        return {'ok': True, 'status': 'removed', 'retention': {'verified': True, 'archiveOnly': True}}
+    monkeypatch.setattr(owner, 'invoke', finish)
+    result = await act(app, 'finishCleanup', row, 'finish-cleanup', previousRequestId='lost-removal')
+    assert result['request']['state'] == 'completed' and result['resource']['status'] == 'removed'
+    assert result['resource']['previousCleanup'] == failed['request']
+    assert app.operations.requests.read(row['sessionId'], 'lost-removal') == failed['request']
+    duplicate = await act(app, 'finishCleanup', row, 'finish-cleanup', previousRequestId='lost-removal')
+    assert duplicate['request'] == result['request'] and calls == ['reconcile','finishCleanup']
+    monkeypatch.setattr(owner, 'invoke', original)
+    assert (await start(app, 'next-check'))['resource']['id'] != row['id']
+
+
+async def test_cleanup_recovery_rejects_unrelated_request_before_effect(app, backend):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    result = await act(app, 'finishCleanup', row, 'bad-recovery', previousRequestId='stop')
+    assert result['request']['state'] == 'failed'
+    assert [name for name, _ in backend] == ['prepare', 'start', 'stop']
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'

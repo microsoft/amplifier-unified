@@ -22,6 +22,7 @@ The user interface and agents call the same host actions:
 | `workspace.environments.execute` | Resource identity, exact revision, stable request identity and command; bounded stdout, stderr, exit code and truncation flags. |
 | `workspace.environments.stop` | Resource identity, exact revision and stable request identity; observed stopping outcome with data retained. |
 | `workspace.environments.exportArtifacts` | The same ownership and revision checks; a bounded verified `/artifacts` archive from a stopped environment, without executing commands, restarting or deleting it. |
+| `workspace.environments.finishCleanup` | Exact stopped owner and prior failed cleanup identity; bounded complete archive preservation and confirmed cleanup without replaying the test or original request. |
 | `workspace.environments.remove` | The same ownership and revision checks; source and artifact archives retained before observed teardown. |
 
 The resource ledger owns allocation identity and lifetime. The existing operation
@@ -108,3 +109,36 @@ not migrate existing resources. The initial adapter refuses to manage them under
 a different configuration; operators must retain the approved implementation
 needed for their recovery before upgrading. Source tests, controlled-backend
 browser tests and real Docker qualification remain separate evidence.
+
+## Finish incomplete cleanup
+
+`workspace.environments.finishCleanup` is an explicit continuation of cleanup,
+not a retry of the test. It takes the resource identity and revision, a new stable
+request identity, and `previousRequestId` naming this owner's failed or uncertain
+removal. It uses the retained original backend configuration. The original
+operation receipt, test outcome and partial exports remain unchanged.
+
+The backend freshly verifies the stopped owner, saves both complete selected
+filesystems, verifies their bytes and archive structure, rechecks ownership before
+removal, and confirms physical absence afterward. The resource is released only
+when guest removal and any dependency preparation cleanup are confirmed. A
+missing or changed backend, foreign owner, running guest, insufficient storage or
+incomplete export retains ownership and reports the phase that needs attention.
+
+Recovery preserves symbolic link text as inert archive metadata, including the
+absolute links produced by pytest. It never follows guest links or extracts guest
+files on the host. These archives are marked `archiveOnly`; restoring them requires
+an isolated environment and an explicit safe extraction policy. Member paths,
+entry types, hard-link targets, member count, tar termination, hashes and sizes
+remain verified. Nothing is silently omitted from the selected filesystems.
+Docker recovery bounds each selected archive to 4 GiB and reserves space for both
+plus 1 GiB; Incus retains its 8 GiB input limit and a 4 GiB selected-content bound.
+Files outside `/workspace` and `/artifacts` require the existing full Incus export.
+
+Preservation and teardown have separately retained phase markers. A definitive
+export/verification failure now reports a failed preservation phase with no
+removal attempted, rather than suggesting a test command might still be running.
+For newly queued checks, that known pre-teardown failure admits one separately
+journaled cleanup continuation automatically. A historical unknown operation is
+never automatically replayed. The workspace's **Preserve files and finish cleanup**
+control and agents use the same action and authority boundary.

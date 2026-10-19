@@ -62,7 +62,7 @@ def backend(monkeypatch, tmp_path):
         return {'exit_code': 0, 'stdout': output, 'stderr': '', 'truncated': False}
     monkeypatch.setattr(worker, 'cli', cli)
     monkeypatch.setattr(worker, 'incus', incus)
-    def export_selected(config, env, name, destination, *, selections=('workspace', 'artifacts')):
+    def export_selected(config, env, name, destination, *, selections=('workspace', 'artifacts'), archive_only=False):
         import tarfile
         calls.append(('incus', ['export', name, '-']))
         if state['export_failed']:
@@ -240,7 +240,7 @@ def test_unconfirmed_source_prevents_execution(tmp_path, backend):
 
 def test_owner_mismatch_prevents_stop_and_removal(tmp_path, backend):
     backend[1]['owner'] = 'another-task'
-    for action in ('stop', 'remove'):
+    for action in ('stop', 'remove', 'finishCleanup'):
         result = worker.execute_call(payload(tmp_path, action))
         assert result['code'] == 'ownership_conflict'
     assert not any(args[0] in {'stop','export','destroy'} for _,args in backend[0])
@@ -276,8 +276,9 @@ def test_incomplete_export_never_destroys(tmp_path, backend):
     assert list(tmp_path.glob('retained-*/incomplete.json'))
 
 
-def test_running_remove_never_exports_or_stops(tmp_path, backend):
-    assert worker.execute_call(payload(tmp_path, 'remove'))['code'] == 'not_stopped'
+@pytest.mark.parametrize('action', ['remove', 'finishCleanup'])
+def test_running_remove_never_exports_or_stops(tmp_path, backend, action):
+    assert worker.execute_call(payload(tmp_path, action))['code'] == 'not_stopped'
     assert not any(args[0] in {'stop','export','destroy'} for _,args in backend[0])
 
 
@@ -285,7 +286,7 @@ def test_storage_shortage_preserves_stopped_environment(tmp_path, backend, monke
     backend[1].update(instance='Stopped', launch='stopped')
     monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=1))
     result = worker.execute_call(payload(tmp_path, 'remove'))
-    assert result['code'] == 'retention_storage' and result['status'] == 'unknown'
+    assert result['code'] == 'retention_storage' and result['status'] == 'stopped'
     assert not any(args[0] in {'export','destroy'} for _,args in backend[0])
 
 
@@ -368,8 +369,8 @@ def test_manifest_failure_preserves_stopped_instance(tmp_path, backend, monkeypa
     def fail(*args):
         raise OSError('retained manifest write failed')
     monkeypatch.setattr(worker.common, 'retain_manifest', fail)
-    with pytest.raises(OSError):
-        worker.execute_call(payload(tmp_path, 'remove'))
+    result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert result['phase'] == 'verifying' and result['effectAdmitted'] is False
     assert not any(args[0] == 'destroy' for _, args in backend[0])
     assert list(tmp_path.glob('retained-*/incomplete.json'))
 
@@ -449,7 +450,7 @@ def test_reconcile_query_failure_never_proves_absence(tmp_path, backend, monkeyp
 
 def test_explicit_full_retry_preserves_failed_selection_receipt(tmp_path, backend):
     backend[1].update(instance='Stopped', launch='stopped', export_failed=True)
-    assert worker.execute_call(payload(tmp_path, 'remove'))['status'] == 'unknown'
+    assert worker.execute_call(payload(tmp_path, 'remove'))['status'] == 'stopped'
     assert not any(args[0] == 'destroy' for _, args in backend[0])
     backend[1]['export_failed'] = False
     value = payload(tmp_path, 'remove')
@@ -485,3 +486,21 @@ def test_stream_export_is_quiet_bounded_and_never_extracts(tmp_path, monkeypatch
     with pytest.raises(worker.BackendFailure,match='bound'):
         worker.export_selected({'incusExecutable':str(executable),'project':'owned'},{'PATH':os.defpath},'owned',smaller)
     assert not (smaller/'retention.json').exists()
+
+
+def test_recovery_cleanup_verifies_physical_absence_after_preservation(tmp_path, backend, monkeypatch):
+    calls, state = backend
+    state.update(instance='Stopped', launch='stopped')
+    monkeypatch.setattr(worker, 'reconcile', lambda *args: {'status': 'absent' if state['launch']=='removed' else 'stopped'})
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert result['ok'] and result['retention']['archiveOnly']
+    assert [args[0] for _, args in calls if args[0] in {'export','exec','stop','destroy','launch'}] == ['export','destroy']
+    assert {path.stem for path in next(tmp_path.glob('cleanup-*')).glob('*.json')} == {'preserving','verifying','removing','observing'}
+
+
+def test_recovery_never_releases_owner_on_unknown_post_destroy_state(tmp_path, backend, monkeypatch):
+    backend[1].update(instance='Stopped', launch='stopped')
+    monkeypatch.setattr(worker, 'reconcile', lambda *args: {'status': 'unknown'})
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert not result['ok'] and result['status'] == 'unknown'
+    assert result['retention']['verified']
