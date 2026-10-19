@@ -245,10 +245,10 @@ test('collapsed sidebar toggle lives in the header without duplicate chat contro
  assert.doesNotMatch(draft,/Research/);
 });
 test('browsing headers have no return control with or without a retained chat',()=>{
- for(const surface of ['workspace','workspaces','chats'])for(const narrow of [false,true])for(const session of [undefined,{id:'a',title:'Retained chat',status:'working'}]){
+ for(const surface of ['home','workspace','workspaces','chats'])for(const narrow of [false,true])for(const session of [undefined,{id:'a',title:'Retained chat',status:'working'}]){
   const state={view:{workSurface:surface,workWorkspaceId:'b'},workspaces:[workspace]};
   const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state,session,narrow,presentation:{},act:host.dispatch})));
-  assert.doesNotMatch(html,/Back to chat|>Back<|Retained chat/);
+  assert.doesNotMatch(html,/Back to chat|>Back<|Retained chat|Resume|Return to draft|Go to Home/);
   assert.match(html,/Open navigation/);
  }
 });

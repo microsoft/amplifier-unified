@@ -13,9 +13,14 @@ conversation execution. No release or production adoption is implied.
 - Available space determines navigation: docked on a wide screen, a drawer on a
   tablet and a full browse surface on a phone. All views remain available.
 
-Changing Appearance does not navigate. The Home action deliberately applies the
-chosen starting view. Resuming a browser restores its existing surface. A new web
-client arrives at Home while retaining the selected conversation behind it.
+Changing Appearance does not navigate. Home returns to the last view, status
+filter, scope, search and page choices in this client; its scroll position is
+retained in the browser tab, like chat reading positions. Search pending at
+navigation is saved before leaving. Resuming a browser restores its existing
+surface and choices. A new web client arrives at Home with the chosen starting
+view while retaining the selected conversation behind it. Only the explicit
+“Go to starting view” control resets the view and status filter; it keeps scope
+and search. Appearance popovers close when leaving Home.
 
 ## Canonical owners
 
@@ -64,12 +69,13 @@ screen. Keep the warm typography and independent Appearance/view choices.
   work / On its own. Unavailable scopes cannot silently create somewhere else.
 - Focus uses one reading column. The decision comes before the single status
   filter row, with a prominent action that opens the original conversation.
-- The header owns returning to the open chat/draft. It does not show a Home
-  back action while already on Home. The shell owns opening/closing Browse.
+- The header uses the existing shell navigation, breadcrumbs and chat controls.
+  The trial-added Resume and Home back links have been removed at the user’s
+  request. Home is reached from the sidebar; the shell owns opening/closing it.
 - Navigation labels say Projects. Folder-backed workspace ownership, creation,
   permissions and history contracts are unchanged; this is not logical regrouping.
-- Returning Home chooses the starting view but preserves an explicitly opened or
-  closed desktop sidebar. Narrow navigation closes when choosing Home. Appearance
+- Returning Home preserves the last view and an explicitly opened or closed
+  desktop sidebar. Narrow navigation closes when choosing Home. Appearance
   changes and view switches preserve selection, search, draft and saved output.
 - Counts describe chats in the current scope; activity timestamps explicitly say
   Updated. Typography uses the app's text-size tokens, including small metadata.
@@ -80,3 +86,22 @@ one aligned label column, and required attention must stay reachable. Verify
 phone/tablet navigation, keyboard focus, enlarged text and dark/forced colors.
 These checks establish usable behavior, not measured user preference. Revisit if
 moving statuses out of the sidebar makes returning to waiting work harder.
+
+## Continuity refinement — 2026-10-19
+
+The user requested that Home remember its state after visiting chats/projects,
+and that the trial-added Resume link be removed in favor of the existing header.
+This supersedes the first trial’s reset-on-Home behavior. Confirm navigation away
+and back, reload, immediate departure while typing, and scroll restoration after
+results load. Preserve independent starting preferences and chat/Canvas state.
+
+Two timing defects were found during those journeys: search blur must not disable
+New chat when its project is already confirmed, and closing a modal sidebar must
+release its inert background before React reveals a retained Canvas. The latter
+uses layout-effect cleanup in the existing modal-focus owner. Browser acceptance
+includes a phone opening that saved output and using its normal Back to chat.
+
+Main was integrated through `b164044ad` (0.20.181), including configuration
+recovery, saved chat-reference navigation, patch placement recovery, passive
+environment inspection and approval layout fixes. The Home integration extends
+client presentation and resource demand without replacing these owners.

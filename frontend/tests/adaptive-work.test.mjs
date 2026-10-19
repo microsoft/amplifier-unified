@@ -27,3 +27,16 @@ test('Home preserves an explicitly opened or closed sidebar independently of app
  const drawer=homePatch({interfaceDetail:'standard'},{navExpanded:false},{navExpanded:true,navPinned:false});
  assert.equal(drawer.navExpanded,false);
 });
+
+test('returning Home retains choices across chat/project visits and appearance changes',()=>{
+ const choices={workHomeView:'studio',workHomeFilter:'idle',workHomeScope:'project-a',workHomeQuery:'launch',workHomePages:{idle:2},navPinned:true};
+ for(const workSurface of ['chat','workspace','workspaces','chats']){
+  const away={...choices,workSurface,workWorkspaceId:'project-b',selectedSessionId:'other'};
+  const back={...away,...homePatch({interfaceDetail:'minimal',workStartView:'focus'},{},away)};
+  for(const [key,value] of Object.entries(choices))assert.deepEqual(back[key],value,key);
+  assert.equal(back.workSurface,'home');assert.equal(back.selectedSessionId,'other');
+ }
+ const reset={...choices,...homePatch({interfaceDetail:'minimal'},{workHomeView:'focus',workHomeFilter:'all'},choices)};
+ assert.equal(reset.workHomeView,'focus');assert.equal(reset.workHomeFilter,'all');
+ assert.equal(reset.workHomeScope,'project-a');assert.equal(reset.workHomeQuery,'launch');
+});

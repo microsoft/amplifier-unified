@@ -1,4 +1,4 @@
-import React,{createContext,useEffect,useRef,useState} from 'react';
+import React,{createContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 
 export const NavigationOpen=createContext(true);
 const inertOwners=new WeakMap();
@@ -12,7 +12,9 @@ export function useNarrowScreen(query='(max-width: 760px)'){
 // prevent both keyboard and assistive-technology navigation into the background.
 export function useModalFocus(ref,enabled,onClose){
  const close=useRef(onClose);close.current=onClose;
- useEffect(()=>{
+ // Release the old modal during the commit, before newly revealed siblings get
+ // their declarative inert state. A passive cleanup can re-inert an open Canvas.
+ useLayoutEffect(()=>{
   const panel=ref.current;if(!enabled||!panel)return;
   const previous=document.activeElement,hidden=[];
   let branch=panel;

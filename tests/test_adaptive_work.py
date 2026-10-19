@@ -62,3 +62,21 @@ async def test_new_web_arrival_and_resume_preserve_chat_and_private_draft(servic
     assert resumed['view']['workHomeView']=='focus'
     assert resumed['view']['draft']=='Keep this draft'
     assert resumed['selectedSessionId']==selected
+
+
+async def test_home_choices_survive_navigation_and_client_resume_without_leaking(service):
+    choices = {'workHomeView': 'studio', 'workHomeFilter': 'idle',
+               'workHomeScope': 'two', 'workHomeQuery': 'beta',
+               'workHomePages': {'idle': 2, 'unread': 1}, 'navPinned': True}
+    service.clients.attach('home-continuity', kind='web')
+    with service.clients.bind('home-continuity'):
+        await service.dispatch('view.update', {'patch': choices})
+        for surface in ('chat', 'workspace', 'workspaces', 'chats', 'home'):
+            await service.dispatch('view.update', {'patch': {'workSurface': surface}})
+            assert all(service.state['view'][key] == value for key, value in choices.items())
+    resumed = service.clients.attach('home-resumed', resume='home-continuity', kind='web')
+    assert resumed['view']['workSurface'] == 'home'
+    assert all(resumed['view'][key] == value for key, value in choices.items())
+    independent = service.clients.attach('home-independent', kind='web')
+    assert 'workHomeQuery' not in independent['view']
+    assert 'workHomePages' not in independent['view']
