@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.178",
+      "title": "Restore saved model recordings and improve everyday reliability",
+      "changes": [
+        "Saved model requests and responses are accessible from paged Work details. New captures link to their exact call, while older recordings remain available through Show saved recordings. Open calls refresh when saved recordings arrive, and full downloads retain their source ownership.",
+        "Reviewed diagnostic capture notices stay reviewed as healthy recording activity continues. New losses or capture errors still raise an alert.",
+        "Stopped test environments can export their recorded artifacts without restarting the environment or copying its entire workspace. The export keeps a separate receipt and leaves removal and retention decisions unchanged.",
+        "Active conversations reuse their navigation index during streaming. Browser updates prepare shared shell data once per frame, and background navigation queries reuse a bounded workspace summary until its source changes.",
+        "Workspace replacements refresh navigation even when the total number of workspaces stays the same."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.177",
       "title": "Keep saved Work details and conversation responses current",
       "changes": [

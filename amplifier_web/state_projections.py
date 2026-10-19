@@ -66,6 +66,10 @@ class StateProjections:
         if state is None:
             # An explicit unknown invalidation may follow direct global edits,
             # without a canonical commit epoch. It cannot reuse prior pages.
+            resources = getattr(getattr(self.service, 'shell', None), 'resources', None)
+            queries = getattr(resources, 'queries', None)
+            if queries is not None:
+                queries.invalidate_workspaces()
             self.values.clear()
             self.previous_navigation = None
             return

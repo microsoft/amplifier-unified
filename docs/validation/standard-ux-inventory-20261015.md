@@ -378,6 +378,31 @@ Use repeated comparable observations for regression decisions. Three sends and
 one sample per workspace action are an early warning, not a stable p95 estimate
 or proof that a particular commit caused a latency change.
 
+### Active shell frame and workspace input reuse (October 18)
+
+**PERF-633-FRAME** extends the existing scale lifecycle checks. During twelve
+active chats, verify that each browser frame reads its shell client, resolves its
+composition, computes its bootstrap hash and prunes registrations once. Exercise
+registered/unregistered, preview/recovery, scope changes, response-budget limits
+and idle expiry; another client's active stream must preserve its registration.
+These witnesses belong to `tests/test_shell_resources.py` and the existing
+shell resource transport tests.
+
+Keep the admitted session index across updates while owners are protected by
+running work, runtime ownership, pending configuration or approval. Still prove
+exclusive ownership before retiring an eligible row. Replace a workspace with a
+different registration at the same total count and verify the committed map is
+fresh (`tests/test_history_residency.py`).
+
+Distinct cold navigation queries may share one bounded detached workspace
+summary, never expanded configuration. Charge that summary's complete captured
+cost to every query. Commit changes, unknown invalidation and registry replacement
+must refresh it; older queued inputs stay unchanged and close releases it. An
+alternate caller-owned registry must not borrow canonical facts. These witnesses
+belong to `tests/test_shell_query_owner.py` and root navigation dependency checks.
+Current and desired scale observations are retained in
+[the frame reuse qualification](frame-projection633-qualification.md).
+
 ### Checkout identity across handoff waits (October 16)
 
 **R168-01** extends checkout handoff coverage: after the initial Git preflight,
