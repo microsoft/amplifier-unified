@@ -384,9 +384,19 @@ class _WorkFailureObservation:
         original_index = WorkWindows._binding_current
         def index(windows, page):
             result = original_index(windows, page)
-            if result is False and scoped(windows):
-                self.safe(self.event, 'index-stamp-mismatch', windows, page['sessionId'],
-                          first=('index-stamp', id(windows)))
+            if result is False:
+                def evidence():
+                    if not scoped(windows):
+                        return
+                    identity = page.get('sessionId')
+                    context = self.window.get()
+                    if identity is None and context is not None and context[0] is windows:
+                        identity = context[1]
+                    if identity is None:
+                        raise ValueError('Observation identity unavailable')
+                    self.event('index-stamp-mismatch', windows, identity,
+                               first=('index-stamp', id(windows)))
+                self.safe(evidence)
             return result
         patch.setattr(WorkWindows, '_binding_current', index)
 
@@ -684,8 +694,12 @@ def test_failure_observer_uses_original_refusal_without_second_dependency_probe(
             args = ({'private-path': True}, [])
             assert WorkWindows._matches(*args) is False
         elif boundary == 'index':
-            args = (windows, {'sessionId': 'root'})
+            # The worker's raw page has no host sessionId decoration yet.
+            # Only this same-window context may supply the observation scope.
+            args = (windows, {})
             assert WorkWindows._binding_current(*args) is False
+            assert trace.failures[0]['kind'] == 'index-stamp-mismatch'
+            assert trace.observation_errors == 0
         else:
             args = (windows, 'root', row, dict(row), 0)
             with pytest.raises(ValueError) as caught:
