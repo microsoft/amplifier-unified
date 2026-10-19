@@ -30,18 +30,47 @@ def read_removal(app, args, origin, caller):
         sid = args['sessionId']
         if origin not in {'ui', 'user'} and sid != caller:
             raise AppError('Removal inspection requires the recorded root owner.', 403)
+        fields = ('id', 'sessionKind', 'workspace', 'workingDirectory', 'executionRevision',
+                  'interruptionRevision', 'runtimeSessionId', 'nativeIdentity', 'nativeProject',
+                  'nativeParentId')
         try:
-            source = app._session(sid, hydrate=False)
-        except AppError:
+            source, = app._session_read_sources([sid], fields)
+            if (not isinstance(source, dict) or source.get('id') != sid or not isinstance(source.get('workspace'), str)
+                    or not source['workspace']
+                    or source.get('sessionKind') not in (None, 'root')
+                    or source.get('sessionKind') is None and source.get('nativeParentId')
+                    or any(k in source and (not isinstance(source[k], str) or not source[k])
+                           for k in ('runtimeSessionId', 'nativeIdentity', 'nativeProject', 'workingDirectory'))
+                    or any(k in source and (type(source[k]) is not int or source[k] < 0)
+                           for k in ('executionRevision', 'interruptionRevision'))):
+                raise ValueError('incomplete owner metadata')
+            # Local app roots legitimately start without native/placement fields.
+            # Keep absent fields absent in the snapshot, not inferred proof of
+            # revision zero. A native owner must supply its full placement facts.
+            if source.get('runtimeSessionId') or source.get('nativeIdentity'):
+                required = ('id', 'sessionKind', 'workspace', 'workingDirectory',
+                            'executionRevision', 'interruptionRevision')
+                if any(k not in source for k in required):
+                    raise ValueError('native placement metadata unavailable')
+                if not any(row['id'] == sid for row in app.state['sessions']):
+                    # Saved directory summaries default missing revisions to 0.
+                    # Confirm native-owner facts in the exact canonical record;
+                    # select only these scalars, never runtime/config/history.
+                    columns = ','.join(f"json_type(value,'$.{k}'),json_extract(value,'$.{k}')"
+                                       for k in required)
+                    saved = app.db.execute(f"SELECT {columns} FROM state_records "
+                                           "WHERE kind='session' AND id=?", (sid,)).fetchone()
+                    if saved is None or any(saved[2*i] != ('integer' if k.endswith('Revision') else 'text')
+                                            or saved[2*i+1] != source[k] for i, k in enumerate(required)):
+                        raise ValueError('native saved placement facts unavailable')
+        except (AppError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
             raise AppError('Removal inspection requires the recorded root owner.', 403) from None
         principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or sid
         workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
-        if (source.get('sessionKind', 'root') != 'root'
-                or origin not in {'ui', 'user'} and PRINCIPAL.get() != principal
+        if (origin not in {'ui', 'user'} and PRINCIPAL.get() != principal
                 or not workspace or source['workspace'] != workspace['path']):
             raise AppError('Removal inspection requires the recorded root owner.', 403)
-        return (principal, *(source.get(k) for k in
-                ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision')))
+        return (principal, *((k in source, source.get(k)) for k in fields))
 
     captured = root_binding()
     sid, rid = args['sessionId'], args['id']

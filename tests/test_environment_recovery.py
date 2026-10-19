@@ -1315,3 +1315,249 @@ async def test_public_removal_read_dormant_root_never_admits_repairs_or_persists
     assert app._state['selectedSessionId'] == peer['id']
     assert state_records.load_owner(app.db, source['id']) == (saved, controls)
     assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('transport', ['ui', 'agent'])
+async def test_public_removal_read_unknown_root_never_refreshes_or_admits(app, backend, monkeypatch, transport):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    before = removal_read_snapshot(app, row)
+    source = app.state['sessions'][0]
+    unknown = {**source, 'id': 'unknown-original-root'}
+    args = {**removal_read_args(app, row, original), 'sessionId': unknown['id']}
+    attempted = []
+    def forbidden(*args, **kwargs):
+        attempted.append('session-or-history-effect')
+        raise AssertionError('Passive missing-owner inspection must not refresh or admit')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        guard.setattr(app, '_session', forbidden)
+        guard.setattr(app, '_admit_session', forbidden)
+        guard.setattr(app, '_save', forbidden)
+        guard.setattr(app.history, 'refresh', forbidden)
+        with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+            if transport == 'agent':
+                await agent(app, unknown, REMOVAL_READ, args, 'unknown-root-read')
+            else:
+                await app.dispatch(REMOVAL_READ, args, include_state=False)
+    assert caught.value.status == 403 and attempted == calls == []
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('transport', ['ui', 'agent'])
+async def test_public_removal_read_does_not_retarget_a_native_alias(app, backend, monkeypatch, transport):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source = app.state['sessions'][0]
+    source.update(nativeIdentity='synthetic-native-alias', runtimeSessionId='synthetic-native-alias',
+                  sessionKind='root', workingDirectory=source['workspace'],
+                  executionRevision=0, interruptionRevision=0)
+    app._publish()
+    assert app.directory.resolve('synthetic-native-alias')['id'] == source['id']
+    before = removal_read_snapshot(app, row)
+    args = {**removal_read_args(app, row, original), 'sessionId': 'synthetic-native-alias'}
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+        if transport == 'agent':
+            await agent(app, source, REMOVAL_READ, args, 'alias-read',
+                        _runtimeSessionId='synthetic-native-alias')
+        else:
+            await app.dispatch(REMOVAL_READ, args, include_state=False)
+    assert caught.value.status == 403 and calls == []
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('change', [
+    'missing-id', 'missing-workspace', 'wrong-id', 'empty-workspace',
+    'wrong-kind', 'native-parent', 'bad-execution', 'bad-interruption',
+    'empty-working-directory', 'invalid-principal', 'native-missing-placement',
+])
+async def test_public_removal_read_requires_valid_passive_owner_metadata(app, backend, monkeypatch, change):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source = app.state['sessions'][0]
+    read_sources = app._session_read_sources
+    visits = []
+    def altered(identities, fields):
+        assert identities == [source['id']]
+        rows = read_sources(identities, fields)
+        value = dict(rows[0])
+        visits.append(change)
+        if change in {'missing-id', 'missing-workspace'}:
+            value.pop(change.removeprefix('missing-'), None)
+        elif change == 'native-missing-placement':
+            value['runtimeSessionId'] = 'synthetic-native'
+            value.pop('executionRevision', None)
+        else:
+            key, item = {
+                'wrong-id': ('id', 'other-root'),
+                'empty-workspace': ('workspace', ''),
+                'wrong-kind': ('sessionKind', 'worker'),
+                'native-parent': ('nativeParentId', 'original-parent'),
+                'bad-execution': ('executionRevision', True),
+                'bad-interruption': ('interruptionRevision', -1),
+                'empty-working-directory': ('workingDirectory', ''),
+                'invalid-principal': ('runtimeSessionId', 7),
+            }[change]
+            value[key] = item
+            if change == 'native-parent':
+                value.pop('sessionKind', None)
+        return [value]
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    monkeypatch.setattr(app, '_session_read_sources', altered)
+    with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+        await agent(app, source, REMOVAL_READ, removal_read_args(app, row, original), 'metadata-read')
+    assert caught.value.status == 403 and visits == [change] and calls == []
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('residency', ['resident', 'dormant'])
+async def test_public_removal_read_uses_only_bounded_owner_fields_without_session_lookup(app, backend, monkeypatch, residency):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source, peer = app.state['sessions']
+    args = removal_read_args(app, row, original)
+    if residency == 'dormant':
+        app._save()
+        app._state['sessions'].remove(source)
+        app._state['selectedSessionId'] = peer['id']
+        app.projections.invalidate()
+        assert app.directory.resolve(source['id']) is not None
+    before = removal_read_snapshot(app, row)
+    read_sources, fields_read, attempted = app._session_read_sources, [], []
+    def observed(identities, fields):
+        assert identities == [source['id']]
+        fields_read.append(tuple(fields))
+        return read_sources(identities, fields)
+    def forbidden(*args, **kwargs):
+        attempted.append('admission')
+        raise AssertionError('A passive owner field read must not admit a session')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        guard.setattr(app, '_session_read_sources', observed)
+        guard.setattr(app, '_session', forbidden)
+        guard.setattr(app, '_admit_session', forbidden)
+        guard.setattr(app, '_save', forbidden)
+        guard.setattr(app.history, 'refresh', forbidden)
+        result = await agent(app, source, REMOVAL_READ, args, 'bounded-metadata-read')
+    assert_unverified_removal_read(result['result'], row, original)
+    expected_fields = ('id', 'sessionKind', 'workspace', 'workingDirectory', 'executionRevision',
+                       'interruptionRevision', 'runtimeSessionId', 'nativeIdentity', 'nativeProject',
+                       'nativeParentId')
+    assert fields_read == [expected_fields, expected_fields]
+    assert attempted == calls == [] and removal_read_snapshot(app, row) == before
+
+
+async def test_public_removal_read_router_exception_does_not_bypass_mutation_admission(app, backend, monkeypatch):
+    require_removal_read_contract()
+    row = (await start(app, 'ordinary-admission-start'))['resource']
+    source, peer = app.state['sessions']
+    args = {**scope(app), 'id': row['id'], 'expectedRevision': row['revision'],
+            'requestId': 'ordinary-cold-stop'}
+    app._save()
+    app._state['sessions'].remove(source)
+    app._state['selectedSessionId'] = peer['id']
+    app.projections.invalidate()
+    assert app.directory.resolve(source['id']) is not None
+    attempted = []
+    def observe_admission(metadata):
+        attempted.append(metadata['id'])
+        raise RuntimeError('synthetic ordinary mutation admission witness')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        guard.setattr(app, '_admit_session', observe_admission)
+        with pytest.raises(RuntimeError, match='synthetic ordinary mutation admission witness'):
+            await app.dispatch('workspace.environments.stop', args, include_state=False)
+    assert attempted == [source['id']] and calls == []
+    with pytest.raises(ValueError, match='not found'):
+        app.operations.requests.read(source['id'], args['requestId'])
+
+
+@pytest.mark.parametrize('residency', ['resident', 'dormant'])
+async def test_public_removal_read_preserves_explicit_native_root_placement(app, backend, monkeypatch, residency):
+    require_removal_read_contract()
+    source, peer = app.state['sessions']
+    source.update(sessionKind='root', runtimeSessionId='synthetic-recorded-runtime',
+                  nativeIdentity='synthetic-recorded-runtime', nativeProject='synthetic-project',
+                  workingDirectory=source['workspace'], executionRevision=7, interruptionRevision=3)
+    row, original = await removal_read_fixture(app, monkeypatch)
+    args = removal_read_args(app, row, original)
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['owner']['principal'] == source['runtimeSessionId']
+    if residency == 'dormant':
+        app._save()
+        app._state['sessions'].remove(source)
+        app._state['selectedSessionId'] = peer['id']
+        app.projections.invalidate()
+    before = removal_read_snapshot(app, row)
+    fields = ('id', 'sessionKind', 'workspace', 'workingDirectory', 'executionRevision',
+              'interruptionRevision', 'runtimeSessionId', 'nativeIdentity', 'nativeProject')
+    observed_before = app._session_read_sources([source['id']], fields)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    result = await agent(app, source, REMOVAL_READ, args, 'native-original-read',
+                         _runtimeSessionId=source['runtimeSessionId'])
+    assert_unverified_removal_read(result['result'], row, original)
+    assert app._session_read_sources([source['id']], fields) == observed_before
+    assert observed_before[0]['executionRevision'] == 7 and observed_before[0]['interruptionRevision'] == 3
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('missing', ['workingDirectory', 'executionRevision', 'interruptionRevision', 'sessionKind'])
+async def test_public_removal_read_cold_native_defaults_do_not_supply_missing_saved_facts(app, backend, monkeypatch, missing):
+    require_removal_read_contract()
+    from amplifier_web import state_records
+    source, peer = app.state['sessions']
+    source.update(sessionKind='root', runtimeSessionId='synthetic-recorded-runtime',
+                  nativeIdentity='synthetic-recorded-runtime', workingDirectory=source['workspace'],
+                  executionRevision=0, interruptionRevision=0)
+    row, original = await removal_read_fixture(app, monkeypatch)
+    args = removal_read_args(app, row, original)
+    source.pop(missing)
+    app._save()
+    saved, _ = state_records.load_owner(app.db, source['id'])
+    assert missing not in saved
+    app._state['sessions'].remove(source)
+    app._state['selectedSessionId'] = peer['id']
+    app.projections.invalidate()
+    metadata = app._session_read_sources([source['id']], (missing,))[0]
+    assert missing in metadata  # Existing directory defaults must not fill proof gaps.
+    before = removal_read_snapshot(app, row)
+    attempted = []
+    def forbidden(*args, **kwargs):
+        attempted.append('admission')
+        raise AssertionError('Incomplete saved owner cannot be admitted to repair metadata')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        guard.setattr(app, '_session', forbidden)
+        guard.setattr(app, '_admit_session', forbidden)
+        guard.setattr(app, '_save', forbidden)
+        with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+            await agent(app, source, REMOVAL_READ, args, 'missing-native-facts',
+                        _runtimeSessionId=source['runtimeSessionId'])
+    assert caught.value.status == 403 and attempted == calls == []
+    assert state_records.load_owner(app.db, source['id'])[0] == saved
+    assert removal_read_snapshot(app, row) == before
+
+
+@pytest.mark.parametrize('transport', ['ui', 'agent'])
+async def test_public_removal_read_rejects_project_retarget_before_owner_lookup(app, backend, monkeypatch, transport):
+    require_removal_read_contract()
+    row, original = await removal_read_fixture(app, monkeypatch)
+    source = app.state['sessions'][0]
+    args = {**removal_read_args(app, row, original), 'nativeProject': 'caller-selected-project'}
+    before = removal_read_snapshot(app, row)
+    looked_up = []
+    def forbidden(*args, **kwargs):
+        looked_up.append('owner')
+        raise AssertionError('Invalid passive schema must fail before owner lookup')
+    with monkeypatch.context() as guard:
+        calls = forbid_removal_read_effects(app, guard)
+        guard.setattr(app, '_session', forbidden)
+        guard.setattr(app, '_session_read_sources', forbidden)
+        with pytest.raises(AppError, match='Additional properties') as caught:
+            if transport == 'agent':
+                await agent(app, source, REMOVAL_READ, args, 'project-retarget-read')
+            else:
+                await app.dispatch(REMOVAL_READ, args, include_state=False)
+    assert caught.value.status == 400 and looked_up == calls == []
+    assert removal_read_snapshot(app, row) == before
