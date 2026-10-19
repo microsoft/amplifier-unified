@@ -11,7 +11,7 @@ def definitions(schema, string):
     required = ['workspaceId', 'sessionId', 'id', 'expectedRevision']
     candidate = {**string(100), 'minLength': 1}
     return {
-        'workspace.work.resource': ('Append the current linked owner\\'s bounded resource/cleanup report. Explicit attribution only; no resource scan, verified teardown claim or lifecycle action.', schema({**target,
+        'workspace.work.resource': ("Append the current linked owner's bounded resource/cleanup report. Explicit attribution only; no resource scan, verified teardown claim or lifecycle action.", schema({**target,
             'resourceId': {**string(500), 'minLength': 1}, 'kind': {**string(100), 'minLength': 1},
             'reportedState': {'enum': ['active', 'unknown', 'reaped', 'observed_absent']},
             'evidenceReference': {**string(2000), 'minLength': 1}}, [*required, 'resourceId', 'kind', 'reportedState', 'evidenceReference'])),
