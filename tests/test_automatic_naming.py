@@ -253,7 +253,7 @@ async def test_deferred_name_waits_for_new_content_and_oversized_input_is_bounde
         expected_revision = revision(session)
         assert expected_revision is not None
         for _ in range(100):
-            await app.history.refresh(force=False)
+            await app.history.refresh(force=True)
             current = app.directory.resolve(session['id'])
             if current is not None and current.get('nativeRevision') == expected_revision:
                 break
