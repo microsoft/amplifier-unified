@@ -61,7 +61,7 @@ try{
  otherBrowser=await chromium.launch(launchOptions);
  const other=await otherBrowser.newContext({extraHTTPHeaders:headers});
  await other.addCookies([{name:'amplifier_unified_session',value:started.cookie,url:base,httpOnly:true,sameSite:'Strict'}]);
- const second=await other.newPage();await second.goto(base);
+ const second=await other.newPage();await second.goto(base);await showFixtureConversation(second);
  await expect(second.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await otherBrowser.close();otherBrowser=null;
  await control({op:'interim-start'});await expect(group).toHaveCount(0);

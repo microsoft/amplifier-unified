@@ -47,7 +47,7 @@ try{
  await action('attachment.add',{sessionId:sid,name:'original.txt',base64:'a2VlcA=='});
  await action('canvas.show',{kind:'text',title:'Original Canvas',content:'Retained original Canvas'});
  const canvasId=(await saved(page)).canvas.id;
- const other=await context.newPage();await other.setViewportSize({width:1280,height:900});await other.goto(url);await other.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const other=await context.newPage();await other.setViewportSize({width:1280,height:900});await other.goto(url);await showFixtureConversation(other);await other.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const otherBefore=await saved(other),baseline=(await saved(page)).library.sessionCount;
  // A different workspace is visible in the main browser, and the active chat is in A.
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:a.id}});

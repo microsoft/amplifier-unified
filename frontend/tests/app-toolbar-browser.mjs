@@ -73,7 +73,7 @@ try{
   }
  }
  touchBrowser=await chromium.launch({headless:true});
- const touch=await touchBrowser.newPage({viewport:{width:320,height:844},hasTouch:true,isMobile:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await touch.goto(url);await touch.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const touch=await touchBrowser.newPage({viewport:{width:320,height:844},hasTouch:true,isMobile:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await touch.goto(url);await showFixtureConversation(touch);await touch.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await touch.evaluate(()=>window.amplifier.dispatch('session.create'));await touch.locator('.a-work-header .a-canvas-toggle').waitFor();
  const touchTargets=await touch.locator('.a-work-header-actions > button,.a-work-header-actions > .a-work-menu > button').evaluateAll(buttons=>buttons.filter(button=>button.getClientRects().length).map(button=>{const r=button.getBoundingClientRect();return {width:r.width,height:r.height}}));
  assert.ok(touchTargets.length>0);assert.ok(touchTargets.every(r=>r.width>=44&&r.height>=44));assert.ok(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

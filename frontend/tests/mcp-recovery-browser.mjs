@@ -173,7 +173,7 @@ try{
  // A second independently attached client holds the original saved document.
  secondBrowser=await chromium.launch({headless:true});
  const secondContext=await secondBrowser.newContext({viewport:{width:1100,height:850},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const second=await secondContext.newPage();await second.goto(url);
+ const second=await secondContext.newPage();await second.goto(url);await showFixtureConversation(second);
  await second.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await second.evaluate(async before=>{await window.amplifier.dispatch('session.select',{id:before.session});await window.amplifier.dispatch('canvas.select',{id:before.id});},before);
  await dismissFixtureSetup(second,'second client');

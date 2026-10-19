@@ -96,7 +96,7 @@ try{
  const mobileContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const mobile=await mobileContext.newPage();
  mobile.on('pageerror',error=>errors.push(error.message));
- await mobile.goto(url);await mobile.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await mobile.goto(url);await showFixtureConversation(mobile);await mobile.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const mobileAction=(name,args={})=>mobile.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await mobileAction('session.select',{id:before.session});
  await mobileAction('canvas.select',{id:before.id});
