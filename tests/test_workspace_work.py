@@ -673,3 +673,38 @@ async def test_failed_source_save_keeps_pending_coverage_for_successful_same_sou
     monkeypatch.setattr(records, 'save_working', original)
     app._save()
     assert (await app.dispatch('workspace.work.coverage', {'workspaceId': wid}))['result']['observedInputs'] == 1
+
+
+async def test_attention_includes_dependency_only_blocker_before_paging(app):
+    owner = app.state['sessions'][0]
+    dependency = (await create(app, owner, command='dependency'))['result']['item']
+    item = (await create(app, owner, command='dependent', intent='dependent',
+                         dependsOn=[dependency['id']]))['result']['item']
+    assert item['attentionReasons'] == ['blocked']
+    page = (await app.dispatch('workspace.work.list', {
+        'workspaceId': workspace_id(app, owner), 'filter': 'attention', 'limit': 1}))['result']
+    assert page['total'] == 1 and page['items'][0]['id'] == item['id']
+    assert page['items'][0]['blockedBy'] == [dependency['id']]
+    assert not app.runtime.inputs
+
+
+async def test_attention_retains_counterevidence_after_unverified_pass(app):
+    owner = app.state['sessions'][0]
+    item = (await create(app, owner))['result']['item']
+    item = (await change_work(app, owner, 'report', item, 'initial-pass',
+        promiseRevision=1, candidate='a' * 40, outcome='passed',
+        report='Initial participant report.', criteria=['retained']))['result']['item']
+    item = (await app.dispatch('workspace.work.decision', {
+        'workspaceId': workspace_id(app, owner), 'sessionId': owner['id'],
+        'id': item['id'], 'expectedRevision': item['revision'], 'promiseRevision': 1,
+        'candidate': 'a' * 40, 'decision': 'accepted'},
+        command_id='human-before-counterevidence'))['result']['item']
+    for command, outcome in [('later-failure', 'failed'), ('unverified-pass', 'passed')]:
+        item = (await change_work(app, owner, 'report', item, command,
+            promiseRevision=1, candidate='a' * 40, outcome=outcome,
+            report='Retained participant report.', criteria=['retained']))['result']['item']
+    assert item['attentionReasons'] == ['counterevidence_after_decision']
+    page = (await app.dispatch('workspace.work.list', {
+        'workspaceId': workspace_id(app, owner), 'filter': 'attention'}))['result']
+    assert page['total'] == 1 and page['items'][0]['id'] == item['id']
+    assert not page['items'][0]['humanDecisionCurrent']
