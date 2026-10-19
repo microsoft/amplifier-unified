@@ -11,10 +11,20 @@ test('appearance chooses arrival only; explicit starting preference wins',()=>{
  for(const key of ['selectedSessionId','draft','canvas','workHomeScope','workStartView'])assert.equal(Object.hasOwn(patch,key),false);
 });
 test('late pages cannot answer a new project, search or page',()=>{
- const data={scope:'a',query:'launch',requestedPages:{idle:1}};
+ const data={scope:'a',requestedScope:'a',query:'launch',requestedPages:{idle:1}};
  assert.equal(currentWorkPage(data,{workHomeScope:'a',workHomeQuery:'launch',workHomePages:{idle:1}}),true);
  for(const changes of [{workHomeScope:'b'},{workHomeQuery:'offsite'},{workHomePages:{idle:2}}])
   assert.equal(currentWorkPage(data,{workHomeScope:'a',workHomeQuery:'launch',workHomePages:{idle:1},...changes}),false);
+});
+
+test('pinned Home accepts its effective project while fencing request and pin changes',()=>{
+ const data={scope:'two',requestedScope:'all',query:'',requestedPages:{}};
+ assert.equal(currentWorkPage(data,{},'two'),true);
+ assert.equal(currentWorkPage(data,{},'one'),false);
+ assert.equal(currentWorkPage(data,{}),false);
+ assert.equal(currentWorkPage(data,{workHomeScope:'managed'},'two'),false);
+ assert.equal(currentWorkPage({...data,requestedScope:'managed'},{workHomeScope:'managed'},'two'),true);
+ assert.equal(currentWorkPage({...data,scope:'missing',unavailable:true},{},'missing'),true);
 });
 
 test('Home preserves an explicitly opened or closed sidebar independently of appearance',()=>{

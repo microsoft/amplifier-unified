@@ -220,7 +220,9 @@ class ShellResources:
             from .adaptive_work import WORK_QUERY_FIELDS
             return (((root_navigation_revision, workspace_revision), None), self._epochs(CHAT_GLOBALS),
                     view.get('workHomeScope'), scoped.get('selectedSessionId'),
-                    encoded({key: view.get(key) for key in WORK_QUERY_FIELDS}))
+                    encoded({**{key: view.get(key) for key in WORK_QUERY_FIELDS},
+                             'pinnedWorkspaceId': instance.get('scope', {}).get('workspaceId')
+                             if instance.get('scope', {}).get('mode') == 'pinned' else None}))
         saved = view.get('navRecentLimit', 20)
         from .chat_navigation import RECENT_LIMITS
         saved = saved if type(saved) is int and saved in RECENT_LIMITS else 20

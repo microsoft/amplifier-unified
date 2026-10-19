@@ -40,18 +40,18 @@ function WorkCard({chat,kind,state,act,hero=false}){
 
 export function AdaptiveWorkHome({host,state,act,presentation}){
  const model=useNavigationController(host,'chats'),nav=useContext(WorkNavigationContext),view=state.view||{};
- const value=model.state.workHome,ready=hasNavigationResource(model.state,'workHome')&&currentWorkPage(value,view);
+ const pinnedScope=model.state.workHomePinnedScope,value=model.state.workHome,ready=hasNavigationResource(model.state,'workHome')&&currentWorkPage(value,view,pinnedScope);
  const level=presentation.interfaceDetail||presentation.executionDetail||'standard',mode=view.workHomeView||startingWorkView(presentation);
- const scope=view.workHomeScope||'all',filter=view.workHomeFilter||'all',query=view.workHomeQuery||'';
+ const scope=pinnedScope||view.workHomeScope||'all',filter=view.workHomeFilter||'all',query=view.workHomeQuery||'';
  const [search,setSearch]=useState(query),timer=useRef(null),pendingSearch=useRef(null),flush=useRef(null),searchInput=useRef(null),settingsButton=useRef(null),[settingsOpen,setSettingsOpen]=useState(false),pane=useRef(null);
  useEffect(()=>{setSearch(query)},[query]);useEffect(()=>()=>flush.current?.(),[]);
  const patch=values=>act('view.update',{patch:values});
- const readingKey=workReadingKey(view,mode);
+ const readingKey=workReadingKey({...view,workHomeScope:scope},mode);
  useLayoutEffect(()=>{if(ready&&pane.current)return rememberHomeScroll(pane.current,readingKey)},[ready,readingKey]);
  useEffect(()=>{if(!view.workHomeView)patch({workHomeView:mode,navPinned:level==='detailed'})},[view.workHomeView]);
  const flushSearch=()=>{clearTimeout(timer.current);const value=pendingSearch.current;pendingSearch.current=null;if(value!==null)patch({workHomeQuery:value,workHomePages:{}})};
  flush.current=flushSearch;
- const chooseScope=scope=>{clearTimeout(timer.current);pendingSearch.current=null;setSearch('');patch({workHomeScope:scope,workHomeQuery:'',workHomePages:{}})};
+ const chooseScope=scope=>{if(pinnedScope)return;clearTimeout(timer.current);pendingSearch.current=null;setSearch('');patch({workHomeScope:scope,workHomeQuery:'',workHomePages:{}})};
  const changeSearch=value=>{setSearch(value);pendingSearch.current=value;clearTimeout(timer.current);timer.current=setTimeout(flushSearch,220)};
  const closeSettings=()=>{setSettingsOpen(false);settingsButton.current?.focus()};
  const pages=ready?value.groups:{},total=Object.values(pages).reduce((sum,page)=>sum+page.total,0);
@@ -60,7 +60,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  const setFilter=key=>patch({workHomeFilter:key});
  // Search/page loading must not disable a click as the search field blurs.
  // Creation needs the confirmed project, not a matching page of search results.
- const canStart=scope==='all'||scope==='managed'||(value?.scope===scope&&!value.unavailable&&!!value.workspace?.path);
+ const canStart=Object.hasOwn(model.state,'workHomePinnedScope')&&(scope==='all'||scope==='managed'||(value?.scope===scope&&!value.unavailable&&!!value.workspace?.path));
  const newChat=()=>nav.newChat(scope==='all'||scope==='managed'?{location:{kind:'managed'}}:value.workspace.path);
  function pageGroup(kind,limit){
   const page=pages[kind];if(!page)return null;
@@ -95,12 +95,12 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
    <div className="a-home-intro"><h1>{mode==='focus'?'One thing at a time.':mode==='brief'?'Your work, at a glance.':'Everything in motion.'}</h1>{level!=='minimal'&&<p>{mode==='focus'?'Begin with what needs you.':mode==='brief'?'What needs you, what’s ready, and where you left off.':'Follow the work and find your next step.'}</p>}</div>
    <div className="a-home-query">
     <label className="a-home-search"><Search size={18}/><input ref={searchInput} type="search" aria-label="Search your work" placeholder="Find your work…" maxLength={500} value={search} onChange={event=>changeSearch(event.target.value)} onBlur={flushSearch}/>{search&&<button type="button" className="a-icon" aria-label="Clear work search" onClick={()=>{changeSearch('');searchInput.current?.focus()}}><X size={16}/></button>}</label>
-    <select aria-label="Work scope" value={scope} onChange={event=>chooseScope(event.target.value)}><option value="all">All work</option><option value="managed">On its own</option>{projects.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select>
+    <select aria-label="Work scope" value={scope} disabled={!!pinnedScope} onChange={event=>chooseScope(event.target.value)}>{pinnedScope?<option value={scope}>{projects.find(row=>row.id===scope)?.name||'Unavailable project'}</option>:<><option value="all">All work</option><option value="managed">On its own</option>{projects.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</>}</select>
    </div>
-   {scope!=='all'&&scope!=='managed'&&ready&&value.workspace&&<div className="a-home-project"><Folder/><strong>{value.workspace.name}</strong><button type="button" onClick={()=>nav.browse('workspace',value.workspace.id)}>Open project<ArrowRight/></button></div>}
+   {scope!=='all'&&scope!=='managed'&&value?.scope===scope&&!value.unavailable&&value.workspace&&<div className="a-home-project"><Folder/><strong>{value.workspace.name}</strong><button type="button" onClick={()=>nav.browse('workspace',value.workspace.id)}>Open project<ArrowRight/></button></div>}
    <NavigationResourceStatus state={model.state} resource="workHome" label="your work" refresh={model.refreshResources}/>
    {!ready&&!model.state.navigationResourcePending?.workHome&&<p role="status">Loading your work…</p>}
-   {ready&&value.unavailable?<p role="alert">This project is unavailable. <button type="button" onClick={()=>chooseScope('all')}>Show all work</button></p>:ready&&<>
+   {ready&&value.unavailable?<p role="alert">This project is unavailable. {!pinnedScope&&<button type="button" onClick={()=>chooseScope('all')}>Show all work</button>}</p>:ready&&<>
     {!focusOverview&&filters}
     {!total?<div className="a-home-welcome"><Inbox size={32}/><h2>{query?'No matching work.':'A fresh place to begin.'}</h2><p>{query?'Try another phrase or a different scope.':'Bring a question, an idea, or a project. You can organize it as it grows.'}</p><button type="button" className="a-primary" onClick={()=>query?changeSearch(''):newChat()}>{query?'Clear search':'Start a chat'}<ArrowRight/></button></div>:
      filter!=='all'?<div className="a-home-filtered">{pageGroup(filter)}</div>:

@@ -49,6 +49,34 @@ async def test_home_resource_key_survives_diagnostics_and_query_change(service):
     assert reasons==('query',)
 
 
+async def test_pinned_home_request_identity_and_unavailable_scope_never_widen(service, monkeypatch):
+    monkeypatch.setattr(service, '_session', lambda *a, **k: pytest.fail('Browsing hydrated a session'))
+    client = service.shell.client('pinned-home')
+    instance = {'id': 'chats', 'package': 'builtin.chats', 'slot': 'navigation',
+                'scope': {'mode': 'pinned', 'workspaceId': 'two'}}
+    for requested in ('all', 'managed', 'one'):
+        service.state['view'].update(workSurface='home', workHomeScope=requested)
+        snapshot = service.shell.navigation(client, instance, navigation_resources=frozenset({'workHome'}))
+        page = snapshot['workHome']
+        assert snapshot['workHomePinnedScope'] == page['scope'] == 'two'
+        assert page['requestedScope'] == requested
+        assert {row['id'] for row in page['items']} == {'beta'}
+    keys = []
+    for workspace_id, expected in [('one', {'alpha'}), ('two', {'beta'}), ('missing', set())]:
+        instance['scope']['workspaceId'] = workspace_id
+        page = service.shell.navigation(client, instance, navigation_resources=frozenset({'workHome'}))['workHome']
+        assert page['scope'] == workspace_id
+        assert page['unavailable'] == (workspace_id == 'missing')
+        assert {row['id'] for row in page['items']} == expected
+        scoped = service.shell.scoped_state(client, instance)
+        keys.append(service.shell.resources._page_key('workHome', scoped, instance, ((1, 2), 3), client, 7, (1, 2, 3, 4, 5, 6)))
+    assert len(set(keys)) == 3, 'Pinned project changes cannot reuse another project page'
+    instance['scope']['workspaceId'] = 'two'
+    next(row for row in service.state['workspaces'] if row['id'] == 'two')['available'] = False
+    page = service.shell.navigation(client, instance, navigation_resources=frozenset({'workHome'}))['workHome']
+    assert page['scope'] == 'two' and page['unavailable'] and not page['items']
+
+
 async def test_new_web_arrival_and_resume_preserve_chat_and_private_draft(service):
     service.state['view']['workHomeView']='studio'
     record=service.clients.attach('fresh-home',kind='web')

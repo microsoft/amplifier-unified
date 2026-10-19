@@ -45,6 +45,12 @@ a conversation to a new folder, or grants access. On its own means managed chats
 Project Work opens the existing workspace goal/work projection; it is not a fourth
 global mode. Logical cross-folder project membership remains future work.
 
+If the Chats component is pinned to one project, Home keeps that boundary: its
+scope control shows only that project, and creation uses that project's confirmed
+path. Requested query identity and effective project identity are tracked
+separately. An unavailable pinned project shows an unavailable state and cannot
+offer an all-work fallback; changing the component's pin invalidates cached pages.
+
 ## Trial gates and deliberate limits
 
 Verify all three views at desktop, tablet and phone widths; keyboard navigation;

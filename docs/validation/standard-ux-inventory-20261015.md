@@ -716,3 +716,21 @@ root/child and streaming/retry paths, cut-prefix ambiguity, root/native identity
 download authority and late owner/reference changes, partial attempt replacement,
 and page eviction. See [qualification and limits](diagnostic-capture-20261018.md).
 This expands existing focused checks; no new frozen browser lane is claimed.
+
+### Adaptive Home (October 19)
+
+**HOME-860**, recorded additively as `home.adaptive-work`, belongs to
+`adaptive-work-browser.mjs` in Extended browser checks. Run this focused smoke
+locally when changing Home, its scoped resource, or navigation/Canvas continuity.
+It covers fresh Home versus resumed chat, immediate search departure and return,
+confirmed project creation scope, private draft and saved Canvas retention,
+pinned/unavailable project constraints, and phone drawer → chat → Canvas → Home.
+Use the existing empty-host fixture with private contexts and disposable folders.
+It exercises the production host and built client with a synthetic runtime;
+live-provider behavior and populated-history performance remain separate.
+
+The existing Python and frontend Home tests own bounded queries, no transcript
+hydration, cache/request identity, pin changes, starting preferences and client
+state isolation. The new smoke is a regression owner, not a requirement to rerun
+the unrelated browser census before release. Frozen inventory counts remain
+unchanged; current results must name the actual source/build and cleanup outcome.

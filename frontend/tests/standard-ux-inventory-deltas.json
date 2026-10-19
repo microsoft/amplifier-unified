@@ -1361,6 +1361,69 @@
         }
       ],
       "qualification": "docs/validation/release172-qualification.md"
+    },
+    {
+      "id": "delta.860",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/860",
+      "reason": "Adaptive Home adds a standard arrival/browse surface; retain the frozen inventory and add one focused regression owner.",
+      "workflowsAdded": [
+        {
+          "id": "home.adaptive-work",
+          "family": "navigation",
+          "title": "Arrive at Home and retain work across views, scopes and chats",
+          "scope": "standard-path",
+          "entryPath": [
+            "Fresh browser",
+            "Home breadcrumb"
+          ],
+          "prerequisites": [
+            "Production built client and empty-host fixture with synthetic runtime in an owned DTU",
+            "Private browser contexts and disposable project folders; no live account or user history"
+          ],
+          "steps": [
+            "Open a fresh client at Home and switch to Studio",
+            "Choose a project, type search and immediately start a chat",
+            "Return Home and open a saved chat with a private draft and Canvas output",
+            "Reload that chat; open an independent fresh client",
+            "Pin Chats to each project, attempt another requested scope, and pin an unavailable project",
+            "At phone width open Browse, choose the pinned chat, interact with its retained Canvas and return Home"
+          ],
+          "expectedResults": [
+            "Home choices and pending search persist; project creation uses its confirmed folder.",
+            "A resumed client retains chat/draft/Canvas; an independent client starts at Home.",
+            "Effective pinned scope settles and controls agree; missing pinned projects cannot widen or create elsewhere.",
+            "Phone drawer cleanup leaves Canvas interactive and retains the private draft.",
+            "The fixture and browser retire cleanly; failures retain a report and screenshot."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "fresh-client",
+            "resumed-client",
+            "pinned-project",
+            "unavailable-project"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/adaptive-work-browser.mjs",
+              "relation": "Extended browser checks owner; focused local smoke on affected Home/navigation changes"
+            },
+            {
+              "path": "tests/test_adaptive_work.py",
+              "relation": "Scope, cache identity, bounded query, client state and no-hydration contracts"
+            },
+            {
+              "path": "frontend/tests/adaptive-work.test.mjs",
+              "relation": "Current-page identity, view preferences and retained navigation choices"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime proves host/browser interaction, not live-provider performance or real-history scale.",
+            "This additive smoke does not make the unrelated existing browser census a release gate."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#adaptive-home-october-19"
     }
   ]
 }

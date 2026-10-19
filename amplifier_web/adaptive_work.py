@@ -3,12 +3,14 @@
 WORK_QUERY_FIELDS = ('workHomeScope', 'workHomeQuery', 'workHomePages')
 
 
-def work_home(service, state):
+def work_home(service, state, *, pinned_workspace_id=None):
     view = state.get('view', {})
-    scope = view.get('workHomeScope') or 'all'
+    requested_scope = view.get('workHomeScope') or 'all'
+    scope = pinned_workspace_id or requested_scope
     query = view.get('workHomeQuery') or ''
     workspace = next((row for row in state.get('workspaces', [])
-                      if row['id'] == scope and row.get('available') is True), None)
+                      if row['id'] == scope and row.get('available') is True
+                      and isinstance(row.get('path'), str) and row['path']), None)
     # An unavailable project must never widen silently to all work.
     unavailable = scope not in ('all', 'managed') and workspace is None
     base = {'navChatScope': 'workspace' if scope not in ('all', 'managed') else 'all',
@@ -25,7 +27,8 @@ def work_home(service, state):
             filters['navChatPage'] = {**page['scope'], 'index': index}
             page = service.projections.chats({**scoped, 'view': filters}, section='recent')
         pages[status] = page
-    return {'scope': scope, 'query': query, 'requestedPages': view.get('workHomePages') or {},
+    return {'scope': scope, 'requestedScope': requested_scope,
+            'query': query, 'requestedPages': view.get('workHomePages') or {},
             'workspace': {key: workspace.get(key) for key in ('id', 'name', 'path')} if workspace else None,
             'unavailable': unavailable, 'groups': pages,
             'items': [row for page in pages.values() for row in page['items']]}

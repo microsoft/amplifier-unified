@@ -25,7 +25,8 @@ export function rememberHomeScroll(pane,key){
  pane.addEventListener('scroll',scroll,{passive:true});browser.addEventListener('pagehide',persist);
  return ()=>{persist();pane.removeEventListener('scroll',scroll);browser.removeEventListener('pagehide',persist)};
 }
-export function currentWorkPage(value,view={}){
- return value?.scope===(view.workHomeScope||'all')&&value?.query===(view.workHomeQuery||'')
+export function currentWorkPage(value,view={},pinnedScope=null){
+ return value?.scope===(pinnedScope||view.workHomeScope||'all')
+  &&value?.requestedScope===(view.workHomeScope||'all')&&value?.query===(view.workHomeQuery||'')
   &&['attention','unread','working','idle'].every(key=>(value.requestedPages?.[key]||0)===(view.workHomePages?.[key]||0));
 }
