@@ -45,16 +45,26 @@ def observe(work, session, message):
            'inputOrigin': message['inputOrigin'], 'observedAt': time.time()}
     # Queue only until the existing source-session save commits. Do not leave
     # uncommitted facts on the shared SQLite connection for an unrelated writer.
-    work.pending_input_facts[identity] = (row, message)
+    work.pending_input_facts[identity] = row
 
 
-def stage_saved_inputs(work, sessions, admitted):
+def stage_saved_inputs(work, sessions, admitted, deleted=()):
     staged = []
-    for identity, (row, message) in list(work.pending_input_facts.items()):
+    for identity, row in list(work.pending_input_facts.items()):
+        if row['sessionId'] in deleted:
+            staged.append(identity)
+            continue
         if row['sessionId'] not in admitted:
             continue
         session = sessions.get(row['sessionId'])
-        if session is None or not any(m is message for m in session.get('messages', [])):
+        if session is None:
+            continue
+        message = next((m for m in session.get('messages', []) if m.get('id') == row['messageId']), None)
+        # The admitted source snapshot is authoritative; metadata does not retain
+        # an abandoned message body. A failed save still keeps the pending fact.
+        if (not message or message.get('role') != 'user' or message.get('inputOrigin') != row['inputOrigin']
+                or hashlib.sha256(message.get('text', '').encode()).hexdigest() != row['sourceSha256']):
+            staged.append(identity)
             continue
         if not work.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
             work.receipts.insert(identity, fingerprint(row), row)

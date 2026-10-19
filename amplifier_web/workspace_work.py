@@ -162,7 +162,7 @@ class WorkspaceWork:
             'disposition', 'ownerSessionId', 'originSessionId', 'nextAction', 'blockedReason', 'updatedAt',
             'verification', 'humanDecision', 'delivery', 'execution')}
         value['candidate'] = item.get('candidate')
-        value['latestOutcome'] = item.get('latestOutcome', 'not_run')
+        value['latestOutcome'] = item.get('latestOutcome', 'not_reported')
         value['humanDecisionCurrent'] = item.get('humanDecisionSequence', 0) > item.get('counterevidenceSequence', 0)
         value['captureAuthority'] = 'Attributed scope interpretation; not an execution grant.'
         value['blockedBy'] = self.blocked_by(item)
@@ -311,13 +311,13 @@ class WorkspaceWork:
     def blocked_by(self, item):
         blocked = []
         for identity in item.get('dependsOn', []):
-            try:
-                dependency = self.receipts.receipt(identity)['result']
-                satisfied = (dependency.get('workspaceId') == item['workspaceId']
-                             and dependency.get('disposition') == 'closed'
-                             and dependency.get('dispositionBasis') == 'satisfied')
-            except (KeyError, ValueError):
-                satisfied = False
+            row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
+            receipt = json.loads(row[0]) if row else {}
+            dependency = receipt.get('result', {})
+            satisfied = (receipt.get('commandAction') == RECORD
+                         and dependency.get('workspaceId') == item['workspaceId']
+                         and dependency.get('disposition') == 'closed'
+                         and dependency.get('dispositionBasis') == 'satisfied')
             if not satisfied:
                 blocked.append(identity)
         return blocked
@@ -447,6 +447,8 @@ class WorkspaceWork:
                 now = time.time()
                 event_extra = {}
                 event_promise = None
+                promise_change = False
+                prior_candidate = None
                 if verb == 'create':
                     if args['commitment'] == 'accepted' and captured['inputOrigin'] not in HUMAN_ORIGINS:
                         self.error('Accepted Work requires proven human source origin; retain other sources as proposals.', 400)
@@ -463,7 +465,8 @@ class WorkspaceWork:
                             'ownerSessionId': actor['id'], 'schemaVersion': 1, 'sourceKey': source_key,
                             'revision': 1, 'promiseRevision': 1, 'promiseRevisedAt': now, 'commitment': args['commitment'],
                             'disposition': 'open', 'verification': 'not_verified', 'humanDecision': 'not_recorded',
-                            'delivery': 'not_recorded', 'execution': 'not_started', 'links': [], 'criterionEvidence': {},
+                            'delivery': 'not_recorded', 'execution': 'not_started', 'latestOutcome': 'not_reported',
+                            'links': [], 'criterionEvidence': {},
                             'eventCount': 1, 'createdAt': now, 'updatedAt': now,
                             'interpretation': '', 'criteria': [], 'constraints': [], 'dependsOn': [], 'nextAction': '', 'blockedReason': ''}
                 elif verb == 'revise':
@@ -486,12 +489,13 @@ class WorkspaceWork:
                         item['verification'] = 'not_verified'
                         item['humanDecision'] = 'not_recorded'
                         item['humanDecisionSequence'] = 0
-                        item['latestOutcome'] = 'not_run'
+                        item['latestOutcome'] = 'not_reported'
                         item['criterionEvidence'] = {}
                         item['execution'] = 'not_started'
                 else:
                     from .workspace_work_evidence import mutate
                     item = self.load(args['id'], workspace)
+                    prior_candidate = item.get('candidate')
                     event_extra, event_promise = mutate(self, verb, item, args, actor, origin, workspace)
                 if 'dependsOn' in args:
                     self.check_dependencies(workspace, item, args['dependsOn'])
@@ -510,6 +514,14 @@ class WorkspaceWork:
                 self.receipts.insert(event_id, fingerprint(event), event)
                 if verb == 'create' or verb == 'revise' and promise_change:
                     item['promiseEventRef'] = event_id
+                # A fresh collection cannot launder an older validation after
+                # counterevidence, a candidate change or explicit reopening.
+                if (verb == 'create' or promise_change
+                        or verb == 'link' and prior_candidate != item.get('candidate')
+                        or verb == 'report' and item.get('counterevidenceSequence') == item['eventCount']
+                        or verb == 'disposition' and item['disposition'] == 'open'):
+                    item['verificationBoundaryRef'] = event_id
+                    item['verificationBoundaryAt'] = now
                 if captured:
                     from .workspace_work_coverage import mapped
                     mapped(self, captured, item)

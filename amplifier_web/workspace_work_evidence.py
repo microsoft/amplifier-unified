@@ -63,13 +63,16 @@ def _qualification(work, actor, item, args):
     collection = receipt.get('result', {})
     if receipt.get('commandAction') != 'integration.collect' or collection.get('sessionId') != actor['id']:
         work.error('Use this verifier root\'s exact retained integration collection.', 403)
-    revised = item['promiseRevisedAt']
-    promise_row = work.db.execute('SELECT rowid FROM commands WHERE id=?', (item['promiseEventRef'],)).fetchone()
+    historical = args['promiseRevision'] < item['promiseRevision']
+    revised = item.get('verificationBoundaryAt', item['promiseRevisedAt'])
+    boundary = item.get('verificationBoundaryRef', item['promiseEventRef'])
+    promise_row = work.db.execute('SELECT rowid FROM commands WHERE id=?', (boundary,)).fetchone()
     collection_row = work.db.execute('SELECT rowid FROM commands WHERE id=?', (identity,)).fetchone()
-    if not promise_row or not collection_row or collection_row[0] <= promise_row[0]:
-        work.error('The collection predates the current retained promise event.')
-    if not isinstance(collection.get('capturedAt'), (int, float)) or collection['capturedAt'] < revised:
-        work.error('The check receipt predates the current promise; retain it as an old report, not current verification.')
+    if not historical:
+        if not promise_row or not collection_row or collection_row[0] <= promise_row[0]:
+            work.error('The collection predates the current verification boundary.')
+        if not isinstance(collection.get('capturedAt'), (int, float)) or collection['capturedAt'] < revised:
+            work.error('The check receipt predates the current verification boundary; old evidence is not current verification.')
     validation_ids = collection.get('validationIds', [])
     if not validation_ids:
         work.error('A check collection needs its exact retained validation invocations.')
@@ -79,9 +82,9 @@ def _qualification(work, actor, item, args):
         run_row = work.db.execute('SELECT rowid FROM commands WHERE id=?', (validation_id,)).fetchone()
         if (validation.get('commandAction') != 'integration.validate' or run.get('sessionId') != actor['id']
                 or run.get('captureId') != collection.get('captureId')
-                or not run_row or run_row[0] <= promise_row[0]
-                or not isinstance(run.get('capturedAt'), (int, float)) or run['capturedAt'] < revised):
-            work.error('The executed validation was not bound after this promise revision.')
+                or not run_row or not isinstance(run.get('capturedAt'), (int, float))
+                or not historical and (run_row[0] <= promise_row[0] or run['capturedAt'] < revised)):
+            work.error('The executed validation was not bound after this verification boundary.')
     repositories = collection.get('repositories', [])
     matches = [r for r in repositories if r.get('resultingSource', {}).get('head') == args['candidate']]
     if len(matches) != 1:
@@ -98,6 +101,8 @@ def _qualification(work, actor, item, args):
         work.error('Passing verification requires exact retained passed checks and artifacts; missing/unknown is not success.')
     if args['outcome'] != 'passed' and observed == 'passed':
         work.error('The reported outcome conflicts with its check receipt.')
+    if historical:
+        return 'historical_check'
     executors = {link['sessionId'] for link in item.get('links', [])
                  if link['candidate'] == args['candidate'] and link['role'] == 'executor'}
     if not executors:
@@ -163,7 +168,7 @@ def mutate(work, verb, item, args, actor, origin, workspace):
         if args['role'] == 'executor' and item.get('candidate') != args['candidate']:
             item.update(candidate=args['candidate'], verification='not_verified', criterionEvidence={},
                         humanDecision='not_recorded', humanDecisionSequence=0,
-                        latestOutcome='not_run', execution='not_started')
+                        latestOutcome='not_reported', execution='not_started')
         extra['link'] = copy.deepcopy(link)
     elif verb == 'report':
         event_promise = args['promiseRevision']

@@ -860,3 +860,36 @@ async def test_failed_canonical_collection_cannot_support_passed_report(app):
         await change_work(app, reviewer, 'report', item, 'false-pass',
             promiseRevision=1, candidate=candidate, outcome='passed', report='Contradict collection.',
             criteria=['retained'], checkReceiptId=check)
+
+
+async def test_explicit_reopening_requires_fresh_check_not_old_collection(app):
+    owner, reviewer, item, candidate = await linked_check_subject(app)
+    check = retained_check(app, reviewer, candidate, 'before-reopen')
+    item = (await change_work(app, reviewer, 'report', item, 'verified-before-close',
+        promiseRevision=1, candidate=candidate, outcome='passed', report='Original check.',
+        criteria=['retained'], checkReceiptId=check))['result']['item']
+    item = (await change_work(app, owner, 'disposition', item, 'close-before-reopen',
+        disposition='closed', basis='satisfied', reason='Original criteria checked.'))['result']['item']
+    item = (await change_work(app, owner, 'disposition', item, 'reopen-for-evidence',
+        disposition='open', basis='reopened', reason='New evidence needs a fresh check.'))['result']['item']
+    with pytest.raises(AppError, match='boundary'):
+        await change_work(app, reviewer, 'report', item, 'old-check-after-reopen',
+            promiseRevision=1, candidate=candidate, outcome='passed', report='Old check again.',
+            criteria=['retained'], checkReceiptId=check)
+
+
+async def test_deleted_source_coverage_is_retired_only_after_source_commit(app, monkeypatch):
+    import amplifier_web.state_records as records
+    owner = app.state['sessions'][0]
+    app._message(owner, 'user', 'A source explicitly forgotten before save.', inputOrigin='ui')
+    app.forget_session_records({owner['id']})
+    original = records.save_working
+    monkeypatch.setattr(records, 'save_working', lambda *a, **k: (_ for _ in ()).throw(OSError('Synthetic save failure')))
+    with pytest.raises(OSError):
+        app._save(session_ids={owner['id']}, record_only=True)
+    assert app.workspace_work.pending_input_facts
+    monkeypatch.setattr(records, 'save_working', original)
+    app._save(session_ids={owner['id']}, record_only=True)
+    assert not app.workspace_work.pending_input_facts
+    assert (await app.dispatch('workspace.work.coverage', {
+        'workspaceId': workspace_id(app, owner)}))['result']['observedInputs'] == 0

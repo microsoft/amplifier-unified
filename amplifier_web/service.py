@@ -1004,7 +1004,7 @@ class AppService:
             staged_work_inputs = []
             if getattr(self, 'workspace_work', None):
                 from .workspace_work_coverage import stage_saved_inputs
-                staged_work_inputs = stage_saved_inputs(self.workspace_work, admitted_index, admitted_ids)
+                staged_work_inputs = stage_saved_inputs(self.workspace_work, admitted_index, admitted_ids, deleted_ids)
             with self.performance_diagnostics.measure('state.serialize', synchronous=True):
                 normalize_state(normalized, self.db, undo=normalization_undo)
                 saved = persist(self.data_dir, self._state, pending_views,
