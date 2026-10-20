@@ -911,3 +911,20 @@ has 100 registered scenarios and 143 distinct source/readiness browser scripts
 reconcile these totals without altering the frozen 65-scenario baseline.
 
 The integrated branch containing both testing settings and existing-chat adoption has 101 registered scenarios, 144 distinct readiness/extended scripts, and 143 excluding attachment consumption. Both additive owners preserve the original 65-scenario identity.
+
+
+### Test execution limits (October 20)
+
+**TEST-EXECUTION-LIMITS** extends the registered `testing-settings` browser owner
+with global future-job queue depth, zero waiting expiry, profile CPU and check
+durations, effective values, stale edits, lost-acknowledgement readback, narrow
+unsaved-close/Keep settings open and cold reopen. The settings fixture remains
+private and synthetic; no production policy is changed.
+
+`test_test_execution_settings.py` owns global authority, private revisioned
+settings, complete journal counts and pagination beyond 64 requests, frozen
+accepted policy and historical direct-execution defaults. Durable queue coverage
+checks that a restarted scheduler retains resources and timeouts after settings
+change. Preparation tests cover one saved waiting/build deadline and independent
+dependency recipe identity. This adds no duplicate browser scenario or broad
+publication gate and does not claim physical-runner deployment acceptance.
