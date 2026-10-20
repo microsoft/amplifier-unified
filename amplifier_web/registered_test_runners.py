@@ -17,7 +17,7 @@ import uuid
 
 from . import test_capacity_settings as capacity
 
-FILES = ('test_runner_controller.py', 'incus_environment_worker.py', 'test_environment_worker.py',
+FILES = ('test_runner_backend_policy.py', 'test_runner_controller.py', 'incus_environment_worker.py', 'test_environment_worker.py',
          'test_host_resources.py', 'test_environment_profiles.py', 'environment_retention.py',
          'test_job_transport.py', 'test_environment_preparation.py', 'test_environment_prepare_guest.py',
          'test_environment_initialize_guest.py', 'test_job_guest.py')
@@ -71,6 +71,8 @@ def definitions(schema, string):
         'testing.runners.read': ('Read globally registered test machines. Does not start tests or reconnect to targets.', schema()),
         'testing.runners.register': ('Register an already approved SSH machine with its configured native Incus test runner. Installs only this app’s fixed controller in private user storage; uses existing SSH authentication and host-key trust. Global setup authority is required once.', schema({'expectedRevision': string(64), 'connection': string(200), 'name': string(80), 'configPath': string(4096)}, ['expectedRevision', 'connection', 'name'])),
         'testing.runners.enable': ('Enable or pause a registered test machine for future checks. Existing owned work keeps its original target and cleanup route.', schema({'expectedRevision': string(64), 'id': string(64), 'enabled': {'type': 'boolean'}}, ['expectedRevision', 'id', 'enabled'])),
+        'testing.runners.capacity.read': ('Inspect registered backend limits and their source.', schema({'id': string(64)}, ['id'])),
+        'testing.runners.capacity.save': ('Change registered backend limits for future admissions across cooperating controllers on the same target account. Active checks keep running.', schema({'id': string(64), 'expectedRevision': string(64), 'limits': schema({key: {'type': 'integer', 'minimum': 0, 'maximum': capacity.MAXIMUM} for key in ('maxRunning', 'maxInstances', 'minFreeBytes')}, [])}, ['id', 'expectedRevision', 'limits'])),
         'testing.runners.machine.read': ('Inspect the registered machine resource budget and current reservations.', schema({'id': string(64)}, ['id'])),
         'testing.runners.machine.save': ('Change the registered machine shared resource budget for future admissions. Active work remains running. Requires global host-defaults authority.', schema({'id': string(64), 'expectedRevision': string(64), 'limits': schema({key: {'type': 'integer', 'minimum': 0, 'maximum': capacity.MAXIMUM} for key in capacity.host_resources.FIELDS}, [])}, ['id', 'expectedRevision', 'limits'])),
     }
@@ -230,17 +232,21 @@ async def dispatch(app, action, args, authority):
     try:
         if action.endswith('.read') and action == 'testing.runners.read':
             return {'accepted': True, 'result': snapshot(app)}
-        if action.startswith('testing.runners.machine.'):
+        if action.startswith(('testing.runners.machine.', 'testing.runners.capacity.')):
             runner = next((r for r in store(app)['runners'] if r['id'] == args['id']), None)
             if runner is None:
                 raise ValueError('Choose a registered test machine.')
             if action.endswith('.save'):
                 app.configuration_authority.check(authority)
-            payload = {'action': 'machine.save' if action.endswith('.save') else 'machine.read', **{k: args[k] for k in ('limits', 'expectedRevision') if k in args}}
+            payload = {'action': action.removeprefix('testing.runners.'), **{k: args[k] for k in ('limits', 'expectedRevision') if k in args}}
             result = await asyncio.to_thread(call, runner, payload)
             if not result.get('ok'):
                 raise ValueError(result.get('message', 'The test machine could not confirm its settings.'))
-            return {'accepted': True, 'result': result['machineResources']}
+            if action.endswith('.save'):
+                app.test_queue.backoff.clear()
+                app.test_queue.wakeup.set()
+                app.test_queue.start()
+            return {'accepted': True, 'result': result['machineResources' if '.machine.' in action else 'backendPolicy']}
         async with app.lock:
             app.configuration_authority.check(authority)
             value = store(app)
@@ -299,7 +305,7 @@ def has_room(observation, request):
     return not (
         limits['maxReservedCpu'] and reserved['cpus'] + request['cpus'] > limits['maxReservedCpu']
         or limits['maxReservedMemoryMiB'] and reserved['memoryMiB'] + request['memoryMiB'] > limits['maxReservedMemoryMiB']
-        or limits['minAvailableMemoryMiB'] and observed['availableMemoryMiB'] < request['memoryMiB'] + limits['minAvailableMemoryMiB']
+        or limits['minAvailableMemoryMiB'] and observed['availableMemoryMiB'] < request['memoryMiB'] + limits['minAvailableMemoryMiB'] + reserved.get('pendingMemoryMiB', 0)
         or limits['minFreeBytes'] and observed['freeBytes'] < limits['minFreeBytes']
         or limits['maxLoadPercent'] and observed['loadPercent'] > limits['maxLoadPercent']
         or request.get('profileId') != 'linux-python' and limits.get('maxPreparing') and reserved.get('preparing', 0) >= limits['maxPreparing'])

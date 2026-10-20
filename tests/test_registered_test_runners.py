@@ -210,19 +210,25 @@ def test_cloned_machine_ids_have_distinct_account_authorities_and_alias_reuse(tm
     assert controller.authority_id(first) == values[0]
 
 
-def test_reconcile_exact_terminal_launch_settles_fence_without_replay(target, monkeypatch):
+@pytest.mark.parametrize("lost_reply", ["raised", "returned"])
+def test_reconcile_exact_terminal_launch_settles_fence_without_replay(target, monkeypatch, lost_reply):
     value = prepared(target)
     value['expectedBackendIdentity'] = target[1]
     effects = []
     def effect(p):
         effects.append(p['action'])
         if p['action'] == 'start':
+            if lost_reply == 'returned':
+                return {'ok': False, 'status': 'unknown', 'effectAdmitted': True}
             raise TimeoutError('reply lost')
         observation = controller.worker.common.observation(p, controller.worker.identity(p), target[1], 'retained-launch', 'matched', True)
         return {'ok': True, 'status': 'stopped', 'observation': observation}
     monkeypatch.setattr(controller.worker, 'execute_call', effect)
-    with pytest.raises(TimeoutError):
-        request(target, value, 'start')
+    if lost_reply == 'raised':
+        with pytest.raises(TimeoutError):
+            request(target, value, 'start')
+    else:
+        assert request(target, value, 'start')['status'] == 'unknown'
     assert host.snapshot()['reserved']['count'] == 1
     assert request(target, value, 'reconcile')['status'] == 'stopped'
     assert host.snapshot()['reserved']['count'] == 0

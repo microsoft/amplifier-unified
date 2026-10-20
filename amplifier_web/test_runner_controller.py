@@ -25,12 +25,13 @@ from amplifier_web import incus_environment_worker as worker
 from amplifier_web import test_environment_preparation as preparation
 from amplifier_web import test_environment_profiles as profiles
 from amplifier_web import test_host_resources as machine
+from amplifier_web import test_runner_backend_policy as backend_policy
 
 MAX_SOURCE = 512 * 1024**2
 CHUNK = 512 * 1024
 MAX_CONTROL = 1024 * 1024
 MUTATIONS = {'start', 'execute', 'job_start', 'job_cancel', 'stop', 'remove', 'finishCleanup', 'exportArtifacts', 'prepareDependencies', 'cleanupDependencies'}
-ACTIONS = MUTATIONS | {'prepare', 'capacity', 'read', 'job_read', 'reconcile', 'source', 'artifact', 'describe', 'machine.read', 'machine.save', 'cancelPreparation'}
+ACTIONS = MUTATIONS | {'prepare', 'capacity', 'read', 'job_read', 'reconcile', 'source', 'artifact', 'describe', 'machine.read', 'machine.save', 'cancelPreparation', 'capacity.read', 'capacity.save'}
 PAYLOAD = {'action', 'source', 'backendKey', 'expectedBackendIdentity', 'retentionMode', 'snapshot', 'operationId', 'universeId', 'rootOwner', 'resourceId', 'resourceRevision', 'admissionRevision', 'requestId', 'command', 'jobId', 'profileId', 'resourceRequest', 'timingRequest', 'timeoutSeconds', 'limits', 'offset', 'content', 'archiveIndex', 'exportRequestId', 'expectedRevision'}
 
 
@@ -229,7 +230,12 @@ def dispatch(request):
         return {'ok': True, 'machineResources': machine.snapshot()}
     if action == 'machine.save':
         return {'ok': True, 'machineResources': machine.save(payload['expectedRevision'], payload['limits'])}
+    if action == 'capacity.read':
+        return {'ok': True, 'backendPolicy': backend_policy.snapshot(base, identity, config)}
+    if action == 'capacity.save':
+        return {'ok': True, 'backendPolicy': backend_policy.save(base, identity, config, payload['expectedRevision'], payload['limits'])}
     if action == 'capacity':
+        config = backend_policy.apply(base, identity, config)
         result = worker.execute_call({'action': 'capacity', 'root': str(base), 'incus': config})
         result['machineResources'] = machine.snapshot()
         return result
@@ -277,6 +283,7 @@ def dispatch(request):
             # This is the target-side dispatch fence. Persist before *any* build,
             # create, test, stop or export effect; keep it after lost replies.
         if action in {'start', 'prepareDependencies'}:
+            config = backend_policy.apply(base, identity, config)
             reservation = machine.reserve(row, target)
             if not reservation.get('admitted'):
                 return {'ok': False, 'status': 'not-started', 'effectAdmitted': False, 'admissionDenied': True,
@@ -335,7 +342,9 @@ def reconcile_launch(root, payload, result, row):
     if not isinstance(payload.get('expectedBackendIdentity'), dict):
         return
     expected = worker.common.binding(payload, worker.identity(payload), payload['expectedBackendIdentity'])
-    if (not original or original.get('state') != 'admitted'
+    unresolved = original and (original.get('state') == 'admitted' or
+        original.get('state') == 'completed' and original.get('result', {}).get('status') == 'unknown' and not original.get('result', {}).get('creationSettled'))
+    if (not unresolved
             or any(observed.get(key) != value for key, value in expected.items())
             or observed.get('admissionSettled') is not True
             or observed.get('ownership') not in {'matched', 'absent'}):

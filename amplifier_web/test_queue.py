@@ -228,8 +228,9 @@ class TestQueue:
                 'nextOffset': offset+len(page) if offset+len(page)<len(content) else None,
                 'truncatedAtSource': bool(output.get('truncated') or output.get('stdout_truncated') or output.get('stderr_truncated')),
                 'retention': environments.public(self.app.data_dir, row)['retention'] if row else None}}
-        async with self.app.lock:
-            if action.endswith('.cancel'):
+        if action.endswith('.cancel'):
+            row = None
+            async with self.app.lock:
                 if origin not in {'ui', 'user'}:
                     owner.active_binding(owner.source(args, origin, caller, hydrate=False))
                 receipt = self.get(identity)
@@ -243,10 +244,12 @@ class TestQueue:
                     self.save(receipt)
                     if receipt['job']['status'] == 'starting' and receipt['job'].get('resourceId'):
                         row = environments.get(self.app.data_dir, source['id'], receipt['job']['resourceId'])
-                        await asyncio.to_thread(environments.cancel_preparation, self.app, row)
                 self.wakeup.set()
                 self.wake_job(identity)
-                return {'accepted': True, 'result': self.public(receipt)}
+            if row is not None:
+                await asyncio.to_thread(environments.cancel_preparation, self.app, row)
+            return {'accepted': True, 'result': self.public(receipt)}
+        async with self.app.lock:
             digest = fingerprint([ACTION, args, source['id'], origin])
             previous = self.app.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
             if previous:
