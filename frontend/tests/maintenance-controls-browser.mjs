@@ -16,7 +16,8 @@ try{
  await mkdir(out,{recursive:true});
  const boot=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error(log||'Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error(`Fixture exited ${code}: ${log}`))});fixture.stdout.on('data',data=>{text+=data;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  assert.equal(boot.package,fileURLToPath(new URL('../../amplifier_web/__init__.py',import.meta.url)));
- browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
+ const launchOptions={headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
+ browser=await chromium.launch(launchOptions);
  page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.method()==='POST'&&request.url().includes('/api/actions')){const action=request.postDataJSON()?.action;if(['conversation.send','call.start'].includes(action))newWorkRequests.push(action)}});
@@ -36,15 +37,18 @@ try{
  await expect(controls()).toContainText('New work is held');
  report.timings.pauseHoldVisibleMs=Date.now()-pauseAt;
  assert.equal((await evidence()).maintenance.held,true);
- const peer=await browser.newPage({viewport:{width:850,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ // A second browser also works with the ARM single-process launch adapter,
+ // whose Chromium process cannot safely host a second incognito context.
+ const peerBrowser=await chromium.launch(launchOptions);
  try{
+  const peer=await peerBrowser.newPage({viewport:{width:850,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
   await peer.goto(boot.url);await peer.waitForSelector('#amp-one');await showFixtureConversation(peer);
   const peerActivity=peer.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/});
   if(!await peerActivity.isVisible())await peer.getByRole('button',{name:'Open navigation',exact:true}).click();
   await peerActivity.click();await expect(peer.locator('[data-part="host-maintenance"]:visible')).toContainText('New work is held');
   await peer.reload();await expect(peer.locator('[data-part="host-maintenance"]:visible')).toContainText('New work is held');
   assert.equal((await evidence()).calls.filter(row=>row.operation==='pause').length,1);
- }finally{await peer.close()}
+ }finally{await peerBrowser.close()}
  report.checks.push('A separate browser observes the same durable hold after reconnect without replay');
  await expect(controls()).not.toContainText('All tracked work is paused');
  await expect(controls().getByRole('button',{name:'Resume paused work',exact:true})).toBeDisabled();
