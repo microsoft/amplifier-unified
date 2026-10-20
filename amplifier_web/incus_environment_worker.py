@@ -120,17 +120,17 @@ def launcher_interpreter(path):
     return interpreter
 
 
-def validate_configuration(value):
+def validate_configuration(value, *, _engine_owner=None):
     """Read-only qualification of an explicitly installed legacy CLI generation."""
     required = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir', 'admissionDir', 'project', 'image'}
-    allowed = required | {'daemonFingerprint', 'maxRunning', 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory', 'preparationNetwork', 'preparationStorage'}
+    allowed = required | {'daemonFingerprint', 'maxRunning', 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory', 'preparationNetwork', 'preparationStorage', 'engineQualification'}
     if not isinstance(value, dict) or not required <= value.keys() or value.keys() - allowed:
         raise ValueError('The qualified Incus backend configuration is incomplete.')
     config = dict(value)
     for key in ('executableSha256', 'packageSha256', 'image'):
         if not isinstance(config[key], str) or not re.fullmatch(r'[a-f0-9]{64}', config[key]):
             raise ValueError('Backend code and image identities must be exact SHA-256 values.')
-    if config['packageSha256'] not in QUALIFIED_PACKAGES.values():
+    if not config.get('engineQualification') and config['packageSha256'] not in QUALIFIED_PACKAGES.values():
         raise ValueError('The legacy package pin is not the app-qualified generation.')
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}', config['project']):
         raise ValueError('An explicit Incus project is required.')
@@ -150,14 +150,22 @@ def validate_configuration(value):
     interpreter = launcher_interpreter(config['executable'])
     # Normal venv interpreter symlinks are legitimate. The package source and
     # launcher, not the venv symlink spelling, define this qualification.
-    probe = run([str(interpreter), '-I', '-c',
+    probe = run([str(interpreter), '-I', '-B', '-c',
         'import importlib.util,importlib.metadata,json; s=importlib.util.find_spec("amplifier_bundle_digital_twin_universe"); print(json.dumps({"version":importlib.metadata.version("amplifier-bundle-digital-twin-universe"),"directory":next(iter(s.submodule_search_locations))}))'],
         env={'PATH': os.defpath, 'LANG': 'C.UTF-8'}, timeout=10)
     if probe['exit_code'] or probe['truncated']:
         raise ValueError('The qualified legacy interpreter is unavailable.')
     installed = json.loads(probe['stdout'])
-    if QUALIFIED_PACKAGES.get(installed['version']) != config['packageSha256'] or package_digest(installed['directory']) != config['packageSha256']:
+    if (not config.get('engineQualification') and QUALIFIED_PACKAGES.get(installed['version']) != config['packageSha256']
+            or package_digest(installed['directory']) != config['packageSha256']):
         raise ValueError('The installed legacy backend is not this app\'s qualified generation.')
+    # A purpose-created candidate cannot become a historical static-qualified
+    # install by dropping its receipt, including unchanged package source bytes.
+    spec = importlib.util.spec_from_file_location('_incus_engine_generations', Path(__file__).with_name('incus_engine_generations.py'))
+    generations = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generations)
+    if config.get('engineQualification') or Path(config['executable']).is_relative_to(generations.root()):
+        generations.verify(config, owner=_engine_owner)
     config.update(interpreter=str(interpreter), packageDirectory=installed['directory'])
     for key, env_key in [('maxRunning', 'AMPLIFIER_DTU_MAX_RUNNING'), ('maxInstances', 'AMPLIFIER_DTU_MAX_INSTANCES'), ('minFreeBytes', 'AMPLIFIER_DTU_MIN_FREE_BYTES')]:
         # Preserve explicit operator environment policy when host configuration
@@ -221,7 +229,9 @@ def run(arguments, env, timeout=30, watched_file=None, output_bytes=OUTPUT_BYTES
 
 
 def cli(config, env, arguments, timeout=30):
-    result = run([config['executable'], *arguments], env, timeout, output_bytes=CONTROL_BYTES)
+    command = ([config['interpreter'], '-I', '-B', config['executable']]
+               if config.get('engineQualification') else [config['executable']])
+    result = run([*command, *arguments], env, timeout, output_bytes=CONTROL_BYTES)
     if result['truncated']:
         raise BackendFailure('response_limit', 'The backend receipt exceeded its bound; inspect the recorded operation.')
     try:
@@ -444,9 +454,10 @@ def host_target(config, env):
         return {'supported': False, 'reason': 'The Incus execution target has no verified local machine authority. Backend limits still apply.'}
 
 
-def execute_call(payload):
+def execute_call(payload, *, _engine_owner=None):
     root = private_directory(payload['root'])
-    config = validate_configuration(payload['incus'])
+    config = (validate_configuration(payload['incus'], _engine_owner=_engine_owner) if _engine_owner
+              else validate_configuration(payload['incus']))
     env = environment(config, root)
     action = payload['action']
     name = None if action == 'capacity' else identity(payload)

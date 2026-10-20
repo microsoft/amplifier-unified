@@ -18,7 +18,8 @@ import time
 
 from . import test_capacity_settings as capacity
 
-FILES = ('test_runner_backend_policy.py', 'test_runner_controller.py', 'incus_environment_worker.py', 'test_environment_worker.py',
+FILES = ('incus_engine_core_binding.py', 'managed_runner_binding.py', 'incus_engine_generations.py', 'managed_runner_identity.py', 'incus_engine_probe.py',
+         'managed_incus_target.py', 'test_runner_backend_policy.py', 'test_runner_controller.py', 'incus_environment_worker.py', 'test_environment_worker.py',
          'test_host_resources.py', 'test_environment_profiles.py', 'environment_retention.py',
          'test_job_transport.py', 'test_environment_preparation.py', 'test_environment_prepare_guest.py',
          'test_environment_initialize_guest.py', 'test_job_guest.py')

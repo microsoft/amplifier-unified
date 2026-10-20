@@ -82,7 +82,8 @@ class ManagedUpdates:
         # connection or infer its pin from this runner's installed commit.
         rows = [row for row in rows if row.get('installationId') not in selected
                 or any(server.get('installationId') == row.get('installationId') for server in self.state['servers'])]
-        return [*rows, *runner_rows]
+        from .managed_incus_updates import update_sources as incus_sources
+        return [*rows, *runner_rows, *incus_sources(self.service)]
 
     async def stage_update(self, source):
         if source.get('runnerKind'):

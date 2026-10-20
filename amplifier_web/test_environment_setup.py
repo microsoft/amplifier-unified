@@ -511,6 +511,8 @@ async def setup_docker(base, selected, owned, record, step):
 
 async def setup_incus(base, selected, owned, record, step):
     from .incus_environment_worker import file_digest, package_digest, QUALIFIED_PACKAGES, CURRENT_QUALIFIED_VERSION
+    record['engineSourcePolicy'] = {'version': 1, 'repository': LEGACY_REPOSITORY,
+                                    'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
     binary = selected['executable']
     uv = shutil.which('uv')
     if not uv:

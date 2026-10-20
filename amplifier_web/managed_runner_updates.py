@@ -66,8 +66,9 @@ def setup_policy(app, raw):
     """Legacy migration requires the actual new-install setup receipt."""
     if not raw:
         return None
-    carried = private.read_json(root(app, False) / ('selection-' + key(raw) + '.json'))
-    if carried and carried.get('configuration') == raw:
+    from .managed_runner_binding import selection
+    carried = selection(root(app, False), raw, private.read_json)
+    if carried:
         policy = carried.get('policy')
         if isinstance(policy, dict):
             return policy
@@ -78,7 +79,7 @@ def setup_policy(app, raw):
         if not re.fullmatch('[a-f0-9]{32}\\.json', path.name):
             continue
         value = private.read_json(path) or {}
-        if (value.get('state') == 'completed' and value.get('candidateConfiguration') == raw
+        if (value.get('state') == 'completed' and execution_binding(value.get('candidateConfiguration', {})) == execution_binding(raw)
                 and 'priorConfiguration' in value and value['priorConfiguration'] is None
                 and value.get('installationId') == raw.get('installationId')
                 and value.get('proof', {}).get('probeRemoved') is True):
@@ -312,13 +313,13 @@ def referenced(home, identity):
         return True
     if not path.exists():
         return False
-    selection = private.read_json(path / ('selection-' + key(selected) + '.json')) or {}
+    from .managed_runner_binding import rollback_record
+    predecessor = rollback_record(path, selected, private.read_json)
     for item in path.glob('*.json'):
         if not re.fullmatch(r'[a-f0-9]{32}\.json', item.name):
             continue
         record = private.read_json(item) or {}
-        rollback = (record.get('id') == selection.get('updateId')
-                    and record.get('candidate') == selected and record.get('state') == 'selected')
+        rollback = predecessor is not None and record == predecessor
         unsettled = (record.get('state') not in {'selected', 'skipped', 'superseded'}
                      and record.get('probeState') != 'failed')
         values = ([record.get('previous')] if rollback else [])
@@ -381,11 +382,9 @@ async def skip(app, identity):
 
 
 def rollback_target(app, raw):
-    selected = private.read_json(root(app, False) / ('selection-' + key(raw) + '.json'))
-    if not selected or not selected.get('updateId'):
-        return None
-    record = private.read_json(record_path(app, selected['updateId']))
-    if record and record.get('candidate') == raw and record.get('state') == 'selected':
+    from .managed_runner_binding import rollback_record
+    record = rollback_record(root(app, False), raw, private.read_json)
+    if record:
         return record['previous']['installationId']
     return None
 
@@ -400,8 +399,8 @@ def rollback(app, identity):
     previous = rollback_target(app, raw)
     if not previous:
         return False
-    selected = private.read_json(root(app, False) / ('selection-' + key(raw) + '.json'))
-    record = private.read_json(record_path(app, selected['updateId']))
+    from .managed_runner_binding import rollback_record
+    record = rollback_record(root(app, False), raw, private.read_json)
     restored = record['previous']
     config, status, _ = validate_configuration_value(app, restored)
     if not config or status != 'ready':
@@ -424,9 +423,5 @@ def validate_execution(home, config):
 
 
 def execution_binding(config):
-    value = json.loads(json.dumps(config))
-    for field in ('maxRunning', 'maxInstances', 'minFreeBytes'):
-        value.pop(field, None)
-        if isinstance(value.get('incus'), dict):
-            value['incus'].pop(field, None)
-    return value
+    from .managed_runner_binding import execution_binding as binding
+    return binding(config)
