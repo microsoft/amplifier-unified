@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.187",
+      "title": "Move through Focus and keep Home in context",
+      "changes": [
+        "Browse Focus items with Previous, Next and Start again without dismissing work or changing chat status.",
+        "Keep your Focus position when visiting a chat or project and returning, including after a reload. Changing the search or project scope starts a new pass, even when it has no results.",
+        "Keep Home free of a redundant header label and stale selected-chat highlights. Window titles and chat recovery notices follow the page you are viewing."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.186",
       "title": "Clearer access choices and reliable approval guidance",
       "changes": [
