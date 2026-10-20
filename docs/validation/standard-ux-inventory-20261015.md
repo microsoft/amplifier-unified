@@ -958,3 +958,18 @@ See [Registered test machines](../registered-test-machines.md) for timings,
 evidence boundaries and remaining platform setup work.
 
 Integrated model-capacity, testing settings and existing-chat adoption coverage totals 102 registered scenarios and 145 distinct readiness/extended scripts (144 excluding attachment consumption), preserving the frozen 65-scenario baseline.
+
+
+### Per-chat test queue (October 20)
+
+PR #925 extends the existing `testing-settings-browser.mjs` owner with the global
+Maximum pending checks per chat field. The production service and built client
+passed saved-value readback after a lost acknowledgement, stale-writer refusal
+with retained edits, desktop/narrow controls and cold reopen. The default remains
+1; higher values queue FIFO work behind the chat's single owned environment.
+
+Focused real-dispatch tests cover full counts beyond a displayed page, local and
+remote cleanup boundaries, concurrent scheduler passes, restart and the exact
+initial-allocation cancellation gap. Unknown or advanced owners remain held. This
+is controlled-backend and rendered-client evidence, not live runner deployment.
+No new broad test lane or publication gate is added.

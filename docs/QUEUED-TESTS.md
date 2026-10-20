@@ -1,6 +1,11 @@
 # Host-owned isolated checks
 
-`workspace.tests.submit` admits one bounded check per root conversation. The
+`workspace.tests.submit` queues bounded checks per root conversation. The global
+**Settings → Testing & resources → Advanced execution limits** controls both the
+total pending queue and **Maximum pending checks per chat** (default 1). These
+positive limits count all waiting and active checks, including those beyond the
+first displayed page. Raising the per-chat limit permits a sequence of checks;
+it does not permit overlapping environments for one chat. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
 command once, stops the exact owned environment, exports source and artifacts,
@@ -48,6 +53,12 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   or changed owner becomes unknown and preserves the environment. Automatic
   stop/export/remove requires a recorded terminal guest result. Old queue
   receipts retain their original bounded-execute recovery behavior.
+- Checks from the same chat are admitted in submission order, one at a time,
+  across local and registered remote machines. A later check waits until the
+  earlier check and its owned environment cleanup settle. A terminal unknown
+  result does not free ownership; the retained allocation continues to block
+  later checks until exact cleanup or reconciliation confirms release. Waiting
+  reasons remain visible in the existing check list.
 - A host admits FIFO among its eligible roots. One physical capacity observation
   is shared by a batch; unavailable backends back off to at most one observation
   per minute. Local cleanup wakes the queue immediately. Physical backend

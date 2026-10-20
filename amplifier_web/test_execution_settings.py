@@ -8,12 +8,12 @@ import stat
 import uuid
 from . import test_environment_profiles as profiles
 
-QUEUE_DEFAULTS = {'maxPending': 64, 'defaultWaitSeconds': 3600}
+QUEUE_DEFAULTS = {'maxPending': 64, 'maxPendingPerChat': 1, 'defaultWaitSeconds': 3600}
 PROFILE_FIELDS = (*profiles.RESOURCE_FIELDS, *profiles.TIMING_FIELDS)
 
 
 def definitions(schema, string):
-    queue = schema({key: {'type': 'integer', 'minimum': 1 if key == 'maxPending' else 0,
+    queue = schema({key: {'type': 'integer', 'minimum': 1 if key != 'defaultWaitSeconds' else 0,
                           'maximum': profiles.MAX_SECONDS} for key in QUEUE_DEFAULTS}, [])
     fields = schema({key: {'type': 'integer', 'minimum': 1,
                           'maximum': 1048576 if key in profiles.RESOURCE_FIELDS else profiles.MAX_SECONDS}
@@ -33,7 +33,7 @@ def validate(value):
     if not isinstance(queue, dict) or set(queue) - QUEUE_DEFAULTS.keys():
         raise ValueError('Choose supported queue limits.')
     for key, item in queue.items():
-        if type(item) is not int or not (1 if key == 'maxPending' else 0) <= item <= profiles.MAX_SECONDS:
+        if type(item) is not int or not (1 if key != 'defaultWaitSeconds' else 0) <= item <= profiles.MAX_SECONDS:
             raise ValueError('Queue limits must be whole numbers; maximum pending must be positive.')
     saved = value['profiles']
     if not isinstance(saved, dict) or set(saved) - {item['id'] for item in profiles.catalog()}:

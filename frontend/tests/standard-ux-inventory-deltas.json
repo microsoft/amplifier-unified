@@ -1801,6 +1801,63 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#registered-test-machines-october-20"
+    },
+    {
+      "id": "delta.925",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/925",
+      "reason": "Extend the existing execution-settings workflow with an adjustable per-chat pending limit and explicit serial ownership; reuse the registered browser owner.",
+      "workflowsAdded": [
+        {
+          "id": "settings.per-chat-test-queue",
+          "family": "settings",
+          "title": "Queue several checks from one chat without overlapping environments",
+          "scope": "advanced-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources",
+            "Advanced execution limits"
+          ],
+          "prerequisites": [
+            "Private production AppService fixture and built client; no production policy changes"
+          ],
+          "steps": [
+            "Set Maximum pending checks per chat above the default of 1",
+            "Lose the successful save acknowledgement and reconcile its exact saved values",
+            "Race a newer writer and preserve the rejected draft",
+            "Discard edits and inspect the winning value",
+            "Reopen at narrow width"
+          ],
+          "expectedResults": [
+            "The per-chat limit is global and defaults to 1.",
+            "The same chat runs one environment at a time; later checks wait for confirmed cleanup.",
+            "A lost acknowledgement does not repeat the mutation.",
+            "Stale writers cannot overwrite newer settings or lose their edits.",
+            "Desktop and narrow controls remain usable and the saved limit survives reopening."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Existing registered browser owner extended with per-chat field assertions"
+            },
+            {
+              "path": "tests/test_per_chat_test_queue.py",
+              "relation": "Real submissions, local/remote serialization, full counts, restart, cancellation and retained unknown ownership"
+            }
+          ],
+          "limits": [
+            "Controlled backend effects do not qualify a live physical runner or deployment.",
+            "Root allocation and retained-storage safety bounds are unchanged."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#per-chat-test-queue-october-20"
     }
   ]
 }
