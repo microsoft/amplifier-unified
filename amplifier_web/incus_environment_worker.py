@@ -28,8 +28,10 @@ QUALIFIED_PACKAGES = {
     '0.4.0': '5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39',
     '0.4.1': 'b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06',
     '0.4.2': '0911d18ec7256913253b53ce66520fac2f6cc78d19696a3f7b724a646dd909b8',
+    '0.4.3': '2019e9b6ed0d2a1e882f90d8767f3652a278e9a5df0902efcf2a4a3b869a09ff',
 }
-CURRENT_QUALIFIED_VERSION = '0.4.2'
+CURRENT_QUALIFIED_VERSION = '0.4.3'
+CREATION_RECOVERY_DIGESTS = frozenset(QUALIFIED_PACKAGES[version] for version in ('0.4.2', '0.4.3'))
 OUTPUT_BYTES = 8192
 CONTROL_BYTES = 65536
 EXPORT_BYTES = 8 * 1024 ** 3
@@ -330,10 +332,10 @@ def reconcile(config, env, name, payload, backend, binding_source):
         matches = [item]
     request = cli(config, env, ['launch-status', payload['operationId']])
     matches_owner = request.get('name') == name and request.get('owner_root') == payload['rootOwner']
-    # 0.4.2 records definitive pre-submission rejection and terminal creation
+    # Qualified 0.4.2 and 0.4.3 record definitive pre-submission rejection and terminal creation
     # failure. Exact receipt identity plus an empty actual inventory can settle
     # these attempts; an absent unknown receipt remains unresolved.
-    failed_creation = (config.get('packageSha256') == QUALIFIED_PACKAGES['0.4.2']
+    failed_creation = (config.get('packageSha256') in CREATION_RECOVERY_DIGESTS
                        and request.get('request_id') == payload['operationId']
                        and request.get('state') == 'failed')
     complete = matches_owner and (request.get('state') in {'ready', 'stopped', 'removed'}
@@ -383,7 +385,7 @@ def check_legacy_image(config, env, payload):
 
 def observe(config, env, name, payload, confinement=False):
     request = cli(config, env, ['launch-status', payload['operationId']])
-    failed_instance = (config.get('packageSha256') == QUALIFIED_PACKAGES['0.4.2']
+    failed_instance = (config.get('packageSha256') in CREATION_RECOVERY_DIGESTS
                        and request.get('state') == 'failed' and 'instance_status' in request)
     if request['state'] in {'not_recorded', 'removed', 'failed'} and not failed_instance:
         return request, None

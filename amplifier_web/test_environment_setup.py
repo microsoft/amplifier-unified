@@ -24,7 +24,7 @@ import time
 from filelock import FileLock, Timeout
 
 LEGACY_REPOSITORY = 'https://github.com/microsoft/amplifier-bundle-digital-twin-universe'
-LEGACY_COMMIT = 'f6f4fec229139b239eb16920eef3b1b287ea6843'
+LEGACY_COMMIT = 'ce9219d8dac2770efe0b8270acd8ec017af625c7'
 INCUS_IMAGE_SERVER = 'https://images.linuxcontainers.org'
 INCUS_IMAGE_ALIAS = 'ubuntu/24.04/cloud'
 ACTIVE = {'accepted', 'running'}
