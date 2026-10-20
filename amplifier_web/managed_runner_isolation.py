@@ -45,9 +45,9 @@ def inspect(config, home, row):
     settings = container['HostConfig']
     if (settings.get('Privileged') or settings.get('ReadonlyRootfs') is not True
             or set(settings.get('CapDrop') or []) != {'ALL'}
-            or set(settings.get('CapAdd') or []) != {'CHOWN', 'SETUID', 'SETGID', 'KILL'}
+            or {value.removeprefix('CAP_') for value in settings.get('CapAdd') or []} != {'CHOWN', 'SETUID', 'SETGID', 'KILL'}
             or not any(value in {'no-new-privileges', 'no-new-privileges:true'} for value in settings.get('SecurityOpt', []))
-            or settings.get('Devices') or settings.get('DeviceRequests') or settings.get('Binds')
+            or settings.get('Devices') or settings.get('DeviceRequests')
             or settings.get('PidMode') == 'host' or settings.get('IpcMode') == 'host'
             or settings.get('NetworkMode') == 'host'
             or settings.get('Memory') != expected['memoryMiB'] * 1024**2
@@ -64,6 +64,13 @@ def inspect(config, home, row):
         volume = worker.docker_json(payload, 'volume', 'inspect', mount['Name'])[0]
         if volume.get('Options') or any(volume.get('Labels', {}).get(key) != value for key, value in owner.items()):
             raise ValueError('The test volume is not private to this qualification.')
+    # Docker's legacy Binds field also contains named-volume syntax. The
+    # effective Mounts and inspected volume ownership above are authoritative;
+    # reject any additional or differently mapped bind declaration.
+    binds = settings.get('Binds') or []
+    if binds and (len(binds) != 3 or set(binds) != {
+            item['Name'] + ':' + item['Destination'] + ':rw' for item in mounts}):
+        raise ValueError('Unexpected qualification bind declarations.')
     networks = container.get('NetworkSettings', {}).get('Networks', {})
     if len(networks) != 1:
         raise ValueError('The test service has unexpected network access.')

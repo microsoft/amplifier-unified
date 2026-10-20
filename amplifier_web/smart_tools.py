@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -616,7 +617,8 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
                 environment = _install_environment()
                 if args.get('_runner_qualification') is True:
                     environment['UV_LINK_MODE'] = 'copy'
-                await self._run([uv, "venv", str(install_dir / "venv")], timeout=120, env=environment)
+                interpreter = ["--python", sys.executable] if args.get('_runner_qualification') is True else []
+                await self._run([uv, "venv", *interpreter, str(install_dir / "venv")], timeout=120, env=environment)
                 package = str(_inside(source, info["path"])) + ("[" + ",".join(extras) + "]" if extras else "")
                 await self._run([uv, "pip", "install", "--python", str(python), package], timeout=600, env=environment)
                 row = {**info, "id": identity, "status": "installed", "extras": extras, "installedAt": time.time(), "binDir": str(python.parent), "python": str(python), "sourceDir": str(_inside(source, info["path"])), "nextStep": "Register the tool's documented MCP executable from this bin folder. Installation does not start a server or configure model credentials."}

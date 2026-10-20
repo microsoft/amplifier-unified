@@ -15,7 +15,7 @@ import uuid
 
 MAX_BYTES = 65536
 FIELDS = {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image',
-          'maxRunning', 'maxInstances', 'minFreeBytes', 'python', 'admissionRoot', 'retentionMode', 'remoteRunner', 'capacityPolicyId'}
+          'maxRunning', 'maxInstances', 'minFreeBytes', 'python', 'admissionRoot', 'retentionMode', 'remoteRunner', 'capacityPolicyId', 'runnerQualificationRequired'}
 INCUS_FIELDS = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir',
                 'admissionDir', 'project', 'image', 'daemonFingerprint', 'maxRunning',
                 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory',

@@ -26,12 +26,28 @@ app-qualified permanent exception.
 
 
 Current evidence: the focused runner/batch/Smart Tool/sequence checks passed
-(72 checks), followed by 35 runner boundary checks after adding native isolation
-and retirement coverage. The composed manager cases cover prompt progress,
+(85 checks), followed by the retained configuration regressions. Updated purpose-installed
+generations require exact runtime proof even when their source commit was already
+app-qualified; genuinely legacy setups keep their original compatibility path. The composed manager cases cover prompt progress,
 capacity waiting without the chat lifecycle lock, availability discovery while
 waiting, interrupted stage receipts and unrelated failed-tool independence.
-Actual backend lifecycle and rendered UI acceptance remain pending at this
-source checkpoint. No live Docker qualification is claimed.
+Actual Linux Incus and Docker qualification each completed source snapshot,
+offline owned execution, sentinel artifact export, stop/removal and future-only
+selection. Native observations confirmed the Docker container, volumes and
+network absent; the original Incus adapter reported authoritative absence. Setup
+origin was a private controlled receipt fixture; installation, candidate library,
+transport, backend, durable jobs, artifacts and cleanup were real. No host setup
+or production configuration was changed. A first Docker attempt exposed an
+inspector representation bug, rejected before the check, and cleaned up. Its
+failure was retained; a separate owned attempt passed after normalization of
+native capability names and exact named-volume bind verification.
+
+The built, mounted global Updates UI passed desktop and narrow browser checks
+for capacity wait, unknown outcome, cold reopen, failure and exact Retry/Skip
+result IDs. Native Windows automatic generation promotion remains unsupported;
+passive availability checks return a truthful not-checked state without POSIX
+file calls. Linux and WSL behavior is unchanged. macOS and native Windows backend
+lifecycle qualification are not claimed.
 
 Selection changes cancel future qualification effects and reconcile only the
 original owner. Unknown start/cleanup results retain that owner without replay.

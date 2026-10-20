@@ -228,6 +228,7 @@ async def test_actual_owner_state_machine_checks_and_cleans_once(app, lifecycle)
     record = private.read_json(updates.record_path(app, staged['runnerUpdate']))
     row = environments.get(app.data_dir, 'runner-update-' + record['id'], record['resourceId'])
     assert row['status'] == 'retired' and record['proof']['artifactVerified']
+    assert row.get('directoryIdentity') and environments.storage.directory(app.data_dir, row).is_dir()
     assert (await updates.advance(app, staged['runnerUpdate']))['complete']
     assert calls == ['prepare', 'start', 'job_start', 'stop', 'remove', 'reconcile']
 
@@ -576,3 +577,116 @@ def test_native_incus_isolation_requires_actual_frozen_limits(app, monkeypatch):
     actual['limits.memory'] = '4096MiB'
     with pytest.raises(ValueError, match='limits'):
         isolation.inspect(config, app.data_dir, row)
+
+
+async def test_same_package_qualified_on_new_backend_keeps_first_owner_proof(app, monkeypatch):
+    monkeypatch.setattr(probe, 'advance', qualified)
+    initial = selected(app)
+    first = await updates.stage(app, source(app))
+    await updates.advance(app, first['runnerUpdate'])
+    first_config = environments.configuration(app)[0]
+    other = {**initial, 'dockerHost': 'unix:///owned/other.sock'}
+    private.write_json(app.data_dir / 'test-environments.json', other)
+    private.write_json(private.root(app) / ('e' * 32 + '.json'), {
+        'id': 'e' * 32, 'state': 'completed', 'priorConfiguration': None,
+        'installationId': other['installationId'], 'candidateConfiguration': other,
+        'proof': {'probeRemoved': True}})
+    second = await updates.stage(app, source(app))
+    await updates.advance(app, second['runnerUpdate'])
+    second_config = environments.configuration(app)[0]
+    assert first_config['installationId'] == second_config['installationId']
+    assert updates.qualification_path(app.data_dir, first_config) != updates.qualification_path(app.data_dir, second_config)
+    updates.validate_execution(app.data_dir, first_config)
+    updates.validate_execution(app.data_dir, second_config)
+
+
+async def test_passive_inventory_without_posix_private_file_capabilities(tmp_path, monkeypatch):
+    app = SimpleNamespace(data_dir=tmp_path)
+    for name in ('getuid', 'O_NOFOLLOW', 'O_DIRECTORY'):
+        monkeypatch.delattr(updates.os, name)
+    assert updates.update_sources(app) == []
+    assert not updates.rollback(app, 'unrelated-mcp-installation')
+    assert not updates.referenced(tmp_path, 'unrelated-mcp-installation')
+    await updates.retire(app)
+    (tmp_path / 'test-environments.json').write_text('{}')
+    row = updates.update_sources(app)[0]
+    assert not row['eligible'] and row['status'] == 'not_checked'
+    assert 'not supported on this platform' in row['detail']
+    assert 'not been checked' in row['detail']
+
+
+@pytest.mark.parametrize('changed', [None, 'host-mount', 'extra-capability', 'extra-bind'])
+def test_native_docker_inspection_named_volumes_and_normalized_capabilities(monkeypatch, changed):
+    from amplifier_web import managed_runner_isolation as isolation
+    from amplifier_web import test_environment_worker as worker
+    from amplifier_web import test_environment_profiles as profiles
+    row = {'profileId': 'linux-python', 'resourceRequest': profiles.freeze('linux-python'),
+           'sessionId': 'owner', 'launchOperationId': 'operation', 'universeId': 'test-owned',
+           'backendIdentity': {'daemon': 'daemon'}}
+    limits = profiles.resources(row['profileId'], row['resourceRequest'])
+    owner = {'io.amplifier.root-owner': 'owner', 'io.amplifier.operation-id': 'operation',
+             'com.docker.compose.project': 'test-owned'}
+    mounts = [{'Name': 'owned-' + str(i), 'Type': 'volume', 'Destination': value}
+              for i, value in enumerate(['/workspace', '/artifacts', '/var/lib/unified-jobs'])]
+    settings = {'Privileged': False, 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
+                'CapAdd': ['CAP_CHOWN', 'CAP_KILL', 'CAP_SETGID', 'CAP_SETUID'],
+                'SecurityOpt': ['no-new-privileges:true'],
+                'Binds': [item['Name'] + ':' + item['Destination'] + ':rw' for item in mounts],
+                'Memory': limits['memoryMiB'] * 1024**2, 'NanoCpus': int(limits['cpus'] * 10**9),
+                'PidsLimit': limits['pids'], 'ShmSize': limits['shmMiB'] * 1024**2,
+                'Tmpfs': {'/tmp': 'rw,noexec,nosuid,size=' + str(limits['tmpMiB'] * 1024**2)}}
+    if changed == 'host-mount':
+        mounts[0]['Type'] = 'bind'
+    if changed == 'extra-capability':
+        settings['CapAdd'].append('CAP_SYS_ADMIN')
+    if changed == 'extra-bind':
+        settings['Binds'].append('/private:/private:rw')
+    container = {'Config': {'Labels': owner}, 'HostConfig': settings, 'Mounts': mounts,
+                 'NetworkSettings': {'Networks': {'owned-network': {}}}}
+    def docker(payload, *args):
+        if args[0] == 'info': return {'ID': 'daemon'}
+        if args[0] == 'container': return {'ID': 'container'}
+        if args[0] == 'inspect': return [container]
+        if args[0] == 'volume': return [{'Labels': owner, 'Options': {}}]
+        if args[0] == 'network': return [{'Labels': owner, 'Internal': True}]
+        raise AssertionError(args)
+    monkeypatch.setattr(worker, 'docker_json', docker)
+    if changed:
+        with pytest.raises(ValueError): isolation.inspect({'backend': 'docker'}, '.', row)
+    else:
+        assert isolation.inspect({'backend': 'docker'}, '.', row)['hostMounts'] is False
+
+
+async def test_allowlisted_new_generation_still_requires_exact_runtime_and_retained_proof(app, monkeypatch):
+    candidate = app.smart_tools.state['installations'][1]
+    candidate.update(commit=OLD, runnerCandidate=True)
+    request = {**source(app), 'latest': OLD}
+    staged = await updates.stage(app, request)
+    record = private.read_json(updates.record_path(app, staged['runnerUpdate']))
+    assert record['normalized']['runnerQualificationRequired'] is True
+    with pytest.raises(ValueError, match='not passed'):
+        environments.validate_configuration_value(app, record['candidate'])
+    monkeypatch.setattr(probe, 'advance', qualified)
+    await updates.advance(app, staged['runnerUpdate'])
+    config, status, _ = environments.configuration(app)
+    assert status == 'ready' and config['runnerQualificationRequired']
+    updates.validate_execution(app.data_dir, config)
+    from amplifier_web import test_environment_configs as retained
+    identity = retained.retain(app.data_dir, config)
+    assert retained.resolve(app, {'backendKey': identity, 'backendConfigRetained': True}, None) == config
+    monkeypatch.setattr(updates, 'runtime_identity', lambda *_: {**RUNTIME, 'runtimeSha256': 'd' * 64})
+    with pytest.raises(updates.RunnerUpdateError):
+        updates.validate_execution(app.data_dir, config)
+    # A removed proof cannot silently downgrade a known source revision to the
+    # historical static allow-list path, including retained owner execution.
+    updates.qualification_path(app.data_dir, config).unlink()
+    with pytest.raises(updates.RunnerUpdateError):
+        updates.validate_execution(app.data_dir, config)
+    assert environments.configuration(app)[1] == 'unavailable'
+
+
+def test_legacy_known_generation_keeps_existing_static_execution_path(app, monkeypatch):
+    config, status, _ = environments.configuration(app)
+    assert status == 'ready' and 'runnerQualificationRequired' not in config
+    monkeypatch.setattr(updates, 'runtime_identity', lambda *_: pytest.fail('legacy byte hashing'))
+    updates.validate_execution(app.data_dir, config)

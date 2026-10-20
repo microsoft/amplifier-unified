@@ -74,9 +74,9 @@ def effect(app, path, record, row, config, action):
         effects[action].update(state='returned', result=result)
         save(path, record)
         return result
-    except Exception:
+    except Exception as error:
         # The retained dispatch is the authority after lost acknowledgements.
-        effects[action]['state'] = 'unknown'
+        effects[action].update(state='unknown', errorType=type(error).__name__)
         save(path, record)
         return None
 
@@ -156,6 +156,10 @@ def advance(app, path, record, config):
         raise ValueError('The original qualification backend changed.')
     state = record['probeState']
     if state == 'prepare':
+        if row['status'] == 'prepared':
+            row = environments.storage.allocate(app.data_dir, row)
+        if row['status'] != 'ready' or environments.storage.observe(app.data_dir, row)['observation'] != 'present':
+            return 'unknown'
         result = effect(app, path, record, row, config, 'prepare')
         if result is None:
             # Re-entry revalidates its exact retained daemon/source binding.
@@ -212,8 +216,9 @@ def advance(app, path, record, config):
         if not record.get('isolation'):
             try:
                 proof = isolation.inspect(config, app.data_dir, row)
-            except (OSError, ValueError, RuntimeError):
-                save(path, record, checkPassed=False, probeState='stop')
+            except (OSError, ValueError, RuntimeError) as error:
+                save(path, record, checkPassed=False, probeState='stop',
+                     isolationFailure={'errorType': type(error).__name__, 'detail': str(error)[:1024]})
                 return 'waiting'
             save(path, record, isolation=proof)
         result = effect(app, path, record, row, config, 'job_start')
