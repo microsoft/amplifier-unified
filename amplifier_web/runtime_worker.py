@@ -116,6 +116,7 @@ class Worker:
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
+        cancelled = False
         started = time.monotonic()
         generation = getattr(getattr(self, 'runtime', None), 'generation', None) or {}
         facts = {'type': 'runtime.bridge', 'bridgeId': identity, 'operation': operation,
@@ -139,6 +140,8 @@ class Worker:
             diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
             return result
         except TimeoutError as exc:
+            if timeout is None:
+                raise
             diagnostic('timeout', elapsedSeconds=round(time.monotonic() - started, 3),
                        errorType='TimeoutError')
             raise TimeoutError(
@@ -146,6 +149,7 @@ class Worker:
                 "(transport timeout, not normal coordination.wait expiry)."
             ) from exc
         except asyncio.CancelledError:
+            cancelled = True
             diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
@@ -153,6 +157,10 @@ class Worker:
                        elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         finally:
+            if operation == 'capacity.admit' and args.get('waitForCapacity'):
+                # A local future can disappear while this process stays alive.
+                # Fence the exact host-side wait, including a reply in transit.
+                publish({'op': 'bridge.cancel' if cancelled else 'bridge.received', 'id': identity})
             self.bridges.pop(identity, None)
             if not future.done():
                 future.cancel()

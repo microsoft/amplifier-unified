@@ -4685,6 +4685,9 @@ class AppService:
         if operation == "capacity.admit":
             from .capacity_wait import admit
             return await admit(self, session_id, args)
+        if operation == 'capacity.abandoned':
+            from .capacity import abandoned
+            return await abandoned(self, session_id, args)
         if operation == "history":
             from .history_query import query_history
             return await query_history(self, args, session_id)

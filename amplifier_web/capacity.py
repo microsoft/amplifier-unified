@@ -428,3 +428,25 @@ async def admission(service, session_id, args, *, guard=None, queue_turn=None, o
                 refresh_usage(session['execution'])
                 raise
         return result
+
+
+async def abandoned(service, session_id, args):
+    """Private transport cancellation: preserve an admitted but unacknowledged call."""
+    from .collaboration import PRINCIPAL
+    from .execution import LIVE_PHASES, refresh_usage
+    async with service.lock:
+        session = service._session(session_id)
+        row = args.get('call') or {}
+        native = session.get('runtimeSessionId') or session_id
+        if PRINCIPAL.get() != native or row.get('rootSessionId') != native:
+            return {'retained': False}
+        node = next((n for n in session.get('execution', {}).get('nodes', [])
+                     if n.get('id') == row.get('id') and n.get('kind') == 'llm'
+                     and n.get('producerId') == row.get('producerId')
+                     and n.get('turnId') == row.get('turnId')), None)
+        if node and node.get('admittedAt') and not node.get('endedAt') and node.get('phase') in LIVE_PHASES:
+            node['phase'] = 'outcome_unknown'
+            refresh_usage(session['execution'])
+            service._publish_changes(sessions={session_id})
+            return {'retained': True}
+        return {'retained': False}

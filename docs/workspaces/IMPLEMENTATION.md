@@ -1388,3 +1388,13 @@ host. The default permits 256 waiting calls with no time limit; the user can cha
 both values. A zero timeout waits until capacity or cancellation. A configured
 expiry reports that no provider request was sent and does not save a budget pause.
 Policy changes wake existing waits; they neither restart nor replay any work.
+
+Individual cancellation of a worker's waiting model call sends a capacity-only
+transport cancellation for that exact bridge ID. The host retains its per-worker
+lookup until the worker consumes the reply, so cancellation also covers a reply
+in transit. A waiting entry is removed without stopping the worker. If admission
+already persisted a matching receipt, cancellation marks that unended receipt
+outcome unknown and retains its reservation; it does not infer that a provider
+was never invoked or free capacity. Unknown IDs, another worker's frames, and
+late cancellation after reply consumption cannot change another call. Unrelated
+mutation bridges retain their existing completion behavior.
