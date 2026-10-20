@@ -97,7 +97,7 @@ try{
  await action('view.update',{patch:{panel:null}});await page.getByRole('button',{name:'New chat',exact:true}).click();
  await page.getByRole('button',{name:'Choose project',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
- await page.getByRole('button',{name:'Browse',exact:true}).click();
+ await page.getByRole('form',{name:'Use existing folder',exact:true}).getByRole('button',{name:'Browse',exact:true}).click();
  await page.getByRole('button',{name:'New folder',exact:true}).click();
  const folder=page.getByRole('textbox',{name:'New folder name',exact:true});
  await folder.fill('first-folder');await page.getByRole('button',{name:'Create folder',exact:true}).click();
