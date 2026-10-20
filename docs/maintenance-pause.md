@@ -131,3 +131,23 @@ update-owner change; a stale absent-worker observation is not sufficient proof.
 Native qualification uses deterministic synthetic providers and counted effects.
 It proves the exercised Core/Foundation and loop ownership, not remote-provider
 cancellation, live-account parity or untested Windows descendant termination.
+
+## Maintained acceptance ownership
+
+The investigation's eleven requested smoke areas have explicit owners below.
+Component, native-process and browser evidence remain distinct; passing one
+does not imply that every combination or platform was exercised.
+
+| Area | Maintained checks and explicit limits |
+| --- | --- |
+| Model, finite delegate and persistent child boundaries | `test_native_maintenance_pause.py`; `maintenance_native_probe.py` restart/completed-job modes. Actual Core/Foundation with deterministic providers; no live-provider claim. |
+| Pause outside Updates and same-host Resume | `maintenance-controls-browser.mjs`; host receipt tests preserve private drafts and canonical authority. |
+| Restart and independent clients | Native restart probe preserves root/child identity and counted effect; maintained browser checks a second client's reconnect. These are separate composed layers, not a live multi-device update claim. |
+| Admission after awaited locks | `test_maintenance.py`, runtime maintenance admission checks, queued settings and test-environment owner regressions. |
+| Pending child results and approvals | Completed-job and approval native probe modes. Pending approval waits; denial settles. Approval is never answered automatically or serialized as a reusable token. |
+| Later Stop, edit, policy, task, assignment or ownership | Exact binding and once-only claim checks in `test_maintenance.py`; runtime guard runs before resumed effects. |
+| Slow/hung accepted effects | Native held-tool probe waits beyond the old shutdown grace with no automatic escalation. External side effects cannot be undone. |
+| Independent emergency Stop | Actual owned POSIX process groups and inspectable HTTP host in native emergency mode. Windows descendants remain unqualified. |
+| Persistence failure, lost acknowledgement and duplicate command | Host SQLite failure/claim tests, streaming checkpoint-failure tests and browser same-ID lost-reply retry. Unknown consumed claims are not reissued. |
+| Schedules and accepted versus unsubmitted queues | Maintained schedule/queued-settings/test-owner regressions; disabled and missed occurrences remain under their original owners. |
+| Desktop/mobile focus and confirmation | Maintained browser checks Tab, Shift+Tab, Escape, Cancel, stale target and paged owner details. |

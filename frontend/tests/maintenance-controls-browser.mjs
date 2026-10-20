@@ -36,6 +36,16 @@ try{
  await expect(controls()).toContainText('New work is held');
  report.timings.pauseHoldVisibleMs=Date.now()-pauseAt;
  assert.equal((await evidence()).maintenance.held,true);
+ const peer=await browser.newPage({viewport:{width:850,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ try{
+  await peer.goto(boot.url);await peer.waitForSelector('#amp-one');await showFixtureConversation(peer);
+  const peerActivity=peer.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/});
+  if(!await peerActivity.isVisible())await peer.getByRole('button',{name:'Open navigation',exact:true}).click();
+  await peerActivity.click();await expect(peer.locator('[data-part="host-maintenance"]:visible')).toContainText('New work is held');
+  await peer.reload();await expect(peer.locator('[data-part="host-maintenance"]:visible')).toContainText('New work is held');
+  assert.equal((await evidence()).calls.filter(row=>row.operation==='pause').length,1);
+ }finally{await peer.close()}
+ report.checks.push('A separate browser observes the same durable hold after reconnect without replay');
  await expect(controls()).not.toContainText('All tracked work is paused');
  await expect(controls().getByRole('button',{name:'Resume paused work',exact:true})).toBeDisabled();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
