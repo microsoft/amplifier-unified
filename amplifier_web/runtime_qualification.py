@@ -300,6 +300,16 @@ async def freeze(manager, generation, project):
         vcs = (record or {}).get('directUrl', {}).get('vcs_info', {})
         if name in policies and vcs.get('commit_id') == source.fragment and ref:
             policies[name]['ref'] = ref
+    checked_path = receipt / 'runtime-sources.json'
+    checked = json.loads(checked_path.read_text()) if checked_path.exists() else {}
+    installed = environments.installed_sources(project, graph=graph, tracked=checked)
+    for name, policy in checked.items():
+        source = installed.get(name, {})
+        if (source.get('override') or source.get('current') != policy['revision']
+                or source.get('url') != policy['url']
+                or source.get('subdirectory', '') != policy.get('subdirectory', '')):
+            raise ValueError('The installed worker differs from its checked source policy.')
+        policies[name] = policy
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')
     content = frozen_manifest(environments.manifest_path().read_bytes(), graph)
