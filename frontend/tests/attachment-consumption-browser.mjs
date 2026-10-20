@@ -3,7 +3,7 @@
 import './composer-test-helpers.mjs';
 import {installAttachmentObserver} from './attachment-consumption-observer.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
-import {bounded,withActionRoute,observed,resultOf} from './chat-reference-harness.mjs';
+import {bounded,withActionRoute,observed,resultOf,combinedFailure} from './chat-reference-harness.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -24,6 +24,17 @@ await mkdir(output,{recursive:true});
 const save=()=>writeFile(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');
 await save();
 let browser,base,primary,stderr='',fixtureExit;
+const secondaryErrors=[],seenFailures=new Set();
+function rememberFailure(error,phase,caseId){
+ const failures=error instanceof AggregateError?[...(error.cause?[error.cause]:[]),...error.errors]:[error];
+ for(const failure of failures){
+  if(failure instanceof AggregateError){rememberFailure(failure,phase,caseId);continue;}
+  if(seenFailures.has(failure))continue;seenFailures.add(failure);
+  const detail={phase,caseId,name:failure.name,message:failure.message,stack:failure.stack};
+  if(!primary){primary=failure;report.primary=detail;}
+  else {secondaryErrors.push(failure);(report.secondaryErrors??=[]).push(detail);}
+ }
+}
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python'),
  ['-u',join(fixtureRoot,'attachment_consumption_ui_server.py')],{stdio:['ignore','pipe','pipe']});
 const ownedStop=ownFixture(fixture,{label:'Attachment consumption fixture'});
@@ -76,7 +87,7 @@ async function setupPage(){
  await context.route('**/*',route=>new URL(route.request().url()).origin===base?route.continue():route.abort('blockedbyclient'));
  await context.addInitScript(installAttachmentObserver);
  const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
- page.on('pageerror',error=>report.errors.push(error.message));
+ page.on('pageerror',error=>{report.errors.push(error.message);rememberFailure(error,'pageerror');});
  try{
   await page.goto(base);
   await page.waitForFunction(()=>!!window.amplifier?.getState()?.client?.id,null,{timeout:15000});
@@ -89,19 +100,38 @@ async function setupPage(){
   await call(page,'session.select',{id:owner});
   await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
   return {context,page,owner,other};
- }catch(error){await bounded(context.close(),10000,'Startup context close');throw error;}
+ }catch(error){
+  const cleanup=[];
+  try{await bounded(context.close(),10000,'Startup context close');}catch(closeError){cleanup.push(closeError);}
+  throw combinedFailure(error,cleanup);
+ }
 }
 
 async function detector(page,owner){
  const id='f'.repeat(32);
  await page.locator('.a-composer').evaluate((form,id)=>{const marker=document.createElement('a');marker.href='/api/attachments/'+id;marker.textContent='Synthetic detector control';marker.id='attachment-detector-control';form.append(marker);},id);
  await watch(page,owner,[id]);
- await page.locator('#attachment-detector-control').evaluate(node=>node.remove());await consumed(page,[id]);
- // A deliberate synchronous add/remove is not a product failure. It proves the
- // mutation sensor retains a node even when final DOM and a frame sample miss it.
- await page.locator('.a-composer').evaluate((form,id)=>{const marker=document.createElement('a');marker.href='/api/attachments/'+id;form.append(marker);marker.remove();},id);
+ // Initial clear, uncached wrapper insertion, then empty/remove the wrapper in
+ // ONE task. Final DOM/live addedNodes alone cannot recover the intermediate ID.
+ await page.locator('.a-composer').evaluate((form,id)=>{
+  form.querySelector('#attachment-detector-control').remove();
+  const wrapper=document.createElement('span'),marker=document.createElement('a');
+  marker.href='/api/attachments/'+id;wrapper.append(marker);form.append(wrapper);
+  marker.remove();wrapper.remove();
+ },id);
+ await consumed(page,[id]);
  const synchronous=await trace(page);
- assert.ok(synchronous.violations.some(row=>row.id===id&&row.kind==='added-node'),'Detector must reject same-task transient reappearance');
+ assert.ok(synchronous.violations.some(row=>row.id===id&&row.owner===owner&&row.kind==='added-node'),'Detector must reject initial-clear/same-task emptied-wrapper reappearance');
+ const firstClear=synchronous.events.findIndex(row=>row.kind==='optimistic-clear-observed'&&row.id===id);
+ const firstReturn=synchronous.events.findIndex(row=>row.kind==='added-node'&&row.id===id);
+ assert.ok(firstClear>=0&&firstReturn>firstClear,'Removal arms before later addition in the same batch');
+ const foreignId='e'.repeat(32);
+ await page.evaluate(([owner,id])=>window.attachmentTrace.watch(owner,[id],true),['different-fixture-owner',foreignId]);
+ await page.locator('.a-composer').evaluate((form,id)=>{const marker=document.createElement('a');marker.href='/api/attachments/'+id;form.append(marker);marker.remove();},foreignId);
+ assert.equal((await trace(page)).violations.some(row=>row.id===foreignId),false,'Different-chat rule cannot create a violation in this owner');
+ const beforeEmpty=(await trace(page)).violations.length;
+ await page.locator('.a-composer').evaluate(form=>{const wrapper=document.createElement('span');form.append(wrapper);wrapper.remove();});
+ assert.equal((await trace(page)).violations.length,beforeEmpty,'An empty wrapper cannot inherit stale cached IDs');
  await page.locator('.a-composer').evaluate((form,id)=>{const marker=document.createElement('a');marker.href='/api/attachments/'+id;marker.textContent='One-frame detector control';form.append(marker);requestAnimationFrame(()=>requestAnimationFrame(()=>marker.remove()));},id);
  await frames(page,4);
  const data=await trace(page);assert.equal(data.capped,false);assert.ok(data.violations.some(row=>row.id===id&&row.kind==='animation-frame'),'Detector must reject a presented-frame candidate');
@@ -207,13 +237,19 @@ async function recovery(page,owner,mode){
   await page.reload();await expect(composer).toHaveDraft('New unknown draft');
   const check=page.getByRole('button',{name:'Check delivery',exact:true});await expect(check).toBeVisible();
   const result=observed(call(page,'conversation.delivery',{sessionId:owner,inputId:input}));
-  await resultOf(result);
+  const delivery=await resultOf(result);
+  assert.equal(delivery.result?.delivery,'unknown','Explicit inspection must retain UNKNOWN without positive evidence');
  }else await expect(page.getByRole('button',{name:'Retry',exact:true})).toBeVisible();
  await frames(page);
  const after=await observation(page,mode+' recovery retained');
+ await expect(composer).toHaveDraft('New '+mode+' draft');
+ assert.equal(after.selectedSessionId,owner,'Recovery remains bound to the original chat');
+ assert.equal(after.drafts[owner],'New '+mode+' draft','Final saved newer draft is retained');
+ assert.ok(after.attachments[owner]?.some(x=>x.id===row.id),'Final original attachment association remains with its exact owner');
  assert.equal(after.sends.filter(x=>x.sessionId===owner).length,1,'Recovery inspection/reload must not replay');
  const rows=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')||'[]'));
  const retained=rows.find(x=>x.commandId===input);assert.ok(retained);
+ assert.equal(retained.sessionId,owner);assert.equal(retained.status,expected);
  assert.deepEqual(retained.attachmentIds,[row.id]);assert.equal(retained.text,'Retain '+mode+' submission');
  await original(page,row);
 }
@@ -234,25 +270,30 @@ try{
    else if(row.id==='accepted-two-cycle')await twoCycles(page,env.owner,env.other);
    else await recovery(page,env.owner,row.id==='failed-recovery'?'failed':'unknown');
    row.status='passed';
-  }catch(error){row.status='failed';row.error=error.message;primary??=error;}
+  }catch(error){row.status='failed';row.error=error.message;rememberFailure(error,'case',row.id);}
   finally{
    if(page&&!page.isClosed()){
-    try{report.traces.push({label:row.id+' terminal',...await trace(page)});await control(page,{op:'release-all'});}
-    catch(error){row.status='failed';row.cleanupError=error.message;primary??=error;}
+    try{report.traces.push({label:row.id+' terminal',...await trace(page)});}
+    catch(error){row.status='failed';(row.cleanupErrors??=[]).push(error.message);rememberFailure(error,'terminal-trace',row.id);}
+    try{await control(page,{op:'release-all'});}
+    catch(error){row.status='failed';(row.cleanupErrors??=[]).push(error.message);rememberFailure(error,'release-all',row.id);}
    }
-   if(context)try{await bounded(context.close(),10000,'Case browser-context cleanup');}catch(error){row.status='failed';row.cleanupError=error.message;primary??=error;}
+   if(context)try{await bounded(context.close(),10000,'Case browser-context cleanup');}
+   catch(error){row.status='failed';(row.cleanupErrors??=[]).push(error.message);rememberFailure(error,'context-close',row.id);}
    await save();
   }
  }
  assert.deepEqual(report.errors,[],'Browser page errors');
  if(primary)throw primary;
-}catch(error){primary=error;report.error=error.message;}
+}catch(error){rememberFailure(error,'outer');report.error=primary.message;}
 finally{
- try{await finishFixture({label:'Attachment consumption',close:[['Chromium',()=>browser?.close()]],stop,originalError:primary});}
- catch(error){primary??=error;report.cleanupError=error.message;}
+ // Ask the existing helper to throw its complete cleanup aggregate, so failures
+ // are retained here rather than only printed behind an earlier primary.
+ try{await finishFixture({label:'Attachment consumption',close:[['Chromium',()=>browser?.close()]],stop});}
+ catch(error){report.cleanupError=error.message;rememberFailure(error,'fixture-browser-cleanup');}
  report.fixtureExit=fixtureExit||null;report.complete=report.cases.every(row=>['passed','failed'].includes(row.status));
  report.passed=!primary&&report.complete&&report.cases.every(row=>row.status==='passed')&&fixtureExit?.code===0;
  report.fixtureStderr=stderr;await save();
 }
-if(!report.passed)throw primary||Error('Attachment consumption evidence incomplete');
+if(!report.passed)throw combinedFailure(primary,secondaryErrors)||Error('Attachment consumption evidence incomplete');
 console.log('Attachment consumption: actual host/browser two-cycle journey and recovery passed; synthetic runtime, no native/provider claim.');
