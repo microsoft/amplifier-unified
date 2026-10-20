@@ -51,3 +51,48 @@ remote effects can already be paused.
 Changes to the public loop capability are reviewed alongside Unified. Supported
 safe-boundary suspension must be distinguished from adapters that can only drain
 or cancel. No Spark-1 adoption, main merge or release is part of this work.
+
+## Host authority and native handoff
+
+`amplifier_web.maintenance.Maintenance` owns the durable host epoch and bounded
+root receipts in the application database. Its `hostMaintenance` shell projection
+is separate from the existing backup/repair `maintenance` results. The ordinary
+projection contains counts and readiness only; `maintenance.status` pages exact
+root receipts. Pause and emergency Stop commit admission closed before requesting
+runtime work. Existing command receipts remain passive, including after restart.
+Failed storage keeps in-process admission closed; an incomplete write is never
+claimed as a durable pause.
+
+The runtime exposes a synchronous owned-root inventory and asynchronous pause,
+resume and Stop requests. It installs the owner's awaited receipt observer,
+once-only resume authorizer, non-consuming current-policy resume guard,
+synchronous final admission guard, and canonical session loader. The admission
+guard must not reenter the service lock. The loader permits paused-only remount;
+it does not grant permission to execute. The runtime must require an accepted,
+persisted observer response before reporting a safe boundary. An existing-worker
+inspection may proceed while maintenance is held, but a new worker start still
+checks the manager's final admission boundary.
+
+The inventory is bounded to 512 roots, 256 children per root and 100 input IDs per
+root. A proof may include up to five original generation/input descriptors (the
+root and four background jobs), four exact job origins, and accepted pending input
+IDs that do not yet belong to a generation. Their input union must match the root
+receipt. A root may become terminal while an already-owned background job
+suspends only when explicit terminal evidence preserves its original origin.
+Finite children need no invented loop generation: native session, parent, tool
+call and checkpoint identities bind them to the original completion owner.
+Changing or missing input/job identities cannot be repaired by replay.
+
+Resume claims persist before runtime unlock. A lost claim/response or an
+interrupted host operation becomes uncertain and is not replayed on startup.
+Explicit Resume can reopen admission while leaving uncertain, blocked or
+unsupported roots untouched. Current Stop, task, history, placement, ownership,
+configuration and budget checks apply again to every resumed effect. Disabled
+schedules remain disabled; the canonical scheduler records occurrences missed
+during the hold as skipped, including schedules configured to run the latest
+missed occurrence.
+
+The maintained owner checks are in `tests/test_maintenance.py`; adjacent service,
+schedule, collaboration input and force-restart checks cover admission and the
+unchanged update confirmation boundary. These checks alone do not qualify native
+checkpoint contents, provider behavior, browser controls or installed packaging.

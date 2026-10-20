@@ -679,7 +679,10 @@ class Management:
                 raise ValueError('Restore this project folder before continuing its chat.')
         if not self.service.runtime:raise ValueError('Amplifier runtime is unavailable')
         from .updates import work_paused
-        if work_paused(self.service.state):raise ValueError('An update is activating; retry shortly')
+        # Existing paused workers remain inspectable. RuntimeManager checks
+        # maintenance at its final new-start admission boundary; it must not
+        # turn an existing-worker inspection into an execution permission.
+        if work_paused(self.service.state, include_maintenance=False):raise ValueError('An update is activating; retry shortly')
         # Explicitly using runtime controls makes this a web-owned presentation.
         if session.get('historyManaged') and not session.get('historyLoaded'):
             await self.service.history.ensure_loaded(session['id'])

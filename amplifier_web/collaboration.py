@@ -1400,6 +1400,9 @@ class Collaboration:
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
                 return duplicate
+            if action in {'coordination.create', 'coordination.send'}:
+                from .maintenance import require_open
+                require_open(self.service)
             if args.get("grantId"):
                 self.error("Legacy grant-bearing writes are unsupported. Read the original receipt; do not replay it as new work.", 410)
             creation = CREATION.get()

@@ -385,6 +385,8 @@ from .configuration_recovery import definitions as configuration_recovery_defini
 ACTION_DEFINITIONS.update(configuration_recovery_definitions(schema, string))
 from .patch_placement import definitions as patch_placement_definitions
 ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
+from .maintenance import definitions as maintenance_definitions
+ACTION_DEFINITIONS.update(maintenance_definitions(schema, string))
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -437,6 +439,7 @@ for _access, _actions in {
         *test_queue_definitions(schema, string),
         *assignment_definitions(schema, string),
         *handoff_definitions(schema, string),
+        *maintenance_definitions(schema, string),
     },
 }.items():
     for _action in _actions:
@@ -717,6 +720,8 @@ class AppService:
         self.access_mode = AccessMode(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
+        from .maintenance import Maintenance
+        self.maintenance = Maintenance(self)
         from .test_queue import TestQueue
         self.test_queue = TestQueue(self)
         from .peer_attribution import PeerAttribution
@@ -1704,6 +1709,7 @@ class AppService:
         if runtime is not None and hasattr(runtime, "home"):
             runtime.home = self.data_dir
         self.worktrees.bind_runtime()
+        self.maintenance.bind_runtime()
         self.state["runtime"]["available"] = runtime is not None
         if hasattr(runtime, "retention"):
             self.state["runtime"]["retention"] = dict(runtime.retention.settings)
@@ -1877,6 +1883,9 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
+        from .maintenance import ACTIONS as maintenance_actions
+        if action in maintenance_actions:
+            return await self.maintenance.dispatch(action, args, origin, command_id, admission_check)
         if resolved_target is not None and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
@@ -2233,6 +2242,8 @@ class AppService:
                     return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
                 if admission_check is not None:
                     admission_check()
+                from .maintenance import require_open
+                require_open(self)
                 if expected_revision is not None and expected_revision != self.state['revision']:
                     raise AppError('The app changed. Refresh its state and retry.', 409)
                 try:
@@ -2431,6 +2442,9 @@ class AppService:
             # existing receipt replay above and already accepted work stay intact.
             if admission_check is not None:
                 admission_check()
+            from .maintenance import require_open, starts_work
+            if starts_work(action, args):
+                require_open(self)
             self.configuration_authority.check(configuration_authority)
             guard_history_action(self, action, args, origin, caller_session_id)
             if checked_session:
@@ -3141,6 +3155,7 @@ class AppService:
                     pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"))
+                self.maintenance.invalidate(session['id'], 'A later user Stop superseded maintenance resume.')
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 session["status"] = "stopping"
@@ -3171,6 +3186,7 @@ class AppService:
                 if action == "worker.message" and (not worker.get("persistent") or worker.get("status") not in {"idle", "running"}):
                     raise AppError("This worker cannot receive a follow-up.", 409)
                 if action == "worker.stop":
+                    self.maintenance.invalidate(session['id'], 'A child Stop superseded maintenance resume.')
                     worker["interruptionRevision"] = worker.get("interruptionRevision", 0) + 1
                     worker["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 method = self.runtime.stop_worker if action == "worker.stop" else self.runtime.message_worker if action == "worker.message" else self.runtime.steer_worker
@@ -4885,8 +4901,6 @@ class AppService:
             self._check_voice_owner(self._session(session_id)['id'], transfer_id)
         input_context = await self.surface_context.checkpoint(self._session(session_id)['id'])
         async with self.lock:
-            if work_paused(self.state):
-                raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
             session = self._session(session_id)
             self._check_voice_owner(session['id'], transfer_id)
             if session.get("configurationBusy"):raise AppError("Applying conversation settings; retry shortly.",409)
@@ -4899,6 +4913,10 @@ class AppService:
                 if previous[0] != fingerprint:
                     raise AppError("This voice command ID was already used with different contents.", 409)
                 return {**json.loads(previous[1]), "duplicate": True}
+            from .maintenance import require_open
+            require_open(self)
+            if work_paused(self.state):
+                raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
             receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending"}
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             # The voice owner supplies the captured utterance ID. Text alone
