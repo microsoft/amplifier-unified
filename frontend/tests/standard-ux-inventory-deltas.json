@@ -1427,6 +1427,71 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#adaptive-home-october-19"
+    },
+    {
+      "id": "delta.914",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/914",
+      "reason": "Busy assignment calls wait automatically; global Advanced settings control waiting without per-workspace setup.",
+      "workflowsAdded": [
+        {
+          "id": "settings.model-capacity",
+          "family": "settings",
+          "title": "Set global model waiting limits and recover an uncertain save",
+          "scope": "advanced-path",
+          "entryPath": [
+            "Settings",
+            "Advanced",
+            "Performance & runtime",
+            "Model capacity"
+          ],
+          "prerequisites": [
+            "Production built client and AppService in an owned disposable host",
+            "Synthetic runtime; no paid provider calls or live settings changes"
+          ],
+          "steps": [
+            "Save finite waiting limits",
+            "Change the same policy from another client and attempt a stale save",
+            "Keep private edits until explicitly discarding them for the newer saved values",
+            "Save unlimited waiting, lose the response after commit, and reopen",
+            "Check the same save and inspect its original command receipt",
+            "Cancel closing with an unsaved draft on a narrow layout",
+            "Discard the draft and verify saved values on cold reopen"
+          ],
+          "expectedResults": [
+            "Settings apply to all current and new workspaces on this host.",
+            "A stale save cannot overwrite newer settings; private edits survive.",
+            "Checking a lost save reuses its exact command identity and contents and produces no second mutation.",
+            "Changing waiting policy starts or stops no worker and preserves selection.",
+            "Desktop and narrow layouts remain usable and saved values survive reopening."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "two-clients",
+            "lost-response",
+            "cold-reopen"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/model-capacity-settings-browser.mjs",
+              "relation": "Registered browser owner using the production service and built UI"
+            },
+            {
+              "path": "tests/test_model_admission_wait.py",
+              "relation": "Capacity waits, cancellation, identity, settings, and spending boundaries"
+            },
+            {
+              "path": "frontend/tests/model-capacity-settings.test.mjs",
+              "relation": "Settings state, command retry, stale edits, and waiting presentation"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime qualification is not live-provider or throughput evidence.",
+            "Waiting policy does not raise spending or assignment concurrency limits."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#model-capacity-waiting-settings--october-20"
     }
   ]
 }
