@@ -37,6 +37,14 @@ pages have no external resources and suppress cross-origin referrers. Old hosts 
 unsupported result; existing manual-token connections continue to work unchanged.
 
 
+## Consumers
+
+[Desktop clients](desktop-clients.md) use this platform-neutral approval seam.
+Amplifier for Mac stores the credential in Keychain; a future Windows client owns
+its OS credential-storage implementation. Neither platform name nor app bundle
+identity enlarges `companion-v1`. This guide remains the authority for pairing;
+platform contracts reference it instead of copying the protocol.
+
 ## Credential and client isolation
 
 Companion credentials use the distinct `amc_` family. Existing `amt_` terminal

@@ -23,6 +23,8 @@ journeys, and a record of the product owner's decisions.
 | --- | --- |
 | [Vision](VISION.md) | The experience we want across clients and devices. |
 | [CX: client experience](../../contracts/client-experience.v1.md) | Observable journeys and common action meanings. |
+| [DC: desktop client](../../contracts/desktop-client.v1.md) | Shared desktop journeys; Mac preview and planned Windows consumer. |
+| [Desktop consumers and evidence](desktop-clients.md) | Current ownership, compatibility limits, DJ1–7 and gap-derived work. |
 | [CS: client state](../../contracts/client-state.v1.md) | Ownership, scoped synchronization, configuration and recovery boundaries. |
 | [CD: client development](../../contracts/client-development.v1.md) | How parallel implementations change together without sharing internals. |
 | [State scope map](state-scopes.md) | Concrete examples of shared, host-local and client-local state. |
@@ -40,11 +42,12 @@ describe the intended behavior, not undocumented capabilities in wire v1.
 
 | Boundary | Home | Consumers |
 | --- | --- | --- |
-| Shared client experience/state | This contract set, initially in Unified | Web, connected TUI, future native clients, agent adapters |
+| Shared client experience/state | This contract set, initially in Unified | Web, connected TUI, Amplifier for Mac, planned Windows client, agent adapters |
 | Target AHP/ACP wire semantics | Upstream specifications; HP/AP delegate to them | Every target client, host and agent adapter |
 | Legacy HTTP/SSE and action schemas | Unified wire guide and service schemas during migration | Existing clients |
 | Storage/configuration/ownership mechanisms | Foundation's APIs and contracts | Unified, standalone CLI/TUI, other hosting apps |
 | Execution admission, lifecycle, update generation | Unified host/runtime contracts | Connected clients and runtime integrations |
+| Desktop platform presentation and distribution | Each platform client’s vision/contracts; shared behavior stays in DC/CX/CS | Mac; planned Windows |
 | Terminal rendering, scrollback, keybindings | TUI's own vision/contracts | TUI frontends and its host adapter |
 | Web layout and widgets | Proposed separate web client repo | Browser/embedded-web experiences |
 | Current implementation and release status | Assessment, work plan and validation records | Maintainers and release reviewers |

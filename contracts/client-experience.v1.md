@@ -5,7 +5,8 @@ These are proposed observable behaviors, not a claim of current parity.
 
 ## Who builds against this
 
-Web, TUI and future native client builders, the Unified host, and acceptance reviewers.
+Web, TUI, Amplifier for Mac and future Windows client builders, the Unified host,
+and acceptance reviewers. [DC](desktop-client.v1.md) specializes desktop journeys.
 Platform implementations retain their own presentation contracts.
 
 ## What it is
@@ -102,6 +103,7 @@ Which existing names should be normalized without making platform commands unfam
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-20 | Identify desktop consumers and DC; preserve CX1–8. | [Desktop coordination record](../docs/clients/desktop-clients.md). |
 | 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../docs/ux/decisions/20261020.md). |
 | 2026-10-13 | Add CX8: interaction economy without clutter or lost authority. | User direction: UX is golf; minimize strokes. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
