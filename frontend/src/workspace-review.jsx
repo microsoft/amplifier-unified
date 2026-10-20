@@ -53,7 +53,7 @@ export function WorkspaceReview({dispatch,sessionId,workspace,requests=[],onOpen
     {!value.items.length&&<p>No chats on this page. Refresh to read current workspace membership.</p>}
     {value.items.map(row=><article key={row.sessionId} data-review-chat={row.sessionId}>
      <h4>{row.title}{row.sessionId===sessionId?' (this chat)':''}</h4>
-     <p>{row.executionUnverified?'Previously active; current execution unverified':statuses[row.status]||row.status}{row.activityObserved?'':' · Saved status'} · {row.commissioned?'Commissioned chat':'Independent chat'}</p>
+     <p>{row.executionUnverified?'Previously active; current execution unverified':statuses[row.status]||row.status}{row.activityObserved?'':' · Saved status'} · {row.commissioned?'Commissioned chat':'Started independently'}</p>
      <ul>{reviewSteps(row).map(step=><li key={step}>{step}.</li>)}</ul>
      {!!row.unverifiedApprovals&&<p>{row.unverifiedApprovals} saved permission requests have no observed live waiter. They may have expired after restart.</p>}
      {!!row.expiredApprovals&&<p>{row.expiredApprovals} earlier permission requests expired. Inspect the saved work before asking again.</p>}

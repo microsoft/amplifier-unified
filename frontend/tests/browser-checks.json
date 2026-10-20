@@ -45,6 +45,7 @@
     {"id": "memory-personalization", "command": ["node", "tests/memory-personalization-browser.mjs"]},
     {"id": "publishing", "command": ["node", "tests/publishing-browser.mjs"]},
     {"id": "portability", "command": ["node", "tests/portability-browser.mjs"]},
+    {"id": "testing-settings", "command": ["node", "tests/testing-settings-browser.mjs"]},
     {"id": "settings", "command": ["node", "tests/settings-browser.mjs"]},
     {"id": "configuration-recovery-components", "command": ["node", "--test", "tests/configuration-recovery.test.mjs"]},
     {"id": "configuration-recovery", "command": ["node", "tests/configuration-recovery-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/configuration-recovery"}},
@@ -100,6 +101,8 @@
     {"id": "coordination", "command": ["node", "tests/coordination-browser.mjs"]},
     {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]},
     {"id": "test-environments", "command": ["node", "tests/test-environments-browser.mjs"], "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python", "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/test-environments"}},
-    {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}}
+    {"id": "assignment-adoption", "command": ["node", "tests/assignment-adoption-browser.mjs"]},
+    {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}},
+    {"id": "model-capacity-settings", "command": ["node", "tests/model-capacity-settings-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/model-capacity-settings"}}
   ]
 }

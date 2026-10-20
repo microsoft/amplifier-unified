@@ -39,7 +39,7 @@ export function WorkspaceAwareness({dispatch,sessionId,context,refresh}){
    <details><summary>Your execution folder</summary><code>{awareness.own.executionDirectory}</code>{awareness.own.executionDirectoryTruncated&&' (shortened)'}</details>
    {!shown.peers.length&&<p>No other active chats observed in this workspace.</p>}
    {shown.peers.map(peer=><article key={peer.sessionId} data-active-peer={peer.sessionId}>
-    <strong>{peer.title||'Untitled chat'}</strong> · {peer.status} · {peer.kind==='root'?(peer.commissionedBy?'Commissioned chat':'Independent chat'):'Observed child or internal task'}
+    <strong>{peer.title||'Untitled chat'}</strong> · {peer.status} · {peer.kind==='root'?(peer.commissionedBy?'Commissioned chat':'Started independently'):'Observed child or internal task'}
     <p>{peer.sameExecutionDirectory?'Shares your execution folder':'Uses a different execution folder'}{peer.declaredOverlap&&' · Declared files overlap'}</p>
     {!peer.sameExecutionDirectory&&<details><summary>Execution folder</summary><code>{peer.executionDirectory}</code>{peer.executionDirectoryTruncated&&' (shortened)'}</details>}
     {peer.intent.status!=='unavailable'&&!peer.intent.pathCount&&<p className="a-caption">No files declared; overlap is unknown.</p>}

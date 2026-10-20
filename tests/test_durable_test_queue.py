@@ -19,7 +19,7 @@ def running(monkeypatch, backend, queue):
     if hasattr(environments, 'dependencies'):
         # This fixture controls lifecycle/guest effects. Image preparation has
         # its own physical acceptance; never download/build from a unit fixture.
-        monkeypatch.setattr(environments.dependencies, 'prepare', lambda config, root, snapshot, profile_id, request_id: {
+        monkeypatch.setattr(environments.dependencies, 'prepare', lambda config, root, snapshot, profile_id, request_id, **kwargs: {
             'status': 'ready', 'profileId': profile_id, 'sourceSha256': snapshot['archive_sha256'],
             'backend': config.get('backend', 'docker'), 'image': 'sha256:'+'a'*64})
         monkeypatch.setattr(environments.dependencies, 'cleanup', lambda *args: {'complete': True, 'status': 'removed'})
@@ -59,6 +59,11 @@ async def test_restart_during_check_observes_same_job_without_cleanup_or_replay(
     assert receipt['job']['timeoutSeconds'] == 1200
     row = environments.get(app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
     assert row['profileId'] == 'browser-test'
+    from amplifier_web import test_execution_settings
+    test_execution_settings.write(app, {'version': 1, 'queue': {}, 'profiles': {
+        'browser-test': {'defaultTimeoutSeconds': 1, 'maxTimeoutSeconds': 1, 'cpus': 1}}})
+    assert row['timingRequest']['maxTimeoutSeconds'] == 1800
+    assert row['resourceRequest']['cpus'] == 4
     await queue.close()  # Host disappears; the independently admitted guest runs.
     assert len(starts) == 1 and not any(action == 'stop' for action, _ in backend)
     recovered = app.test_queue = TestQueue(app)

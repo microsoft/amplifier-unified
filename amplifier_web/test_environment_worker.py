@@ -26,11 +26,16 @@ jobs = importlib.util.module_from_spec(_jobs_spec)
 _jobs_spec.loader.exec_module(jobs)
 
 
+_host_spec = importlib.util.spec_from_file_location('_host_resources', Path(__file__).with_name('test_host_resources.py'))
+host_resources = importlib.util.module_from_spec(_host_spec)
+_host_spec.loader.exec_module(host_resources)
+
+
 def selected_profile(payload):
     spec = importlib.util.spec_from_file_location('_environment_profiles', Path(__file__).with_name('test_environment_profiles.py'))
     profiles = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(profiles)
-    return profiles.get(payload.get('profileId', 'linux-python'))
+    return profiles.resources(payload.get('profileId', 'linux-python'), payload.get('resourceRequest'))
 
 
 def read_private_record(path):
@@ -656,7 +661,8 @@ def execute_call(payload):
             # Source snapshot is immutable and retained even when launch fails.
             snapshot = serialize(lib.export_repository_snapshot(Path(payload['source']), root / 'source.tar'))
             (root / 'snapshot.json').write_text(json.dumps(snapshot))
-            return {'ok': True, 'universeId': identity, 'snapshot': snapshot, 'backendIdentity': backend}
+            return {'ok': True, 'universeId': identity, 'snapshot': snapshot, 'backendIdentity': backend,
+                    'hostTarget': host_resources.local_target(payload.get('dockerHost'), {'dockerd'})}
         if action == 'start':
             source_identity(identity, snapshot)
             compose = root / 'compose.json'
@@ -716,7 +722,8 @@ def execute_call(payload):
             if not source_ready(root, identity, snapshot):
                 return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                         'message': 'Source preparation is not confirmed for this exact snapshot. No check was started and source was not installed again.'}
-            result = lib.execute(identity, payload['command'], workdir='/workspace',
+            command = jobs.command({**payload, 'jobEnvironment': selected_profile(payload)['environment']})
+            result = lib.execute(identity, command, workdir='/workspace',
                 timeout_seconds=payload['timeoutSeconds'], max_output_bytes=32768, config=config)
             return {'ok': True, 'universeId': identity, 'result': serialize(result)}
         if action == 'stop':

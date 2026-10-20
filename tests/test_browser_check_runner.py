@@ -50,6 +50,11 @@ def test_owned_orphan_is_reaped_and_reported_before_next_check(tmp_path, detache
               f'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],start_new_session={detached!r});Path({str(pid)!r}).write_text(str(p.pid))')
     code, report, _ = execute(tmp_path, [scenario('leaks', source), scenario('next', 'pass')])
     assert code == 1 and report['scenarios'][0]['cleanup']['terminated'] == 1
+    observed = report['scenarios'][0]['cleanup']['observedBeforeTermination']
+    assert len(observed) == 1 and observed[0]['pid'] == int(pid.read_text())
+    assert observed[0]['startTime'].isdigit()
+    assert observed[0]['executable'] == Path(sys.executable).resolve().name
+    assert set(observed[0]) == {'pid', 'startTime', 'parentPid', 'processGroup', 'executable'}
     assert report['scenarios'][1]['status'] == 'passed'
     stat = Path('/proc') / pid.read_text() / 'stat'
     assert not stat.exists() or stat.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
@@ -62,6 +67,16 @@ def test_uncertain_cleanup_stops_and_records_unrun_without_false_cascade(tmp_pat
     assert report['scenarios'][1]['status'] == 'unrun'
     assert report['scenarios'][1]['reason'] == 'unsafe_cleanup'
     assert not (tmp_path / 'results/must-not-run.log').exists()
+
+
+def test_cleanup_identity_details_are_bounded_without_reducing_failure_count(monkeypatch):
+    identities = {-pid: '1' for pid in range(1, 41)}
+    snapshots = iter([{}, identities, {}])
+    monkeypatch.setattr(runner, 'owned_members', lambda *args: next(snapshots))
+    cleanup = runner.retire_group(-1, 'synthetic')
+    assert cleanup['terminated'] == 40 and cleanup['remaining'] == []
+    assert len(cleanup['observedBeforeTermination']) == 32
+    assert cleanup['omittedProcessDetails'] == 8
 
 
 def test_last_successful_exit_with_unreadable_ownership_still_fails(tmp_path, monkeypatch):
@@ -220,6 +235,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
         'maintenance-controls': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/maintenance-controls'},
+        "assignment-adoption": {},
         'diagram-navigation': {'DIAGRAM_EVIDENCE': '{root}/output/browser-checks/diagram-navigation/report.json'},
         'chat-shortcuts': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/chat-shortcuts'},
         'automation-hub': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/automation-hub'},
@@ -228,6 +244,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'peer-attribution': {'AMPLIFIER_TEST_BUILT_STATIC': '1'},
         'device-pairing': {},
         'settings-drafts': {},
+        'testing-settings': {},
         'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
         'approval-layout': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/approval-layout'},
         'standard-ux-connection-controls': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-connection-controls'},
@@ -253,6 +270,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'attachment-consumption': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
         'home-sidebar': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/home-sidebar'},
         'focus-navigation': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/focus-navigation'},
+        'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
@@ -269,7 +287,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 100
+    assert len(original) == 65 and len(rows) == 103
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -407,8 +425,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     attachment = 'tests/attachment-consumption-browser.mjs'
     assert attachment in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', attachment] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment}) == 142
-    assert len(readiness_scripts | extended_scripts) == 143
+    assert len((readiness_scripts | extended_scripts) - {attachment}) == 145
+    assert len(readiness_scripts | extended_scripts) == 146
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

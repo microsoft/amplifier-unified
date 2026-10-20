@@ -867,6 +867,15 @@ class RuntimeManager:
             except ValueError as exc:
                 await self._write(row, {"op":"bridge.result","id":data["id"],"error":str(exc)})
 
+    async def _cancel_capacity_bridge(self, sid, row, bridge):
+        bridge['task'].cancel()
+        await asyncio.gather(bridge['task'], return_exceptions=True)
+        # Cancellation is not evidence that an already admitted call was unused.
+        # The private accounting operation only marks an exact existing receipt
+        # uncertain; it cannot invent a receipt or free an allowance.
+        if self.workers.get(sid) is row and self.app_bridge:
+            await self.app_bridge('capacity.abandoned', bridge['args'], sid)
+
     async def _read(self, sid, row):
         from .runtime_event_batches import BufferedLines, EventSink, MAX_BYTES, finish_owned, terminal
         lines = BufferedLines(row['process'].stdout)
@@ -943,6 +952,14 @@ class RuntimeManager:
                     task = asyncio.create_task(self._bridge(sid, row, data))
                     row["bridge_tasks"].add(task)
                     task.add_done_callback(row["bridge_tasks"].discard)
+                    if data.get('operation') == 'capacity.admit' and data.get('args', {}).get('waitForCapacity'):
+                        row.setdefault('capacity_bridges', {})[data['id']] = {'task': task, 'args': data['args']}
+                elif data.get('op') in {'bridge.cancel', 'bridge.received'}:
+                    bridge = row.get('capacity_bridges', {}).pop(data.get('id'), None)
+                    if bridge and data['op'] == 'bridge.cancel' and self.workers.get(sid) is row:
+                        task = asyncio.create_task(self._cancel_capacity_bridge(sid, row, bridge))
+                        row['bridge_tasks'].add(task)
+                        task.add_done_callback(row['bridge_tasks'].discard)
                 elif data.get("op") == "reply":
                     row["inflight"].discard(data.get("id"))
                     input_id = row.get('sendInputs', {}).pop(data.get('id'), None)

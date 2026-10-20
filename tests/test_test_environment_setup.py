@@ -312,19 +312,20 @@ def test_unknown_probe_admission_is_not_settled_by_absence(app, monkeypatch):
     assert setup.observe_partial(app, record)['absent']
 
 
-async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app, monkeypatch, tmp_path):
+@pytest.mark.parametrize('installed_version', ['0.4.3', '0.4.2', '0.4.1'])
+async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app, monkeypatch, tmp_path, installed_version):
     from amplifier_web import incus_environment_worker as worker
     fingerprint, daemon = 'a' * 64, 'b' * 64
     calls = []
     monkeypatch.setattr(setup.shutil, 'which', lambda _: '/usr/bin/uv')
-    monkeypatch.setattr(worker, 'package_digest', lambda _: worker.QUALIFIED_PACKAGES['0.4.1'])
+    monkeypatch.setattr(worker, 'package_digest', lambda _: worker.QUALIFIED_PACKAGES['0.4.3'])
     monkeypatch.setattr(worker, 'file_digest', lambda *a: ('c' * 64, 10))
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[0] == '/usr/bin/uv':
             return ''
         if '-I' in argv:
-            return '"/approved/package"'
+            return json.dumps({'directory': '/approved/package', 'version': installed_version})
         if 'query' in argv:
             assert '--project' not in argv, 'Incus query rejects the global project flag'
             if '/1.0/instances/' in argv[-1]:
@@ -350,8 +351,16 @@ async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app
     record = {'id': 'f' * 32}
     async def step(phase, detail):
         record.update(phase=phase, detail=detail)
+    if installed_version != '0.4.3':
+        with pytest.raises(ValueError, match='approved package'):
+            await setup.setup_incus({'backend': 'incus'}, {'executable': '/usr/bin/incus'}, tmp_path, record, step)
+        assert not any(call[0] == '/usr/bin/incus' for call in calls)
+        return
     config, proof = await setup.setup_incus({'backend': 'incus'}, {'executable': '/usr/bin/incus'}, tmp_path, record, step)
     assert config['incus']['image'] == fingerprint
+    assert config['incus']['packageSha256'] == worker.QUALIFIED_PACKAGES['0.4.3']
+    install = next(call for call in calls if 'install' in call)
+    assert install[-1] == 'git+' + setup.LEGACY_REPOSITORY + '@' + setup.LEGACY_COMMIT
     assert config['incus']['preparationStorage'] == 'existing-pool'
     assert proof['probeRemoved'] and proof['offline']
     assert len([call for call in calls if 'copy' in call]) == 1
