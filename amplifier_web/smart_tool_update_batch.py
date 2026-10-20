@@ -3,7 +3,7 @@ import asyncio
 import re
 import time
 
-from .managed_runner_backend import backend
+from .managed_runner_backend import backend, skip_key
 
 from .update_diagnostics import exception_type
 
@@ -187,7 +187,7 @@ async def skip(manager, identity_value):
             await backend(item['runnerSource']['runnerKind']).skip(manager.service, item.get('runnerUpdate'))
             pending.remove(item)
             await manager.publish(pendingSmartTools=pending,
-                                  skippedSmartTools={**state.get('skippedSmartTools', {}), identity_value: item['revision']})
+                                  skippedSmartTools={**state.get('skippedSmartTools', {}), skip_key(item['runnerSource']): item['revision']})
             await finish(manager, pending)
             return
         cleanup = {key: value for key, value in item.items() if key != 'failure'}

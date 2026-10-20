@@ -75,3 +75,71 @@ async def test_interrupted_runner_stage_reports_failure_and_preserves_intent(app
     result = app.state['updates']['pendingSmartTools'][0]
     assert result['failure']['phase'] == 'stage' and result['runnerUpdate'] == pending['runnerUpdate']
     runner.advance.assert_not_called()
+
+
+async def test_skip_is_suppressed_on_recheck_for_same_source_not_other_selection(app, monkeypatch):
+    from amplifier_web import managed_runner_backend as routing
+    from amplifier_web import update_checks
+    manager = app.update_manager
+    source = {'id': 'managed-runner:dtu', 'kind': 'smart tool', 'runnerKind': runner.KIND,
+              'label': 'Managed test runner core', 'installationId': 'a' * 24,
+              'url': 'https://example.invalid/runner', 'ref': 'main', 'runnerSelection': 'a' * 64,
+              'runnerPolicy': {'ref': 'main'}, 'current': 'a' * 40, 'latest': 'b' * 40,
+              'eligible': True, 'status': 'update'}
+    pending = {**item(), 'runnerSource': source, 'resultId': 'attempt-only', 'revision': 'b' * 40,
+               'failure': {'phase': 'qualify', 'reason': 'managed-runner-qualification-failed'}}
+    await manager.publish(pendingSmartTools=[pending], phase='error')
+    monkeypatch.setattr(runner, 'skip', AsyncMock())
+    await batch.skip(manager, pending['resultId'])
+    assert app.state['updates']['skippedSmartTools'] == {routing.skip_key(source): 'b' * 40}
+    monkeypatch.setattr(manager, 'inventory_sources', AsyncMock(side_effect=lambda **_: [copy.deepcopy(source)]))
+    monkeypatch.setattr(update_checks, 'git_revision', AsyncMock(return_value='b' * 40))
+    await manager.check(tier='other')
+    assert manager.inventory[0]['status'] == 'skipped'
+    source['runnerSelection'] = 'c' * 64
+    await manager.check(tier='other')
+    assert manager.inventory[0]['status'] == 'update'
+
+
+async def test_bulk_install_retries_opaque_runner_result_id(app, monkeypatch):
+    manager = app.update_manager
+    pending = {**item(), 'resultId': 'managed-runner-result', 'failure': {'phase': 'qualify'}}
+    await manager.publish(pendingSmartTools=[pending], phase='error')
+    monkeypatch.setattr(runner, 'advance', AsyncMock(return_value={'complete': True}))
+    await manager.command('install')
+    runner.advance.assert_awaited_once_with(app, pending['runnerUpdate'])
+    assert not app.state['updates']['pendingSmartTools']
+
+
+async def test_actual_installer_copy_mode_and_interpreter_failed_pip_cleanup(app, tmp_path, monkeypatch):
+    import sys
+    from amplifier_web.smart_tools import SmartToolsManager
+    smart = SmartToolsManager(app)
+    checkout = tmp_path / 'runner-checkout'
+    checkout.mkdir()
+    (checkout / 'pyproject.toml').write_text('[project]\nname="digital-twin-universe"\nversion="0.test"\n')
+    monkeypatch.setattr(smart, '_checkout', AsyncMock(return_value=(checkout, 'b' * 40)))
+    monkeypatch.setattr(smart, '_inspect_checkout', lambda *args: {
+        'pythonSupported': True, 'path': '.', 'repository': 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe',
+        'commit': 'b' * 40, 'name': 'DTU', 'ref': 'b' * 40})
+    commands = []
+    async def run(argv, **kwargs):
+        commands.append(argv)
+        assert kwargs['env']['UV_LINK_MODE'] == 'copy'
+        if 'venv' in argv:
+            assert argv[argv.index('--python') + 1] == sys.executable
+            binary = __import__('pathlib').Path(argv[-1]) / 'bin/python'
+            binary.parent.mkdir(parents=True)
+            binary.write_text('partial interpreter')
+            return ''
+        raise RuntimeError('bounded fixture install failed')
+    monkeypatch.setattr(smart, '_run', run)
+    try:
+        with pytest.raises(RuntimeError, match='fixture install failed'):
+            await smart.install({'repository': 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe',
+                                 'ref': 'b' * 40, 'path': '.', '_runner_qualification': True})
+        assert len(commands) == 2
+        assert not list((smart.root / 'installs').iterdir())
+        assert not smart.state['installations']
+    finally:
+        await smart.close()

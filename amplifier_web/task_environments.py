@@ -98,7 +98,7 @@ def validate_configuration_value(app, value, *, _qualification=False):
         raise ValueError('The operator configuration must be an object.')
     if value.get('enabled') is not True:
         return None, 'disabled', 'Test environments are disabled on this host.'
-    if set(value) - {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes', 'retentionMode', 'capacityPolicyId'}:
+    if set(value) - {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes', 'retentionMode', 'capacityPolicyId', 'runnerQualificationRequired'}:
         raise ValueError('The operator configuration contains unsupported settings.')
     if 'retentionMode' in value and value['retentionMode'] not in {'files', 'full'}:
         raise ValueError('Choose files or full environment retention.')
@@ -108,14 +108,21 @@ def validate_configuration_value(app, value, *, _qualification=False):
     commit = value.get('commit')
     if not isinstance(commit, str) or not re.fullmatch('[a-f0-9]{40}', commit):
         raise ValueError('The managed backend has no exact revision.')
-    if commit not in QUALIFIED_DTU_COMMITS and not _qualification:
-        from .managed_runner_updates import trusted_installation
-        if not trusted_installation(app, value):
-            raise ValueError('The managed backend has not passed this machine’s owned qualification.')
     manager = getattr(app, 'smart_tools', None)
     installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
     if not installation or installation.get('status') != 'installed' or installation.get('commit') != commit or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
         raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
+    dynamic = installation.get('runnerCandidate') is True
+    if value.get('runnerQualificationRequired') is not None and value['runnerQualificationRequired'] is not True:
+        raise ValueError('The retained runner qualification requirement changed.')
+    if value.get('runnerQualificationRequired') and not dynamic:
+        raise ValueError('The retained runner installation provenance changed.')
+    if (dynamic or commit not in QUALIFIED_DTU_COMMITS) and not _qualification:
+        from .managed_runner_updates import trusted_installation
+        if not trusted_installation(app, value):
+            raise ValueError('The managed backend has not passed this machine’s owned qualification.')
+    if dynamic:
+        value = {**value, 'runnerQualificationRequired': True}
     identity = installation['id']
     if not re.fullmatch(r'[a-f0-9]{24}', identity):
         raise ValueError('The managed installation identity is invalid.')

@@ -749,8 +749,8 @@ class UpdateManager:
                 async def remote(url, ref):
                     return await git_revision(url, ref, process)
                 async def check_row(row):
+                    from .managed_runner_backend import backend, skip_key
                     if row.get('runnerKind'):
-                        from .managed_runner_backend import backend
                         inspector = getattr(backend(row['runnerKind']), 'check_source', None)
                         if inspector is not None:
                             try:
@@ -774,7 +774,7 @@ class UpdateManager:
                         row['latest'] = await task
                         row['status'] = 'update' if row['latest'] != row.get('current') else 'current'
                         if (row.get('kind') == 'smart tool' and row['status'] == 'update'
-                                and state.get('skippedSmartTools', {}).get(row.get('installationId')) == row['latest']):
+                                and state.get('skippedSmartTools', {}).get(skip_key(row)) == row['latest']):
                             row.update(status='skipped', detail='This Smart Tool revision was skipped. A newer revision can still be offered.')
                     except (ValueError, RuntimeError, TimeoutError): row['status']='check_failed'
                 checked = []
@@ -858,7 +858,7 @@ class UpdateManager:
             pending = list(self.service.state['updates']['pendingSmartTools'])
             if all(item.get('failure') for item in pending):
                 for item in pending:
-                    await self.smartToolRetry(item['previous'])
+                    await self.smartToolRetry(item.get('resultId', item['previous']))
             else:
                 await self.activateSmartTools()
             return

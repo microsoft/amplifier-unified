@@ -477,3 +477,19 @@ test('prepared source mismatch explains preservation and exports only mismatch f
  assert.deepEqual(exported.events[0].resolutionMismatches,['revision']);
  assert.doesNotMatch(JSON.stringify(exported),/private|credential/);
 });
+
+test('runner-only wait keeps availability refresh usable without exposing unrelated work as a blocker',async()=>{
+ const runner={previous:'old',runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check'};
+ const base={phase:'staged',pendingSmartTools:[runner],blockers:[{kind:'conversation',sessionId:'one',label:'Unrelated chat'}]};
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(base),act:(name,args)=>calls.push({name,args})}))});
+ const check=root.root.findByProps({'data-action':'updates.check'});
+ assert.equal(check.props.disabled,false);assert.equal(check.findByType('span').children.join(''),'Check for updates');
+ assert.equal(root.root.findAllByProps({'data-part':'update-blockers'}).length,0);
+ await renderAct(async()=>check.props.onClick());assert.deepEqual(calls,[{name:'updates.check',args:undefined}]);
+ for(const change of [{pendingRelease:'candidate'},{pendingSmartTools:[runner,{previous:'ordinary-tool'}]},{phase:'validating'}]){
+  await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state({...base,...change}),act:()=>{}})));
+  assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,true);
+ }
+ await renderAct(async()=>root.unmount());
+});

@@ -33,7 +33,13 @@ def key(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def supported_private_files():
+    return all(hasattr(os, name) for name in ('getuid', 'O_NOFOLLOW', 'O_DIRECTORY'))
+
+
 def root(app, create=True):
+    if not supported_private_files():
+        raise ValueError('Automatic test runner updates are not supported on this platform.')
     path = Path(app.data_dir) / 'managed-runner-updates'
     if any(part.is_symlink() for part in (path, *path.parents)):
         raise ValueError('The managed runner update directory changed.')
@@ -89,6 +95,17 @@ def setup_policy(app, raw):
 def update_sources(app):
     from .task_environments import REPOSITORY
     from .updates import pinned
+    # Availability inventory must remain safe on native Windows, including an
+    # app that has never configured a test runner. POSIX private-file and owner
+    # guarantees are currently required for automatic generation promotion.
+    if not supported_private_files():
+        if not (Path(app.data_dir) / 'test-environments.json').exists():
+            return []
+        return [{'id': 'managed-runner:dtu', 'kind': 'smart tool', 'runnerKind': KIND,
+                 'label': 'Managed test runner core', 'updateTier': 'other',
+                 'url': REPOSITORY, 'ref': '', 'current': None, 'eligible': False,
+                 'status': 'not_checked', 'usage': 'configured',
+                 'detail': 'Automatic test runner updates are not supported on this platform. The configured runner is unchanged; its version has not been checked.'}]
     raw = raw_configuration(app)
     if not raw or not raw.get('enabled'):
         return []
@@ -134,18 +151,25 @@ def installation(app, raw):
     return item
 
 
+def qualification_path(home, config):
+    return Path(home) / 'managed-runner-updates' / (
+        'qualified-' + config['installationId'] + '-' + config['commit'] + '-'
+        + key(execution_binding(config)) + '.json')
+
+
 def trusted_installation(app, raw):
     """Exact private behavioral proof, not a version/schema allow-list."""
-    item = installation(app, raw)
-    value = private.read_json(root(app, False) / ('qualified-' + item['id'] + '-' + raw['commit'] + '.json'))
-    if (not value or value.get('version') != 1
-            or value.get('proof', {}).get('probeRemoved') is not True
-            or value.get('proof', {}).get('artifactVerified') is not True
-            or value.get('proof', {}).get('checkPassed') is not True):
-        return False
+    installation(app, raw)
     from .task_environments import validate_configuration_value
     normalized, status, _ = validate_configuration_value(app, raw, _qualification=True)
-    return status == 'ready' and execution_binding(normalized) == execution_binding(value.get('normalized', {}))
+    if status != 'ready':
+        return False
+    value = private.read_json(qualification_path(app.data_dir, normalized))
+    return bool(value and value.get('version') == 1
+        and value.get('proof', {}).get('probeRemoved') is True
+        and value.get('proof', {}).get('artifactVerified') is True
+        and value.get('proof', {}).get('checkPassed') is True
+        and execution_binding(normalized) == execution_binding(value.get('normalized', {})))
 
 
 def intent_id(source):
@@ -258,7 +282,7 @@ async def advance(app, identity):
                 raise RunnerUpdateError('managed-runner-selection-changed')
             proof = {'version': 1, 'configuration': record['candidate'], 'runtime': runtime,
                      'proof': record['proof'], 'normalized': record['normalized'], 'updateId': identity}
-            private.write_json(root(app) / ('qualified-' + record['candidate']['installationId'] + '-' + record['candidate']['commit'] + '.json'), proof)
+            private.write_json(qualification_path(app.data_dir, record['normalized']), proof)
             # Exact old/new configurations remain retained independently of the
             # selected file, including rollback and owners admitted before CAS.
             for config_raw in (record['previous'], record['candidate']):
@@ -279,6 +303,8 @@ def referenced(home, identity):
     remove_installation independently checks all live resource owners under its
     installation lock before deleting any unreferenced installation.
     """
+    if not supported_private_files():
+        return False
     path = Path(home) / 'managed-runner-updates'
     selected = private.read_json(Path(home) / 'test-environments.json') or {}
     if selected.get('installationId') == identity:
@@ -305,6 +331,8 @@ def referenced(home, identity):
 async def retire(app):
     """Bounded retirement of purpose-installed code, never user data/evidence."""
     from .task_environments import REPOSITORY
+    if not supported_private_files():
+        return
     folder = root(app, False)
     if not folder.exists():
         return
@@ -362,6 +390,8 @@ def rollback_target(app, raw):
 
 
 def rollback(app, identity):
+    if not supported_private_files():
+        return False
     from .task_environments import validate_configuration_value
     raw = raw_configuration(app)
     if not raw or raw.get('installationId') != identity:
@@ -385,10 +415,9 @@ def rollback(app, identity):
 
 def validate_execution(home, config):
     from .task_environments import QUALIFIED_DTU_COMMITS
-    if not config.get('commit') or config.get('commit') in QUALIFIED_DTU_COMMITS:
+    if not config.get('runnerQualificationRequired') and (not config.get('commit') or config.get('commit') in QUALIFIED_DTU_COMMITS):
         return
-    folder = Path(home) / 'managed-runner-updates'
-    value = private.read_json(folder / ('qualified-' + config['installationId'] + '-' + config['commit'] + '.json'))
+    value = private.read_json(qualification_path(home, config))
     if not value or execution_binding(config) != execution_binding(value.get('normalized', {})) or runtime_identity(config) != value.get('runtime'):
         raise RunnerUpdateError('managed-runner-package-changed')
 
