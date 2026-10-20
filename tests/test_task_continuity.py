@@ -476,3 +476,59 @@ async def test_mutation_dispatch_acknowledges_without_serializing_app_state(
         await app.close()
         if worker is not None:
             await worker.close()
+
+
+async def test_task_history_cursor_keeps_its_high_water_when_a_correction_arrives(
+        tmp_path, monkeypatch):
+    """Old history remains readable; it cannot masquerade as current scope."""
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        await corrected_task(worker, count=21)
+        task_id = worker.tasks.record()['id']
+        revision = worker.tasks.record()['revision']
+        args = {'taskId': task_id, 'limit': 20}
+        first = await worker.perform('task.history', args)
+        assert first['snapshotRevision'] == revision
+        assert first['currentRevision'] == revision
+        assert first['snapshotIsCurrent'] is True
+        assert first['nextAfter']
+        await worker.perform('task.update', {
+            'commandId': 'late-history-append', 'expectedRevision': revision,
+            'correction': 'Late restriction: do not execute the old candidate.'})
+        page = await worker.perform('task.history', {**args, 'after': first['nextAfter']})
+        assert page['snapshotRevision'] == revision
+        assert page['currentRevision'] == revision + 1
+        assert page['snapshotIsCurrent'] is False
+        assert all(row['revision'] <= revision for row in page['items'])
+        assert encoded_size(page) <= TASK_CONTEXT_BYTES
+        current = await worker.perform('task.get')
+        assert current['task']['revision'] == revision + 1
+        assert current['detailRequired'] is True
+        assert len(worker.tasks.record()['corrections']) == 22
+    finally:
+        await worker.close()
+
+
+async def test_history_cursor_cannot_be_rebound_to_a_replacement_task(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    worker = controls()
+    try:
+        await corrected_task(worker, count=21)
+        old = copy.deepcopy(worker.tasks.record())
+        page = await worker.perform('task.history', {'taskId': old['id'], 'limit': 20})
+        assert page['nextAfter']
+        await worker.perform('task.complete', {
+            'commandId': 'explicit-completion', 'expectedRevision': old['revision'],
+            'condition': old['objective'], 'evidence': ['Synthetic retained check']})
+        await create(worker, commandId='next-task',
+                     expectedRevision=worker.tasks.record()['revision'],
+                     objective='Separate next objective')
+        current = copy.deepcopy(worker.tasks.record())
+        with pytest.raises(ValueError, match='cursor|scope|task|changed'):
+            await worker.perform('task.history', {
+                'taskId': current['id'], 'limit': 20, 'after': page['nextAfter']})
+        assert worker.tasks.record() == current
+        assert worker.tasks.history[0]['corrections'] == old['corrections']
+    finally:
+        await worker.close()

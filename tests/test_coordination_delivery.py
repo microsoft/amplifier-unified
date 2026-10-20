@@ -8,6 +8,7 @@ import pytest
 from amplifier_core.message_models import ChatRequest, Message, ToolSpec
 from amplifier_web.coordination_delivery import CoordinationDelivery
 from amplifier_web.surface_delivery import SurfaceProvider
+from amplifier_web.management import Management
 from amplifier_web.service import AppError
 from test_collaborative_workspaces import app, agent_action, generation
 from test_workspace_work import create as create_work, source, workspace_id
@@ -85,8 +86,9 @@ async def test_budget_and_transport_share_one_observation_then_next_request_refr
     assert len(reads) == 2 and measured == transported and measured[0] != measured[1]
 
 
-# Test-first proposed bridge extension: coordination.current.work is the SAME
-# bounded workspace.work.context DTO, not a second task store or execution loop.
+# Producer contract inspected at ce64785720c24081c352baa9e210f0f743c3fb24:
+# .work.discovery is the context DTO; .work.required is invocation provenance.
+# A discovery result never establishes the relevant set or authorizes effects.
 WORK_CONTEXT_BYTES = 12 * 1024
 
 
@@ -94,6 +96,26 @@ def observation(value):
     messages = [m for m in value.messages if (m.metadata or {}).get('coordinationObservation')]
     assert len(messages) == 1
     return json.loads(messages[0].content.split('\n', 1)[1])
+
+
+def bound_transport(actor):
+    current = actor['collaborationGeneration']
+    return {'_runtimeSessionId': actor.get('runtimeSessionId') or actor['id'],
+            '_generationId': current['id'],
+            '_inputBindings': [{'inputId': identity, 'clientId': None}
+                               for identity in current.get('inputIds', [])]}
+
+
+def unavailable_requirements(reason='untyped_followup'):
+    return {'status': 'unavailable', 'reason': reason, 'version': None,
+            'workCount': None, 'requirementCount': None, 'requirementsRef': None,
+            'coverage': {'complete': False}, 'effectAuthorized': False}
+
+
+def empty_discovery(version=1):
+    return {'version': version, 'items': [], 'total': 0, 'truncated': False,
+            'nextAfter': None, 'coverage': 'Historical coverage remains incomplete.',
+            'detailRequired': True}
 
 
 @pytest.mark.parametrize('count', [0, 20, 21, 1000])
@@ -109,17 +131,24 @@ async def test_registered_work_context_pages_cover_the_set_without_hydration(
     before = copy.deepcopy(app.runtime.inputs)
     monkeypatch.setattr(app.history, 'ensure_loaded',
                         AsyncMock(side_effect=AssertionError('No transcript hydration')))
-    app.management = SimpleNamespace(
-        ensure_runtime=AsyncMock(side_effect=AssertionError('No worker warming')),
-        close=AsyncMock())
+    no_worker = AsyncMock(side_effect=AssertionError('No worker warming'))
+    monkeypatch.setattr(Management, 'ensure_runtime', no_worker)
     calls = []
     async def bridge(operation, args):
         calls.append(operation)
-        return await app.app_bridge(operation, args, owner['id'])
+        return await app.app_bridge(operation, {**args, **bound_transport(owner)}, owner['id'])
     try:
         delivery = CoordinationDelivery(Previous(), bridge)
         prepared = await delivery.prepare(request(), None)
-        page = observation(prepared)['work']
+        work = observation(prepared)['work']
+        assert len(json.dumps(work, ensure_ascii=False).encode()) <= WORK_CONTEXT_BYTES
+        assert work['available'] is True
+        # These ordinary fixture inputs have no typed commissioning association.
+        # Even zero discovered work cannot assert complete invocation coverage.
+        assert work['required']['status'] == 'unavailable'
+        assert work['required']['effectAuthorized'] is False
+        assert work['required']['coverage']['complete'] is False
+        page = work['discovery']
         assert calls == ['coordination.current']  # One request-boundary observation.
         seen, cursors = set(), set()
         for _ in range(1001):
@@ -138,15 +167,16 @@ async def test_registered_work_context_pages_cover_the_set_without_hydration(
             cursors.add(page['nextAfter'])
             page = (await app.app_bridge('dispatch', {
                 'action': 'workspace.work.context',
-                'args': {'sessionId': owner['id'], 'after': page['nextAfter']}}, owner['id']))['result']
+                'args': {'sessionId': owner['id'], 'after': page['nextAfter']},
+                **bound_transport(owner)}, owner['id']))['result']
         else:
             pytest.fail('Work context paging did not terminate')
         assert seen == identities
         assert app.runtime.inputs == before
-        app.management.ensure_runtime.assert_not_called()
+        no_worker.assert_not_called()
         delivery.commit(prepared)
     finally:
-        app.management = None
+        assert app.runtime.inputs == before
 
 
 async def test_work_context_includes_owned_and_contributing_items_only(app):
@@ -162,10 +192,12 @@ async def test_work_context_includes_owned_and_contributing_items_only(app):
         'id': linked['id'], 'expectedRevision': linked['revision'],
         'linkedSessionId': owner['id'], 'role': 'reviewer', 'candidate': 'a' * 40,
     }, 'link-reviewer')
-    value = await app.app_bridge('coordination.current', {}, owner['id'])
-    ids = {row['id'] for row in value['work']['items']}
+    value = await app.app_bridge('coordination.current', bound_transport(owner), owner['id'])
+    ids = {row['id'] for row in value['work']['discovery']['items']}
     assert ids == {own['id'], linked['id']}
     assert unrelated['id'] not in ids
+    assert value['work']['required']['status'] == 'unavailable'
+    assert value['work']['required']['effectAuthorized'] is False
 
 
 async def test_work_cursor_rejects_a_changed_set_instead_of_mixing_snapshots(app):
@@ -184,33 +216,37 @@ async def test_work_cursor_rejects_a_changed_set_instead_of_mixing_snapshots(app
 
 @pytest.mark.parametrize('work', [
     None,
-    {'status': 'unavailable', 'reason': 'Projection failed', 'coverage': 'unknown'},
+    {'available': False, 'discovery': {'status': 'unavailable', 'reason': 'Projection failed'},
+     'required': unavailable_requirements('Projection failed')},
 ])
 async def test_missing_work_projection_is_not_an_empty_complete_set(work):
     async def bridge(operation, args):
         return {} if work is None else {'work': work}
     prepared = await CoordinationDelivery(Previous(), bridge).prepare(request(), None)
     projected = observation(prepared)['work']
-    assert projected['status'] == 'unavailable'
-    assert projected['coverage'] == 'unknown'
-    assert projected.get('total') is None
+    assert projected['available'] is False
+    assert projected['required']['status'] == 'unavailable'
+    assert projected['required']['coverage']['complete'] is False
+    assert projected['required']['effectAuthorized'] is False
+    assert projected['discovery'].get('total') is None
 
 
 async def test_unbounded_or_body_bearing_work_projection_fails_closed():
     async def bridge(operation, args):
-        return {'work': {'status': 'available', 'items': [{
+        return {'work': {'available': True, 'discovery': {'items': [{
             'id': 'work-one', 'revision': 1, 'promiseRevision': 1,
             'constraints': ['PRIVATE_CONSTRAINT_BODY' * 20000],
             'originalSource': {'text': 'PRIVATE_SOURCE_BODY' * 20000},
-        }], 'total': 1, 'coverage': 'unknown'}}
+        }], 'total': 1, 'coverage': 'unknown'}, 'required': unavailable_requirements()}}
     prepared = await CoordinationDelivery(Previous(), bridge).prepare(request(), None)
     text = prepared.model_dump_json()
     assert 'PRIVATE_CONSTRAINT_BODY' not in text
     assert 'PRIVATE_SOURCE_BODY' not in text
     projected = observation(prepared)['work']
-    assert projected['status'] == 'unavailable'
-    assert projected['detailRequired'] is True
-    assert projected.get('total') is None  # Failed projection is not trusted.
+    assert projected['available'] is False
+    assert projected['required']['status'] == 'unavailable'
+    assert projected['required']['effectAuthorized'] is False
+    assert projected['discovery'].get('total') is None  # Failed projection is not trusted.
 
 
 @pytest.mark.parametrize('stream', [False, True])
@@ -218,9 +254,8 @@ async def test_work_observation_is_measured_and_transported_once_per_request(str
     calls, measured, transported = [], [], []
     async def bridge(operation, args):
         calls.append(operation)
-        return {'work': {'status': 'available', 'version': len(calls), 'items': [],
-                         'total': 0, 'truncated': False, 'nextAfter': None,
-                         'coverage': 'unknown', 'detailRequired': False}}
+        return {'work': {'available': True, 'discovery': empty_discovery(len(calls)),
+                         'required': unavailable_requirements()}}
     class Provider:
         async def request_budget(self, value, **kwargs):
             measured.append(value.model_dump_json())
@@ -245,4 +280,88 @@ async def test_work_observation_is_measured_and_transported_once_per_request(str
 
 
 def observation_json_version(serialized):
-    return observation(ChatRequest.model_validate_json(serialized))['work']['version']
+    return observation(ChatRequest.model_validate_json(serialized))['work']['discovery']['version']
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('stale', [False, True])
+async def test_outer_delivery_preserves_inner_final_boundary(stream, stale):
+    """Exercise the real wrapper chain, not a production authority predicate."""
+    from amplifier_web.surface_delivery import SurfaceDelivery
+    from amplifier_web.voice_visual_delivery import VoiceVisualDelivery
+    from amplifier_web.output_image_delivery import OutputImageDelivery
+    from amplifier_web.memory_delivery import MemoryDelivery
+
+    reads, events, measured, transported = [], [], [], []
+    replies = {
+        'context.manifest': {'inputIds': ['synthetic-input'], 'surfaces': []},
+        'coordination.current': {
+            'work': {'available': True, 'discovery': empty_discovery(),
+                     'required': unavailable_requirements()}},
+        'memory.context': {'items': []},
+    }
+
+    async def bridge(operation, args):
+        reads.append((operation, copy.deepcopy(args)))
+        return copy.deepcopy(replies[operation])
+
+    class ChangedAtBoundary(RuntimeError):
+        pass
+
+    class CheckedCoordination(CoordinationDelivery):
+        async def revalidate(self, value):
+            events.append('revalidate')
+            assert value.model_dump_json().encode('utf-8') == measured[0]
+            if self.stale:
+                raise ChangedAtBoundary('changed after budget')
+            return value
+
+        def commit(self, value):
+            events.append('commit')
+            super().commit(value)
+
+    class Provider:
+        async def request_budget(self, value, **kwargs):
+            events.append('budget')
+            measured.append(value.model_dump_json().encode('utf-8'))
+            return {'tokens': 100}
+
+        async def complete(self, value, **kwargs):
+            events.append('transport')
+            transported.append(value.model_dump_json().encode('utf-8'))
+            return 'done'
+
+        async def stream(self, value, **kwargs):
+            events.append('transport')
+            transported.append(value.model_dump_json().encode('utf-8'))
+            yield 'done'
+
+    inner = CheckedCoordination(SurfaceDelivery(bridge), bridge)
+    inner.stale = False
+    delivery = MemoryDelivery(
+        OutputImageDelivery(VoiceVisualDelivery(inner, bridge), bridge), bridge)
+    wrapped = SurfaceProvider(Provider(), delivery)
+    original = request(Message(role='user', content='Preserve \u03bb and caf\u00e9.'))
+    original_bytes = original.model_dump_json().encode('utf-8')
+    await wrapped.request_budget(original)
+    assert events == ['budget']
+    inner.stale = stale  # Mutate only after fitting, before transport.
+
+    async def send():
+        if stream:
+            return [row async for row in wrapped.stream(original)]
+        return [await wrapped.complete(original)]
+
+    if stale:
+        with pytest.raises(ChangedAtBoundary, match='changed after budget'):
+            await send()
+        assert transported == []
+        assert events == ['budget', 'revalidate']
+    else:
+        assert await send() == ['done']
+        assert transported == measured
+        assert events == ['budget', 'revalidate', 'commit', 'transport']
+    assert len(measured) == 1
+    assert reads == [('context.manifest', {}), ('coordination.current', {}),
+                     ('memory.context', {})]
+    assert original.model_dump_json().encode('utf-8') == original_bytes
