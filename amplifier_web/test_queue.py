@@ -257,7 +257,7 @@ class TestQueue:
                     'source': source.get('workingDirectory') or source['workspace'],
                     'binding': binding(source), 'authority': authority,
                     'backendKey': environments.config_key(config), 'command': args['command'],
-                    'timeoutSeconds': seconds, 'profileId': args['profileId'], 'durableVersion': 1,
+                    'timeoutSeconds': seconds, 'profileId': args['profileId'], 'resourceRequest': profiles.freeze(args['profileId']), 'durableVersion': 1,
                     'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
             owner.require_causal_depth(receipt['causalDepth'])
@@ -419,7 +419,7 @@ class TestQueue:
                 job = receipt['job']
                 row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
                     receipt['senderSessionId'], next(w['id'] for w in self.app.state['workspaces'] if w['path']==receipt['workspace']),
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE))
+                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'))
                 # Cancellation may arrive while local allocation is persisted.
                 # Never overwrite the newer cancellation/subscription record.
                 receipt = self.get(identity)
@@ -445,6 +445,8 @@ class TestQueue:
                     receipt['job'].pop('resourceId', None)
                     receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
                     receipt['job']['status'] = 'queued'
+                    if launch['result'].get('machineResources'):
+                        receipt['job']['capacity'] = {'available': False, 'machineResources': launch['result']['machineResources']}
                     self.save(receipt)
                     return
                 if launch['state'] == 'failed':

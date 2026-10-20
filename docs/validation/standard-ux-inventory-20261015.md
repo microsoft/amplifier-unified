@@ -879,6 +879,22 @@ has 100 registered scenarios and 143 distinct source/readiness browser scripts
 (142 excluding attachment consumption). Integrating other additive owners must
 reconcile these totals without altering the frozen 65-scenario baseline.
 
+
+### Shared machine test resources (October 20)
+
+**TEST-MACHINE-RESOURCES** extends the registered `testing-settings` owner with
+shared-account machine limits, effective sources, observations/reservations, lost
+save acknowledgement readback, stale installation-writer refusal and narrow build
+slot controls. Its fixture uses a private synthetic authority and never changes
+a real host policy. `test_test_host_resources.py` owns bounded simultaneous
+admissions across backends and machine identities, frozen requests, pressure and
+zero overrides, queue reuse, unknown outcomes and exact owner cleanup.
+
+This is additive ownership for the existing browser scenario; it does not change
+the frozen inventory, add a duplicate browser lane, or claim remote/native-device
+qualification. Remote and unsupported machine authority remains an explicit
+boundary while existing backend testing continues.
+
 ### Existing-chat adoption (October 20)
 
 `assignment-adoption` owns the new existing-chat assignment flow in Extended
