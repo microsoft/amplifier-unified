@@ -84,3 +84,20 @@ def test_legacy_row_requires_exact_current_configuration_without_guessing(tmp_pa
     with pytest.raises(ValueError, match='older environment'):
         configs.resolve(app, row, {**value, 'python': '/new/python'})
     assert not (tmp_path / 'workspace-resources').exists()
+
+
+def test_new_incus_generation_does_not_rebind_existing_owner(tmp_path, monkeypatch):
+    from amplifier_web.incus_environment_worker import QUALIFIED_PACKAGES
+    old = {'enabled': True, 'backend': 'incus', 'python': '/snapshot/python',
+           'incus': {'executable': '/owned/old/adapter', 'packageSha256': QUALIFIED_PACKAGES['0.4.1']}}
+    current = {**old, 'incus': {'executable': '/owned/new/adapter', 'packageSha256': QUALIFIED_PACKAGES['0.4.2']}}
+    identity = configs.retain(tmp_path, old)
+    seen = []
+    def qualify(app, candidate):
+        seen.append(candidate)
+        return old, 'ready', 'qualified'
+    monkeypatch.setattr(owner, 'validate_configuration_value', qualify)
+    row = {'backendKey': identity, 'backendConfigRetained': True}
+    assert configs.resolve(SimpleNamespace(data_dir=tmp_path), row, current) == old
+    assert seen[0]['incus'] == old['incus']
+    assert configs.retain(tmp_path, current) != identity

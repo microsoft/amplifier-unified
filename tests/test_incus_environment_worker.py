@@ -317,7 +317,7 @@ def test_package_digest_changes_and_rejects_symlink(tmp_path):
         worker.package_digest(package)
 
 
-@pytest.mark.parametrize('version', ['0.4.0', '0.4.1'])
+@pytest.mark.parametrize('version', ['0.4.0', '0.4.1', '0.4.2'])
 @pytest.mark.parametrize('wrapper', [False, True])
 def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, monkeypatch, version, wrapper):
     package = tmp_path / 'installed'
@@ -418,7 +418,7 @@ def test_reconcile_absence_requires_exact_settled_receipt(tmp_path, backend, mon
     backend[1]['launch'] = state
     previous = worker.incus
     def query(config, env, arguments, **kwargs):
-        if arguments == ['query', '/1.0/instances?recursion=1']:
+        if arguments == ['query', '/1.0/instances']:
             return {'exit_code': 0, 'truncated': False, 'stdout': '[]'}
         return previous(config, env, arguments, **kwargs)
     monkeypatch.setattr(worker, 'incus', query)
@@ -440,11 +440,100 @@ def test_reconcile_daemon_change_and_missing_legacy_identity_are_unverified(tmp_
 def test_reconcile_query_failure_never_proves_absence(tmp_path, backend, monkeypatch):
     previous = worker.incus
     def query(config, env, arguments, **kwargs):
-        if arguments == ['query', '/1.0/instances?recursion=1']:
+        if arguments == ['query', '/1.0/instances']:
             raise worker.BackendFailure('timeout', 'fixture timeout')
         return previous(config, env, arguments, **kwargs)
     monkeypatch.setattr(worker, 'incus', query)
     result = worker.execute_call(payload(tmp_path, 'reconcile'))
+    assert result['status'] == 'unknown' and not result.get('observation', {}).get('absenceConfirmed')
+
+
+@pytest.mark.parametrize('version,state,request_matches,owner_matches,exists,settled', [
+    ('0.4.2', 'failed', True, True, False, True),
+    ('0.4.2', 'unknown', True, True, False, False),
+    ('0.4.2', 'failed', False, True, False, False),
+    ('0.4.2', 'failed', True, False, False, False),
+    ('0.4.1', 'failed', True, True, False, False),
+    ('0.4.2', 'failed', True, True, True, False),
+])
+def test_reconcile_terminal_creation_failure_requires_exact_generation_and_absence(
+        tmp_path, backend, monkeypatch, version, state, request_matches, owner_matches, exists, settled):
+    value = payload(tmp_path, 'reconcile')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES[version]
+    backend[1].update(launch=state, owner='parent-root' if owner_matches else 'peer')
+    original_cli, original_incus = worker.cli, worker.incus
+    def receipt(config, env, arguments, **kwargs):
+        result = original_cli(config, env, arguments, **kwargs)
+        if arguments[0] == 'launch-status':
+            result['request_id'] = value['operationId'] if request_matches else 'another-request'
+        return result
+    def inventory(config, env, arguments, **kwargs):
+        if arguments == ['query', '/1.0/instances']:
+            instance = json.loads(original_incus(config, env, ['query', '/1.0/instances/owned'])['stdout'])
+            instance['name'] = worker.identity(value)
+            return {'exit_code': 0, 'truncated': False, 'stdout': json.dumps(['/1.0/instances/' + worker.identity(value)] if exists else [])}
+        return original_incus(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'cli', receipt)
+    monkeypatch.setattr(worker, 'incus', inventory)
+    result = worker.execute_call(value)
+    assert result['observation']['absenceConfirmed'] is settled
+    assert result['observation']['admissionSettled'] is settled
+    assert not any(args[0] in {'launch', 'stop', 'destroy'} for _, args in backend[0])
+
+
+def test_terminal_failed_creation_preserves_owned_instance_for_cleanup(tmp_path, backend):
+    value = payload(tmp_path, 'remove')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES['0.4.2']
+    backend[1].update(launch='failed', instance='Stopped')
+    result = worker.execute_call(value)
+    assert result['ok'] and result['status'] == 'removed'
+    assert any(args[0] == 'destroy' for _, args in backend[0])
+    assert not any(args[0] == 'launch' for _, args in backend[0])
+
+
+def test_failed_creation_cannot_claim_peer_instance_for_cleanup(tmp_path, backend):
+    value = payload(tmp_path, 'remove')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES['0.4.2']
+    backend[1].update(launch='failed', instance='Stopped', owner='peer-root')
+    result = worker.execute_call(value)
+    assert not result['ok']
+    assert not any(args[0] in {'destroy', 'stop', 'launch'} for _, args in backend[0])
+
+
+def test_reconcile_uses_small_inventory_and_reads_only_exact_owned_metadata(tmp_path, backend, monkeypatch):
+    value = payload(tmp_path, 'reconcile')
+    original = worker.incus
+    calls = []
+    def query(config, env, arguments, **kwargs):
+        calls.append(arguments)
+        if arguments == ['query', '/1.0/instances']:
+            paths = ['/1.0/instances/peer-' + str(n) for n in range(100)]
+            paths.append('/1.0/instances/' + worker.identity(value) + '?project=tests')
+            return {'exit_code': 0, 'truncated': False, 'stdout': json.dumps(paths)}
+        assert 'recursion' not in arguments[-1]
+        if arguments[0] == 'query' and '/instances/' in arguments[-1]:
+            assert arguments[-1] == '/1.0/instances/' + worker.identity(value)
+        return original(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'incus', query)
+    result = worker.execute_call(value)
+    assert result['status'] == 'running' and result['observation']['admissionSettled']
+    assert len([args for args in calls if '/instances/' in args[-1]]) == 1
+
+
+@pytest.mark.parametrize('problem', ['foreign-project', 'malformed-list', 'disappeared', 'truncated-target'])
+def test_reconcile_unverifiable_target_never_proves_absence(tmp_path, backend, monkeypatch, problem):
+    value = payload(tmp_path, 'reconcile')
+    original = worker.incus
+    def query(config, env, arguments, **kwargs):
+        if arguments == ['query', '/1.0/instances']:
+            name = '/1.0/instances/' + worker.identity(value)
+            entries = [{'name': name}] if problem == 'malformed-list' else [name + ('?project=other' if problem == 'foreign-project' else '')]
+            return {'exit_code': 0, 'truncated': False, 'stdout': json.dumps(entries)}
+        if '/instances/' in arguments[-1]:
+            return {'exit_code': int(problem == 'disappeared'), 'truncated': problem == 'truncated-target', 'stdout': '{}'}
+        return original(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'incus', query)
+    result = worker.execute_call(value)
     assert result['status'] == 'unknown' and not result.get('observation', {}).get('absenceConfirmed')
 
 
