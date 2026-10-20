@@ -692,3 +692,20 @@ def test_legacy_known_generation_keeps_existing_static_execution_path(app, monke
     assert status == 'ready' and 'runnerQualificationRequired' not in config
     monkeypatch.setattr(updates, 'runtime_identity', lambda *_: pytest.fail('legacy byte hashing'))
     updates.validate_execution(app.data_dir, config)
+
+
+@pytest.mark.parametrize('configured', [False, True])
+def test_public_tool_inventory_on_platform_without_posix_capabilities(tmp_path, monkeypatch, configured):
+    from amplifier_web.smart_tool_updates import ManagedUpdates
+    app = SimpleNamespace(data_dir=tmp_path)
+    manager = SimpleNamespace(service=app, state={'installations': [], 'servers': []})
+    app.smart_tools = manager
+    if configured:
+        (tmp_path / 'test-environments.json').write_text('{}')
+    for name in ('getuid', 'O_NOFOLLOW', 'O_DIRECTORY'):
+        monkeypatch.delattr(updates.os, name)
+    rows = ManagedUpdates.update_sources(manager)
+    if configured:
+        assert len(rows) == 1 and rows[0]['status'] == 'not_checked' and not rows[0]['eligible']
+    else:
+        assert rows == []
