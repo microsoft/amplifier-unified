@@ -1374,6 +1374,31 @@ Unknown assignment Stop receipts retain their original outcomes. A later durable
 
 Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. The input must be newer than the cached denial and belong to the observed active generation. Peer input additionally needs its actual admitted human-resume receipt; a caller-supplied flag or message text is insufficient. Only successful durable host admission clears the worker's old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a no-op settings edit in every worker, including workers with enabled local budgets. A still-exhausted or uncertain local allowance remains blocked by its current policy.
 
+### Assignment model admission waiting
+
+Temporary concurrent-call saturation and renewable held call allowances wait in a
+host-owned FIFO before invocation. Waiting calls have no admitted usage receipt.
+A released receipt wakes waiters; each checks the current input, generation, Stop,
+configuration, native owner and actual cumulative/assignment policy again. Unknown
+outcomes remain held and are never inferred complete to free a slot. Disconnect or
+cancellation removes waiting entries; admitted calls finish independently.
+
+Settings → Advanced → Performance & runtime → Model capacity applies across this
+host. The default permits 256 waiting calls with no time limit; the user can change
+both values. A zero timeout waits until capacity or cancellation. A configured
+expiry reports that no provider request was sent and does not save a budget pause.
+Policy changes wake existing waits; they neither restart nor replay any work.
+
+Individual cancellation of a worker's waiting model call sends a capacity-only
+transport cancellation for that exact bridge ID. The host retains its per-worker
+lookup until the worker consumes the reply, so cancellation also covers a reply
+in transit. A waiting entry is removed without stopping the worker. If admission
+already persisted a matching receipt, cancellation marks that unended receipt
+outcome unknown and retains its reservation; it does not infer that a provider
+was never invoked or free capacity. Unknown IDs, another worker's frames, and
+late cancellation after reply consumption cannot change another call. Unrelated
+mutation bridges retain their existing completion behavior.
+
 
 #### Retained terminal evidence for older failed members
 
