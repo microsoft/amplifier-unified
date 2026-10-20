@@ -134,14 +134,21 @@ try{
   // Never activate a permission response, including the synthetic one.
   for(const [index,identity] of ['layout-object','layout-string',ready.grant].entries()){
    const approval=page.locator(`[data-approval-id="${identity}"]`);
+   const note=approval.getByRole('textbox',{name:'Note to Amplifier (optional)',exact:true});
    const allow=approval.getByRole('button',{name:'Allow',exact:true}),deny=approval.getByRole('button',{name:'Deny',exact:true});
-   if(index===0)await allow.focus();
+   if(index===0)await note.focus();
    else{
     await page.keyboard.press('Tab');
     // Chromium includes the next request's scrollable details in tab order.
     // Permit that exact reading stop, never skip an arbitrary focused control.
     if(await approval.evaluate(el=>document.activeElement===el.querySelector('pre')))await page.keyboard.press('Tab');
    }
+   // The optional note is an exact reading/editing stop before the actions.
+   // Keep it empty and verify both directions without dispatching a decision.
+   await expect(note).toBeFocused();await expect(note).toHaveValue('');
+   await page.keyboard.press('Tab');await visibleControl(allow);
+   await page.keyboard.press('Shift+Tab');await expect(note).toBeFocused();
+   await page.keyboard.press('Tab');
    await visibleControl(allow);
    await page.keyboard.press('Tab');await visibleControl(deny);
    await page.keyboard.press('Shift+Tab');await visibleControl(allow);

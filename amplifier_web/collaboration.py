@@ -132,7 +132,11 @@ def restore_owner(session, host_instance):
         identity = approval.get('id', '')
         if identity.startswith('collaboration:'):
             approval['status'] = 'retired'
-        elif not identity.startswith('capability:'):
+        elif identity.startswith('capability:'):
+            # Its owner determines whether this was a live native wait or a
+            # durable raw-API request after configuration authority is loaded.
+            approval['_hostRestarted'] = True
+        else:
             # Ordinary approvals resolve an in-memory native waiter. It cannot
             # survive host replacement. Configuration grants instead retain a
             # durable decision and their own authority checks across restarts.

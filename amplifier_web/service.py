@@ -141,7 +141,7 @@ ACTION_DEFINITIONS = {
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
-    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
+    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "comment": string(4000)}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat shows the selected conversation. Use session.select with an explicit id to open a particular chat. workWorkspaceTab=chats/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
@@ -1207,6 +1207,11 @@ class AppService:
         if task and task is not asyncio.current_task():
             task.cancel()
             self._progress_publish_task = None
+        authority = getattr(self, 'configuration_authority', None)
+        if authority is not None:
+            for owner in self.state['sessions']:
+                if session_ids is None or owner['id'] in session_ids:
+                    authority.reconcile(owner)
         previous = self.state["revision"]
         self.state["revision"] = previous + 1
         self._publish_save_scope = session_ids
@@ -1491,6 +1496,9 @@ class AppService:
                                                     'messages': [], 'workers': [], 'approvals': []})
             from .collaboration import restore_owner
             restore_owner(session, self.instance_id)
+            authority = getattr(self, 'configuration_authority', None)
+            if authority is not None:
+                compacted = authority.reconcile(session) or compacted
             self._state['sessions'].append(session)
             self.cold_display.touch(identity)
             self.projections.invalidate(state=self._state, session_ids={identity})
@@ -2447,8 +2455,17 @@ class AppService:
                 if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
                     raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
-                    from .chat_permissions import PENDING_DETAIL
-                    raise AppError(PENDING_DETAIL, 409)
+                    generation = current.get('collaborationGeneration') or {}
+                    # Existing work retains its mounted policy until it settles.
+                    # Let the human guide that work without starting another run.
+                    steering_existing = (
+                        origin == 'ui' and action == 'conversation.send'
+                        and current.get('status') in {'working', 'starting', 'running'}
+                        and generation.get('id') and not generation.get('terminal')
+                    )
+                    if not steering_existing:
+                        from .chat_permissions import PENDING_DETAIL
+                        raise AppError(PENDING_DETAIL, 409)
             if action == 'session.pin':
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
@@ -3043,7 +3060,10 @@ class AppService:
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
                 from .conversation_steering import target as steering_target
-                target_generation = steering_target(session, args.get('expectedGenerationId'), args.get('allowNextTurn', False))
+                # A run ending before delivery must not turn this correction
+                # into new work under a policy that is awaiting replacement.
+                allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
+                target_generation = steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 text = args["text"].strip()
                 from .message_interactions import resolve_quote
                 quote = resolve_quote(session, args.get("replyId"))
@@ -3064,7 +3084,7 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': args.get('allowNextTurn') is True}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': allow_next_turn}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 if post_previous is not None:
                     promote_human_post(session, message, post_previous)
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
@@ -3166,8 +3186,14 @@ class AppService:
                     raise AppError("This tool requested user approval. It must be answered by the user.", 403)
                 decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
                 approval["status"] = decision
+                comment = args.get('comment', '').strip()
+                if comment:
+                    approval['comment'] = comment
+                    self._message(session, 'user', f'Permission {decision}:\n\n{comment}', 'permission',
+                                  approvalId=args['id'], inputOrigin='approval')
                 if self.runtime:
-                    pending.append((self.runtime.approval, (session["id"], args["id"], decision)))
+                    values = (session["id"], args["id"], decision) + ((comment,) if comment else ())
+                    pending.append((self.runtime.approval, values))
             elif action == "attention.read":
                 from .attention import snapshot
                 # Acknowledge current owner facts, including globals changed

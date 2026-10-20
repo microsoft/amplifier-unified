@@ -719,6 +719,12 @@ This expands existing focused checks; no new frozen browser lane is claimed.
 
 ### Adaptive Home (October 19)
 
+October 20 follow-up: `focus-navigation` covers temporary Focus passes across
+bounded catalog pages, Previous/Next keyboard continuity, unchanged attention and
+runtime state, scope/search isolation, chat/draft restoration, page-aware
+sidebar/title/banner display, and compact Home identity. `adaptive-work` retains
+the existing Home, project, pin, pending-query, creation and Canvas journeys.
+
 **HOME-860**, recorded additively as `home.adaptive-work`, belongs to
 `adaptive-work-browser.mjs` in Extended browser checks. Run this focused smoke
 locally when changing Home, its scoped resource, or navigation/Canvas continuity.

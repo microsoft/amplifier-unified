@@ -83,6 +83,41 @@ async def test_stale_browser_target_rejects_before_any_input(active):
     assert not runtime.sent and not session['messages']
 
 
+@pytest.mark.parametrize('ended', [False, True])
+async def test_pending_file_policy_allows_human_guidance_without_next_turn(active, ended):
+    app, runtime, session = active
+    session.update(fileAccessPending=True, configurationPending=True)
+    if ended:
+        runtime.steer.return_value = {'accepted': False, 'reason': 'Run ended before admission.'}
+    result = await correction(app, expectedGenerationId='generation', allowNextTurn=True)
+    assert result['steering']['disposition'] == ('held' if ended else 'queued')
+    assert result['steering']['allowNextTurn'] is False
+    sent_session = runtime.steer.call_args.args[0]
+    assert sent_session['messages'][-1]['steering']['allowNextTurn'] is False
+    assert session['fileAccessPending'] and session['configurationPending']
+    assert session['execution']['currentTurnId'] == 'original'
+    assert not runtime.sent and not runtime.started
+    assert session['messages'][-1]['text'] == 'Please find a good pause point.'
+
+
+@pytest.mark.parametrize('state', ['idle', 'terminal', 'remounting', 'wrong_generation'])
+async def test_pending_file_policy_does_not_admit_new_or_stale_work(active, state):
+    app, runtime, session = active
+    session.update(fileAccessPending=True, configurationPending=True)
+    if state == 'idle':
+        session['status'] = 'idle'
+        session['workers'] = [{'id':'child', 'persistent':True, 'status':'idle'}]
+    elif state == 'terminal':
+        session['collaborationGeneration'].update(terminal=True, completed=True)
+    elif state == 'remounting':
+        session['configurationBusy'] = True
+    with pytest.raises(AppError):
+        await correction(app, expectedGenerationId='other' if state == 'wrong_generation' else 'generation',
+                         allowNextTurn=True)
+    runtime.steer.assert_not_awaited()
+    assert not runtime.sent and not runtime.started and not session['messages']
+
+
 @pytest.mark.parametrize('failure', ['ended', 'unsupported', 'lost'])
 async def test_failed_steering_never_starts_or_fails_current_work(active, failure):
     app, runtime, session = active

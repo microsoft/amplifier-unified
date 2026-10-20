@@ -34,3 +34,32 @@ export function currentWorkContext(value,view={},pinnedScope=null){
  return value?.scope===(pinnedScope||view.workHomeScope||'all')
   &&value?.requestedScope===(view.workHomeScope||'all')?value:null;
 }
+
+// A Focus pass is a tab-local reading position, never a shared skip/read state.
+const focusStorageKey='amplifier.work-home-focus.v1';
+export function readFocusCursor(browser){
+ try{
+  const value=JSON.parse(browser.sessionStorage.getItem(focusStorageKey));
+  return value&&typeof value.key==='string'&&['attention','unread','working','idle'].includes(value.kind)
+   &&Number.isSafeInteger(value.page)&&value.page>=0&&Number.isSafeInteger(value.index)&&value.index>=-1
+   &&(value.id===null||typeof value.id==='string')?value:null;
+ }catch{return null}
+}
+export function saveFocusCursor(browser,value){
+ try{browser.sessionStorage.setItem(focusStorageKey,JSON.stringify(value))}catch{}
+}
+export function focusPosition(page,cursor){
+ if(!page?.items?.length)return null;
+ const saved=cursor?.page===page.index?cursor:null;
+ const found=saved?.id?page.items.findIndex(chat=>chat.id===saved.id):-1;
+ const index=found>=0?found:Math.min(page.items.length-1,Math.max(0,saved?.index===-1?page.items.length-1:saved?.index||0));
+ return {page:page.index,index,id:page.items[index].id};
+}
+export function stepFocus(page,position,direction){
+ if(!position)return null;
+ const index=position.index+direction;
+ if(index>=0&&index<page.items.length)return {page:page.index,index,id:page.items[index].id};
+ if(direction>0&&page.index+1<page.pages)return {page:page.index+1,index:0,id:null};
+ if(direction<0&&page.index>0)return {page:page.index-1,index:-1,id:null};
+ return null;
+}

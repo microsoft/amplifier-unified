@@ -37,6 +37,8 @@ class Worker:
     def __init__(self):
         self.session = self.runtime = self.execution = None
         self.approvals = {}
+        self.approval_contexts = {}
+        self.approval_deliveries = {}
         self.operation_ids = set()
         self.operation_controls = 0
         self.stop_revision = 0
@@ -83,6 +85,9 @@ class Worker:
         future = asyncio.get_running_loop().create_future()
         options = options or ["allow", "deny"]
         self.approvals[identity] = (future, options)
+        from amplifier_web.host.approvals import REQUEST_CONTEXT
+        if REQUEST_CONTEXT.get() is not None:
+            self.approval_contexts[identity] = REQUEST_CONTEXT.get()
         publish({"type": "approval.requested", "id": identity, "prompt": prompt, "options": options})
         try:
             decision = await future
@@ -93,6 +98,7 @@ class Worker:
             raise
         finally:
             self.approvals.pop(identity, None)
+            self.approval_contexts.pop(identity, None)
 
     async def bridge(self, operation, args):
         timeout = 60
@@ -959,6 +965,74 @@ class Worker:
             if memory_control and self.memory_task is asyncio.current_task():
                 self.memory_task = None
 
+    async def resolve_approval(self, data):
+        identity = data['approval_id']
+        future, options = self.approvals[identity]
+        decision = data['decision']
+        if future.done() or decision not in options:
+            raise ValueError('Approval expired or decision is not offered')
+        comment = data.get('comment', '')
+        if not isinstance(comment, str) or len(comment) > 4000:
+            raise ValueError('Permission guidance must be at most 4000 characters.')
+        comment = comment.strip()
+        contents = (decision, comment)
+        existing = self.approval_deliveries.get(future)
+        if existing:
+            if existing[0] != contents:
+                raise ValueError('A different decision is already being delivered for this approval')
+            return await asyncio.shield(existing[1])
+
+        context = self.approval_contexts.get(identity)
+        if context is None and self.session:
+            context = self.session.coordinator.get('context')
+        if comment and context is None:
+            raise ValueError('Permission guidance could not reach the active conversation.')
+        stop_revision = self.stop_revision
+
+        async def deliver():
+            def current():
+                return (self.approvals.get(identity, (None,))[0] is future
+                        and not future.done() and self.stop_revision == stop_revision)
+            try:
+                if not current():
+                    raise ValueError('Approval expired before guidance delivery')
+                if comment:
+                    await context.add_message({'role': 'user',
+                        'content': f'Permission {decision}:\n\n{comment}',
+                        'metadata': {'approval_id': identity, 'source': 'approval_feedback'}})
+                if not current():
+                    raise ValueError('Approval expired during guidance delivery')
+                from amplifier_web.host.approvals import ApprovalDecision
+                future.set_result(ApprovalDecision(decision, comment or None))
+                return {'accepted': True, 'commentDelivered': bool(comment)}
+            except asyncio.CancelledError:
+                if not future.done():
+                    future.cancel()
+                raise
+            except Exception:
+                # A context append may have taken effect before failing. End
+                # this wait without approving or replaying the uncertain append.
+                if not future.done():
+                    future.set_exception(RuntimeError('Permission guidance delivery failed; no approval was applied.'))
+                raise
+
+        # Approval replies cannot take command_lock: the paused tool can own it.
+        # Share one delivery across retries, shielding it from a lost reply.
+        task = asyncio.create_task(deliver())
+        self.approval_deliveries[future] = (contents, task)
+        self.tasks.add(task)
+        def finished(done):
+            self.tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        def retired(done):
+            self.approval_deliveries.pop(done, None)
+            if not task.done():
+                task.cancel()
+        future.add_done_callback(retired)
+        return await asyncio.shield(task)
+
     async def _command_serial(self, data):
         identity = data.get("id")
         try:
@@ -976,11 +1050,7 @@ class Worker:
                     raise RuntimeError('The session has not finished loading successfully.')
                 result = {"accepted": True}
             elif op == "approval":
-                future, options = self.approvals[data["approval_id"]]
-                if future.done() or data["decision"] not in options:
-                    raise ValueError("Approval expired or decision is not offered")
-                future.set_result(data["decision"])
-                result = {"accepted": True}
+                result = await self.resolve_approval(data)
             elif op == "coordination.approval":
                 prompt = data.get("prompt")
                 decision = None
