@@ -107,3 +107,66 @@ async def test_explicit_heads_ref_uses_exact_branch_and_same_name_tag(same_tag):
     result = await ref_policy('https://example.invalid/repo', 'refs/heads/release/custom', runner)
     assert set(calls[0][3:]) == {'refs/heads/release/custom', 'refs/tags/release/custom'}
     assert result['kind'] == ('ambiguous' if same_tag else 'branch')
+
+
+@pytest.mark.parametrize('topology,authored', [('tag-only', False), ('same-name', False),
+                                                ('main-branch', False), ('same-name', True)])
+async def test_real_direct_installed_git_check_respects_provenance(app, repo, monkeypatch, topology, authored):
+    import shutil
+    import sys
+    from amplifier_web import runtime_environment as environments
+    from amplifier_web import runtime_qualification as qualification
+    from test_runtime_source_policy_resolver import BACKEND
+    uv = shutil.which('uv')
+    assert uv
+    remote = repo[0]
+    (remote / 'pyproject.toml').write_text('[project]\nname="fixture-component"\nversion="1.0"\n'
+        '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n')
+    (remote / 'backend.py').write_text(BACKEND)
+    git(remote, 'add', '.'); git(remote, 'commit', '-m', 'installable fixture')
+    installed_revision = git(remote, 'rev-parse', 'HEAD')
+    ref = 'main' if topology == 'main-branch' else 'stable'
+    if topology != 'main-branch':
+        git(remote, 'tag', ref)
+    if topology == 'same-name':
+        git(remote, 'branch', ref)
+    manifest = remote.parent / 'worker.toml'
+    manifest.write_text('[project]\nname="worker"\nversion="1"\n' +
+        ('dependencies=["fixture-component"]\n[tool.uv.sources]\nfixture-component={git="' + remote.as_uri() + '",branch="stable"}\n' if authored else ''))
+    monkeypatch.setattr(environments, 'manifest_path', lambda: manifest)
+    monkeypatch.setenv('UV_NO_INDEX', '1')
+    monkeypatch.delenv('UV_OFFLINE', raising=False)
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
+    monkeypatch.setenv('UV_CACHE_DIR', str(remote.parent / 'uv-cache'))
+    generation = 'd' * 32 if authored else None
+    project = environments.prepare_project(app.data_dir, generation)
+    await updates.process(uv, 'sync', '--project', str(project), '--python', sys.executable, timeout=90)
+    if not authored:
+        await updates.process(uv, 'pip', 'install', '--python', str(project / '.venv/bin/python'),
+            'git+' + remote.as_uri() + '@' + ref, timeout=90)
+    else:
+        project = await qualification.freeze(app.update_manager, generation, project)
+        (app.data_dir / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    installed = qualification.installed_graph(project)
+    item = next(item for item in installed if item['name'] == 'fixture-component')
+    assert item['directUrl']['vcs_info']['requested_revision'] == (installed_revision if authored else ref)
+    assert item['directUrl']['vcs_info']['commit_id'] == installed_revision
+    if topology == 'same-name':
+        git(remote, 'checkout', 'stable')
+    (remote / 'bundle.md').write_text('new upstream commit')
+    git(remote, 'commit', '-am', 'new upstream commit')
+    latest = git(remote, 'rev-parse', 'HEAD')
+    before = next(row for row in environments.inventory(app.data_dir) if row.get('package') == 'fixture-component')
+    assert before['eligible'] and not before.get('cacheManaged')
+    if authored:
+        assert before['policyOrigin']['kind'] == 'prepared-manifest'
+    else:
+        assert not before.get('policyOrigin')
+    assert before['provenance'] == 'installed Git distribution'
+    await app.update_manager.check(tier='other')
+    row = next(row for row in app.update_manager.inventory if row.get('package') == 'fixture-component')
+    if topology == 'main-branch' or authored:
+        assert row['status'] == 'update' and row['latest'] == latest
+    else:
+        assert row['status'] == 'pinned' and not row['eligible'] and 'latest' not in row
+    assert qualification.installed_graph(project) == installed

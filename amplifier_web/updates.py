@@ -740,7 +740,18 @@ class UpdateManager:
                         except (ValueError, RuntimeError, TimeoutError):
                             row['status'] = 'check_failed'
                         return
-                    prove_kind = bool(row.get('cacheManaged') or row.get('sharedSource') or row.get('kind') == 'bundle / module')
+                    origin = row.get('policyOrigin') or {}
+                    typed_policy = (origin.get('kind') in {'prepared-manifest', 'selected-declaration',
+                                                          'verified-cache-branch', 'checked-source'}
+                                    and all(origin.get(key, '') == row.get(key, '')
+                                            for key in ('url', 'ref', 'subdirectory'))
+                                    and origin.get('revision') == row.get('current'))
+                    # PEP 610 requested_revision has no ref kind. Legacy/raw
+                    # installed Git rows need the same proof as cache URIs;
+                    # retain an exact already-qualified authored policy.
+                    prove_kind = bool(row.get('cacheManaged') or row.get('sharedSource')
+                        or row.get('kind') == 'bundle / module'
+                        or row.get('kind') == 'runtime dependency' and not typed_policy)
                     key = (row['url'], row['ref'], prove_kind)
                     task = remote_tasks.setdefault(key, None)
                     if task is None:

@@ -158,7 +158,7 @@ policy already exists. Actual resolver regressions cover both marker selections.
 
 ## Cached source reference proof
 
-The cache/shared-binding follow-up verifies an untyped ref against both its exact
+The cache/shared-binding and raw installed-Git follow-up verifies an untyped ref against both its exact
 branch and same-name tag in one remote response. Availability checks join identical
 repository/ref lookups within the existing access scope; a cached branch-only
 lookup cannot substitute for this proof. Tag-only and same-name branch/tag sources
@@ -178,3 +178,9 @@ cover tag-only, conflicting-name, ordinary branch and offline cases. Focused
 tests cover grouped queries, access boundaries, fresh-check cache invalidation,
 changed revisions, cancellation and preservation of checked policy. This is
 isolated qualification, not deployment or live-provider evidence.
+
+Real direct Git installs are checked before their first freeze, including a tag-only source,
+a branch/tag name collision, and an ordinary branch. An exact qualified authored-branch
+receipt remains authoritative even when a same-name tag exists. Unchecked transitive
+references stay protected with their original name available for selected-source
+reconciliation; they are not assumed to be permanently fixed by this check.
