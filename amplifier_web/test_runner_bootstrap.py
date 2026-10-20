@@ -6,6 +6,7 @@ Cached or sourceless bytecode beside a controller is never source authority.
 import base64
 import hashlib
 import importlib.abc
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -43,6 +44,25 @@ def main():
             exec(compile(sources[name], module.__spec__.origin, 'exec', dont_inherit=True), module.__dict__)
 
     sys.meta_path.insert(0, SourceOnly())
+    # Some fixed helpers deliberately use spec_from_file_location instead of
+    # package imports. Keep those SourceFileLoader calls on the same verified
+    # bytes; they must not reintroduce adjacent cache authority.
+    source_get_code = importlib.machinery.SourceFileLoader.get_code
+    bytecode_get_code = importlib.machinery.SourcelessFileLoader.get_code
+    directory = controller.parent.resolve()
+    def source_code(loader, fullname):
+        path = Path(loader.path).resolve()
+        if path.is_relative_to(directory):
+            if path.parent != directory or path.name not in sources:
+                raise ImportError('The controller module is outside its verified manifest.')
+            return compile(sources[path.name], str(path), 'exec', dont_inherit=True)
+        return source_get_code(loader, fullname)
+    def bytecode_code(loader, fullname):
+        if Path(loader.path).resolve().is_relative_to(directory):
+            raise ImportError('Controller bytecode is outside its verified source manifest.')
+        return bytecode_get_code(loader, fullname)
+    importlib.machinery.SourceFileLoader.get_code = source_code
+    importlib.machinery.SourcelessFileLoader.get_code = bytecode_code
     # Older retained controllers bootstrap from system Python into their exact
     # qualified interpreter. Keep that transition on this same verified source
     # path; executing the old script directly would restore normal pyc loading.
