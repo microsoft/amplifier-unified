@@ -30,6 +30,7 @@ from . import test_environment_preparation as dependencies
 from . import test_environment_profiles as profiles
 from . import test_environment_recovery as recovery
 from . import test_environment_setup as setup
+from . import test_capacity_settings as capacity_settings
 
 REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe'
 DTU_COMMIT = '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04'
@@ -302,7 +303,7 @@ def invoke(config, home, row, action, args):
 
 def capacity(app, config):
     try:
-        result = invoke(config, app.data_dir, {}, 'capacity', {})
+        result = invoke(capacity_settings.apply(app, config), app.data_dir, {}, 'capacity', {})
         return result['capacity'] if result.get('ok') else {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
     except (OSError, ValueError, TimeoutError):
         return {'available': False, 'blockers': [{'code': 'capacity_unknown'}]}
@@ -485,7 +486,7 @@ def resume_preparation_removal(app, row, config, *, expected_revision=None, admi
         return project_result(home, row, request)
 
 
-def effect(app, row, action, args, config, request, admit):
+def effect(app, row, action, args, config, request, admit, policy_admit=None):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
     locked = admitted = binding_pending = False
@@ -580,11 +581,15 @@ def effect(app, row, action, args, config, request, admit):
                     prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
                         row['snapshot'], row['profileId'], request['requestId'])
                     row = save(home, row, preparedDependencies=prepared_dependencies)
-                admit()
+                if policy_admit:
+                    launch_config = policy_admit()
+                else:
+                    admit()
+                    launch_config = config
                 # Identity and exact source provenance precede any Docker effect.
                 row = save(home, row, backendAdmitted=True, environmentState='starting')
                 admitted = True
-                result = invoke(config, home, row, 'start', args)
+                result = invoke(launch_config, home, row, 'start', args)
         elif action in {'remove', 'finishCleanup'} and (not row.get('backendAdmitted') or row.get('guestRemoved')):
             result = row.get('guestRemoval') or {'ok': True, 'status': 'removed', 'universeId': row.get('universeId'),
                 'message': 'The test guest is absent. All local source and evidence files were retained.'}
@@ -882,6 +887,8 @@ async def dispatch(app, action, args, origin, caller, authority):
             current_config = resolve_configuration(app, row, current_config)
         if current_config != config:
             raise AppError('The approved test environment configuration changed.', 409)
+        if action.endswith('.start'):
+            capacity_settings.load(app)
     try:
         actor = {'sessionId': sid, 'principal': principal}
         if action in {'workspace.environments.setup', 'workspace.environments.setup.reconcile', 'workspace.environments.setup.cleanup'}:
@@ -925,11 +932,15 @@ async def dispatch(app, action, args, origin, caller, authority):
             raise AppError('Full environment retention is available only for this environment’s original Incus backend.', 409)
         guard()
         loop = asyncio.get_running_loop()
-        async def locked_guard():
+        async def locked_guard(capacity=False):
             async with app.lock:
                 guard()
+                if capacity:
+                    return capacity_settings.apply(app, config)
         def admit():
             asyncio.run_coroutine_threadsafe(locked_guard(), loop).result(timeout=10)
+        def policy_admit():
+            return asyncio.run_coroutine_threadsafe(locked_guard(capacity=True), loop).result(timeout=10)
         if (action.rsplit('.', 1)[-1] in {'remove', 'finishCleanup'}
                 and row.get('guestRemoved')
                 and (row.get('preparationPending') or isinstance(row.get('preparationCleanup'), dict))):
@@ -957,7 +968,7 @@ async def dispatch(app, action, args, origin, caller, authority):
         if action.endswith('.reconcile'):
             result = await app.worktrees.finish_thread(recovery.reconcile, app, row, args, config, request, admit)
         else:
-            result = await app.worktrees.finish_thread(effect, app, row, action.rsplit('.', 1)[1], args, config, request, admit)
+            result = await app.worktrees.finish_thread(effect, app, row, action.rsplit('.', 1)[1], args, config, request, admit, policy_admit)
         app.operations.notify()
         return {'accepted': True, 'result': result}
     except (OSError, ValueError, sqlite3.Error, LockTimeout) as exc:
