@@ -253,7 +253,8 @@ async def test_changed_declaration_after_refresh_cannot_pass_into_install(select
 def test_optional_pin_is_protective_even_if_not_selected_to_authorize_recovery():
     raw = ('[project]\nname="another"\nversion="1"\n'
            '[project.optional-dependencies]\nunused=["' + NAME + ' @ git+' + URL + '@' + OLD + '"]\n').encode()
-    assert migration.authored_constraints(raw)[NAME]['ref'] == OLD
+    assert NAME in migration.authored_constraints(raw)
+    assert migration.authored_constraints(raw)[NAME] is None  # Protective, never selection authority.
 
 
 @pytest.mark.parametrize('key', ['UV_CONFIG_FILE', 'UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT'])

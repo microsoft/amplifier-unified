@@ -182,4 +182,3 @@ prompts for the same configuration. If another component already prompts a
 fresh candidate, remaining legacy decisions are reconsidered against that
 candidate's selected declarations. Existing generations and rollback evidence
 are unchanged; this is not a live-worker dependency rewrite.
-
