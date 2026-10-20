@@ -89,8 +89,10 @@ remote execution host.
 
 ## Commissioning-manager placement
 
-An authenticated assignment owner may inspect, create or attach a checkout for
-one of its currently bound members and request that idle member's handoff.
+An authenticated direct commissioning manager may inspect, create or attach a
+checkout for its currently bound member and request that idle member's handoff.
+The original creation receipt and active membership prove that relationship;
+nested managers can place their own members, not arbitrary assignment peers.
 The same native settlement, writer-release and durable placement owner applies.
 The manager does not acquire arbitrary peer controls, cleanup, configuration or
 uncertain-handoff reconciliation authority. Independent peers are excluded.
@@ -100,6 +102,8 @@ reconciled through their existing controls first.
 The receipt captures the manager's transport-bound input ancestry, assignment
 revision, human/task/Stop boundaries and the member's existing placement guards.
 Authority is rechecked before release and before committing placement. The
+same objective may continue in later manager turns, and unrelated assignment
+updates do not cancel an accepted placement. The
 manager receives a reserved, guarded outcome notification, including unknown or
 rejected outcomes when its original authority remains valid. The member receives
 no new input and no replay. A new brief can run only after confirmed placement.

@@ -27,7 +27,7 @@ def definitions(schema, string):
         'worktree.inspect': ('Inspect the current execution repository or an explicit repositoryPath inside this task\'s workspace/execution folders. Non-Git workspaces can select a child repository. Relative paths use the execution folder. Keep the returned absolute repository root for later creation/attachment.', schema({**sid, **repository}, ['sessionId'])),
         'worktree.list': ('List checkouts associated with this task and durable handoff receipts.', schema(sid)),
         'worktree.status': ('Inspect a checkout, its original source manifest, conflicts and Git ownership.', schema(identity)),
-        'worktree.create': ('Create a managed checkout from an exact inspected source revision. repositoryPath selects the source; carry the inspected absolute root for multi-repository work. Default clean committed HEAD; carry_dirty explicitly copies staged/unstaged/untracked evidence. Does not move execution or configure dependencies. A commissioning manager may prepare a checkout for an idle member by supplying that member’s sessionId.', schema({**sid, **repository, 'sourceRevision': string(100), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId', 'sourceRevision'])),
+        'worktree.create': ('Create a managed checkout from an exact inspected source revision. repositoryPath selects the source; carry the inspected absolute root for multi-repository work. Default clean committed HEAD; carry_dirty explicitly copies staged/unstaged/untracked evidence. Does not move execution or configure dependencies. A direct commissioning manager may prepare a checkout for its idle member by supplying that member’s sessionId.', schema({**sid, **repository, 'sourceRevision': string(100), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId', 'sourceRevision'])),
         'worktree.attach': ('Associate an existing Git worktree from the selected repositoryPath (canonical home by default); does not copy history or start work. Attached folders cannot be deleted through managed cleanup.', schema({**sid, **repository, 'path': string(4000)}, ['sessionId', 'path'])),
         'worktree.archive': ('Retire an unused app-created checkout while retaining every file and its Git registration. Moves the whole checkout to private archive storage; does not reclaim disk space or create an immutable snapshot. Active or ambiguous ownership is refused.', schema({**identity, **revision})),
         'worktree.restore': ('Restore an archived checkout without sending input or moving conversation execution. Keeps dirty, ignored and unknown files. Refuses a destination collision.', schema({**identity, **revision})),
@@ -603,7 +603,7 @@ class Worktrees:
                      if m.get('role') == 'user' and m.get('inputOrigin') in {'ui', 'user', 'voice'}), None)
 
     def authority_changed(self, record, *, continuation=False):
-        if reason := manager_placement.guard(self.app, record):
+        if reason := manager_placement.guard(self.app, record, continuation=continuation):
             return reason
         session = self.app._session(record['sessionId'])
         if session.get('interruptionRevision', 0) != record.get('interruptionRevision', 0):
@@ -626,18 +626,21 @@ class Worktrees:
                 or session.get('workingDirectory') != record['target']):
             return 'The requested checkout is no longer the committed execution folder.'
 
+    def suppress_continuation(self, record, reason):
+        record['continuation'] = {'status': 'suppressed', 'detail': reason}
+        self.save(record)
+        if record.get('managerPlacement'):
+            request = self.continuation_request(record)
+            request['subscription'].update(status='suppressed', open=False, reason=reason)
+            self.app.collaboration.save(request['requestId'], request)
+            self.app.db.commit()
+
     def enqueue_continuation(self, record):
         if not record.get('resumeRequested') or record.get('continuation', {}).get('status') not in {None, 'waiting', 'backpressured'}:
             return
         reason = self.authority_changed(record, continuation=True)
         if reason:
-            record['continuation'] = {'status': 'suppressed', 'detail': reason}
-            self.save(record)
-            if record.get('managerPlacement'):
-                request = self.continuation_request(record)
-                request['subscription'].update(status='suppressed', open=False, reason=reason)
-                self.app.collaboration.save(request['requestId'], request)
-                self.app.db.commit()
+            self.suppress_continuation(record, reason)
             return
         owner = self.app.collaboration
         request = self.continuation_request(record)
@@ -701,8 +704,7 @@ class Worktrees:
                         current['configurationBusy'] = False
                     reason = self.continuation_guard({'senderSessionId': record['sessionId'], 'handoffId': record['id']})
                     if reason:
-                        record['continuation'] = {'status': 'suppressed', 'detail': reason}
-                        self.save(record)
+                        self.suppress_continuation(record, reason)
                     else:
                         self.enqueue_continuation(record)
                     self.changed()

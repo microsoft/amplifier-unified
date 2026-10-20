@@ -107,7 +107,7 @@ compare those exact links, not equal message text.
    canonical workspace for history. This shares that checkout; it does not
    allocate a second worktree or isolate ports, services, or browser state.
    To give a commissioned member its own checkout, let its initial setup brief
-   finish without editing shared files. Once idle, the assignment owner can use
+   finish without editing shared files. Once idle, its direct commissioning manager can use
    `worktree.inspect/create` (or `attach`) with the member's `sessionId`, followed
    by `worktree.handoff` with its exact checkout and execution revision.
    This changes the member's execution folder, not the manager's. Finish your

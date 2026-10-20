@@ -33,7 +33,7 @@ async def checkout(app, source, target, root):
         {'sessionId': target['id'], 'repositoryPath': str(root)}, 'inspect'))['result']
     return (await agent_action(app, source, 'worktree.create', {
         'sessionId': target['id'], 'repositoryPath': str(root),
-        'sourceRevision': inspected['repository']['sourceRevision']}, 'create'))['result']
+        'sourceRevision': inspected['repository']['sourceRevision']}, 'create-' + target['id']))['result']
 
 
 async def move(app, source, target, record, identity='move'):
@@ -70,20 +70,24 @@ async def test_manager_places_idle_member_without_moving_itself_or_independent_c
     assert all(row[0] != target['id'] for row in app.runtime.inputs)
 
 
-@pytest.mark.parametrize('invalid', ['independent', 'nonowner', 'detached', 'stopped_assignment',
-                                   'working', 'stopped', 'error', 'child', 'stale_generation'])
+@pytest.mark.parametrize('invalid', ['independent', 'noncommissioner', 'creation_receipt', 'detached', 'stopped_assignment',
+                                   'working', 'preparing', 'stopped', 'error', 'child', 'stale_generation'])
 async def test_manager_scope_does_not_authorize_other_work(app, tmp_path, invalid):
     source, target, independent, root = await prepared(app, tmp_path)
     if invalid == 'independent':
         target = independent
-    elif invalid in {'nonowner', 'detached', 'stopped_assignment'}:
+    elif invalid in {'noncommissioner', 'detached', 'stopped_assignment'}:
         assignment = app.assignments.current(source)
-        if invalid == 'nonowner': assignment['ownerSessionId'] = target['id']
+        if invalid == 'noncommissioner': assignment['members'][target['id']]['creatorSessionId'] = target['id']
         elif invalid == 'detached': assignment['members'][target['id']]['status'] = 'detached'
         else: assignment['status'] = 'stopped'
         app.assignments.save(assignment)
     elif invalid in {'working', 'stopped', 'error'}:
         target['status'] = invalid
+    elif invalid == 'preparing':
+        app.runtime._preparations = {target['id']: True}
+    elif invalid == 'creation_receipt':
+        target['collaboration']['requestId'] = 'missing-creation'
     elif invalid == 'stale_generation':
         source['collaborationGeneration']['terminal'] = True
     if invalid == 'child':
@@ -107,7 +111,7 @@ async def test_manager_authority_is_rechecked_at_native_boundary(app, tmp_path, 
     async def boundary(*args, **kwargs):
         if change == 'assignment':
             value = app.assignments.current(source)
-            value['revision'] += 1
+            value['members'][target['id']]['status'] = 'detached'
             app.assignments.save(value)
         elif change.endswith('_stop'):
             row = source if change.startswith('manager') else target
@@ -185,6 +189,75 @@ async def test_manager_can_attach_then_place_its_idle_member(app, tmp_path):
     await settle(app)
     assert app.worktrees.read(target['id'], pending['id'])['phase'] == 'applied'
     assert target['workingDirectory'] == str(root)
+
+
+async def test_direct_nested_manager_can_place_its_member_but_assignment_owner_cannot(app, tmp_path):
+    owner, source, _, root = await prepared(app, tmp_path)
+    plan(app, source)
+    await generation(app, source, 'nested-manager', ['nested-input'])
+    nested = await commission(app, source, 'nested-create', returnNotification=False)
+    await initial_accepted(app, nested['initialInputId'])
+    target = app._session(nested['sessionId'])
+    await generation(app, target, 'recipient-' + nested['initialInputId'], [nested['initialInputId']])
+    await finish(app, target, nested['initialInputId'])
+    await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': 'idle'})
+    with pytest.raises(AppError):
+        await checkout(app, owner, target, root)
+    record = await checkout(app, source, target, root)
+    pending = await move(app, source, target, record)
+    await settle(app)
+    assert app.worktrees.read(target['id'], pending['id'])['phase'] == 'applied'
+    assert source.get('workingDirectory', source['workspace']) == str(tmp_path)
+
+
+async def test_sibling_creation_and_manager_return_do_not_cancel_pending_placements(app, tmp_path):
+    source, first, _, root = await prepared(app, tmp_path)
+    first_checkout = await checkout(app, source, first, root)
+    launched = []
+    app.worktrees.launch = lambda record, session: launched.append((copy.deepcopy(record), session))
+    first_move = await move(app, source, first, first_checkout, 'first-move')
+    created = await commission(app, source, 'second-member', returnNotification=False)
+    await initial_accepted(app, created['initialInputId'])
+    second = app._session(created['sessionId'])
+    await generation(app, second, 'recipient-' + created['initialInputId'], [created['initialInputId']])
+    await finish(app, second, created['initialInputId'])
+    await app.on_runtime_event('runtime.status', {'sessionId': second['id'], 'status': 'idle'})
+    second_checkout = await checkout(app, source, second, root)
+    second_move = await move(app, source, second, second_checkout, 'second-move')
+    await app.worktrees.finish(*launched[0])
+    assert app.worktrees.read(first['id'], first_move['id'])['phase'] == 'applied'
+    await generation(app, source, 'manager-return', ['first-move-return'])
+    await app.worktrees.finish(*launched[1])
+    result = app.worktrees.read(second['id'], second_move['id'])
+    assert result['phase'] == 'applied'
+    notice = app.collaboration.receipt(result['continuation']['requestId'])
+    assert notice['subscription']['status'] != 'suppressed'
+    assert notice['terminalOutcome']['outcome'] == 'checkout-applied'
+    assert not app.worktrees.continuation_guard(notice)
+
+
+async def test_restart_closes_reserved_return_when_applied_move_is_superseded(app, tmp_path):
+    source, target, _, root = await prepared(app, tmp_path)
+    record = await checkout(app, source, target, root)
+    app.worktrees.enqueue_continuation = lambda record: None  # Crash before notification.
+    pending = await move(app, source, target, record)
+    await settle(app)
+    assert app.worktrees.read(target['id'], pending['id'])['phase'] == 'applied'
+    source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    app._publish_changes(sessions={source['id']})
+    await app.close()
+    runtime = app.runtime
+    other = runtime.app = AppService(app.data_dir, runtime, workspace=tmp_path)
+    try:
+        other.worktrees.start()
+        await settle(other)
+        notice = other.collaboration.receipt('worktree-wait:' + pending['id'])
+        assert notice['subscription']['status'] == 'suppressed'
+        assert notice['subscription']['open'] is False
+        assert other._session(target['id'])['workingDirectory'] == record['path']
+        assert runtime.quiesce_for_handoff.await_count == 1
+    finally:
+        await other.close()
 
 
 async def test_restart_never_replays_an_unknown_manager_move(app, tmp_path, monkeypatch):
