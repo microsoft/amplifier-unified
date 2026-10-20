@@ -539,7 +539,9 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
-    assert set(inputs) == {'app004_qualification', 'mcp_boundary'}
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption'}
+    assert inputs['attachment_consumption']['type'] == 'boolean'
+    assert inputs['attachment_consumption']['default'] == 'false'
     assert inputs['app004_qualification']['type'] == 'boolean'
     assert inputs['app004_qualification']['default'] == 'false'
     assert inputs['mcp_boundary']['type'] == 'boolean'
@@ -563,12 +565,14 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     commands = browser_runner_commands(steps)
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
+    attachment_flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
     assert all(command.count(flag) == 1 for command in commands)
+    assert all(command.count(attachment_flag) == 1 for command in commands)
     # Empty/default selection executes exactly the preexisting plan and budget.
-    assert commands[0].replace(flag, '').strip() == (
+    assert commands[0].replace(flag, '').replace(attachment_flag, '').strip() == (
         'python scripts/browser_check_runner.py --plan frontend/tests/browser-checks.json '
         '--output output/browser-checks --initialize')
-    assert commands[1].replace(flag, '').strip() == (
+    assert commands[1].replace(flag, '').replace(attachment_flag, '').strip() == (
         'uv run --no-sync python scripts/browser_check_runner.py '
         '--plan frontend/tests/browser-checks.json --output output/browser-checks --budget-seconds 1500')
     assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
@@ -588,11 +592,18 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert any(s.get('run') == 'npm ci --prefix frontend' for s in before)
     assert any(s.get('run') == 'uv sync --locked --group dev --group artifacts' for s in before)
     assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
-    next_step = steps[steps.index(contract) + 1]
+    # The fixed attachment-only contracts are inactive for APP004/default.
+    after = [step for step in steps[steps.index(contract) + 1:]
+             if step.get('if') != '${{ inputs.attachment_consumption }}']
+    next_step = after[0]
     assert next_step['name'] == 'Run all extended browser scenarios serially'
     assert 'if' not in next_step  # Implicit success gate leaves initialized rows unrun on failure.
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
-    assert not any('continue-on-error' in step for step in steps)
+    continued = [step for step in steps if 'continue-on-error' in step]
+    assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts'}
+    assert all(step['if'] == '${{ inputs.attachment_consumption }}' for step in continued)
+    failures = next(step for step in steps if step.get('name') == 'Preserve failed attachment contracts')
+    assert failures['run'] == 'exit 1' and 'always()' in failures['if']
     diagnostics = steps[-1]
     assert diagnostics['if'] == 'always()'
     assert diagnostics['uses'] == 'actions/upload-artifact@v4'
