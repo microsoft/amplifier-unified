@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.189",
+      "title": "Prepare coordinated checkouts and explain update failures",
+      "changes": [
+        "Let a manager inspect and prepare separate working checkouts for its directly commissioned idle chats, with current assignment, permission and configuration checks before changes are accepted.",
+        "Preserve completed parallel returns and retire obsolete waits so managers can continue coordinating work without replaying completed operations.",
+        "Include the affected component and source mismatch in safe update diagnostic receipts when ecosystem validation fails, while continuing to reject a changed dependency.",
+        "Restore post-release browser coverage for existing-folder creation, mobile navigation and settled chat shortcut layouts."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.188",
       "title": "Browse work by status and recover coordinated chats",
       "changes": [
