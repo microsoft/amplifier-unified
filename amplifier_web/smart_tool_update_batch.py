@@ -1,6 +1,9 @@
 """Independent, durable results for managed Smart Tool update attempts."""
 import asyncio
 import re
+import time
+
+from .managed_runner_backend import backend
 
 from .update_diagnostics import exception_type
 
@@ -21,7 +24,7 @@ async def attempt(manager, item, phase, operation, *args):
         # Keep only fixed reason codes and code-defined error classes.
         item['failure'] = {'phase': phase, 'errorType': exception_type(error),
                            'reason': getattr(error, 'diagnostic_facts', {}).get('reason', 'smart-tool-update-failed')}
-        if item['failure']['reason'] not in {'smart-tool-startup-failed', 'missing-configured-environment'}:
+        if item['failure']['reason'] not in {'smart-tool-startup-failed', 'missing-configured-environment', 'managed-runner-qualification-failed', 'managed-runner-selection-changed', 'managed-runner-package-changed'}:
             item['failure']['reason'] = 'smart-tool-update-failed'
         return None
 
@@ -38,6 +41,10 @@ async def stage(manager):
             await manager.publish(phase='staging', error=None, detail='Preparing Smart Tool updates…')
             for source in sources:
                 item = {'previous': source['installationId'], 'revision': source.get('latest')}
+                if source.get('runnerKind'):
+                    item['runnerSource'] = source
+                    item['runnerUpdate'] = backend(source['runnerKind']).intent_id(source)
+                    item['resultId'] = source['runnerKind'] + '-' + item['runnerUpdate']
                 label = source.get('label')
                 if isinstance(label, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', label):
                     item['component'] = label
@@ -47,6 +54,8 @@ async def stage(manager):
                 target = await attempt(manager, item, 'stage', manager.service.smart_tools.stage_update, source)
                 if target is not None:
                     item['target'] = target['id']
+                    if target.get('runnerUpdate'):
+                        item['runnerUpdate'] = target['runnerUpdate']
                 await manager.publish(pendingSmartTools=pending)
         await manager.publish(phase='staged', detail='Smart Tools prepared; waiting for work to finish.')
     await activate(manager)
@@ -54,6 +63,10 @@ async def stage(manager):
 
 async def finish(manager, pending):
     failures = [row for row in pending if row.get('failure')]
+    if pending and any(row.get('runnerUpdate') and not row.get('failure') for row in pending):
+        await manager.publish(phase='staged', pendingSmartTools=pending, error=None,
+                              detail='Checking the updated test runner when machine capacity is available. Existing work keeps its original runner.')
+        return
     sequence = {**manager.service.state['updates'].get('sequence', {})}
     if pending:
         if manager.diagnostics.state.get('batch', {}).get('activatedComponents'):
@@ -63,15 +76,44 @@ async def finish(manager, pending):
         await manager.publish(phase='error', pendingSmartTools=pending, sequence=sequence,
                               error=f'{len(failures) or len(pending)} Smart Tool update(s) need attention. Other ready tools were updated. Retry or skip each affected tool below.')
     else:
-        sequence['nextStage'] = 'other'
+        sequence['nextStage'] = 'application' if manager.service.state['updates'].get('runnerAvailabilityCheck') else 'other'
         manager.diagnostics.record('smart-tools-complete', 'succeeded')
         manager.diagnostics.clear_failure()
-        await manager.publish(phase='installed', pendingSmartTools=[], sequence=sequence, error=None,
+        await manager.publish(phase='installed', pendingSmartTools=[], sequence=sequence, error=None, runnerAvailabilityCheck=False,
                               detail='Smart Tools updated. Previous versions are retained for rollback.')
         manager.inventory = []
 
 
 async def activate(manager):
+    # Runner candidates qualify through their own exact resource ownership. They
+    # must not wait for unrelated chats to finish or hold the app lifecycle lock.
+    if not manager.lock.locked():
+        async with manager.lock:
+            pending = list(manager.service.state['updates'].get('pendingSmartTools', []))
+            for item in list(pending):
+                if not item.get('runnerSource') or item.get('failure'):
+                    continue
+                if not item.get('runnerUpdate') or not item.get('target'):
+                    item['failure'] = {'phase': 'stage', 'reason': 'managed-runner-qualification-failed', 'errorType': 'Exception'}
+                    await manager.publish(pendingSmartTools=pending)
+                    continue
+                advance = backend(item['runnerSource']['runnerKind']).advance
+                started = time.monotonic()
+                for step in range(8):
+                    result = await attempt(manager, item, 'qualify', advance,
+                                           manager.service, item['runnerUpdate'])
+                    if not result or result.get('complete') or not result.get('progressed') or time.monotonic() - started > 15:
+                        break
+                    # Yield while the owned worker starts; never hold app.lock.
+                    await asyncio.sleep(0.1)
+                if result and result.get('complete'):
+                    pending.remove(item)
+                elif result:
+                    item['runnerWaiting'] = result.get('waiting')
+                await manager.publish(pendingSmartTools=pending)
+            if not pending or all(row.get('runnerSource') or row.get('failure') for row in pending):
+                await finish(manager, pending)
+                return
     async with manager.service.runtime_lifecycle():
         async with manager.lock:
             pending = list(manager.service.state['updates'].get('pendingSmartTools', []))
@@ -84,7 +126,7 @@ async def activate(manager):
                 manager.service._publish_changes(globals={'updates', 'settings'})
             try:
                 for item in list(pending):
-                    if item.get('failure'):
+                    if item.get('failure') or item.get('runnerSource'):
                         continue
                     if not item.get('target'):
                         # A restart during staging must not replay installation.
@@ -114,16 +156,18 @@ async def retry(manager, identity_value):
         raise ValueError('Wait for the current update to finish.')
     async with manager.lock:
         pending = list(manager.service.state['updates'].get('pendingSmartTools', []))
-        item = next((row for row in pending if row['previous'] == identity_value), None)
+        item = next((row for row in pending if row.get('resultId', row['previous']) == identity_value), None)
         if not item or not item.get('failure'):
             raise ValueError('This tool has no failed update to retry.')
         item.pop('failure')
         await manager.publish(phase='staging', error=None, pendingSmartTools=pending)
         if not item.get('target'):
-            source = {'installationId': item['previous'], 'latest': item['revision']}
+            source = item.get('runnerSource') or {'installationId': item['previous'], 'latest': item['revision']}
             target = await attempt(manager, item, 'stage', manager.service.smart_tools.stage_update, source)
             if target is not None:
                 item['target'] = target['id']
+                if target.get('runnerUpdate'):
+                    item['runnerUpdate'] = target['runnerUpdate']
         await manager.publish(phase='staged', pendingSmartTools=pending)
     await activate(manager)
 
@@ -134,9 +178,18 @@ async def skip(manager, identity_value):
     async with manager.lock:
         state = manager.service.state['updates']
         pending = list(state.get('pendingSmartTools', []))
-        item = next((row for row in pending if row['previous'] == identity_value), None)
+        item = next((row for row in pending if row.get('resultId', row['previous']) == identity_value), None)
         if not item or not item.get('failure'):
             raise ValueError('This tool has no failed update to skip.')
+        if item.get('runnerSource'):
+            # Failed/uncertain owned checks keep their exact package and receipt.
+            # Skipping only declines selection; it never erases recovery evidence.
+            await backend(item['runnerSource']['runnerKind']).skip(manager.service, item.get('runnerUpdate'))
+            pending.remove(item)
+            await manager.publish(pendingSmartTools=pending,
+                                  skippedSmartTools={**state.get('skippedSmartTools', {}), identity_value: item['revision']})
+            await finish(manager, pending)
+            return
         cleanup = {key: value for key, value in item.items() if key != 'failure'}
         await attempt(manager, cleanup, 'cleanup', manager.service.smart_tools.discard_update,
                       item['previous'], item.get('revision'))

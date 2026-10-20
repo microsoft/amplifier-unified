@@ -55,7 +55,7 @@ class ManagedUpdates:
         from .updates import pinned, safe_label
         rows = []
         for item in self.state['installations']:
-            if item.get('supersededBy') or item.get('stagedFrom'): continue
+            if item.get('supersededBy') or item.get('stagedFrom') or item.get('runnerCandidate'): continue
             repository, ref = item.get('repository'), item.get('ref') or 'HEAD'
             if not repository or not item.get('commit'): continue
             servers = [row for row in self.state['servers'] if row.get('installationId') == item['id']]
@@ -75,9 +75,19 @@ class ManagedUpdates:
                              'label': row['name'], 'status': 'local', 'eligible': False,
                              'updateTier': 'other', 'usage': 'configured', 'usageEvidence': ['External MCP connection'],
                              'detail': 'Updated by its service owner or external package manager.'})
-        return rows
+        from .managed_runner_updates import update_sources
+        runner_rows = update_sources(self.service)
+        selected = {row['installationId'] for row in runner_rows}
+        # The runner has a separate source policy. Never mutate a user's MCP
+        # connection or infer its pin from this runner's installed commit.
+        rows = [row for row in rows if row.get('installationId') not in selected
+                or any(server.get('installationId') == row.get('installationId') for server in self.state['servers'])]
+        return [*rows, *runner_rows]
 
     async def stage_update(self, source):
+        if source.get('runnerKind'):
+            from .managed_runner_backend import backend
+            return await backend(source['runnerKind']).stage(self.service, source)
         previous = next(row for row in self.state['installations'] if row['id'] == source['installationId'])
         target = await self.install({'repository': previous['repository'], 'ref': source['latest'],
                                      'path': previous.get('path'), 'extras': previous.get('extras', []), '_update_from': previous['id']})
