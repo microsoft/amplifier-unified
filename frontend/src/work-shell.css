@@ -134,7 +134,11 @@
 #amp-one.a-approachable-shell .a-chat-overview ul{padding-left:18px;overflow-wrap:anywhere}
 @media(max-width:760px){
  #amp-one.a-approachable-shell{padding:0}
- #amp-one.a-approachable-shell .a-work-header{min-height:56px;padding:6px 8px;gap:4px}
+ #amp-one.a-approachable-shell .a-work-header{min-height:56px;padding:6px 8px;gap:4px;flex-wrap:wrap}
+ #amp-one.a-approachable-shell .a-work-heading{order:1;flex:1 0 100%;min-height:32px}
+ #amp-one.a-approachable-shell .a-work-heading>.a-work-home-crumb{display:flex}
+ #amp-one.a-approachable-shell .a-work-heading>strong{flex:1;min-width:0}
+ #amp-one.a-approachable-shell .a-destination-menu{position:fixed;left:8px;right:8px;top:var(--a-navigation-top,104px);width:auto;max-width:none;box-sizing:border-box}
  #amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb),#amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb)+svg,#amp-one.a-approachable-shell .a-work-brand{display:none}
  #amp-one.a-approachable-shell[data-work-surface=home] .a-work-brand{display:flex;border:0;padding-right:0}
  /* Keep Home and the chat title usable without spending phone width on a separator. */

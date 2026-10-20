@@ -231,10 +231,26 @@ try{
  for(const width of [1440,390,360]){
   await page.setViewportSize({width,height:900});await menu.click();await expect(page.getByRole('menu')).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-  if(width<=390)for(const control of [back,forward,menu]){const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44)}
+  if(width<=390){
+   for(const control of [back,forward,menu]){const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44)}
+   const heading=await page.locator('[data-part="header"] .a-work-heading>strong').boundingBox();
+   assert.ok(heading.width>=100,'History controls must leave a readable chat title');
+   const popup=await page.locator('.a-destination-menu').boundingBox();
+   const header=await page.locator('[data-part="header"]').boundingBox();
+   assert.ok(popup.x>=0&&popup.x+popup.width<=width&&popup.y>=header.y+header.height-1,'Menu must fit below the header');
+  }
   await page.screenshot({path:path.join(out,`history-${width}.png`)});await page.keyboard.press('Escape');
  }
- await expect(page.getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
+ // The separate mobile Canvas overlay close is deliberately retained by Scope A.
+ await expect(page.locator('[data-part="header"]').getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
+ const working=await page.request.post(url+'/fixture/activity',{data:{sessionId:b,status:'working'}});
+ assert.ok(working.ok());
+ await action('view.update',{patch:{workSurface:'chats'}});
+ await expect(page.locator('[data-part="work-browser"]')).toBeVisible();
+ await expect(page.locator('[data-part="header"]').getByRole('button',{name:/^(Back|Back to chat)$/})).toHaveCount(0);
+ await expect(page.locator('.a-work-live-controls').getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
+ await expect(page.locator('.a-work-live-controls .a-call-strip[role="status"]')).toHaveCount(0);
+ await expect(page.locator('[data-part="work-browser"]').getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
  const captured=await state();assert.equal(Object.hasOwn(captured,'destinationHistory'),false);
  const runtime=await (await page.request.get(url+'/fixture')).json();
  assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);

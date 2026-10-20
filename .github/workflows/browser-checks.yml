@@ -414,6 +414,8 @@ jobs:
           print(json.dumps(verdict))
           raise SystemExit(0 if verdict['passed'] else 1)
           PY
+      - name: Prove navigation controls and installed wheel outside source
+        run: uv run --no-sync python scripts/navigation_history_qualification.py
       - name: Retain focused results including failures and unrun cases
         if: always()
         uses: actions/upload-artifact@v4
