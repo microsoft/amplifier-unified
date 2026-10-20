@@ -16,7 +16,9 @@ import sys
 import uuid
 
 SOURCE = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(SOURCE))
+INSTALLED_PACKAGE = os.environ.get('MAINTENANCE_PROBE_INSTALLED') == '1'
+if not INSTALLED_PACKAGE:
+    sys.path.insert(0, str(SOURCE))
 
 PROVIDER = '''
 import asyncio, json, os, uuid
@@ -96,7 +98,11 @@ async def run(root, mode="restart"):
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
         AMPLIFIER_SESSION_STATE_HOME=str(root / "ownership"),
         AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root / "capture"),
-        AMPLIFIER_RUNTIME_IMMUTABLE="1", PYTHONPATH=str(SOURCE))
+        AMPLIFIER_RUNTIME_IMMUTABLE="1")
+    if INSTALLED_PACKAGE:
+        os.environ.pop('PYTHONPATH', None)
+    else:
+        os.environ['PYTHONPATH'] = str(SOURCE)
     for key in list(os.environ):
         if key.endswith(("_API_KEY", "_ACCESS_TOKEN")) or key in {"OPENAI_KEY", "ANTHROPIC_AUTH_TOKEN"}:
             os.environ.pop(key, None)
@@ -139,6 +145,11 @@ async def run(root, mode="restart"):
     report = {"paths": paths, "versions": {name: importlib.metadata.version(name) for name in
         ("amplifier-core", "amplifier-foundation", "amplifier-module-loop-live",
          "amplifier-module-loop-streaming")}, "processes": [], "stages": [], "fallbackSignals": []}
+    report['installedPackage'] = INSTALLED_PACKAGE
+    report['applicationPath'] = str(Path(importlib.import_module('amplifier_web').__file__).resolve())
+    if INSTALLED_PACKAGE:
+        assert '/site-packages/amplifier_web/' in report['applicationPath'], report
+        assert all('/site-packages/' in paths[name] for name in ('loop-live', 'tool-delegate')), report
     client = app = runtime = None
     processes, worker_rows = [], []
     runtime_events = []
