@@ -1,4 +1,5 @@
 import {AccessMode} from './access-mode';
+import {ModelCapacitySettings} from './model-capacity-settings';
 import {ConfigurationBoundary} from './configuration-scope';
 import {RegistrySettings} from './registry';
 import {StorageSettings} from './storage-settings';
@@ -63,6 +64,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  else if(page==='storage')content=active==='storage'?<StorageSettings state={state} act={dispatch||act} onPrivacy={()=>navigate('privacy')}/>:null;
  else if(page==='access-approvals')content=<AccessMode globalOnly act={dispatch||act}/>;
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
+ else if(page==='model-capacity')content=<ModelCapacitySettings act={dispatch||act} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;
  else if(page==='custom-appearance')content=React.isValidElement(appearance)?React.cloneElement(appearance,{advancedOnly:true}):appearance;

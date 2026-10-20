@@ -257,12 +257,14 @@ class Assignments:
         limits = value['limits']
         policy = {**limits, 'enabled': True}
         result = evaluate(policy, usage)
-        reasons = result['reasons']
+        reasons = list(result['reasons'])
+        renewable = []
         if reason:
             reasons.append(reason)
         pending = [call for call in usage['receipts'] if call.get('phase') in LIVE | {'outcome_unknown'} and not call.get('endedAt')]
+        uncertain = any(call.get('phase') == 'outcome_unknown' for call in pending)
         if len(pending) >= limits['maxConcurrentCalls']:
-            reasons.append('The assignment concurrent model-call limit is reached.')
+            (reasons if uncertain else renewable).append('The assignment concurrent model-call limit is reached.')
         for metric, maximum, reserve in [('grossTotalTokens', 'maxTotalTokens', 'reserveTokens'), ('costUsd', 'maxCostUsd', 'reserveCostUsd')]:
             limit = limits[maximum]
             if limit is None:
@@ -272,13 +274,18 @@ class Assignments:
                 recorded -= usage['metrics'][metric]['estimatedValue']
             held = sum(call.get('assignmentReservation', {}).get(reserve, 0) for call in pending)
             if recorded + held + limits[reserve] > limit:
-                reasons.append('The assignment has insufficient unreserved ' + metric + ' capacity.')
+                # Only held in-flight allowances can renew. Recorded spend,
+                # an oversized next reservation and unknown outcomes cannot.
+                destination = renewable if pending and not uncertain and recorded + limits[reserve] <= limit else reasons
+                destination.append('The assignment has insufficient unreserved ' + metric + ' capacity.')
         if usage['missingMembers'] and limits['unknownPolicy'] == 'pause':
             reasons.append('Assignment usage is unavailable for a retained member.')
+        waiting = bool(renewable) and not reasons
+        reasons += renewable
         if not reasons:
             row.update(assignmentId=value['id'], assignmentRevision=value['revision'],
                        assignmentReservation={key: limits[key] for key in ('reserveTokens', 'reserveCostUsd')})
-        return {'allowed': not reasons, 'reasons': reasons, 'assignmentId': value['id'], 'assignmentRevision': value['revision']}
+        return {'allowed': not reasons, 'waiting': waiting, 'reasons': reasons, 'assignmentId': value['id'], 'assignmentRevision': value['revision']}
 
     def snapshot(self, session):
         value = self.current(session)

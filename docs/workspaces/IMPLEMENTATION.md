@@ -1373,3 +1373,18 @@ Explicit provider/tool safety failures block peer resumption even after ordinary
 Unknown assignment Stop receipts retain their original outcomes. A later durable recovery receipt can settle only its explicitly listed session/Stop pairs, using the native ownership proof held through that recovery commit. Further recovery consumes this historical evidence instead of reacquiring a detached former member's new independent writer. Current bound members must still settle, and any new or unproved unknown Stop still needs native ownership proof.
 
 Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. The input must be newer than the cached denial and belong to the observed active generation. Peer input additionally needs its actual admitted human-resume receipt; a caller-supplied flag or message text is insufficient. Only successful durable host admission clears the worker's old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a no-op settings edit in every worker, including workers with enabled local budgets. A still-exhausted or uncertain local allowance remains blocked by its current policy.
+
+### Assignment model admission waiting
+
+Temporary concurrent-call saturation and renewable held call allowances wait in a
+host-owned FIFO before invocation. Waiting calls have no admitted usage receipt.
+A released receipt wakes waiters; each checks the current input, generation, Stop,
+configuration, native owner and actual cumulative/assignment policy again. Unknown
+outcomes remain held and are never inferred complete to free a slot. Disconnect or
+cancellation removes waiting entries; admitted calls finish independently.
+
+Settings → Advanced → Performance & runtime → Model capacity applies across this
+host. The default permits 256 waiting calls with no time limit; the user can change
+both values. A zero timeout waits until capacity or cancellation. A configured
+expiry reports that no provider request was sent and does not save a budget pause.
+Policy changes wake existing waits; they neither restart nor replay any work.

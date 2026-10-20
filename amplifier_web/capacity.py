@@ -208,6 +208,12 @@ class CapacityController:
                 # after authoritative admission, preserving limits and usage.
                 self.last_denial = None
                 self.controls.persist(task_only=True)
+        if not result['allowed'] and result.get('state') == 'cancelled':
+            raise asyncio.CancelledError('; '.join(result['reasons']))
+        if not result['allowed'] and result.get('state') == 'wait_expired':
+            # No provider call was made. A bounded queue expiry is not a saved
+            # cumulative budget pause and must not poison later continuation.
+            raise TimeoutError('; '.join(result['reasons']))
         if not result['allowed']:
             self.last_denial = {**result, 'at': time.time(), 'callId': row['id']}
             self.controls.persist(task_only=True)
@@ -335,12 +341,14 @@ def fresh_human_input(service, session, row, denial):
         and receipt.get('delivery') in {'accepted', 'applied', 'submitting'})
 
 
-async def admission(service, session_id, args):
+async def admission(service, session_id, args, *, guard=None, queue_turn=None, on_wait=None):
     """Private worker-to-host gate; model actions cannot supply accounting data."""
     from .service import AppError
     async with service.lock:
         session = service._session(session_id)
         row = copy.deepcopy(args.get('call', {}))
+        if guard and (reason := guard(session)):
+            return {'allowed': False, 'state': 'cancelled', 'reasons': [reason]}
         if row.get('rootSessionId') != (session.get('runtimeSessionId') or session_id):
             raise AppError('Budget admission belongs to the calling root', 409)
         for key in ('rootSessionId', 'sessionId'):
@@ -373,7 +381,14 @@ async def admission(service, session_id, args):
             row.pop(key, None)  # Assignment authority is selected by the host.
         assignment = service.assignments.admission(session, row)
         if not assignment['allowed']:
-            result.update(allowed=False, state='paused', reasons=result['reasons'] + assignment['reasons'])
+            waiting = result['allowed'] and assignment.get('waiting', False)
+            result.update(allowed=False, state='waiting' if waiting else 'paused',
+                          reasons=result['reasons'] + assignment['reasons'])
+        if result['allowed'] and queue_turn and not queue_turn():
+            result.update(allowed=False, state='waiting',
+                          reasons=['Earlier model requests are waiting for assignment capacity.'])
+        if result.get('state') == 'waiting' and on_wait and (refusal := on_wait(session)):
+            return refusal
         if result['allowed']:
             # Persist intent using the existing execution ID before any provider
             # request. A crash leaves pending/unknown evidence, never a replay.
