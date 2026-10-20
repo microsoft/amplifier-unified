@@ -336,6 +336,27 @@ and the separate registered-history scope. These are not OS,
 universal credential, per-tool or multi-tenant isolation guarantees. Existing
 registered own-history access is independent of configuration grants.
 
+## Human-directed member resume — 2026-10-20
+
+`coordination.send` accepts `resume: {sourceMessageId,
+expectedInterruptionRevision}` for a fresh queued request from a commissioning
+owner to a current member of its active assignment. The host verifies the latest
+actual human input against the calling root's admitted input bindings. It must
+postdate the recipient's Stop; peer prose, questions and scheduled inputs cannot
+authorize resume. Assignment, task, source/recipient Stop and latest human input
+are rechecked during preparation and native admission.
+
+The one-input exception permits a stopped recipient and a paused/blocked task to
+receive the reconciliation request. It does not rewrite the task or reset its
+saved goal progress. The recipient deliberately resumes its own task after
+checking its blockers. Capacity policy and saved turn budgets still apply.
+Completed objectives stay completed: an explicit reconciliation/follow-on input
+can reach their chat without reactivating the old goal. Independent chats and
+failed/unsettled runtimes are ineligible.
+The retained receipt consumes this human/member/Stop authorization once, including
+unknown admission outcomes; old suppressed or uncertain requests are not replayed.
+Assignment admission itself still uses the existing explicit `assignment.resume`.
+
 ## Assignment admission and scoped Stop — 2026-10-14
 
 New commissioned roots now share their initiating root's assignment. Nested

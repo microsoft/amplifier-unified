@@ -28,6 +28,19 @@ async def create(controller, **changes):
     return await controller.perform('task.create', {'commandId': 'create', 'expectedRevision': 0, 'objective': 'Ship the verified report', 'constraints': ['Preserve originals'], 'operationIds': ['unknown-operation'], 'artifactRefs': ['report.md'], **changes})
 
 
+async def test_explicit_resume_input_does_not_rewrite_task_or_clear_capacity_denial(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    control = controls()
+    await create(control, maxTurns=4)
+    await control.perform("task.pause", {"commandId": "pause", "expectedRevision": 1})
+    before = copy.deepcopy(control.tasks.snapshot())
+    assert await control.tasks.continuation_allowed(resume=True)
+    assert not await control.tasks.continuation_allowed()
+    assert control.tasks.snapshot() == before
+    control.capacity.last_denial = {"budgetRevision": control.capacity.policy["revision"]}
+    assert not await control.tasks.continuation_allowed(resume=True)
+
+
 async def test_cas_receipts_pause_restart_and_explicit_completion(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     first = controls()

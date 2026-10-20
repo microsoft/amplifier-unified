@@ -64,6 +64,9 @@ def definitions(schema, string):
                "mode": {"enum": ["notify", "queue", "steer"]},
                "replyToRequestId": string(200), "references": references,
                "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+               "resume": schema({"sourceMessageId": string(200),
+                   "expectedInterruptionRevision": {"type": "integer", "minimum": 0}},
+                   ["sourceMessageId", "expectedInterruptionRevision"]),
                "scheduleRepair": schema({"sourceMessageId": string(200),
                    "schedules": {"type": "array", "minItems": 1, "maxItems": 16,
                        "items": schema({"id": string(200), "expectedRevision": {"type": "integer", "minimum": 0}}, ["id", "expectedRevision"])}},
@@ -85,7 +88,7 @@ def definitions(schema, string):
         "coordination.decide": ("Retired. Legacy pending proposals cannot authorize new work.", schema({
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
-        "coordination.send": ("Commit attributed same-workspace task input and return its receipt promptly. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input. For explicit human repair of existing schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
+        "coordination.send": ("Commit attributed same-workspace task input and return its receipt promptly. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input. To resume a commissioned member after an explicit human instruction, use queue with resume={sourceMessageId, expectedInterruptionRevision}; the host binds the current human input and exact Stop/task/assignment boundaries. This admits one fresh input without resetting budgets, permissions or replaying old work. For explicit human repair of existing schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
         "coordination.create": ("Commission an authorized durable task chat inheriting the caller's configuration, workspace and actual execution placement, with a saved return notification before its brief can run. This does not create an independent user chat in a different folder. Inspect this operation's requestId for its initial result. Returns before preparation and does not select the peer. Set returnNotification:false only when no automatic return is wanted.", schema({
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
@@ -217,6 +220,9 @@ class Collaboration:
                 self.save(identity, value)
         from .coordination_watches import Watches
         self.watches = Watches(self)
+        service.db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS peer_resume_authorization
+            ON commands(json_extract(receipt,'$.humanResume.authorizationKey'))
+            WHERE json_extract(receipt,'$.humanResume.authorizationKey') IS NOT NULL""")
         service.db.commit()
 
     def error(self, text, status=403):
@@ -674,10 +680,15 @@ class Collaboration:
                 return "The request workspace changed."
             if target.get("interruptionRevision", 0) != receipt["interruptionRevision"]:
                 return "The user interrupted the recipient after this request."
-            if target.get("status") in {"stopped", "stopping", "interrupted", "error"}:
+            from . import peer_resume
+            resuming = peer_resume.pending(receipt)
+            if resuming and (reason := peer_resume.guard(self.service, receipt, source, target)):
+                return reason
+            if target.get("status") in {"stopping", "interrupted", "error"} or (
+                    target.get("status") == "stopped" and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
-            if task.get("status") in {"paused", "blocked", "completed"}:
+            if task.get("status") in {"paused", "blocked", "completed"} and not resuming:
                 return "The recipient task is not active."
             task_binding = receipt
             if for_reply and 'replyTaskContinuationEpoch' in receipt:
@@ -866,7 +877,9 @@ class Collaboration:
                         if row.get("inputId") == args["inputId"] and row.get("inputOrigin") == "peer"), None)
         if message is None:
             return {"admitted": False, "reason": "The saved host-attributed input is unavailable."}
-        return {"admitted": not reason, "reason": reason, "message": copy.deepcopy(message)}
+        from .peer_resume import pending
+        return {"admitted": not reason, "reason": reason, "message": copy.deepcopy(message),
+                "humanResume": not reason and pending(receipt)}
 
     async def submit_steer(self, identity):
         async with self.service.lock:
@@ -1443,6 +1456,8 @@ class Collaboration:
                 if reason:
                     self.error(reason, 409)
                 mode = args.get("mode", "queue")
+                if args.get('resume') and (origin != 'agent' or mode != 'queue'):
+                    self.error('Resume requires a current human-rooted agent request using queue.')
                 self.service.assignments.require_request(source, target, mode)
                 if mode == "steer":
                     active = target.get("collaborationGeneration") or {}
@@ -1474,6 +1489,16 @@ class Collaboration:
                     envelope["task"] = {key: target["collaboration"][key] for key in
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
                 repair = None
+                resume = None
+                if args.get('resume'):
+                    from .peer_resume import prepare
+                    resume = prepare(self.service, source, target, args['resume'], lineage)
+                    envelope['humanResume'] = {
+                        'sourceMessageId': resume['sourceMessageId'],
+                        'instruction': 'The host verified a fresh human resume request in the commissioning owner. '
+                            'Reconcile completed effects first. You may resume your own paused task if its blocker '
+                            'is resolved. Keep completed objectives completed; only establish follow-on work '
+                            'within the human request. This does not answer questions, grant permissions or reset budgets.'}
                 if args.get('scheduleRepair'):
                     if origin != 'agent' or mode == 'notify':
                         self.error('Schedule repair requires a current human-rooted agent handoff using queue or steer.')
@@ -1497,6 +1522,8 @@ class Collaboration:
                 receipt['assignmentId'] = (self.service.assignments.current(source) or {}).get('id')
                 if repair:
                     receipt['scheduleRepair'] = repair
+                if resume:
+                    receipt['humanResume'] = resume
                 if mode == "steer":
                     receipt.update(delivery="pending_steer", targetGenerationId=active["id"])
                 if creation and identity == creation[4]['requestId'] + ':brief':
