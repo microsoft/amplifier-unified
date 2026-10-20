@@ -109,10 +109,18 @@ the assessment says how much of it has actually been demonstrated.
 - A person visits **2 conversations**, returns to their work overview, and
   reconstructs **0 previously chosen filters or reading positions** in that client.
 
+## Current desktop consumers
+
+[Amplifier for Mac and the planned Windows client](desktop-clients.md) apply this
+vision through the shared desktop contract. The Mac companion preview is released;
+the integrated workspace and Windows implementation remain future work. This
+consumer record does not change the AHP/ACP destination or claim current parity.
+
 ## Changelog
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-20 | Identify current Mac and planned Windows consumers; link shared desktop journeys. | Product-owner request for coordinated platform documentation. |
 | 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../ux/decisions/20261020.md). |
 | 2026-10-02 | Adopt protocol boundaries, client-local state and independent repos. | [Family architecture direction](../architecture/README.md); implementation pending. |
 | 2026-09-20 | Initial draft. | Shared-client design discussion and the sources in the direction index. |

@@ -2,6 +2,26 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.192",
+      "title": "Recover coordinated work and manage test capacity",
+      "changes": [
+        "Let an authorized manager take responsibility for an existing chat in the same workspace while preserving its history, draft, Stop and working folder. Adding a chat does not start it.",
+        "Recover settled failed workers, including older failures with exact retained terminal evidence, and reconsider outdated budget denials after a fresh authorized request. Safety halts, current limits and completed work remain preserved.",
+        "Set global isolated-test capacity without cancelling queued work or interrupting tests already running.",
+        "Finish owned cleanup after qualifying legacy export-limit failures, including when guest removal succeeded but later cleanup needs another attempt."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.191",
+      "title": "Reliable component updates and managed test commands",
+      "changes": [
+        "Accept a checked component update when uv records its exact commit, while preserving the original branch policy so later updates are still discovered. Changed sources and ambiguous references remain rejected.",
+        "Run manually launched isolated tests with their selected prepared environment and restricted workload identity, matching queued tests while preserving command limits, ownership checks and uncertain-result handling."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.190",
       "title": "Quiet navigation and consistent chat controls",
       "changes": [

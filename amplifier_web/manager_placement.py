@@ -13,13 +13,24 @@ def task_binding(app, session):
 def member(app, source, target):
     from .service import AppError
     assignment = app.assignments.current(source)
+    membership = (assignment or {}).get('members', {}).get(target['id'], {})
+    if (assignment and assignment['status'] == 'active'
+            and membership.get('status') == 'bound' and membership.get('role') == 'adopted'
+            and (app.assignments.current(target) or {}).get('id') == assignment['id']
+            and source['workspace'] == target['workspace']):
+        from .assignment_adoption import valid_membership
+        try:
+            if valid_membership(app, source, target, assignment, membership):
+                return assignment
+        except AppError:
+            pass
+        raise ValueError('The explicit adoption receipt is unavailable or changed.')
     metadata = target.get('collaboration') or {}
     request_id = metadata.get('requestId')
     try:
         request = app.collaboration.receipt(request_id) if request_id else {}
     except AppError as exc:
         raise ValueError('The commissioned creation receipt is unavailable.') from exc
-    membership = (assignment or {}).get('members', {}).get(target['id'], {})
     if (not assignment or assignment['status'] != 'active'
             or membership.get('status') != 'bound'
             or membership.get('role') != 'commissioned'
@@ -47,8 +58,10 @@ def authorize(app, action, sid, caller):
     # Refuse before resolving/hydrating an unrelated conversation.
     if (not assignment or assignment['status'] != 'active'
             or assignment['members'].get(sid, {}).get('status') != 'bound'
-            or assignment['members'].get(sid, {}).get('creatorSessionId') != source['id']):
-        raise ValueError('Worktree actions must target the calling task or a directly commissioned member of its active assignment.')
+            or source['id'] not in {
+                assignment['members'].get(sid, {}).get('creatorSessionId'),
+                assignment['members'].get(sid, {}).get('adoptedBySessionId')}):
+        raise ValueError('Worktree actions must target the calling task or a directly commissioned or explicitly adopted member of its active assignment.')
     target = app._session(sid)
     member(app, source, target)
     return source, target

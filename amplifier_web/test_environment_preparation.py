@@ -18,7 +18,7 @@ import subprocess
 import tarfile
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -205,20 +205,20 @@ def _incus_query(settings, path):
     return [settings['incusExecutable'], 'query', path + '?project=' + quote(settings['project'], safe='')]
 
 
-def memory_available(config, folder, profile_id):
+def memory_available(config, folder, profile_id, resource_request=None):
     """Observe headroom before building; unrelated host activity can still change.
 
     This is not a global reservation over processes outside the managed runner.
     Both actual host availability and daemon usage are considered on small hosts.
     """
-    if not Path('/proc/meminfo').exists():
-        return True
-    memory = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
-    available = int(memory['MemAvailable'].split()[0]) * 1024
-    required = profiles.get(profile_id)['memoryMiB'] * 1024 * 1024
+    required = profiles.resources(profile_id, resource_request)['memoryMiB'] * 1024 * 1024
     env = _environment(folder, config)
     log = folder / 'capacity.log'
     if config.get('backend', 'docker') == 'docker':
+        if not Path('/proc/meminfo').exists():
+            return True  # Desktop VM authority is not established by host memory.
+        memory = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
+        available = int(memory['MemAvailable'].split()[0]) * 1024
         command = ['docker', '--host', config['dockerHost']]
         info = json.loads(run([*command, 'info', '--format', '{{json .}}'], env, log, timeout=30, require_complete=True))
         total = int(info['MemTotal'])
@@ -237,12 +237,12 @@ def memory_available(config, folder, profile_id):
         settings = config['incus']
         memory = json.loads(run(_incus_query(settings, '/1.0/resources'), env, log, timeout=30, require_complete=True))['memory']
         total = int(memory['total'])
-        available = min(available, total - int(memory['used']))
+        available = total - int(memory['used'])
     return available >= required + max(1024 ** 3, min(2 * 1024 ** 3, total // 10))
 
 
 @contextmanager
-def preparation_slot(config, folder, profile_id):
+def preparation_slot(config, folder, profile_id, *, seconds=PREPARATION_SECONDS, resource_request=None):
     """At most one dependency build per configured admission authority."""
     if fcntl is None:
         raise ValueError('Dependency preparation needs a supported Linux test host.')
@@ -252,7 +252,7 @@ def preparation_slot(config, folder, profile_id):
         raise ValueError('The dependency preparation admission directory changed.')
     descriptor = os.open(directory / 'dependency-preparation.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
-        deadline = time.monotonic() + PREPARATION_SECONDS
+        deadline = time.monotonic() + seconds
         while True:
             if cancelled(folder):
                 raise PreparationCancelled('Dependency preparation was cancelled.')
@@ -265,7 +265,7 @@ def preparation_slot(config, folder, profile_id):
                 if time.monotonic() > deadline:
                     raise TimeoutError('Another dependency preparation still owns this host’s build slot.')
                 time.sleep(0.2)
-        while not memory_available(config, folder, profile_id):
+        while not memory_available(config, folder, profile_id, resource_request):
             write(folder / 'status.json', {'status': 'preparing', 'phase': 'waiting-for-memory', 'profileId': profile_id,
                                            'reason': 'Waiting for enough observed memory for this test profile.'})
             if cancelled(folder):
@@ -280,7 +280,7 @@ def preparation_slot(config, folder, profile_id):
         os.close(descriptor)
 
 
-def prepare(config, root, snapshot, profile_id, request_id):
+def prepare(config, root, snapshot, profile_id, request_id, *, resource_request=None, host_reservation=None, timing_request=None):
     root = Path(root)
     folder = root / 'preparation'
     if any(path.is_symlink() for path in (folder, *folder.parents)):
@@ -289,6 +289,12 @@ def prepare(config, root, snapshot, profile_id, request_id):
     env = _environment(folder, config)
     expected = plan(root / 'source.tar', snapshot, profile_id)
     expected.update(backend=config.get('backend', 'docker'), requestId=request_id)
+    seconds = profiles.timing(profile_id, timing_request)['preparationTimeoutSeconds']
+    if timing_request is not None:
+        expected['timingRequest'] = timing_request
+    if resource_request is not None:
+        profiles.resources(profile_id, resource_request)
+        expected['resourceRequest'] = resource_request
     expected['baseImage'] = config.get('image') if expected['backend'] == 'docker' else config['incus']['image']
     expected['resourceName'] = 'au-prepare-' + hashlib.sha256((str(root) + request_id).encode()).hexdigest()[:24]
     expected['backendIdentity'] = backend_identity(config, folder, env)
@@ -323,9 +329,13 @@ def prepare(config, root, snapshot, profile_id, request_id):
         shutil.copyfile(Path(__file__).with_name(source), context / target)
     write(context / 'plan.json', expected)
     try:
-        with preparation_slot(config, folder, profile_id):
-            image, inventory = (_docker(config, folder, expected, env) if expected['backend'] == 'docker'
-                                else _incus(config, folder, expected, env))
+        deadline = time.monotonic() + seconds
+        with (nullcontext() if (host_reservation or {}).get('admitted') else preparation_slot(config, folder, profile_id, seconds=seconds, resource_request=resource_request)):
+            # The monotonic deadline is process-local, never part of the saved
+            # dependency recipe identity. Waiting and building share one budget.
+            build = {**expected, '_deadline': deadline}
+            image, inventory = (_docker(config, folder, build, env) if expected['backend'] == 'docker'
+                                else _incus(config, folder, build, env))
         if cancelled(folder):
             raise PreparationCancelled('Dependency preparation was cancelled.')
         inventory_value = json.loads(inventory)
@@ -389,10 +399,16 @@ def _docker(config, folder, expected, env):
     if not re.fullmatch(r'[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('Preparation requires an immutable qualified base image.')
     name = expected['resourceName']
-    budget = profiles.get(expected['profileId'])
+    budget = profiles.resources(expected['profileId'], expected.get('resourceRequest'))
     log = folder / 'build.log'
-    def call(*args, timeout=PREPARATION_SECONDS):
-        return run([*docker, *args], env, log, timeout=timeout)
+    deadline = expected.get('_deadline')
+    if deadline is None:
+        deadline = time.monotonic() + profiles.timing(expected['profileId'], expected.get('timingRequest'))['preparationTimeoutSeconds']
+    def call(*args, timeout=None):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('The saved dependency preparation time limit was reached.')
+        return run([*docker, *args], env, log, timeout=min(remaining, timeout) if timeout is not None else remaining)
     # A separate ordinary container avoids unowned BuildKit caches. The only
     # network-enabled phase has no source mounts, runtime secrets or Docker socket.
     call('create', '--name', name, '--label', 'io.amplifier.preparation=' + name,
@@ -458,10 +474,16 @@ def _incus(config, folder, expected, env):
             raise ValueError('Project dependency preparation needs the supported host setup with its owned build network and storage.')
     incus = [settings['incusExecutable'], '--project', settings['project']]
     name = expected['resourceName']
-    budget = profiles.get(expected['profileId'])
+    budget = profiles.resources(expected['profileId'], expected.get('resourceRequest'))
     log = folder / 'build.log'
-    def call(*args, timeout=PREPARATION_SECONDS):
-        return run([*incus, *args], env, log, timeout=timeout)
+    deadline = expected.get('_deadline')
+    if deadline is None:
+        deadline = time.monotonic() + profiles.timing(expected['profileId'], expected.get('timingRequest'))['preparationTimeoutSeconds']
+    def call(*args, timeout=None):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('The saved dependency preparation time limit was reached.')
+        return run([*incus, *args], env, log, timeout=min(remaining, timeout) if timeout is not None else remaining)
     call('init', 'local:' + settings['image'], name, '--no-profiles', '--storage', settings['preparationStorage'],
          '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=' + str(budget['memoryMiB']) + 'MiB',
          '-c', 'limits.cpu=' + str(budget['cpus']), '-c', 'limits.processes=' + str(budget['pids']), '-c', 'user.amplifier.preparation=' + name)

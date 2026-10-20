@@ -1427,6 +1427,309 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#adaptive-home-october-19"
+    },
+    {
+      "id": "delta.914",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/914",
+      "reason": "Busy assignment calls wait automatically; global Advanced settings control waiting without per-workspace setup.",
+      "workflowsAdded": [
+        {
+          "id": "settings.model-capacity",
+          "family": "settings",
+          "title": "Set global model waiting limits and recover an uncertain save",
+          "scope": "advanced-path",
+          "entryPath": [
+            "Settings",
+            "Advanced",
+            "Performance & runtime",
+            "Model capacity"
+          ],
+          "prerequisites": [
+            "Production built client and AppService in an owned disposable host",
+            "Synthetic runtime; no paid provider calls or live settings changes"
+          ],
+          "steps": [
+            "Save finite waiting limits",
+            "Change the same policy from another client and attempt a stale save",
+            "Keep private edits until explicitly discarding them for the newer saved values",
+            "Save unlimited waiting, lose the response after commit, and reopen",
+            "Check the same save and inspect its original command receipt",
+            "Cancel closing with an unsaved draft on a narrow layout",
+            "Discard the draft and verify saved values on cold reopen"
+          ],
+          "expectedResults": [
+            "Settings apply to all current and new workspaces on this host.",
+            "A stale save cannot overwrite newer settings; private edits survive.",
+            "Checking a lost save reuses its exact command identity and contents and produces no second mutation.",
+            "Changing waiting policy starts or stops no worker and preserves selection.",
+            "Desktop and narrow layouts remain usable and saved values survive reopening."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "two-clients",
+            "lost-response",
+            "cold-reopen"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/model-capacity-settings-browser.mjs",
+              "relation": "Registered browser owner using the production service and built UI"
+            },
+            {
+              "path": "tests/test_model_admission_wait.py",
+              "relation": "Capacity waits, cancellation, identity, settings, and spending boundaries"
+            },
+            {
+              "path": "frontend/tests/model-capacity-settings.test.mjs",
+              "relation": "Settings state, command retry, stale edits, and waiting presentation"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime qualification is not live-provider or throughput evidence.",
+            "Waiting policy does not raise spending or assignment concurrency limits."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#model-capacity-waiting-settings--october-20"
+    },
+    {
+      "id": "delta.907",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/907",
+      "reason": "Global test capacity adds one Settings route and an additive scheduled browser owner; preserve the frozen inventory and original scenarios.",
+      "workflowsAdded": [
+        {
+          "id": "settings.testing-capacity",
+          "family": "settings",
+          "title": "Adjust global isolated-test limits without cancelling waiting work",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources"
+          ],
+          "prerequisites": [
+            "Built client and isolated settings fixture with synthetic state; no production runner or account",
+            "Private browser context and owned fixture process"
+          ],
+          "steps": [
+            "Open Testing & resources without an enabled runner",
+            "Edit global limits including zero and save",
+            "Lose a successful save acknowledgement and reconcile through readback",
+            "Race a second settings writer and retain rejected edits",
+            "Use dirty-close controls at narrow width and cold reopen"
+          ],
+          "expectedResults": [
+            "Global defaults remain available without a runner and persist on reopen.",
+            "Zero is preserved as an explicit disabled ceiling.",
+            "An unknown save response is reconciled without replaying the mutation.",
+            "A stale writer cannot overwrite newer settings or lose its draft.",
+            "Narrow controls remain usable and dirty-close preserves edits."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Registered Extended browser checks owner; affected-flow local smoke"
+            },
+            {
+              "path": "tests/test_test_capacity_settings.py",
+              "relation": "Global authority, queue wake, mutable policy and immutable cleanup identity"
+            }
+          ],
+          "limits": [
+            "Synthetic browser/backend evidence does not establish native runner or production acceptance.",
+            "The original frozen inventory is unchanged; no unrelated full census is a merge gate."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#global-test-capacity-october-20"
+    },
+    {
+      "id": "delta.911",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/911",
+      "reason": "Extend the existing testing-settings browser owner to account-shared native machine budgets; no new scenario or frozen inventory rewrite.",
+      "workflowsAdded": [
+        {
+          "id": "settings.machine-test-resources",
+          "family": "settings",
+          "title": "Inspect and adjust shared native-machine test budgets",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources",
+            "This machine\u2019s test resources"
+          ],
+          "prerequisites": [
+            "Isolated synthetic machine authority; no production machine policy or runner effects"
+          ],
+          "steps": [
+            "Inspect effective limits, observed resources and reservations",
+            "Change a machine budget and zero headroom control",
+            "Lose save acknowledgement and reconcile exact readback without replay",
+            "Race another installation writer and preserve stale edits",
+            "Save dependency-build limit at narrow width"
+          ],
+          "expectedResults": [
+            "Scope explicitly describes one native machine OS account and unsupported remote authorities.",
+            "Current effective automatic/saved values and reservations are visible.",
+            "Lost acknowledgement produces one mutation and confirmed readback.",
+            "Stale machine edits cannot overwrite another writer.",
+            "Controls remain usable at narrow width."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "lost-acknowledgement",
+            "stale-writer"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Existing registered Extended browser owner expanded with exact machine budget assertions"
+            },
+            {
+              "path": "tests/test_test_host_resources.py",
+              "relation": "Shared authority, contention, target identity, request freezing and owner lifecycle"
+            }
+          ],
+          "limits": [
+            "No physical-container, remote-controller or native-Windows shared-authority qualification claimed."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#shared-machine-test-resources-october-20"
+    },
+    {
+      "id": "delta.908",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/908",
+      "reason": "An authorized manager can add an existing chat; retain the frozen inventory and add the new browser owner.",
+      "workflowsAdded": [
+        {
+          "id": "workspace.assignment-adoption",
+          "family": "workspace",
+          "title": "Add an existing chat to shared work without losing drafts or repeating requests",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat overview",
+            "Tasks and workers",
+            "Shared tasks and assignment",
+            "Add an existing chat"
+          ],
+          "prerequisites": [
+            "Built production client and isolated production-service fixture with synthetic runtime",
+            "Existing manager assignment and independent stopped chat"
+          ],
+          "steps": [
+            "Keep an unsent manager draft and open the existing-chat picker",
+            "Change the target Stop revision before Add chat; refresh the rejected review",
+            "Drop the acknowledgement after a committed adoption, then check the same change",
+            "Reload and inspect at desktop and phone widths"
+          ],
+          "expectedResults": [
+            "Stale review cannot add the chat and refresh is available",
+            "Unknown response retries the same request identity and binds exactly one member",
+            "No conversation input, Stop clear, history edit, navigation or draft loss occurs",
+            "The confirmed assignment survives reload with no horizontal overflow"
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "stale-review",
+            "lost-acknowledgement",
+            "cold-reopen"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/assignment-adoption-browser.mjs",
+              "relation": "Extended browser checks owner and focused affected-flow smoke"
+            },
+            {
+              "path": "tests/test_assignment_adoption.py",
+              "relation": "Authority, Stop, ownership, native settlement, concurrency and restart contracts"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime proves service/browser interaction, not paid-provider execution or installed-host adoption.",
+            "Adding a chat does not itself continue work or change its execution folder."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#existing-chat-adoption-october-20"
+    },
+    {
+      "id": "delta.916",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/916",
+      "reason": "Extend the existing testing-settings browser owner with global future-job queue and profile execution limits; preserve the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "settings.test-execution-limits",
+          "family": "settings",
+          "title": "Adjust global queue and test profile execution limits",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources",
+            "Test execution limits"
+          ],
+          "prerequisites": [
+            "Private settings fixture with synthetic runtime and machine authority; no production policy writes"
+          ],
+          "steps": [
+            "Set queue depth and zero queue waiting expiry",
+            "Set per-profile CPU and default/maximum check durations",
+            "Reconcile a lost save acknowledgement without replay",
+            "Race a newer settings writer and preserve the dirty form",
+            "At narrow width, close Settings and keep unsaved execution edits",
+            "Save and reopen the settings"
+          ],
+          "expectedResults": [
+            "Global future-job scope and Docker-only temporary/shared-memory limits are explicit.",
+            "Zero means waiting until Stop or cancellation.",
+            "Effective profile values and saved overrides are visible.",
+            "Unknown acknowledgement causes one mutation and exact readback.",
+            "Stale edits cannot overwrite a newer revision.",
+            "Dirty-close names the execution settings and preserves the edited values.",
+            "Narrow layouts and cold reopen remain usable."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer",
+            "dirty-close"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Existing registered Extended browser owner; no added broad publication gate"
+            },
+            {
+              "path": "tests/test_test_execution_settings.py",
+              "relation": "Global authority, full queue counts, pagination, accepted policy freezing, historical defaults and validation"
+            },
+            {
+              "path": "tests/test_durable_test_queue.py",
+              "relation": "Restart and cancellation preserve exact admitted resource and timing policy"
+            },
+            {
+              "path": "tests/test_environment_preparation.py",
+              "relation": "Saved preparation budget spans waiting/building without changing recipe identity"
+            }
+          ],
+          "limits": [
+            "Browser/runtime fixtures do not establish production deployment or physical runner qualification.",
+            "No automatic retention deletion or Incus temporary/shared-memory mount enforcement is introduced."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#test-execution-limits-october-20"
     }
   ]
 }
