@@ -25,7 +25,6 @@ from urllib.parse import parse_qs, quote, urlsplit
 # Preserve previously qualified owners and configuration identity during upgrades.
 # Launcher bytes vary with installation path; package pairs are exact.
 QUALIFIED_PACKAGES = {
-    '0.4.2': '0911d18ec7256913253b53ce66520fac2f6cc78d19696a3f7b724a646dd909b8',
     '0.4.0': '5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39',
     '0.4.1': 'b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06',
     '0.4.2': '0911d18ec7256913253b53ce66520fac2f6cc78d19696a3f7b724a646dd909b8',
