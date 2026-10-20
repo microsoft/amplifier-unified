@@ -36,9 +36,13 @@ def configuration(config):
     }, sort_keys=True).encode()).hexdigest()
 
 
-def pending(home, generation, rows):
+def pending(home, generation, rows, *, honor_receipt=True):
     """Read-only update inventory. A failed probe never acknowledges the work."""
     candidates = legacy_candidates(rows)
+    # Caller-supplied resolver policy is explicit source intent. Do not inspect
+    # arbitrary external files or reinterpret it as an installer-generated pin.
+    if any(os.environ.get(key) for key in ('UV_CONFIG_FILE', 'UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT')):
+        return None
     if not candidates:
         return None
     from .runtime_environment import receipt_directory, project_path
@@ -52,7 +56,7 @@ def pending(home, generation, rows):
     key = configuration(config)
     try:
         saved = json.loads((receipt_directory(home, generation) / RECEIPT).read_text())
-        if (saved.get('version') == VERSION and saved.get('configuration') == key
+        if (honor_receipt and saved.get('version') == VERSION and saved.get('configuration') == key
                 and all(saved.get('remaining', {}).get(name) == row for name, row in candidates.items())):
             return None
     except (OSError, ValueError, TypeError):
@@ -175,7 +179,7 @@ class Collector:
             if package.get('status') != 'selected' or name not in constraints:
                 continue
             constraint = constraints[name]
-            if not constraint or any(constraint.get(field, '') != package[field]
+            if not constraint or constraint.get('refKind') == 'tag' or any(constraint.get(field, '') != package[field]
                                      for field in ('url', 'ref', 'subdirectory')):
                 package.clear()
                 package['status'] = 'authored-constraint'
@@ -262,7 +266,7 @@ async def reconcile(manager, stage, project, collect):
         raise ValueError('A recorded generation cannot reconcile update policy.')
     old_generation = active_release(home).get('current')
     rows = await update_inventory(home)
-    request = pending(home, old_generation, rows)
+    request = pending(home, old_generation, rows, honor_receipt=False)
     old_receipt = receipt_directory(home, old_generation) / RECEIPT
     if request is None:
         # Carry the acknowledgment forward when another component prompted an

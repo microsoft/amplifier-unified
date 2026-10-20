@@ -121,3 +121,30 @@ requirements, policy origin across stage/freeze/next check, exact identity drift
 explicit pins/branches/tags/forks, ambiguous declarations, clean owned cache
 boundaries, and retention of an unknown legacy pin. They establish source-policy
 behavior, not deployment or fresh-worker adoption on a user's installation.
+
+
+### Reconciling earlier generated pins
+
+Older worker receipts may have recorded a resolver-normalized commit as their
+standing update policy. The ordinary component Updates flow offers one policy
+refresh when these receipts have no origin. It does not load bundles while
+checking or browsing settings. During an unpublished candidate only, a
+collection-only pass observes the effective selected bundle, include and module
+sources after configuration precedence, and binds them to the dependency
+batch's exact package identities.
+
+Only an unambiguous moving branch for the same repository and subdirectory can
+replace an unknown-origin SHA. The candidate resolves that branch, aligns its
+owned cache or shared-source binding to the exact checked commit, and collects
+again before ordinary installation. A same-named branch/tag ambiguity, explicit
+pin, fork, local override, separate resolver configuration, dirty source or
+missing ownership evidence never grants migration. The normal installed graph,
+source identity and immutable freeze checks still decide qualification.
+
+A generation receipt records migrated, protected and unselected packages.
+Unselected catalog providers remain unresolved; merely offering a provider
+does not select its source. The receipt suppresses repeated no-op update
+prompts for the same configuration. If another component already prompts a
+fresh candidate, remaining legacy decisions are reconsidered against that
+candidate's selected declarations. Existing generations and rollback evidence
+are unchanged; this is not a live-worker dependency rewrite.

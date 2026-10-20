@@ -11,6 +11,7 @@ from amplifier_web import runtime_policy_reconciliation as migration
 from amplifier_web import runtime_environment as environments, updates
 from amplifier_web.host.config import HostConfig
 from test_runtime_checked_cache import Diagnostics
+from test_runtime_ref_identity import normalized_runtime
 
 URL = 'https://example.invalid/component'
 OLD = 'a' * 40
@@ -132,7 +133,7 @@ async def test_stale_selected_root_advances_before_install_and_old_generation_is
     request = {'version': 1, 'configuration': migration.configuration(s.config),
                'candidates': migration.legacy_candidates([oldrow])}
     monkeypatch.setattr(environments, 'update_inventory', lambda home: _value([oldrow]))
-    monkeypatch.setattr(migration, 'pending', lambda *args: request)
+    monkeypatch.setattr(migration, 'pending', lambda *args, **kw: request)
     (s.stage / 'runtime-sources.json').write_text(json.dumps({NAME: {
         'url': URL, 'ref': s.old, 'revision': s.old, 'subdirectory': ''}}))
     old_receipt = s.home / 'updates/baseline-runtime'
@@ -218,7 +219,7 @@ async def test_reconciliation_accepts_exact_new_branch_commit_even_without_conte
     request = {'version': 1, 'configuration': migration.configuration(s.config),
                'candidates': migration.legacy_candidates([oldrow])}
     monkeypatch.setattr(environments, 'update_inventory', lambda home: _value([oldrow]))
-    monkeypatch.setattr(migration, 'pending', lambda *args: request)
+    monkeypatch.setattr(migration, 'pending', lambda *args, **kw: request)
     (s.stage / 'runtime-sources.json').write_text(json.dumps({NAME: {
         'url': URL, 'ref': s.old, 'revision': s.old, 'subdirectory': ''}}))
     project = s.home / 'runtime/preparation'
@@ -233,7 +234,7 @@ async def test_changed_declaration_after_refresh_cannot_pass_into_install(select
     request = {'version': 1, 'configuration': migration.configuration(s.config),
                'candidates': migration.legacy_candidates([oldrow])}
     monkeypatch.setattr(environments, 'update_inventory', lambda home: _value([oldrow]))
-    monkeypatch.setattr(migration, 'pending', lambda *args: request)
+    monkeypatch.setattr(migration, 'pending', lambda *args, **kw: request)
     (s.stage / 'runtime-sources.json').write_text(json.dumps({NAME: {
         'url': URL, 'ref': s.old, 'revision': s.old, 'subdirectory': ''}}))
     project = s.home / 'runtime/preparation'
@@ -253,3 +254,87 @@ def test_optional_pin_is_protective_even_if_not_selected_to_authorize_recovery()
     raw = ('[project]\nname="another"\nversion="1"\n'
            '[project.optional-dependencies]\nunused=["' + NAME + ' @ git+' + URL + '@' + OLD + '"]\n').encode()
     assert migration.authored_constraints(raw)[NAME]['ref'] == OLD
+
+
+@pytest.mark.parametrize('key', ['UV_CONFIG_FILE', 'UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT'])
+def test_explicit_external_resolver_policy_does_not_get_a_migration_prompt(selected, monkeypatch, key):
+    monkeypatch.setenv(key, '/external/policy')
+    assert migration.pending(selected.home, None, [row()]) is None
+
+
+async def test_declaration_probe_collects_without_install_or_live_session(selected, monkeypatch):
+    import asyncio
+    import runpy
+    import sys
+    from amplifier_foundation.modules.batch import DependencyBatch
+    from amplifier_web.host import session, config
+    s = selected
+    profiles = s.stage / 'profiles.json'
+    profiles.write_text(json.dumps(['one', 'two']))
+    target = s.stage / 'declarations.json'
+    collected, prepared = [], []
+    async def prepare(workspace, **kwargs):
+        assert kwargs['global_only'] is True
+        assert kwargs['source_policy_collector'] is not None
+        assert kwargs['dependency_batch'] is not None
+        kwargs['source_policy_collector'].observe('git+' + URL + '@main', s.config)
+        kwargs['dependency_batch'].names[NAME] = s.root
+        prepared.append(kwargs['bundle'])
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('Collection must never install or mount a session')
+    monkeypatch.setattr(session, 'prepare_dependencies', prepare)
+    monkeypatch.setattr(session, 'prepare_manager', forbidden)
+    monkeypatch.setattr(DependencyBatch, 'install', forbidden)
+    monkeypatch.setattr(config, 'load_config', lambda *a, **kw: s.config)
+    monkeypatch.setattr(sys, 'argv', ['probe', str(s.stage), 'one', '--profiles', str(profiles),
+                                    '--source-policy-only', str(target)])
+    with monkeypatch.context() as context:
+        context.setattr(asyncio, 'run', lambda coroutine: collected.append(coroutine))
+        runpy.run_module('amplifier_web.update_probe', run_name='__main__')
+    assert len(collected) == 1
+    await collected[0]
+    assert prepared == ['one', 'two']
+    assert json.loads(target.read_text())['packages'][NAME]['revision'] == s.old
+    assert not (s.stage / 'foundation/profile-characteristics.json').exists()
+
+
+def test_reconcile_reconsiders_receipted_pins_when_another_update_already_has_a_candidate(selected, monkeypatch):
+    s = selected
+    monkeypatch.setattr('amplifier_web.host.config.read_config', lambda *a, **kw: s.config)
+    receipt = s.home / 'updates/baseline-runtime'
+    receipt.mkdir()
+    receipt.joinpath(migration.RECEIPT).write_text(json.dumps({
+        'version': 1, 'configuration': migration.configuration(s.config),
+        'remaining': migration.legacy_candidates([row()])}))
+    assert migration.pending(s.home, None, [row()]) is None
+    assert migration.pending(s.home, None, [row()], honor_receipt=False)
+
+def test_available_unselected_provider_does_not_authorize_legacy_pin_recovery():
+    candidates = migration.legacy_candidates([row(package='amplifier-module-provider-vllm')])
+    selected, decisions = migration.selected_policies(candidates, {'packages': {
+        'selected-provider': {'status': 'selected', 'url': URL, 'ref': 'main',
+                              'subdirectory': '', 'revision': NEW, 'manifestSha256': 'x'}}})
+    assert selected == {}
+    assert decisions == {'amplifier-module-provider-vllm': 'unselected'}
+
+
+async def test_unrelated_update_and_freeze_preserve_unknown_origin_for_later_reconciliation(normalized_runtime, monkeypatch):
+    from amplifier_web import runtime_qualification as qualification
+    from test_runtime_ref_identity import ROW, REVISION
+    manager, generation, receipt, graph = normalized_runtime
+    original = environments.update_manifest
+    async def unchanged(home):
+        rows, content = await original(home)
+        old = {**rows[0], 'current': REVISION, 'ref': REVISION, 'eligible': False,
+               'policyOrigin': {'kind': 'unrecorded', 'url': ROW['url'], 'ref': REVISION,
+                                'subdirectory': 'module', 'revision': REVISION}}
+        return [old], content.replace(b'rev="main"', ('rev="' + REVISION + '"').encode())
+    monkeypatch.setattr(environments, 'update_manifest', unchanged)
+    project = await environments.stage(manager, generation, [{'kind': 'bundle', 'updateTier': 'other'}], finalize=False)
+    await qualification.freeze(manager, generation, project)
+    saved = json.loads((receipt / 'runtime-sources.json').read_text())[ROW['package']]
+    assert saved['ref'] == REVISION
+    assert saved['policyOrigin']['kind'] == 'unrecorded'
+    (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    candidates = migration.legacy_candidates(environments.inventory(manager.home, graph=graph))
+    assert ROW['package'] in candidates
