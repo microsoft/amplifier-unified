@@ -3,7 +3,8 @@
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,mkdtemp} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {chromium,expect as baseExpect} from '@playwright/test';
@@ -20,12 +21,31 @@ const observePage=(page,client)=>{
  page.on('request',request=>observer.request(client,request));
 };
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
- [root+'tests/fixtures/empty_host_ui_server.py','--chat-controls','--shared-work'],{stdio:['ignore','pipe','inherit']});
+const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
+await mkdir(output,{recursive:true});
+const installed=process.env.AMPLIFIER_TEST_INSTALLED==='1';
+const fixturePath=process.env.AMPLIFIER_TEST_FIXTURE||root+'tests/fixtures/empty_host_ui_server.py';
+const python=process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python';
+if(installed)assert.ok(process.env.AMPLIFIER_TEST_PYTHON&&process.env.AMPLIFIER_TEST_FIXTURE&&!fixturePath.startsWith(root),'Installed qualification requires an external fixture and explicit interpreter');
+const home=await mkdtemp(path.join(output,'cold-home-'));
+const fixtureEnv={...process.env,AMPLIFIER_TEST_SHARED_WORK_HOME:home};
+if(installed){delete fixtureEnv.PYTHONPATH;delete fixtureEnv.PYTHONHOME}
+const fixtureArgs=[...(installed?['-I','-B']:[]),fixturePath,'--chat-controls','--shared-work'];
+const fixtureOptions={stdio:['ignore','pipe','inherit'],env:fixtureEnv,cwd:path.dirname(fixturePath)};
+// Seed in a different process, close the real service and reopen its persisted
+// state. The second process must never replay capture or initialization actions.
+const seed=spawn(python,[...fixtureArgs,'--shared-work-seed-only'],fixtureOptions);
+let seedOutput='';seed.stdout.on('data',chunk=>{if(seedOutput.length<65536)seedOutput+=String(chunk)});
+const seedClosed=new Promise((resolve,reject)=>{seed.once('error',reject);seed.once('close',(code,signal)=>resolve({code,signal,pid:seed.pid}))});
+let seedReceipt;
+try{seedReceipt=await bounded(seedClosed,30000,'Cold seed process')}
+catch(error){if(seed.exitCode===null)seed.kill('SIGKILL');await bounded(seedClosed,2000,'Cold seed reap');throw error}
+assert.equal(seedReceipt.code,0);assert.equal(seedReceipt.signal,null);assert.match(seedOutput,/"sharedWorkSeed"/);
+await writeFile(path.join(output,'cold-seed.json'),JSON.stringify({receipt:seedReceipt,output:seedOutput})+'\n');
+const fixture=spawn(python,fixtureArgs,fixtureOptions);
 // An admitted HTTP Work wait is shielded from transport cancellation and can
 // naturally take 30s. Keep escalation a failure; allow its actual drain first.
 const stop=ownFixture(fixture,{label:'Shared Work fixture',timeoutMs:40000});
-const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
 let browser,originalError,result,page,fixtureUrl;
@@ -61,6 +81,18 @@ try {
  observePage(page,'primary');
  const calls=observer.calls;
  const manifest=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
+ assert.equal(manifest.coldReopen,true);assert.deepEqual(manifest.coldReadCalls,[]);
+ assert.notEqual(seed.pid,fixture.pid);
+ let installedIdentity=null;
+ if(installed){
+  installedIdentity=(await (await page.request.get(url+'/fixture',{timeout:actionTimeoutMs})).json()).installedIdentity;
+  assert.equal(installedIdentity?.verified,true);assert.ok(installedIdentity.fileCount>0);
+  for(const name of ['index.html','build.json',...Object.keys(installedIdentity.static).filter(name=>/^assets\/app-.*\.(js|css)$/.test(name))]){
+   const response=await page.request.get(url+'/'+(name==='index.html'?'':name),{timeout:actionTimeoutMs});
+   assert.equal(response.status(),200);
+   assert.equal(createHash('sha256').update(await response.body()).digest('hex'),installedIdentity.static[name],name+' served from installed wheel');
+  }
+ }
  assert.equal(manifest.target.delivery,'reported_published');
  assert.equal(manifest.target.latestOutcome,'unknown');
  assert.equal(manifest.target.verification,'not_verified');
@@ -172,10 +204,65 @@ try {
  await action('session.select',{id:draftOwner});
  await expect(composer).toHaveDraft('Private draft remains unchanged.',{timeout:actionTimeoutMs});
  await expect(page.getByRole('button',{name:'Remove private-draft.txt',exact:true})).toBeVisible();
+ // Actual dirty Canvas memory, not a fabricated accepted navigation receipt.
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
+ await action('canvas.show',{kind:'markdown',title:'Work guard source',content:'# Original guard source'});
+ const rendererManifest={id:'example.work-dirty-editor',label:'Work guard editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
+ const rendererSource='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());return React.createElement("label",null,"Work unsaved edit",React.createElement("input",{"data-mount":mount,value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
+ const renderer=(await action('shell.packages.stage',{manifest:rendererManifest,source:rendererSource})).result.digest;
+ assert.equal((await action('shell.packages.validate',{digest:renderer})).result.status,'passed');
+ await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(renderer);
+ const editor=page.locator('[data-canvas-view="primary"]').getByLabel('Work unsaved edit');
+ await editor.fill('DIRTY WORK CANVAS');
+ const canvasView=async()=>(await action('canvas.views.inspect')).result.views.find(view=>view.viewId==='primary');
+ await expect.poll(async()=>(await canvasView()).dirty).toBe(true);
+ const originalView=await canvasView(),mount=await editor.getAttribute('data-mount');
+ const target=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
+ const browseWork=()=>action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:manifest.workspace.id,workWorkspaceTab:'work'}});
+ await browseWork();await expect(editor).toBeHidden();await expect(detail).toBeVisible();
+ await detail.getByRole('button',{name:'Open chat: '+manifest.ownerSessionId,exact:true}).click();
+ await expect(detail.getByRole('alert')).toContainText(/viewer edit/);
+ assert.equal((await state()).selectedSessionId,draftOwner);
+ assert.deepEqual(target(await canvasView()),target(originalView));
+ await action('view.update',{patch:{workSurface:'chat'}});
+ await expect(editor).toHaveValue('DIRTY WORK CANVAS');assert.equal(await editor.getAttribute('data-mount'),mount);
+ await expect(composer).toHaveDraft('Private draft remains unchanged.');
+ await expect(page.getByRole('button',{name:'Remove private-draft.txt',exact:true})).toBeVisible();
+ await action('canvas.views.recover',target(await canvasView()));
+ assert.equal((await state()).canvas.content,'# Original guard source');
+ // A real Settings private draft stays mounted while Work is inspected. The
+ // same Open chat path must ask, refuse on Keep, and retain the exact input.
+ await action('canvas.show',{kind:'settings',title:'Guarded Settings'});
+ await action('view.update',{patch:{settingsExpanded:['ai-connections']}});
+ const ai=page.locator('.a-settings-experience [data-part="ai-connections"]');
+ await ai.getByRole('button',{name:'Connect another service',exact:true}).click();
+ await ai.getByRole('button',{name:/Anthropic API Connect with/}).click();
+ const secret=ai.getByRole('textbox',{name:'API key',exact:true}),secretText='synthetic-unsaved-work-secret';
+ await secret.fill(secretText);assert.ok(!JSON.stringify(await state()).includes(secretText));
+ const providersBefore=(await state()).setup.providers.map(row=>row.id);
+ await browseWork();await expect(secret).toBeHidden();
+ await detail.getByRole('button',{name:'Open chat: '+manifest.ownerSessionId,exact:true}).click();
+ const guard=page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true});
+ await expect(guard).toBeVisible();await guard.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await expect(detail.getByRole('alert')).toContainText('Settings changes were kept');
+ assert.equal((await state()).selectedSessionId,draftOwner);
+ await action('view.update',{patch:{workSurface:'chat'}});
+ await expect(secret).toHaveValue(secretText);
+ assert.deepEqual((await state()).setup.providers.map(row=>row.id),providersBefore);
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();
+ await guard.getByRole('button',{name:'Discard changes',exact:true}).click();
+ await expect(page.locator('.a-settings-experience')).toHaveCount(0);
+ await expect(composer).toHaveDraft('Private draft remains unchanged.');
+ await expect(page.getByRole('button',{name:'Remove private-draft.txt',exact:true})).toBeVisible();
+ await browseWork();
+ await detail.getByRole('button',{name:'Open chat: '+manifest.ownerSessionId,exact:true}).click();
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(manifest.ownerSessionId);
+ await action('session.select',{id:draftOwner});
  const observation=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(observation.forbiddenRuntimeCalls,[]);
  assert.deepEqual(observation.runtimeCallbackCounts,{start:0,send:0,prewarm:0});
  assert.equal(observation.pendingWarmups,0,'No scheduled warm callback may remain unobserved');
+ assert.equal(observation.coldReopen,true);assert.deepEqual(observation.coldReadCalls,[]);
  const runtime=await (await page.request.get(url+'/fixture',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);assert.equal(runtime.workerCount,0);
  // Close observed pages before the final awaited assertion: detached listener
@@ -183,12 +270,15 @@ try {
  await bounded(peer.close(),actionTimeoutMs,'Peer page close');
  await bounded(page.close(),actionTimeoutMs,'Primary page close');
  observer.assertHealthy();
- result={status:'passed',sourceFixture:true,installedWheel:false,launchOptions:launch,
+ result={status:'passed',sourceFixture:!installed,installedWheel:!!installedIdentity,installedIdentity,launchOptions:launch,
+  coldServiceReopen:{seedPid:seed.pid,reopenedPid:fixture.pid,readHydrationCalls:observation.coldReadCalls},
+  dirtyCanvas:{refusal:true,mountPreserved:true,draftAndAttachmentPreserved:true},
+  dirtySettings:{keepRefusedNavigation:true,privateDraftPreserved:true,discardWithoutSave:true},
   acceptedItems:found.size,sourcePagesComplete:true,priorReturnRetained:true,currentUnknown:true,
   widths:[1440,390,320],clients:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
   runtimeCallbackCounts:observation.runtimeCallbackCounts,observationErrors:observer.errors,
   browserTimeouts:{actionTimeoutMs,navigationTimeoutMs},
-  limits:['No live provider or private history','Dirty Canvas/Settings and cold service reopen still require separate qualification']};
+  limits:['No live provider or private history','Synthetic runtime; installed identity requires explicit independently prepared wheel']};
 } catch(error) {
  originalError=error;
  // An expected missing-UI baseline still needs observed fixture/runtime facts.

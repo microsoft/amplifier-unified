@@ -4,6 +4,7 @@ No general write endpoint, provider call, fabricated verification receipt, or
 private history import. This module is enabled only by --shared-work.
 """
 import asyncio
+import contextvars
 import hashlib
 import json
 import time
@@ -11,7 +12,7 @@ import time
 from aiohttp import web
 
 
-async def install(app, runtime):
+async def install(app, runtime, *, manifest_path=None):
     service = app['service']
     calls = []
     callback_counts = {'start': 0, 'send': 0, 'prewarm': 0}
@@ -36,6 +37,75 @@ async def install(app, runtime):
     runtime.start = forbidden_start
     runtime.send = forbidden_send
     runtime.prewarm = forbidden_prewarm
+    cold = bool(manifest_path and manifest_path.exists())
+    if cold:
+        manifest = json.loads(manifest_path.read_text())
+        # No replay of seed commands or source capture on a cold process.
+        actual = service.workspace_work.summary(service.workspace_work.load(
+            manifest['target']['id'], manifest['workspace']))
+        assert actual['revision'] == manifest['target']['revision']
+        assert actual['promiseRevision'] == manifest['target']['promiseRevision']
+    else:
+        manifest = await seed(service)
+        if manifest_path:
+            manifest_path.write_text(json.dumps(manifest))
+    active_read = contextvars.ContextVar('shared_work_fixture_read', default=False)
+    cold_calls = []
+    if cold:
+        # Trap hydration caused by a Work read, without pretending that the
+        # ordinary app's chat display is itself forbidden to hydrate history.
+        for target, name in [(service.history, 'ensure_loaded'), (service.cold_display, 'hydrate'),
+                             (service.management, 'ensure_runtime')]:
+            if target is None:
+                continue
+            original = getattr(target, name)
+            async def guarded(*args, _original=original, _name=name, **kwargs):
+                if active_read.get():
+                    cold_calls.append(_name)
+                    raise AssertionError('Cold Work read hydrated or started a worker: ' + _name)
+                return await _original(*args, **kwargs)
+            setattr(target, name, guarded)
+
+    async def inspect(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        return web.json_response({**manifest, 'coldReopen': cold, 'coldReadCalls': cold_calls,
+            'forbiddenRuntimeCalls': list(calls), 'runtimeCallbackCounts': dict(callback_counts),
+            'pendingWarmups': len(service.warmup.pending)})
+    app.router.add_get('/fixture/shared-work', inspect)
+
+    # Observe the production wait without changing its timeout, cancellation or
+    # result. stdout records survive the HTTP connection and server shutdown.
+    dispatch = service.workspace_work.dispatch
+    sequence = 0
+    async def observed_dispatch(action, args, origin, command_id, caller):
+        nonlocal sequence
+        token = active_read.set(True)
+        try:
+            if action != 'workspace.work.wait':
+                return await dispatch(action, args, origin, command_id, caller)
+            sequence += 1
+            identity = sequence
+            def emit(phase, **fields):
+                print(json.dumps({'workWait': {'id': identity, 'phase': phase,
+                    'at': time.monotonic(), 'waitMs': args.get('waitMs', 30000), **fields}}), flush=True)
+            emit('entered')
+            try:
+                response = await dispatch(action, args, origin, command_id, caller)
+            except asyncio.CancelledError:
+                emit('cancelled')
+                raise
+            except Exception as error:
+                emit('failed', error=type(error).__name__)
+                raise
+            emit('returned', changed=response.get('changed'), timedOut=response.get('timedOut'))
+            return response
+        finally:
+            active_read.reset(token)
+    service.workspace_work.dispatch = observed_dispatch
+
+
+async def seed(service):
     workspace = service.state['workspaces'][0]
     created = await service.dispatch('session.create', {
         'workspace': workspace['path'], 'title': 'Synthetic Work owner'},
@@ -122,41 +192,4 @@ async def install(app, runtime):
         'reportedCleanup': resource_row, 'coverage': coverage,
     }
 
-    async def inspect(request):
-        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
-            raise web.HTTPForbidden()
-        return web.json_response({**manifest, 'forbiddenRuntimeCalls': list(calls),
-            'runtimeCallbackCounts': dict(callback_counts),
-            'pendingWarmups': len(service.warmup.pending)})
-
-    app.router.add_get('/fixture/shared-work', inspect)
-
-    # Observe the production wait without changing its timeout, cancellation or
-    # result. stdout records survive the HTTP connection and server shutdown.
-    dispatch = service.workspace_work.dispatch
-    sequence = 0
-
-    async def observed_dispatch(action, args, origin, command_id, caller):
-        nonlocal sequence
-        if action != 'workspace.work.wait':
-            return await dispatch(action, args, origin, command_id, caller)
-        sequence += 1
-        identity = sequence
-
-        def emit(phase, **fields):
-            print(json.dumps({'workWait': {'id': identity, 'phase': phase,
-                'at': time.monotonic(), 'waitMs': args.get('waitMs', 30000), **fields}}), flush=True)
-
-        emit('entered')
-        try:
-            response = await dispatch(action, args, origin, command_id, caller)
-        except asyncio.CancelledError:
-            emit('cancelled')
-            raise
-        except Exception as error:
-            emit('failed', error=type(error).__name__)
-            raise
-        emit('returned', changed=response.get('changed'), timedOut=response.get('timedOut'))
-        return response
-
-    service.workspace_work.dispatch = observed_dispatch
+    return manifest
