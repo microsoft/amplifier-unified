@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // A delayed optional read must not hold public workspace paging or filtering.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -32,9 +33,9 @@ try{
   }
   await route.continue();
  });
- await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier',exact:true})).toBeEditable();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});await expect(page.getByRole('textbox',{name:'Message Amplifier',exact:true})).toBeEditable();
  const before=await inspect();
- await page.locator('[data-part="header"] .a-work-crumb').click();
+ await page.locator('[data-part="header"] .a-work-crumb:not(.a-work-home-crumb)').click();
  const rows=page.locator('.a-work-browser .a-nav-chats [data-session-id]');
  await expect(rows).toHaveCount(40);await expect.poll(()=>!!releasePlan).toBe(true);
  const firstIds=await rows.evaluateAll(elements=>elements.map(el=>el.dataset.sessionId));

@@ -96,6 +96,17 @@ def checked_source(path: Path) -> dict:
     return {"path": str(path), "revision": revision}
 
 
+def browser_prepare_commands(repo: Path, uv: str, interpreter: str, *, install_dependencies=False) -> list[list[str]]:
+    """Reuse the locked browser setup without replacing an installed-wheel env."""
+    lock = json.loads((repo / "frontend/package-lock.json").read_text())
+    version = lock["packages"]["node_modules/playwright"]["version"]
+    install = [interpreter, "-m", "playwright", "install"]
+    if install_dependencies:
+        install.append("--with-deps")
+    return [[uv, "pip", "install", "--python", interpreter, f"playwright=={version}"],
+            [*install, "chromium"]]
+
+
 def prepare(lane: str, state: Path, repo: Path, *, python: str, cli_source: Path | None,
             loop_source: Path | None, install_browser_dependencies: bool = False,
             filesystem_source: Path | None = None, apply_patch_source: Path | None = None) -> dict:
@@ -132,13 +143,9 @@ def prepare(lane: str, state: Path, repo: Path, *, python: str, cli_source: Path
     run([uv, "sync", "--locked", "--group", "dev", "--python", python])
     interpreter = plan["interpreter"]
     if lane.startswith("browser-"):
-        lock = json.loads((repo / "frontend/package-lock.json").read_text())
-        version = lock["packages"]["node_modules/playwright"]["version"]
-        run([uv, "pip", "install", "--python", interpreter, f"playwright=={version}"])
-        install = [interpreter, "-m", "playwright", "install"]
-        if install_browser_dependencies:
-            install.append("--with-deps")
-        run([*install, "chromium"])
+        for args in browser_prepare_commands(repo, uv, interpreter,
+                                             install_dependencies=install_browser_dependencies):
+            run(args)
     if lane in {"cli-interop", "filesystem-aliases"}:
         run([uv, "pip", "install", "--python", interpreter,
              *[record["path"] for record in sources.values()]])

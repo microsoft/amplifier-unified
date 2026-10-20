@@ -17,9 +17,9 @@ an environment is launched.
 
 Setup is a separate host effect: a direct user action authorizes it, while an
 agent needs `test_host_setup` in global scope. This does not grant authority to
-change unrelated configuration. Existing session-scoped `test_environments`
-authority still governs checks. Passive discovery and result reads do not request
-configuration authority.
+change unrelated configuration. Routine task-owned testing needs no separate `test_environments` approval.
+Root ownership, Stop and current backend identity still govern checks. Passive
+discovery and result reads do not request configuration authority.
 
 Setup retains its identity and phase before effects. Repeating a request returns
 its retained result; interrupted effects are observed, never blindly repeated.

@@ -17,7 +17,7 @@ try{
   window.clearTimeout=id=>{pending.delete(id);nativeClear(id)};
   window.flushComposerDebounce=()=>{const entries=[...pending];pending.clear();for(const [id,fn] of entries){nativeClear(id);fn()}return entries.length};
  });
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  await act('session.create');const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await act('session.create');const second=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);

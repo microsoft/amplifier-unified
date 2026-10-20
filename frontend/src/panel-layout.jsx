@@ -22,7 +22,7 @@ export function showingOverview(state){
 }
 const Layout=createContext(null);
 export function WorkspaceLayout({state,act,children,presentation={},appearanceCss='',appearanceScheme=''}){
- const narrow=useNarrowScreen();
+ const narrow=useNarrowScreen('(max-width: 900px)');
  const host=useRef(null),[metrics,setMetrics]=useState({available:1200,gap:12,rail:0}),[draft,setDraft]=useState(null);
  useLayoutEffect(()=>{
   const el=host.current;if(!el)return;

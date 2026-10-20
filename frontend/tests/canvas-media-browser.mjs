@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Production HTML sandbox and genuine decoder/playback, without a model call.
 // Tiny VP8 fixture: ffmpeg -f lavfi -i testsrc=size=64x48:rate=10 -t 1
 // -c:v libvpx -pix_fmt yuv420p -an tiny.webm. Audio is one second of silent PCM.
@@ -23,7 +24,7 @@ try{
  let remoteRequests=0;
  await context.route('https://media.invalid/**',route=>{remoteRequests++;return route.abort()});
  page=await context.newPage();
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await action('session.create',{});
  await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:640}});

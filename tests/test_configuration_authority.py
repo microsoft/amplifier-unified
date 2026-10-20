@@ -245,8 +245,8 @@ async def test_declined_and_stopped_requests_never_authorize_and_user_grants_do_
     assert app.configuration_authority.rows(peer['id']) == []
     pending = (await agent(app,source,'capability.request',args,'stopped-request'))['result']
     await app.dispatch('conversation.stop',{'sessionId':source['id']})
-    with pytest.raises(AppError,match='conversation changed'):
-        await app.dispatch('approval.respond',{'sessionId':source['id'],'id':pending['id'],'decision':'allow'})
+    cleared = await app.dispatch('approval.respond',{'sessionId':source['id'],'id':pending['id'],'decision':'allow'})
+    assert cleared['decisionApplied'] is False and cleared['result']['status'] == 'expired'
     assert not app.configuration_authority.valid(row, source)
 
 

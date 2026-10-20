@@ -52,3 +52,37 @@ independent windows, failed warm launches with explicit retry, retained composer
 and iframe input, missing/deleted targets, newer user navigation, and no chat
 submission. Pure tests also cover pre-boot delivery, foreign/path-mismatched
 targets, forbidden targets, rebinding, dismissal and stale in-flight results.
+
+## Inline references to existing chats
+
+`outputs.attachChatReference` accepts `sessionId`, an explicit saved assistant
+`messageId`, and `targetSessionId` (with `targetNativeProject` when the native ID
+is ambiguous). The host saves a typed relationship in the existing output
+registry. The card uses the destination's current title and workspace; authors
+cannot supply HTML, URLs, labels, client IDs or arbitrary actions.
+
+Publication never navigates. **Open chat** is an explicit same-document browser
+click through the ordinary guarded `session.select` dispatcher, carrying the
+saved record/version/revision and exact source-message proof. Settings, Canvas,
+draft and attachment owners remain unchanged. The source stays mounted until
+acceptance. A superseded queued click cannot override newer navigation.
+Archived destinations open for viewing without restoring them. Missing,
+unavailable or changed identities fail closed without selecting another chat.
+The action neither creates a chat nor sends input, prepares a runtime, starts
+work, grants permission or approves anything; ordinary history refresh is allowed.
+
+Cards belong only to the original assistant reply. Verified web/canonical aliases
+retain that association across cold storage; changed source bytes do not inherit
+it. Copy and Markdown export retain an inert, escaped host-local label, without
+target conversation contents or an executable URL. Export range and identity
+omission options still apply. Forks/imports do not copy live reference authority;
+the original relationship remains retained. Ordinary Markdown links are not
+automatically converted. `outputs.unlink` removes the card from display without
+deleting the record; relinking changes its revision, invalidating old click proofs.
+
+Qualification: `tests/test_chat_references.py`,
+`frontend/tests/chat-reference-browser.mjs`, and the copy tests cover the intended
+boundaries. `CHAT_REFERENCE_NEGATIVE_RELOAD=1` deliberately replaces a genuine
+card click with a reload and must fail the same-document check. Source-only
+implementation is not acceptance: execute these checks, rendered keyboard/mobile
+and two-client behavior, and the negative control in the admitted isolated route.

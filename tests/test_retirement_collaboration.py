@@ -46,6 +46,53 @@ for line in sys.stdin:
 '''
 
 
+@pytest.mark.parametrize('restart', [False, True])
+async def test_human_resume_starts_fresh_process_without_replaying_prior_input(tmp_path, monkeypatch, restart):
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path/'native'))
+    log = tmp_path/'resumed.jsonl'
+    def create():
+        runtime = RuntimeManager(command=[sys.executable, '-c', SCRIPT, str(log)])
+        runtime.retention.wake = lambda: None
+        service = AppService(tmp_path/'app', runtime, workspace=tmp_path)
+        runtime.app_bridge = service.app_bridge
+        return service, runtime
+    app, runtime = create()
+    try:
+        source, target = [app._new_session({'title': title}) for title in ('Manager', 'Member')]
+        app.state['sessions'] = [source, target]
+        assignment = app.assignments.ensure(source, 'fixture-assignment')
+        assignment['members'][target['id']] = {'status': 'bound', 'role': 'member'}
+        target['assignmentId'] = assignment['id']
+        app.assignments.save(assignment); app._publish()
+        await runtime.prewarm(target, app.on_runtime_event)
+        original = runtime.workers[target['id']]['process']
+        await app.dispatch('conversation.stop', {'sessionId': target['id']}, command_id='human-stop', include_state=False)
+        async with asyncio.timeout(5):
+            while original.returncode is None or target['status'] != 'stopped':
+                await asyncio.sleep(.01)
+        human = app._message(source, 'user', 'Resume my paused member.',
+                             inputId='fresh-human', inputOrigin='ui')
+        source_id, target_id = source['id'], target['id']
+        app._publish()
+        if restart:
+            await app.close()
+            app, runtime = create()
+            source, target = app._session(source_id), app._session(target_id)
+        await generation(app, source, 'manager-resume', ['fresh-human'])
+        args = {'sessionId': target_id, 'text': 'Reconcile and continue.',
+                'resume': {'sourceMessageId': human['id'], 'expectedInterruptionRevision': 1}}
+        await agent_action(app, source, 'coordination.send', args, 'fresh-resume')
+        await settled(app, 'fresh-resume', 'accepted')
+        await agent_action(app, source, 'coordination.send', args, 'fresh-resume')
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        assert len(rows) == 1 and rows[0]['pid'] != original.pid
+        assert rows[0]['message']['inputOrigin'] == 'peer'
+        assert rows[0]['message']['peerEnvelope']['humanResume']['sourceMessageId'] == human['id']
+        assert target['interruptionRevision'] == 1
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('boundary', ['retired', 'retiring', 'host-restarted', 'user-stopped'])
 async def test_peer_request_after_idle_retirement_needs_no_human_relay(tmp_path, monkeypatch, boundary):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path/'native'))

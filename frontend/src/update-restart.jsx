@@ -7,6 +7,7 @@ export function UpdateRestart({updates,act}){
  const [request,setRequest]=React.useState(null);
  const button=React.useRef(null),cancelButton=React.useRef(null),restoreFocus=React.useRef(false);
  const current=confirmation?.key===key;
+ const latest=updates.application?.latest?.replace(/^v/,'');
  const cancel=()=>{restoreFocus.current=true;setConfirmation(null);setError('')};
  React.useEffect(()=>{
   if(confirmation)cancelButton.current?.focus();
@@ -30,9 +31,11 @@ export function UpdateRestart({updates,act}){
  };
  if(!target&&!confirmation)return null;
  return <div className="a-update-force-restart">
-  {target&&!confirmation&&<button ref={button} type="button" className="a-soft" disabled={submitting} onClick={()=>{setError('');setConfirmation({key,target:{...target}})}}>Force restart…</button>}
+  {target&&!confirmation&&<button ref={button} type="button" className="a-soft" disabled={submitting} onClick={()=>{setError('');setConfirmation({key,target:{...target},version:updates.pendingApp?.latest?.replace(/^v/,'')})}}>Force restart…</button>}
   {confirmation&&<div role="alertdialog" aria-label="Confirm update restart" onKeyDown={event=>{if(event.key==='Escape'&&!submitting){event.stopPropagation();cancel()}}}>
    <p><strong>Interrupt active work and restart?</strong></p>
+   <p>{confirmation.version?`This restarts into prepared Amplifier ${confirmation.version}.`:'This restarts into the prepared update.'}</p>
+   {current&&latest&&confirmation.version&&latest!==confirmation.version&&<p>Amplifier {latest} is available, but this confirmation uses the prepared version above. Cancel and let the newer release finish preparing to use it instead.</p>}
    <p>Running chats, background workers, tools, and calls will be interrupted. Saved conversation history and drafts will be kept. Interrupted work will not be replayed automatically.</p>
    <p>Unresolved checkout handoffs will still require inspection after the restart.</p>
    {!current&&<p role="alert">The staged update or host changed. Cancel and review the current update before confirming again.</p>}

@@ -17,6 +17,8 @@ class OutputRegistry:
         db.execute('CREATE INDEX IF NOT EXISTS output_session ON output_records(session_id,created)')
         db.execute("""CREATE INDEX IF NOT EXISTS output_linked_media ON output_records(session_id)
             WHERE json_extract(value,'$.kind')='media' AND json_extract(value,'$.linked')=1""")
+        db.execute("""CREATE INDEX IF NOT EXISTS output_linked_chat_reference ON output_records(session_id)
+            WHERE json_extract(value,'$.kind')='chat_reference' AND json_extract(value,'$.linked')=1""")
         db.execute('CREATE TABLE IF NOT EXISTS output_receipts (id TEXT PRIMARY KEY, fingerprint TEXT, value TEXT)')
         db.execute('CREATE TABLE IF NOT EXISTS output_comments (id TEXT PRIMARY KEY, output_id TEXT, value TEXT)')
 
@@ -30,6 +32,12 @@ class OutputRegistry:
         """A conservative presence fact; exact message/byte authority stays with reads."""
         return self.db.execute("""SELECT 1 FROM output_records WHERE session_id=?
             AND json_extract(value,'$.kind')='media' AND json_extract(value,'$.linked')=1
+            LIMIT 1""", (sid,)).fetchone() is not None
+
+    def has_linked_chat_references(self, sid):
+        """Presence only; exact source and target authority stays with reads."""
+        return self.db.execute("""SELECT 1 FROM output_records WHERE session_id=?
+            AND json_extract(value,'$.kind')='chat_reference' AND json_extract(value,'$.linked')=1
             LIMIT 1""", (sid,)).fetchone() is not None
 
     def list(self, sid, *, include_unlinked=False, offset=0, limit=20):

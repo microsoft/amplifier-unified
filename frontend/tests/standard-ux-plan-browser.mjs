@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Canonical plan data through public placement and Canvas controls.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -17,7 +18,7 @@ try{
  await control({op:'chat-plan',status:'idle'});
  const before=await control({op:'inspect'}),original=before.state.sessions.find(row=>row.id===alpha);
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers}),errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep the private plan draft');
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep the private plan draft');
  const plan=page.getByRole('region',{name:'Plan',exact:true});
  const check=async placement=>{await expect(plan).toHaveCount(1);await expect(plan).toHaveClass(new RegExp(`a-chat-plan-${placement}`));await expect(plan).toContainText('1 of 3 done');if(!await plan.getByText('Prepare a document to share',{exact:true}).isVisible())await plan.locator('summary').click();await expect(plan.getByText('Prepare a document to share',{exact:true})).toBeVisible();await expect(plan.locator('input,textarea,select,button,[contenteditable=true]')).toHaveCount(0);assert.deepEqual((await control({op:'inspect'})).state.sessions.find(row=>row.id===alpha).execution.plan,original.execution.plan)};
  await check('composer');

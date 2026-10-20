@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 // Packaged application, isolated storage, no external model or feedback calls.
@@ -16,7 +17,7 @@ try{
  page.on('pageerror',e=>errors.push(e.message));
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await action('session.create');await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep my unfinished ideas.');
  await openSettingsPage(page,'appearance');
  await expect(page.getByRole('button',{name:'Use Aurora',exact:true})).toBeVisible();

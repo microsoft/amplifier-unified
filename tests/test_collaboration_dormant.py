@@ -1,5 +1,6 @@
 """Dormant admission observes host lifetime without replaying prior work."""
 import copy
+import time
 
 import pytest
 
@@ -17,6 +18,13 @@ async def test_collaboration_authority_normalizes_only_prior_host_on_keyed_admis
         {'id': 'ordinary-approval', 'status': 'pending'},
         {'id': 'capability:durable', 'status': 'pending'},
     ]
+    # A durable card needs its canonical grant; an orphan correctly expires.
+    app.configuration_authority.save({
+        'id': 'capability:durable', 'sessionId': owner['id'], 'workspace': owner['workspace'],
+        'interruptionRevision': 0, 'revision': 1, 'status': 'pending', 'createdAt': time.time(),
+        'effects': ['file_access'], 'scopes': ['local'], 'reason': 'Saved configuration request',
+        'nativeWait': False,
+    })
     active = app._new_session({'title': 'Selected chat'})
     app._state['sessions'].extend([owner, active])
     app._state['selectedSessionId'] = active['id']

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -19,7 +20,7 @@ try{
   const value=await page.locator('.a-messages').getAttribute('data-work-projection');
   return value?JSON.parse(value):null;
  }).toMatchObject({status:'ready',current:true,receipt:{scope:'recent-events'}});
- await page.goto(base);const answer=page.locator('[data-message-id="long-answer"]');
+ await page.goto(base);await showFixtureConversation(page);const answer=page.locator('[data-message-id="long-answer"]');
  await expectCurrentWork();
  await answer.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();console.log('Assistant body loaded');
  assert.equal(await answer.getByRole('button',{name:'Show full text'}).count(),0);

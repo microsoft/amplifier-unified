@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -8,7 +9,7 @@ let browser;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);fixture.once('exit',()=>reject(Error('Fixture exited')));fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data.url)}}catch{}}})});
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1500,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
- page.on('pageerror',error=>errors.push(error.message));await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ page.on('pageerror',error=>errors.push(error.message));await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  await action('session.create',{});
  const row=(await action('canvas.apps.create',{title:'Live sketch',manifest:{version:1,stateSchema:{type:'object'}},initialState:{strokes:Array.from({length:7},(_,i)=>({points:[[i,0],[i,1]]})),note:''},content:`<h1>Live sketch</h1><canvas id="drawing" style="width:400px;height:240px"></canvas><label>Sketch note<input id="note"></label><script>

@@ -67,6 +67,15 @@ association and provenance, not the semantic truth of arbitrary prose. Failed,
 unknown, skipped and unrun criteria remain visible. Self-reported shipment is not
 host-observed delivery.
 
+An explicit publication report binds the current promise and candidate, reporter,
+destination, exact references and reported outcome. It is displayed as **Reported
+published**, never **Shipped** or host-confirmed delivery. It neither invokes a
+publisher nor fetches a reference. Failed, unknown and not-run publication reports
+remain attributed observations. Existing publisher receipts without a proven
+candidate/artifact association cannot establish that association by inference.
+Publication reports do not alter verification, human decisions or closure gates.
+Scope/candidate changes clear the current delivery projection, retaining history.
+
 Explicit closure records satisfied, cancelled or superseded, its reason and
 source/evidence basis. Reopening appends a new disposition while preserving the
 previous one. It neither reopens a terminal assignment task nor retries an effect.

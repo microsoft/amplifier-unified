@@ -216,6 +216,19 @@ class ShellResources:
 
     def _page_key(self, name, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision):
         view = dict(scoped['view'])
+        from .adaptive_work import STATUS_RESOURCES
+        if name in STATUS_RESOURCES:
+            pinned = instance.get('scope', {}).get('workspaceId') if instance.get('scope', {}).get('mode') == 'pinned' else None
+            return (((root_navigation_revision, workspace_revision), None), self._epochs(CHAT_GLOBALS),
+                    pinned, scoped.get('selectedSessionId'),
+                    encoded({'index': (view.get('navStatusPages') or {}).get(STATUS_RESOURCES[name], 0)}))
+        if name == 'workHome':
+            from .adaptive_work import WORK_QUERY_FIELDS
+            return (((root_navigation_revision, workspace_revision), None), self._epochs(CHAT_GLOBALS),
+                    view.get('workHomeScope'), scoped.get('selectedSessionId'),
+                    encoded({**{key: view.get(key) for key in WORK_QUERY_FIELDS},
+                             'pinnedWorkspaceId': instance.get('scope', {}).get('workspaceId')
+                             if instance.get('scope', {}).get('mode') == 'pinned' else None}))
         saved = view.get('navRecentLimit', 20)
         from .chat_navigation import RECENT_LIMITS
         saved = saved if type(saved) is int and saved in RECENT_LIMITS else 20
