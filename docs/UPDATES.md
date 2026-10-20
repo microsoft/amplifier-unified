@@ -290,6 +290,13 @@ source content and explicit policy match; graph changes invalidate that reuse.
 A new attempt always starts with fresh dependency resolution. Existing explicit
 local/registry overrides are not replaced by a remembered Git lock.
 
+uv may represent a checked moving ref as `rev=<full checked commit>#<same commit>`.
+That spelling is equivalent only when repository, subdirectory and exact commit
+also match; abbreviated commits, other refs and branch movement still fail.
+The checked ref policy is carried separately into qualification and bound again
+to the installed source identity. Frozen installs retain exact commits while the
+next update check continues following the configured branch.
+
 After the uv-managed launcher supports generation activation, an already tested
 application environment becomes the live launch target through an atomic private
 pointer. This avoids installing its exact packages a second time. Older

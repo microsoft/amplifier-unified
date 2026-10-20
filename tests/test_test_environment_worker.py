@@ -3,8 +3,14 @@ import json
 import io
 import tarfile
 import hashlib
+import os
+import shlex
+import subprocess
+import time
 from pathlib import Path
 import sys
+import uuid
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +18,11 @@ import pytest
 from amplifier_web import task_environments as owner
 from amplifier_web import test_environment_worker as worker
 from amplifier_web import task_resources as storage
+from amplifier_web import test_environment_profiles as profiles
+from amplifier_web import test_job_guest as guest
+
+real_docker_json = worker.docker_json
+real_docker_owner = worker.docker_owner
 
 
 class Value:
@@ -1023,3 +1034,250 @@ def test_cleanup_failure_rejects_arbitrary_backend_codes(code):
     assert result['code'] == 'archive_verification_failed'
     assert result['status'] == 'stopped' and result['effectAdmitted'] is False
     assert 'private' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test'])
+def test_manual_execution_uses_selected_profile_not_caller_overrides(library, tmp_path, profile_id):
+    lib, calls = library
+    value = {**payload(tmp_path, 'execute'), 'profileId': profile_id,
+             'command': "printf '%s\\n' 'quotes \" and ; $HOME'; exit 7",
+             'environment': {'HOME': '/root'}, 'jobEnvironment': {'PATH': '/caller'},
+             'uid': 0, 'gid': 0, 'user': 'root'}
+    worker.retain_source_ready(tmp_path, 'owned', value['snapshot'])
+    expected = Value(stdout='partial\n', stderr='diagnostic\n', exit_code=7, truncated=True)
+    lib.execute = lambda *args, **kwargs: (calls.append(('execute', args, kwargs)) or expected)
+    result = worker.execute_call(value)
+    assert result == {'ok': True, 'universeId': 'owned', 'result': expected.model_dump()}
+    assert len(calls) == 1
+    _, args, options = calls[0]
+    assert args[0] == 'owned'
+    argv = shlex.split(args[1])
+    assert argv[:3] == ['python3', '-I', '-c']
+    assert argv[4] == 'execute'
+    assert json.loads(argv[5]) == {
+        'command': value['command'], 'environment': profiles.get(profile_id)['environment']}
+    assert options['workdir'] == '/workspace'
+    assert options['timeout_seconds'] == 12 and options['max_output_bytes'] == 32768
+    assert not (tmp_path / 'source-attempt.json').exists()
+
+
+@pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test'])
+def test_manual_and_durable_transport_share_environment(library, tmp_path, profile_id):
+    lib, calls = library
+    value = {**payload(tmp_path, 'execute'), 'profileId': profile_id, 'jobId': 'job-exact'}
+    worker.retain_source_ready(tmp_path, 'owned', value['snapshot'])
+    worker.execute_call(value)
+    manual = json.loads(shlex.split(calls[-1][1][1])[5])
+    # The durable observer receipt is irrelevant here; inspect its one dispatch.
+    with pytest.raises(json.JSONDecodeError):
+        worker.execute_call({**value, 'action': 'job_start'})
+    durable = json.loads(shlex.split(calls[-1][1][1])[5])
+    assert manual['environment'] == durable['environment'] == profiles.get(profile_id)['environment']
+    assert manual['command'] == durable['command'] == value['command']
+    assert len(calls) == 2
+    assert calls[-1][2]['timeout_seconds'] == 15  # Observer, not manual timeout.
+
+
+def test_manual_guest_reuses_fixed_identity_and_execs_without_login_shell(monkeypatch):
+    events = []
+    monkeypatch.setattr(guest.os, 'setgroups', lambda groups: events.append(('groups', groups)))
+    monkeypatch.setattr(guest.os, 'setgid', lambda gid: events.append(('gid', gid)))
+    monkeypatch.setattr(guest.os, 'setuid', lambda uid: events.append(('uid', uid)))
+    monkeypatch.setattr(guest.os, 'chdir', lambda cwd: events.append(('cwd', cwd)))
+    monkeypatch.setattr(guest.os, 'execve', lambda *args: events.append(('exec', args)))
+    monkeypatch.setenv('PRIVATE_HOST_SECRET', 'not-forwarded')
+    value = {'command': 'python -V; exit 7', 'environment': profiles.get('browser-test')['environment']}
+    guest.execute(value)
+    assert events[:4] == [('groups', []), ('gid', 65534), ('uid', 65534), ('cwd', '/workspace')]
+    _, (executable, argv, environment) = events[4]
+    assert executable == '/bin/sh' and argv == ['/bin/sh', '-c', value['command']]
+    assert environment == {'LANG': 'C.UTF-8', **profiles.get('browser-test')['environment']}
+    assert 'PRIVATE_HOST_SECRET' not in environment
+    assert len(events) == 5
+
+
+@pytest.mark.parametrize('failure', ['setgroups', 'setgid', 'setuid'])
+def test_manual_privilege_failure_never_runs_command(monkeypatch, failure):
+    for name in ('setgroups', 'setgid', 'setuid'):
+        monkeypatch.setattr(guest.os, name, lambda value: None)
+    def refuse(value):
+        raise PermissionError('cannot drop identity')
+    monkeypatch.setattr(guest.os, failure, refuse)
+    monkeypatch.setattr(guest.os, 'chdir', lambda *args: pytest.fail('changed cwd after identity failure'))
+    monkeypatch.setattr(guest.os, 'execve', lambda *args: pytest.fail('root fallback'))
+    with pytest.raises(PermissionError, match='cannot drop identity'):
+        guest.execute({'command': 'true'})
+
+
+def test_manual_host_payload_selects_resource_profile_without_caller_environment(tmp_path, monkeypatch):
+    home, row = allocated(tmp_path)
+    row['profileId'] = 'browser-test'
+    monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
+    (tmp_path / 'test_environment_worker.py').write_text(
+        "import json,sys\np=json.load(sys.stdin)\nprint(json.dumps({'ok': True, **p}))\n")
+    args = {'requestId': 'manual-exact', 'command': 'python -V', 'profileId': 'linux-python',
+            'environment': {'HOME': '/root'}, 'jobEnvironment': {'PATH': '/caller'}, 'uid': 0}
+    result = owner.invoke({'python': sys.executable, 'image': owner.APPROVED_IMAGE, 'dockerHost': 'unix:///socket'},
+                          home, row, 'execute', args)
+    assert result['action'] == 'execute' and result['profileId'] == 'browser-test'
+    assert result['requestId'] == 'manual-exact' and result['command'] == 'python -V'
+    assert not {'environment', 'jobEnvironment', 'uid'} & result.keys()
+
+
+def test_manual_backend_uncertainty_dispatches_once(library, tmp_path):
+    lib, calls = library
+    value = payload(tmp_path, 'execute')
+    worker.retain_source_ready(tmp_path, 'owned', value['snapshot'])
+    def lost(*args, **kwargs):
+        calls.append(('execute', args, kwargs))
+        raise Failure()
+    lib.execute = lost
+    result = worker.execute_call(value)
+    assert result['status'] == 'unknown' and not result['ok']
+    assert result['code'] == 'fixture-failure' and len(calls) == 1
+
+
+@pytest.mark.parametrize('fault', ['backend', 'owner', 'snapshot'])
+def test_manual_refusal_never_dispatches(library, tmp_path, monkeypatch, fault):
+    lib, calls = library
+    value = payload(tmp_path, 'execute')
+    worker.retain_source_ready(tmp_path, 'owned', value['snapshot'])
+    if fault == 'backend':
+        value['expectedBackendIdentity']['daemon'] = 'changed'
+    elif fault == 'snapshot':
+        value['snapshot']['archive_sha256'] = 'changed'
+    else:
+        def refuse(*args):
+            raise ValueError('owner changed')
+        monkeypatch.setattr(worker, 'docker_owner', refuse)
+    if fault == 'owner':
+        with pytest.raises(ValueError, match='owner changed'):
+            worker.execute_call(value)
+    else:
+        assert not worker.execute_call(value)['ok']
+    assert calls == []
+
+
+@contextmanager
+def owned_smoke_guest(docker, argv, name, labels):
+    """Reconcile after any launch response, including a lost acknowledgement."""
+    try:
+        docker(*argv)
+        yield
+    finally:
+        # Successful listing is required; an unavailable daemon stays a failure.
+        ids = docker('ps', '-a', '--no-trunc', '--filter', 'name=^/' + name + '$',
+                     '--format', '{{.ID}}').stdout.split()
+        assert len(ids) <= 1
+        if ids:
+            observed = json.loads(docker('inspect', ids[0]).stdout)[0]
+            assert observed['Id'] == ids[0] and observed['Name'] == '/' + name
+            assert all(observed['Config']['Labels'].get(key) == val for key, val in labels.items())
+            docker('rm', '-f', ids[0])
+            assert not docker('ps', '-a', '--filter', 'id=' + ids[0], '--format', '{{.ID}}').stdout.strip()
+        # An empty listing after a lost launch response does not settle that
+        # launch; its original exception still fails the check, without replay.
+
+
+def test_smoke_cleanup_checks_identity_after_lost_launch_response():
+    calls = []
+    labels = {'io.amplifier.root-owner': 'fixture-owner'}
+    def docker(*args):
+        calls.append(args)
+        if args[0] == 'run':
+            raise subprocess.TimeoutExpired('docker run', 1)
+        if args[0] == 'ps':
+            return SimpleNamespace(stdout='exact-id\n' if '--no-trunc' in args else '')
+        if args[0] == 'inspect':
+            return SimpleNamespace(stdout=json.dumps([{
+                'Id': 'exact-id', 'Name': '/owned-name', 'Config': {'Labels': labels}}]))
+        return SimpleNamespace(stdout='')
+    with pytest.raises(subprocess.TimeoutExpired):
+        with owned_smoke_guest(docker, ['run'], 'owned-name', labels):
+            pytest.fail('unknown launch cannot execute')
+    assert [args[0] for args in calls] == ['run', 'ps', 'inspect', 'rm', 'ps']
+    assert calls[3] == ('rm', '-f', 'exact-id')
+
+
+@pytest.mark.skipif(os.environ.get('GITHUB_ACTIONS') != 'true'
+                    or os.environ.get('CHECK_SUITE') != 'managed-removal-recovery',
+                    reason='Real Docker smoke is owned by the fixed hosted repair suite.')
+def test_manual_profile_real_owned_docker_workload(library, tmp_path, monkeypatch):
+    """Real Docker owner/guest boundary; library execution transport is controlled.
+
+    No host source mounts, credentials, existing guests or prepared dependencies.
+    Prepared profile environment is real, but package installation is not claimed.
+    """
+    lib, _ = library
+    monkeypatch.setattr(worker, 'docker_json', real_docker_json)
+    monkeypatch.setattr(worker, 'docker_owner', real_docker_owner)
+    value = payload(tmp_path, 'execute')
+    name = 'unified-profile-' + uuid.uuid4().hex
+    value.update(universeId=name, dockerHost='unix:///var/run/docker.sock', profileId='browser-test')
+    base = ['docker', '--host', value['dockerHost']]
+    def docker(*args, timeout=60):
+        return subprocess.run([*base, *args], capture_output=True, text=True, timeout=timeout, check=True)
+    value['expectedBackendIdentity'] = worker.docker_backend(value)
+    docker('pull', owner.APPROVED_IMAGE, timeout=180)
+    labels = {'com.docker.compose.project': name, 'io.amplifier.root-owner': value['rootOwner'],
+              'io.amplifier.operation-id': value['operationId']}
+    argv = ['run', '-d', '--name', name, '--read-only', '--cap-drop', 'ALL',
+            '--security-opt', 'no-new-privileges:true', '--network', 'none',
+            '--pids-limit', '128', '--memory', '256m', '--cpus', '1']
+    for cap in ('CHOWN', 'SETUID', 'SETGID', 'KILL'):
+        argv += ['--cap-add', cap]
+    for key, val in labels.items():
+        argv += ['--label', key + '=' + val]
+    for path in ('/workspace', '/artifacts', '/var/lib/unified-jobs', '/tmp'):
+        argv += ['--tmpfs', path + ':rw,nosuid,size=16777216']
+    argv += [owner.APPROVED_IMAGE, 'sleep', 'infinity']
+    with owned_smoke_guest(docker, argv, name, labels):
+        docker('exec', name, '/bin/sh', '-c', worker.jobs.initialize_command())
+        worker.retain_source_ready(tmp_path, name, value['snapshot'])
+        dispatched = []
+        def execute(identity, command, *, workdir, timeout_seconds, max_output_bytes, config):
+            assert identity == name and config['docker_host'] == value['dockerHost']
+            dispatched.append(command)
+            process = subprocess.run([*base, 'exec', '--workdir', workdir, name,
+                                      '/bin/sh', '-c', command],
+                                     capture_output=True, text=True, timeout=timeout_seconds)
+            return Value(stdout=process.stdout[:max_output_bytes], stderr=process.stderr[:max_output_bytes],
+                         exit_code=process.returncode,
+                         truncated=max(len(process.stdout), len(process.stderr)) > max_output_bytes)
+        lib.execute = execute
+        script = """import json, os
+from pathlib import Path
+for root in ('/workspace', '/artifacts'):
+    path = Path(root) / 'proof.txt'
+    path.write_text('owned workload')
+    assert path.read_text() == 'owned workload'
+    assert path.stat().st_uid == 65534
+assert not os.access('/var/lib/unified-jobs', os.R_OK)
+assert not os.access('/var/lib/unified-jobs', os.W_OK)
+print(json.dumps({'uid': os.getuid(), 'gid': os.getgid(), 'groups': os.getgroups(),
+                  'cwd': os.getcwd(), 'environment': dict(os.environ)}))
+"""
+        value['command'] = shlex.join(['python', '-c', script])
+        result = worker.execute_call(value)
+        assert result['ok'] and result['result']['exit_code'] == 0, result
+        proof = json.loads(result['result']['stdout'])
+        assert (proof['uid'], proof['gid'], proof['groups'], proof['cwd']) == (65534, 65534, [], '/workspace')
+        for key, val in profiles.get('browser-test')['environment'].items():
+            assert proof['environment'][key] == val
+        assert len(dispatched) == 1
+        # A cold invocation of the same worker reads previous writes; no job or
+        # initialization is needed and the caller still owns cleanup.
+        value['command'] = 'cat /workspace/proof.txt /artifacts/proof.txt'
+        second = worker.execute_call(value)
+        assert second['result']['stdout'] == 'owned workloadowned workload'
+        assert second['result']['exit_code'] == 0 and len(dispatched) == 2
+        durable = {**value, 'action': 'job_start', 'jobId': 'profile-parity',
+                   'command': shlex.join(['python', '-c', script])}
+        observed = worker.execute_call(durable)
+        deadline = time.monotonic() + 10
+        while not observed['job']['terminal'] and time.monotonic() < deadline:
+            time.sleep(.05)
+            observed = worker.execute_call({**durable, 'action': 'job_read'})
+        assert observed['job']['state'] == 'passed', observed
+        assert json.loads(observed['result']['stdout']) == proof
+        assert sum(shlex.split(command)[4] == 'job_start' for command in dispatched) == 1

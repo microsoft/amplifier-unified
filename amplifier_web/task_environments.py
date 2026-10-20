@@ -317,13 +317,34 @@ def confirmed_result(row, request):
             and isinstance(request.get('result'), dict))
 
 
-def require_resolved_removal(app, row, exclude_request_id=None):
+def legacy_cleanup_qualification(app, row, action, args):
+    """Derive an exception from trusted retained evidence, never caller flags."""
+    if action != 'finishCleanup':
+        return None
+    from .test_environment_legacy import returned_export_limit
+    prior = app.operations.requests.read(row['sessionId'], args['previousRequestId'])
+    return returned_export_limit(row, prior)
+
+
+def require_resolved_removal(app, row, exclude_request_id=None, legacy=None):
     """A new identity cannot escape any retained unresolved removal.
 
     lastOperation can be a later stop/read; the bounded request-list page is not
     the history. An unbound removal cannot be assigned to a resource after a
     crash, so it holds this root only; another root's history cannot hold it.
     """
+    qualified = None
+    if legacy is not None:
+        from .test_environment_legacy import returned_export_limit, completed_export_limit
+        prior = app.operations.requests.read(row['sessionId'], legacy['originalRequestId'])
+        if row.get('guestRemoved'):
+            removal, _ = confirmed_guest_removal(app, row)
+            verified = completed_export_limit(row, prior, removal)
+        else:
+            verified = returned_export_limit(row, prior)
+        if verified != legacy:
+            raise ValueError('The retained legacy preservation result changed.')
+        qualified = legacy['originalRequestId']
     journal = app.operations.requests.journal
     with journal.lock:
         found = journal.db.execute(
@@ -334,8 +355,9 @@ def require_resolved_removal(app, row, exclude_request_id=None):
             "AND json_extract(value,'$.action') IN "
             "('workspace.environments.remove','workspace.environments.finishCleanup') "
             "AND COALESCE(json_extract(value,'$.state'),'outcome_unknown') NOT IN ('completed','failed') "
-            "AND (? IS NULL OR id!=?) ORDER BY rowid LIMIT 1",
-            (row['sessionId'], row['id'], exclude_request_id, exclude_request_id)).fetchone()
+            "AND (? IS NULL OR id!=?) AND (? IS NULL OR id!=?) ORDER BY rowid LIMIT 1",
+            (row['sessionId'], row['id'], exclude_request_id, exclude_request_id,
+             qualified, qualified)).fetchone()
     if found:
         raise ValueError('The original removal remains unresolved. Inspect its retained evidence; a new request cannot repeat it.')
 
@@ -353,10 +375,12 @@ def begin_removal(app, row, action, args, actor):
         current = get(app.data_dir, row['sessionId'], row['id'])
         if current['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
-        require_resolved_removal(app, current, args['requestId'])
+        legacy = legacy_cleanup_qualification(app, current, action.rsplit('.', 1)[-1], args)
+        require_resolved_removal(app, current, args['requestId'], legacy)
         request, fresh = app.operations.requests.begin(row['sessionId'], action, args, actor)
         if fresh:
-            request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'])
+            request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'],
+                **({'legacyCleanupQualification': legacy} if legacy else {}))
         return request, fresh
     finally:
         lock.release()
@@ -443,7 +467,7 @@ def resume_preparation_removal(app, row, config, *, expected_revision=None, admi
         request, result = confirmed_guest_removal(app, row)
         if previous_request_id is not None and previous_request_id != request['requestId']:
             raise ValueError('Choose the exact confirmed guest removal request.')
-        require_resolved_removal(app, row, request['requestId'])
+        require_resolved_removal(app, row, request['requestId'], request.get('legacyCleanupQualification'))
         if admit:
             admit()
         # A successful cleanup save may precede a failed journal/projection
@@ -489,10 +513,15 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
             binding_pending = False
             # Also covers the queue's direct route, before projection/config
             # writes. Never let this refusal rewrite an already-retained UNKNOWN.
-            require_resolved_removal(app, row, request['requestId'])
+            legacy = legacy_cleanup_qualification(app, row, action, args)
+            if (recorded.get('legacyCleanupQualification') is not None
+                    and recorded['legacyCleanupQualification'] != legacy):
+                raise ValueError('The retained legacy preservation result changed.')
+            require_resolved_removal(app, row, request['requestId'], legacy)
             binding_pending = True
-            if recorded.get('resourceId') is None:
-                request = app.operations.requests.finish(recorded, 'admitting', resourceId=row['id'])
+            if recorded.get('resourceId') is None or legacy:
+                request = app.operations.requests.finish(recorded, 'admitting', resourceId=row['id'],
+                    **({'legacyCleanupQualification': legacy} if legacy else {}))
             binding_pending = False
         if row.get('pendingRequest') and row['pendingRequest'] != request['requestId']:
             prior = app.operations.requests.read(sid, row['pendingRequest'])
@@ -518,11 +547,15 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
         if action == 'finishCleanup':
             prior = app.operations.requests.read(sid, args['previousRequestId'])
             failure = prior.get('result', {})
-            if (prior.get('action') not in {'workspace.environments.remove', 'workspace.environments.finishCleanup'}
+            if legacy:
+                # Qualification is separately committed on this continuation.
+                # Do not rewrite the old UNKNOWN receipt or fabricate phases.
+                pass
+            elif (prior.get('action') not in {'workspace.environments.remove', 'workspace.environments.finishCleanup'}
                     or prior.get('state') != 'failed'
                     or prior.get('resourceId') != row['id'] or prior.get('sessionId') != sid):
                 raise ValueError('Choose this environment’s confirmed pre-removal failure.')
-            if (not isinstance(failure, dict) or failure.get('effectAdmitted') is not False
+            if not legacy and (not isinstance(failure, dict) or failure.get('effectAdmitted') is not False
                     or failure.get('phase') not in {'preserving', 'verifying'}
                     or failure.get('code') not in {'preservation_failed', 'archive_verification_failed'}):
                 raise ValueError('The previous cleanup does not establish a safe pre-removal failure.')
