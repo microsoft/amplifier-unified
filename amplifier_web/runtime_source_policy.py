@@ -76,12 +76,19 @@ def declarations(content):
         for value in uv.get(collection, []):
             requirement(value)
     for name, source in uv.get('sources', {}).items():
-        if not isinstance(source, dict) or not source.get('git'):
-            continue
-        refs = [source[key] for key in ('branch', 'rev', 'tag') if source.get(key)]
-        if len(refs) == 1:
-            add(name, {'url': source['git'], 'ref': refs[0],
-                       'subdirectory': source.get('subdirectory', '')})
+        # uv permits marker-specific source arrays. Every declared alternative
+        # participates: selecting one by guessing its marker would hide a pin.
+        entries = source if isinstance(source, list) else [source]
+        if not entries:
+            found[package_name(name)] = None
+        for entry in entries:
+            refs = ([entry[key] for key in ('branch', 'rev', 'tag') if entry.get(key)]
+                    if isinstance(entry, dict) else [])
+            if not isinstance(entry, dict) or not entry.get('git') or len(refs) != 1:
+                found[package_name(name)] = None  # Local/unknown overrides are not a branch declaration.
+                continue
+            add(name, {'url': entry['git'], 'ref': refs[0],
+                       'subdirectory': entry.get('subdirectory', '')})
     return {name: value for name, value in found.items() if value is not None}
 
 
