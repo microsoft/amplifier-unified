@@ -73,6 +73,12 @@ try{
  await expect(updates).not.toContainText('Other components installed at');
  await expect(install).toBeEnabled();
  await expect(overview.locator('.a-progress-spinner')).toHaveCount(0);
+ await stage('source-mismatch');
+ await expect(overview).toContainText('Updates need attention');
+ await expect(updates).toContainText('A component changed to a different source during update preparation.');
+ await expect(updates).toContainText('Amplifier kept the current components active.');
+ await expect(updates).toContainText('amplifier-foundation');
+ await page.screenshot({path:output+'-source-mismatch.png'});
  await stage('adopting');await expect(overview).toContainText('Ready for new work');await expect(overview).toContainText('No app restart');await expect(check).toBeEnabled();
  await stage('installed');await expect(updates).toContainText('Other components installed at');
  await expect(updates).toContainText('Included components installed at');
