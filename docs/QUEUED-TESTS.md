@@ -55,6 +55,34 @@ The result does not satisfy a shared-task dependency or prove product acceptance
 
 ## Capacity policy
 
+Global **Settings → Testing & resources → Advanced limits** exposes running
+and total retained environment ceilings and the free-disk reserve. These apply
+across workspaces on this app installation. The screen shows each effective
+value and whether it comes from a global setting, an optional selected-runner
+connection override, the configured backend, or the backend default. An empty
+field inherits; explicit zero disables that individual limit. Saving requires
+an exact settings/selected-runner revision. Agents additionally need global
+`host_defaults` configuration authority. Ordinary checks cannot raise limits.
+
+The host keeps these mutable overrides in a separate private `test-capacity.json`
+policy, not the immutable backend configuration used by owned environments.
+Consequently existing queued receipts, source bindings, and cleanup snapshots
+remain valid after settings edits, including receipts written before this UI.
+A save clears queue backoff and wakes waiting checks. Capacity observations and
+the final guarded launch admission use the current policy; a policy decrease
+never kills already admitted work. Changes to backend identity, installation,
+endpoint, credentials, source/image or placement retain their existing refusal
+and cleanup rules. Direct edits to the old backend configuration remain exact
+configuration changes, not a supported live policy update.
+
+Runner overrides identify the qualified **connection**, not a universal machine.
+Changing connection aliases can select a different override; global defaults
+still apply. Docker and Incus retain their own physical daemon/project admission
+locks, but this UI does not synchronize policies across other app installations,
+users, or container systems. CPU/memory budgets, queue size/wait policies,
+resource-aware scheduling and automatic routing across machines remain separate
+work. This screen does not claim those controls exist.
+
 The Docker configuration may set `maxRunning` (default 15), `maxInstances`
 (default 256 retained plus active), and `minFreeBytes` (default 10 GiB). Zero
 explicitly disables that individual limit. Stopped environments consume storage
