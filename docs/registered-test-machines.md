@@ -30,7 +30,7 @@ Live qualification used two approved native Linux machines and an identical tiny
 
 A separate real AppService/TestQueue run used a controlled capacity fixture for a saturated origin and first target. The second target performed actual source transfer, durable job execution, result delivery, stop, export/download and removal in **32.766 seconds**. The saturated target received only a read-only capacity request. No production policy was changed to simulate saturation.
 
-The first development controller exposed the system interpreter's older archive API. Its stopped guest was preserved and recovered through explicit verified cleanup; the final controller enters the already-qualified adapter interpreter before processing requests. All successful qualification guests were removed after retaining source and results.
+The first development controller exposed the system interpreter's older archive API. Its stopped guest was preserved and recovered through explicit verified cleanup; the final controller enters the already-qualified adapter interpreter before processing requests. All seven development and qualification guests were confirmed absent after retaining source and results, with no remaining machine reservations for those owners.
 
 ## Remaining work
 
