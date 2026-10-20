@@ -211,7 +211,8 @@ def invoke(config, folder, payload):
             from . import test_environment_worker as common
             common.verify_binding({**payload, 'snapshot': snapshot}, result['universeId'], result['backendIdentity'], prepare=True)
         return result
-    timeout = 2000 if safe['action'] == 'prepareDependencies' else 800 if safe['action'] in {'start', 'remove', 'finishCleanup', 'exportArtifacts'} else 180 if safe['action'] in {'stop', 'cleanupDependencies'} else safe.get('timeoutSeconds', 30) + 30
+    from . import test_environment_profiles as profiles
+    timeout = profiles.timing(safe.get('profileId'), safe.get('timingRequest'))['preparationTimeoutSeconds'] + 200 if safe['action'] == 'prepareDependencies' else 800 if safe['action'] in {'start', 'remove', 'finishCleanup', 'exportArtifacts'} else 180 if safe['action'] in {'stop', 'cleanupDependencies'} else safe.get('timeoutSeconds', 30) + 30
     result = call(runner, safe, timeout)
     if result.get('archives'):
         # The target's retained archive remains authoritative even when transfer

@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import uuid
 
 # This entry point is shipped in a hash-qualified, private immutable directory.
 if __package__ in (None, ''):
@@ -29,8 +30,8 @@ MAX_SOURCE = 512 * 1024**2
 CHUNK = 512 * 1024
 MAX_CONTROL = 1024 * 1024
 MUTATIONS = {'start', 'execute', 'job_start', 'job_cancel', 'stop', 'remove', 'finishCleanup', 'exportArtifacts', 'prepareDependencies', 'cleanupDependencies'}
-ACTIONS = MUTATIONS | {'prepare', 'capacity', 'read', 'job_read', 'reconcile', 'source', 'artifact', 'describe', 'machine.read', 'machine.save'}
-PAYLOAD = {'action', 'source', 'backendKey', 'expectedBackendIdentity', 'retentionMode', 'snapshot', 'operationId', 'universeId', 'rootOwner', 'resourceId', 'resourceRevision', 'admissionRevision', 'requestId', 'command', 'jobId', 'profileId', 'resourceRequest', 'timeoutSeconds', 'limits', 'offset', 'content', 'archiveIndex', 'exportRequestId', 'expectedRevision'}
+ACTIONS = MUTATIONS | {'prepare', 'capacity', 'read', 'job_read', 'reconcile', 'source', 'artifact', 'describe', 'machine.read', 'machine.save', 'cancelPreparation'}
+PAYLOAD = {'action', 'source', 'backendKey', 'expectedBackendIdentity', 'retentionMode', 'snapshot', 'operationId', 'universeId', 'rootOwner', 'resourceId', 'resourceRevision', 'admissionRevision', 'requestId', 'command', 'jobId', 'profileId', 'resourceRequest', 'timingRequest', 'timeoutSeconds', 'limits', 'offset', 'content', 'archiveIndex', 'exportRequestId', 'expectedRevision'}
 
 
 def digest(value):
@@ -49,6 +50,20 @@ def state():
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
     worker.private_directory(path)
     return path
+
+
+def authority_id(root, *, create=False):
+    path = root / 'authority.json'
+    value = read(path)
+    if value is None and create:
+        try:
+            worker.common.write_private_record(path, {'version': 1, 'id': uuid.uuid4().hex})
+        except FileExistsError:
+            pass
+        value = read(path)
+    if not isinstance(value, dict) or value.get('version') != 1 or not re.fullmatch(r'[a-f0-9]{32}', value.get('id', '')):
+        raise ValueError('The target authority must be registered first.')
+    return value['id']
 
 
 def read(path, default=None):
@@ -157,7 +172,7 @@ def prepare(root, payload, config, target):
     name = worker.identity(payload)
     identity, _ = backend(config, root)
     worker.common.verify_binding({**payload, 'root': str(root)}, name, identity, prepare=True)
-    immutable = {'owner': owner(payload), 'snapshot': snapshot, 'profileId': payload['profileId'], 'resourceRequest': payload['resourceRequest']}
+    immutable = {'owner': owner(payload), 'snapshot': snapshot, 'profileId': payload['profileId'], 'resourceRequest': payload['resourceRequest'], 'timingRequest': payload.get('timingRequest')}
     saved = read(root / 'owner.json')
     if saved is not None and saved != immutable:
         raise ValueError('The immutable target owner changed.')
@@ -202,10 +217,11 @@ def dispatch(request):
     base = state()
     identity, target = backend(config, base)
     action = payload['action']
-    if action != 'describe' and (request['machineId'] != machine.identity() or request['backendIdentity'] != identity):
+    authority = authority_id(base, create=action == 'describe')
+    if action != 'describe' and (request['machineId'] != authority or request['backendIdentity'] != identity):
         raise ValueError('The registered machine or backend changed.')
     if action == 'describe':
-        return {'ok': True, 'version': 1, 'machineId': machine.identity(), 'backendIdentity': identity,
+        return {'ok': True, 'version': 1, 'machineId': authority, 'backendIdentity': identity, 'nativeMachineId': machine.identity(),
                 'accountId': hashlib.sha256(str(os.getuid()).encode()).hexdigest(),
                 'profiles': [p['id'] for p in profiles.catalog()], 'incus': config,
                 'machineResources': machine.snapshot()}
@@ -221,14 +237,26 @@ def dispatch(request):
     root = base / ('owner-' + digest(original))
     root.mkdir(mode=0o700, exist_ok=True)
     worker.private_directory(root)
+    if action == 'cancelPreparation':
+        # A cancellation marker is independently publishable while the long
+        # preparation holds its effect lock. It grants no launch authority.
+        saved = read(root / 'owner.json')
+        if not saved or saved['owner'] != original or saved['snapshot'] != payload.get('snapshot') or saved['resourceRequest'] != payload.get('resourceRequest') or saved.get('timingRequest') != payload.get('timingRequest'):
+            raise ValueError('Cancellation requires the exact original target owner.')
+        folder = root / 'preparation'
+        folder.mkdir(mode=0o700, exist_ok=True)
+        worker.private_directory(folder)
+        write(folder / 'cancel.json', {'cancelRequested': True})
+        return {'ok': True, 'status': 'cancellation-requested', 'message': 'Cancellation reached the original builder. Stopping and cleanup must still be observed.'}
     with locked(root):
         if action == 'source':
             return source_chunk(root, payload)
         if action == 'prepare':
             profiles.resources(payload.get('profileId'), payload.get('resourceRequest'))
+            profiles.timing(payload.get('profileId'), payload.get('timingRequest'))
             return prepare(root, payload, config, target)
         saved = read(root / 'owner.json')
-        if not saved or saved['owner'] != original or saved['snapshot'] != payload.get('snapshot') or saved['resourceRequest'] != payload.get('resourceRequest') or saved['profileId'] != payload.get('profileId'):
+        if not saved or saved['owner'] != original or saved['snapshot'] != payload.get('snapshot') or saved['resourceRequest'] != payload.get('resourceRequest') or saved['profileId'] != payload.get('profileId') or saved.get('timingRequest') != payload.get('timingRequest'):
             raise ValueError('The original source and target owner are required.')
         if action == 'artifact':
             return artifact(root, payload)
@@ -260,7 +288,7 @@ def dispatch(request):
         runtime_payload = {k: v for k, v in payload.items() if k in PAYLOAD and k not in {'content', 'offset', 'limits'}}
         runtime_payload.update(root=str(root), incus=config)
         if action == 'prepareDependencies':
-            receipt = preparation.prepare({'backend': 'incus', 'incus': config}, root, saved['snapshot'], saved['profileId'], payload['requestId'], resource_request=saved['resourceRequest'], host_reservation=reservation)
+            receipt = preparation.prepare({'backend': 'incus', 'incus': config}, root, saved['snapshot'], saved['profileId'], payload['requestId'], resource_request=saved['resourceRequest'], host_reservation=reservation, timing_request=saved.get('timingRequest'))
             write(root / 'prepared.json', receipt)
             machine.settle(row, phase='launching')
             result = {'ok': True, 'preparedDependencies': receipt}
@@ -278,6 +306,8 @@ def dispatch(request):
             result = worker.execute_call(runtime_payload)
             if action == 'start' and result.get('ok'):
                 machine.settle(row)
+            if action == 'reconcile':
+                reconcile_launch(root, runtime_payload, result, row)
             # Unknown creation retains capacity even after absent inventory.
             # Release only after our completed launch followed by exact stopped
             # or removed owner evidence; no TTL and no origin assertions.
@@ -292,6 +322,36 @@ def dispatch(request):
             write(record_path, {'state': 'completed', 'intent': intent, 'result': result})
         return result
 
+
+
+def reconcile_launch(root, payload, result, row):
+    launch = read(root / 'launch-dispatched.json')
+    if not launch or not result.get('ok'):
+        return
+    path = root / ('effect-' + digest([launch['requestId'], 'start']) + '.json')
+    original = read(path)
+    observed = result.get('observation', {})
+    if not isinstance(payload.get('expectedBackendIdentity'), dict):
+        return
+    expected = worker.common.binding(payload, worker.identity(payload), payload['expectedBackendIdentity'])
+    if (not original or original.get('state') != 'admitted'
+            or any(observed.get(key) != value for key, value in expected.items())
+            or observed.get('admissionSettled') is not True
+            or observed.get('ownership') not in {'matched', 'absent'}):
+        return
+    state = result.get('status')
+    if state not in {'running', 'stopped', 'absent'} or state == 'absent' and observed.get('absenceConfirmed') is not True:
+        return
+    # DTU's exact original launch receipt is terminal. This settles the target
+    # fence without repeating create; an inventory-only absence cannot do so.
+    write(path, {**original, 'state': 'completed', 'result': {'ok': True, 'status': 'removed' if state == 'absent' else state,
+        'universeId': worker.identity(payload), 'reconciled': True, 'observation': observed}})
+    if state in {'stopped', 'absent'}:
+        if (not read(root / 'preparation/intent.json') or read(root / 'prepared.json')
+                or (read(root / 'preparation/cleanup.json', {}) or {}).get('complete')):
+            machine.settle(row, release=True)
+    else:
+        machine.settle(row)
 
 def main():
     try:
