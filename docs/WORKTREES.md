@@ -86,3 +86,35 @@ available. Older records with no recorded host retain unknown provenance and are
 not rewritten. For separately paired hosts and canonical history migration, see
 [task portability](TASK-PORTABILITY.md); local handoff itself does not select a
 remote execution host.
+
+## Commissioning-manager placement
+
+An authenticated direct commissioning manager may inspect, create or attach a
+checkout for its currently bound member and request that idle member's handoff.
+The original creation receipt and active membership prove that relationship;
+nested managers can place their own members, not arbitrary assignment peers.
+The same native settlement, writer-release and durable placement owner applies.
+The manager does not acquire arbitrary peer controls, cleanup, configuration or
+uncertain-handoff reconciliation authority. Independent peers are excluded.
+The member must be idle with settled settings; Stop and failed work must be
+reconciled through their existing controls first.
+
+The receipt captures the manager's transport-bound input ancestry, assignment
+revision, human/task/Stop boundaries and the member's existing placement guards.
+Checkout preparation revalidates that captured scope after repository lookup,
+Git lock waits and source inspection. The first durable checkout record is
+committed together with that check under the app state lock; slow Git runs
+outside it. A cancellation before admission creates no checkout. After
+admission, the exact operation settles with retained evidence even if its caller
+stops, and no later work is authorized by that receipt. Inspect/list/status
+revalidate the relationship and manager instruction before publishing results;
+manager status reads cannot reconcile a member's uncertain archive.
+Authority is also rechecked before release and before committing placement. The
+same objective may continue in later manager turns, and unrelated assignment
+updates do not cancel an accepted placement. The
+manager receives a reserved, guarded outcome notification, including unknown or
+rejected outcomes when its original authority remains valid. The member receives
+no new input and no replay. A new brief can run only after confirmed placement.
+Retries read the original receipt; restart retains unknown effects and does not
+redo a move with uncertain writer release. History, drafts, usage and task state
+remain with their existing owners.

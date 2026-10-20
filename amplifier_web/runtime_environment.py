@@ -367,13 +367,29 @@ def augmented_manifest(content, rows):
             '\n'.join(json.dumps(key) + ' = ' + toml_value(value) for key, value in data.items()) + '\n').encode()
 
 
-def matches_resolution(resolved, row):
-    if resolved is None or resolved.fragment != row['latest']:
-        return False
-    query = parse_qs(resolved.query)
-    ref = next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '')
-    url = urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', ''))
-    return url == row['url'] and ref == row['ref'] and next(iter(query.get('subdirectory', [''])), '') == row.get('subdirectory', '')
+def verify_resolution(resolved, row):
+    """Reject changed sources with evidence that is safe to copy for diagnosis."""
+    expected = {'repository': row['url'], 'ref': row['ref'],
+                'subdirectory': row.get('subdirectory', ''), 'revision': row['latest']}
+    if resolved is None:
+        mismatches = ['source']
+    else:
+        query = parse_qs(resolved.query)
+        observed = {'repository': urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', '')),
+                    'ref': next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), ''),
+                    'subdirectory': next(iter(query.get('subdirectory', [''])), ''),
+                    'revision': resolved.fragment}
+        mismatches = [key for key in expected if expected[key] != observed[key]]
+    if mismatches:
+        error = ValueError('A runtime source resolved differently after checking; check for updates again.')
+        # Field names and commits distinguish drift from other resolver
+        # differences without exposing repository URLs, refs or local paths.
+        error.diagnostic_facts = {
+            'reason': 'runtime-resolution-mismatch', 'component': row['package'],
+            'resolutionMismatches': mismatches, 'expectedRevision': row['latest'],
+            **({'observedRevision': resolved.fragment} if resolved is not None else {}),
+        }
+        raise error
 
 
 async def stage(manager, generation, candidates, *, finalize=True):
@@ -426,8 +442,7 @@ async def stage(manager, generation, candidates, *, finalize=True):
     for row in selected:
         if row.get('kind') == 'runtime dependency':
             installed = locked.get(row['package'])
-            if not matches_resolution(installed, row):
-                raise ValueError('A runtime branch moved after checking; check for updates again.')
+            verify_resolution(installed, row)
     if finalize and not receipt.exists():
         receipt.with_name('runtime-base.toml').write_bytes(manifest_path().read_bytes())
         shutil.copy2(project / 'pyproject.toml', receipt.with_name('runtime.toml'))

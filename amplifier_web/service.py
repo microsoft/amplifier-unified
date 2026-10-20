@@ -403,7 +403,7 @@ for _access, _actions in {
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
-        "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile",
+        "worktree.remove", "worktree.archive", "worktree.restore", "worktree.reconcile",
         "coordination.intent",
     },
     "presentation": {
@@ -421,6 +421,7 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        "worktree.create", "worktree.attach", "worktree.handoff",
         "coordination.review",
         *integration_definitions(schema, string),
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
@@ -2185,7 +2186,7 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('worktree.'):
             try:
-                result = await self.worktrees.dispatch(action, args, origin, command_id)
+                result = await self.worktrees.dispatch(action, args, origin, command_id, caller_session_id)
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
@@ -4694,7 +4695,10 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith('worktree.') or (args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}):
+            if args['action'].startswith('worktree.'):
+                # The canonical worktree owner checks commissioned-manager scope.
+                action_args.setdefault('sessionId', session_id)
+            if args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id

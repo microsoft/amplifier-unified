@@ -106,6 +106,17 @@ compare those exact links, not equal message text.
    The peer keeps the source's actual execution folder while retaining the
    canonical workspace for history. This shares that checkout; it does not
    allocate a second worktree or isolate ports, services, or browser state.
+   To give a commissioned member its own checkout, let its initial setup brief
+   finish without editing shared files. Once idle, its direct commissioning manager can use
+   `worktree.inspect/create` (or `attach`) with the member's `sessionId`, followed
+   by `worktree.handoff` with its exact checkout and execution revision.
+   This changes the member's execution folder, not the manager's. Finish your
+   turn after the pending handoff; the host sends you one guarded outcome.
+   Inspect `worktree.list` for that member and send its next brief only after
+   the placement is applied. No user relay or separate approval is required.
+   Stop, newer instructions, detached members, native ownership and unresolved
+   settings remain effective. Independent chats cannot be moved this way;
+   cleanup and uncertain-handoff reconciliation still belong to the owner.
    Inspect your actual owned resources with `workspace.resources.managed`, using
    this workspace and your root session ID. Page each owner with its returned
    cursor. Local publishing reports actual bound ports and immutable served
