@@ -296,6 +296,7 @@ class ShellQueryOwner:
             if key != self.active:
                 self.jobs.pop(key, None)
             elif self.projector is not None and self.retiring is None:
+                job['retiring'] = True
                 projector, self.projector = self.projector, None
                 self.retiring = asyncio.create_task(projector.close())
         self._wake_capacity()
@@ -337,6 +338,18 @@ class ShellQueryOwner:
                         self._diagnose(job, started_at, result, accepted=False)
                         if not self.closed:
                             self._wake_capacity()
+                        continue
+                    if job.get('retiring'):
+                        # Demand can return while its abandoned read is closing.
+                        # Capture a fresh current read; an intentional retirement
+                        # is not a catalog failure. The loop awaits the exact old
+                        # process before starting any replacement.
+                        self._diagnose(job, started_at, result, accepted=False)
+                        for identity in interested:
+                            with self.service.clients.bind(identity):
+                                self.resources.snapshot(identity)
+                            self.resources.shell.notify(identity)
+                        self._wake_capacity()
                         continue
                     try:
                         current = not self.service.db.in_transaction and self._fence(job['inputs']['operation']) == job['fence']
