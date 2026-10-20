@@ -1369,3 +1369,16 @@ previously suppressed or unknown requests are not replayed.
 A fresh human-backed owner request can admit one reconciliation input to a failed commissioned member. The host requires a recorded terminal generation, no active child work, and the existing native ownership lock proving the previous worker is absent. Ownership stays held through the saved receipt. The failed generation and its effects remain evidence; no input or command is retried. A newer failure, Stop, membership change, human input or pending access change invalidates admission. Explicit provider/tool safety stops remain blocked. This resolves the former instruction to inspect a failure followed by an unconditional refusal even after inspection.
 
 Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. Only a successful host admission clears the old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a separate settings edit in every worker.
+
+
+## Explicit responsibility for existing chats
+
+[Existing-chat adoption](assignment-adoption.md) adds a settled, independent root
+through a revision-bound preview and explicit manager/human instruction. The
+canonical assignment retains a distinct adoption receipt, not a fabricated
+creation operation. Native ownership, unresolved configuration, task state and
+concurrent Stop/input changes are checked before committing membership. Existing
+manager continuation and placement controls then use that responsibility. Earlier
+history and usage stay attributed as before; adding itself never starts a turn.
+The workspace/canvas assignment controls expose the same operation. Independent
+chats in a shared folder remain independent unless explicitly added.
