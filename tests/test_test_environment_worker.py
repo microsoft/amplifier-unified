@@ -1114,7 +1114,7 @@ def test_manual_host_payload_selects_resource_profile_without_caller_environment
     row['profileId'] = 'browser-test'
     monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
     (tmp_path / 'test_environment_worker.py').write_text(
-        "import json,sys\np=json.load(sys.stdin)\nprint(json.dumps(p))\n")
+        "import json,sys\np=json.load(sys.stdin)\nprint(json.dumps({'ok': True, **p}))\n")
     args = {'requestId': 'manual-exact', 'command': 'python -V', 'profileId': 'linux-python',
             'environment': {'HOME': '/root'}, 'jobEnvironment': {'PATH': '/caller'}, 'uid': 0}
     result = owner.invoke({'python': sys.executable, 'image': owner.APPROVED_IMAGE, 'dockerHost': 'unix:///socket'},
