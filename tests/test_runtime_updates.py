@@ -127,10 +127,16 @@ async def test_branch_movement_after_check_does_not_activate(environment):
     (manager.home / 'updates/releases' / generation).mkdir(parents=True)
     (repo / 'marker.txt').write_text('third')
     git(repo, 'commit', '-am', 'third')
-    with pytest.raises(ValueError, match='branch moved'):
+    with pytest.raises(ValueError, match='source resolved differently') as caught:
         await environments.stage(manager, generation, [row])
+    assert caught.value.diagnostic_facts == {
+        'reason': 'runtime-resolution-mismatch', 'component': 'fixture-runtime',
+        'resolutionMismatches': ['revision'], 'expectedRevision': new,
+        'observedRevision': git(repo, 'rev-parse', 'HEAD'),
+    }
     assert not active_release(manager.home)
     assert environments.locked_sources(current)['fixture-runtime'].fragment == old
+    assert not (environments.receipt_directory(manager.home, generation) / 'runtime.lock').exists()
 
 
 def test_cold_inventory_does_not_prepare_worker(tmp_path):
@@ -241,7 +247,7 @@ async def test_installed_transitive_branch_drift_rejected(installed_transitive):
     environments.receipt_directory(manager.home, generation).mkdir(parents=True)
     (repo / 'child/marker.txt').write_text('moved since check')
     git(repo, 'commit', '-am', 'drift')
-    with pytest.raises(ValueError, match='branch moved'):
+    with pytest.raises(ValueError, match='source resolved differently'):
         await environments.stage(manager, generation, [row])
     assert not active_release(manager.home)
     assert not (environments.receipt_directory(manager.home, generation) / 'runtime.lock').exists()
