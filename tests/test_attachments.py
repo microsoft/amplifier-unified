@@ -182,3 +182,148 @@ def test_pasted_text_metadata_and_content_survive_reload(tmp_path):
     assert metadata(tmp_path, row['id']) == row
     path, _ = file_path(tmp_path, row['id'])
     assert path.read_bytes() == text.encode()
+
+
+@pytest.mark.parametrize('private', [False, True], ids=['legacy', 'private-client'])
+@pytest.mark.parametrize('evidence', ['input-delivered', 'runtime-delivery', 'delivery-check'])
+async def test_accepted_attachments_settle_before_rpc_return(tmp_path, private, evidence):
+    """Exercise the real settlement/publication boundary without a provider."""
+    from amplifier_web.runtime import normalize_event
+
+    class HeldRuntime(Runtime):
+        def __init__(self):
+            super().__init__()
+            self.entered, self.release = asyncio.Event(), asyncio.Event()
+            self.calls = []
+
+        async def send(self, session, text, input_id, emit):
+            self.calls.append(input_id)
+            self.entered.set()
+            await asyncio.wait_for(self.release.wait(), 15)
+            return {'accepted': True}
+
+        async def delivery(self, session, input_id):
+            return 'accepted'
+
+        async def close(self):
+            self.release.set()
+
+    runtime = HeldRuntime()
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    sender = 'sender' if private else None
+    pending = entered = None
+
+    async def action(identity, name, args, **kwargs):
+        with app.clients.bind(identity):
+            return await asyncio.wait_for(app.dispatch(name, args, **kwargs), 10)
+
+    async def add(identity, sid):
+        # Same name and bytes deliberately yield different upload identities.
+        result = await action(identity, 'attachment.add', {
+            'sessionId': sid, 'name': 'same.png', 'base64': base64.b64encode(PNG).decode()})
+        return next(row for row in result['state']['sessions'] if row['id'] == sid)['draftAttachments'][-1]
+
+    def draft(identity, session):
+        with app.clients.bind(identity):
+            return list(app.clients.attachments(session))
+
+    try:
+        await action(None, 'session.create', {})
+        owner = app._session()
+        await action(None, 'session.create', {})
+        other = app._session()
+        if private:
+            app.clients.attach(sender)
+        app.clients.attach('independent')
+        await action(sender, 'session.select', {'id': owner['id']})
+        sent = await add(sender, owner['id'])
+        independent = await add('independent', owner['id'])
+        other_file = await add(sender, other['id'])
+        pending = asyncio.create_task(action(sender, 'conversation.send', {
+            'sessionId': owner['id'], 'text': 'Sent A', 'attachmentIds': [sent['id']]}, command_id='sent-A'))
+        entered = asyncio.create_task(runtime.entered.wait())
+        done, _ = await asyncio.wait({pending, entered}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        if pending in done:
+            await pending
+            pytest.fail('The synthetic RPC returned before its release')
+        assert entered in done, 'Send did not reach the bounded synthetic runtime'
+        newer = await add(sender, owner['id'])
+        await action(sender, 'view.update', {'patch': {'draft': 'Newer text B'}})
+        if private:
+            # A real page reload copies the pending private draft. Delivery must
+            # settle both copies, not whichever client happens to be bound now.
+            app.clients.attach('resumed', resume=sender)
+        await action(sender, 'session.select', {'id': other['id']})
+
+        # Neither another chat/input nor negative/uncertain evidence consumes A.
+        async with app.lock:
+            app._delivery(other, 'sent-A', 'accepted')
+            app._delivery(owner, 'not-this-input', 'accepted')
+            for status in ('unknown', 'failed'):
+                app._delivery(owner, 'sent-A', status)
+                assert draft(sender, owner) == [sent, newer]
+        assert not pending.done()
+
+        # Deliberately deliver from an unrelated client context. The callback
+        # must use the accepted message's chat and upload IDs, not this context.
+        with app.clients.bind('independent'):
+            if evidence == 'input-delivered':
+                event = normalize_event({'type': 'input.delivered', 'input_id': 'sent-A'}, owner['id'], 'sent-A')
+                await asyncio.wait_for(app.on_runtime_event(*event), 5)
+            elif evidence == 'runtime-delivery':
+                await asyncio.wait_for(app.on_runtime_event('runtime.delivery', {
+                    'sessionId': owner['id'], 'inputId': 'sent-A', 'delivery': 'accepted'}), 5)
+            else:
+                result = await asyncio.wait_for(app.dispatch('conversation.delivery', {
+                    'sessionId': owner['id'], 'inputId': 'sent-A'}), 5)
+                assert result['result']['delivery'] == 'accepted'
+
+        assert not pending.done(), 'Assertions must precede the RPC acknowledgement'
+        assert owner['messages'][0]['delivery']['status'] == 'accepted'
+        assert owner['messages'][0]['attachments'] == [sent]
+        assert draft(sender, owner) == [newer]
+        assert draft('independent', owner) == [independent]
+        assert draft(sender, other) == [other_file]
+        if private:
+            assert draft('resumed', owner) == [newer]
+            assert app.clients.records[sender]['drafts'][owner['id']] == 'Newer text B'
+            assert app.clients.records['resumed']['drafts'][owner['id']] == 'Newer text B'
+            for identity in (sender, 'resumed'):
+                saved = json.loads(app.db.execute('SELECT value FROM client_views WHERE id=?', (identity,)).fetchone()[0])
+                assert saved['attachments'][owner['id']] == [newer]
+        else:
+            assert owner['draft'] == 'Newer text B'
+        assert attachments.file_path(tmp_path, sent['id'])[0].read_bytes() == PNG
+
+        # Repeated acceptance and a late weaker reply cannot erase the new draft.
+        async with app.lock:
+            for status in ('accepted', 'unknown', 'failed'):
+                app._delivery(owner, 'sent-A', status)
+            assert owner['messages'][0]['delivery']['status'] == 'accepted'
+        runtime.release.set()
+        await asyncio.wait_for(pending, 5)
+        assert draft(sender, owner) == [newer]
+        assert runtime.calls == ['sent-A']
+    finally:
+        runtime.release.set()
+        for task in (pending, entered):
+            if task is not None and not task.done():
+                task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.gather(*(task for task in (pending, entered) if task is not None),
+                                                  return_exceptions=True), 5)
+        finally:
+            await asyncio.wait_for(app.close(), 5)
+
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        session = restored._session(owner['id'])
+        with restored.clients.bind(sender):
+            assert restored.clients.attachments(session) == [newer]
+        if private:
+            with restored.clients.bind('resumed'):
+                assert restored.clients.attachments(session) == [newer]
+        assert session['messages'][0]['attachments'] == [sent]
+        assert attachments.file_path(tmp_path, sent['id'])[0].read_bytes() == PNG
+    finally:
+        await asyncio.wait_for(restored.close(), 5)
