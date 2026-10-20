@@ -1,6 +1,26 @@
 """The update safety gate and its user-visible reasons share one source."""
 
 
+def auxiliary_blockers(service):
+    """Bounded categories from canonical host owners, without hydrating chats."""
+    state = service.state
+    result = []
+    if state.get('voicePreviewBusy'):
+        result.append({'kind': 'voice', 'label': 'Voice preview is playing'})
+    voice = state.get('voice', {})
+    if voice.get('status') not in {None, 'disconnected', 'idle', 'ended', 'error'}:
+        result.append({'kind': 'voice', 'label': 'A voice call is active',
+                       **({'sessionId': voice['sessionId']} if voice.get('sessionId') else {})})
+    operations = state.get('smartTools', {}).get('operations', [])
+    if (any(op.get('status') in {'queued', 'running'} for op in operations)
+            or any(not task.done() for task in getattr(service, 'smart_tool_tasks', ()))):
+        result.append({'kind': 'smart-tools', 'label': 'A Smart Tool operation is still running'})
+    naming = getattr(service, 'naming_backfill', None)
+    if naming is not None and naming.running:
+        result.append({'kind': 'naming', 'label': 'Chat naming is still running'})
+    return result
+
+
 def blockers(service):
     state = service.state
     result = []
@@ -16,8 +36,8 @@ def blockers(service):
         if row not in result:
             result.append(row)
 
-    if state.get('voicePreviewBusy'):
-        add('voice', 'Voice preview is playing')
+    for row in auxiliary_blockers(service):
+        add(row['kind'], row['label'], row.get('sessionId'))
     runtime = getattr(service, 'runtime', None)
     pending = getattr(runtime, 'has_pending_operations', None)
     if pending and pending():
@@ -27,14 +47,9 @@ def blockers(service):
             add('runtime', 'Preparing or finishing conversation work', sid)
         if not ids:
             add('runtime', 'Preparing or finishing background runtime work')
-    operations = [op for op in state.get('smartTools', {}).get('operations', []) if op.get('status') in {'queued', 'running'}]
-    if operations or any(not task.done() for task in getattr(service, 'smart_tool_tasks', ())):
-        add('smart-tools', 'A Smart Tool operation is still running')
     for key in ('requests', 'followups'):
         if any(row.get('status') in {'queued', 'sending'} for row in state.get('feedback', {}).get(key, [])):
             add('feedback', 'Feedback delivery is in progress')
-    if state.get('voice', {}).get('status') not in {None, 'disconnected', 'idle', 'ended', 'error'}:
-        add('voice', 'A voice call is active', state['voice'].get('sessionId'))
     for session in sessions.values():
         sid = session['id']
         if session.get('configurationBusy'):
