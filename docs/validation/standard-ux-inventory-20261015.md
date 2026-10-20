@@ -869,7 +869,25 @@ without a staged update. Desktop and phone checks exercise Tab, Shift+Tab, Escap
 focus restoration, stale confirmation and an accepted request whose reply is lost.
 The retry must keep the original command identity; no automatic replay occurs.
 Resume remains disabled until the canonical host reports `canResume`; waiting,
-unsupported and uncertain work must settle before admission can reopen.
+unsupported and uncertain work under a held epoch must settle before admission
+can reopen. If release was durably authorized but a resumed worker's reply is
+lost, show the uncertainty honestly and allow a fresh Pause only when canonical
+`canPause` allows it; do not send another Resume automatically.
+
+Additional auxiliary-work checks belong to this same owner: active voice,
+host naming and Smart Tool work appear in a bounded list and prevent safe-ready
+or Resume until settled. The status describes host-observed work, without
+claiming external requests were cancelled. Clearing the actual task must refresh
+readiness without another user action. A tool queued behind a connection or
+account check must not start after the hold, while an already-dispatched tool
+may finish once without cancellation or replay.
+
+`maintenance-controls.test.mjs` covers the auxiliary display, explicit limits
+and fresh-Pause authority; `test_maintenance_auxiliary.py` covers the actual stdio
+MCP queue/dispatch boundaries, naming provider-selection wait and task-completion
+publication. These are focused component/transport checks. The combined owner
+and built-client integration must additionally verify the list and readiness
+transitions; their results must not be inferred from the focused tests.
 
 The built-client fixture uses real HTTP actions, durable host receipts and
 synthetic runtime boundaries. It does not qualify native checkpoint restoration,
