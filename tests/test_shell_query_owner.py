@@ -253,6 +253,50 @@ async def test_releasing_last_interest_retires_blocked_worker_without_query_comp
     assert not (service.data_dir / 'query-release').exists()
 
 
+@pytest.mark.parametrize('resource', ['recentNavigation', 'workStatusIdle'])
+async def test_returning_demand_waits_for_its_retiring_query_without_retry(service, resource):
+    owner = prepare(service)
+    closing, release_close = asyncio.Event(), asyncio.Event()
+    projectors = []
+
+    class GatedClose(ProcessProjector):
+        async def close(self):
+            closing.set()
+            await release_close.wait()
+            await super().close()
+
+    def factory(home, **kwargs):
+        kwargs['_command'] = (sys.executable, str(Path(__file__).resolve()), 'worker')
+        projector = GatedClose(home, **kwargs)
+        projectors.append(projector)
+        return projector
+
+    owner.queries.factory = factory
+    try:
+        snapshot(service, wanted=(resource,))
+        await started(service)
+        process, spool = projectors[0]._process, projectors[0]._root
+        snapshot(service, wanted=(), demand=2)
+        retiring = owner.queries.retiring
+        await asyncio.wait_for(closing.wait(), 5)
+        # The user returns to exactly the same page before its canceled read
+        # has stopped. This is renewed demand, not a failed catalog read.
+        snapshot(service, wanted=(resource,), demand=3)
+        assert len(projectors) == 1
+        release_close.set()
+        await asyncio.wait_for(asyncio.shield(retiring), 5)
+        assert process.returncode == 0 and not spool.exists()
+        (service.data_dir / 'query-release').touch()
+        result = await settle(service, wanted=(resource,), demand=3)
+        page = result['instances']['chats']['resources'][resource]['value'][resource]
+        assert page['total'] == 2
+        assert len(projectors) == 2
+        assert not owner.queries.failures
+        assert service.performance_diagnostics.counters.get('shell.query.retry', 0) == 0
+    finally:
+        release_close.set()
+
+
 async def test_queue_is_bounded_and_input_has_no_transcript_or_private_draft(service):
     owner = prepare(service)
     owner.queries.factory = held_projector
