@@ -102,10 +102,41 @@ def retire_group(group, token, preexisting=None):
     while inspect() and time.monotonic() < grace:
         time.sleep(.05)
     initial = inspect()
+    observed = []
+    for pid, birth in initial.items():
+        if len(observed) == 32:
+            break
+        row = {'pid': pid, 'startTime': birth}
+        try:
+            entry = Path('/proc') / str(pid)
+            fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            if fields[19] == birth:
+                executable = entry.joinpath('exe').readlink().name[:96]
+                fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+                if fields[19] == birth:
+                    row.update(parentPid=int(fields[1]), processGroup=int(fields[2]),
+                               executable=executable)
+                else:
+                    row['detail'] = 'identity_changed'
+            else:
+                row['detail'] = 'identity_changed'
+        except OSError as exc:
+            row['detail'] = type(exc).__name__
+        observed.append(row)
+
+    def receipt(remaining):
+        result = {'remaining': remaining, 'terminated': len(initial)}
+        if observed:
+            # No arguments, environment, full paths or unproven process owners.
+            result['observedBeforeTermination'] = observed
+            if len(initial) > len(observed):
+                result['omittedProcessDetails'] = len(initial) - len(observed)
+        return result
+
     for sig in (signal.SIGTERM, signal.SIGKILL):
         current = inspect()
         if not current:
-            return {'remaining': [], 'terminated': len(initial)}
+            return receipt([])
         for pid, birth in current.items():
             try:
                 handle = os.pidfd_open(pid)
@@ -120,7 +151,7 @@ def retire_group(group, token, preexisting=None):
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and inspect():
             time.sleep(.05)
-    return {'remaining': list(inspect()), 'terminated': len(initial)}
+    return receipt(list(inspect()))
 
 
 def validate_plan(plan):

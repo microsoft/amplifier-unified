@@ -50,6 +50,11 @@ def test_owned_orphan_is_reaped_and_reported_before_next_check(tmp_path, detache
               f'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],start_new_session={detached!r});Path({str(pid)!r}).write_text(str(p.pid))')
     code, report, _ = execute(tmp_path, [scenario('leaks', source), scenario('next', 'pass')])
     assert code == 1 and report['scenarios'][0]['cleanup']['terminated'] == 1
+    observed = report['scenarios'][0]['cleanup']['observedBeforeTermination']
+    assert len(observed) == 1 and observed[0]['pid'] == int(pid.read_text())
+    assert observed[0]['startTime'].isdigit()
+    assert observed[0]['executable'] == Path(sys.executable).resolve().name
+    assert set(observed[0]) == {'pid', 'startTime', 'parentPid', 'processGroup', 'executable'}
     assert report['scenarios'][1]['status'] == 'passed'
     stat = Path('/proc') / pid.read_text() / 'stat'
     assert not stat.exists() or stat.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
@@ -62,6 +67,16 @@ def test_uncertain_cleanup_stops_and_records_unrun_without_false_cascade(tmp_pat
     assert report['scenarios'][1]['status'] == 'unrun'
     assert report['scenarios'][1]['reason'] == 'unsafe_cleanup'
     assert not (tmp_path / 'results/must-not-run.log').exists()
+
+
+def test_cleanup_identity_details_are_bounded_without_reducing_failure_count(monkeypatch):
+    identities = {-pid: '1' for pid in range(1, 41)}
+    snapshots = iter([{}, identities, {}])
+    monkeypatch.setattr(runner, 'owned_members', lambda *args: next(snapshots))
+    cleanup = runner.retire_group(-1, 'synthetic')
+    assert cleanup['terminated'] == 40 and cleanup['remaining'] == []
+    assert len(cleanup['observedBeforeTermination']) == 32
+    assert cleanup['omittedProcessDetails'] == 8
 
 
 def test_last_successful_exit_with_unreadable_ownership_still_fails(tmp_path, monkeypatch):
