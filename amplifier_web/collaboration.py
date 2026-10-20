@@ -641,6 +641,9 @@ class Collaboration:
             reason = self.service.assignments.blocked(source, receipt.get('assignmentId'))
             if reason:
                 return reason
+            if (receipt.get('assignmentId') and not receipt.get('dependencyRequestId')
+                    and receipt.get('sourceInterruptionRevision') != source.get('interruptionRevision', 0)):
+                return 'The assignment requester was interrupted after this request; old input is not replayed.'
             if receipt.get('creationOperationId'):
                 creation = self.receipt(receipt['creationOperationId'])
                 reason = self.creation_guard(creation)
@@ -1068,8 +1071,9 @@ class Collaboration:
         if self.service.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
             return
         sender = self.service._session(request['senderSessionId'])
-        if self.service.assignments.blocked(sender, request.get('assignmentId')):
-            wait.update(status='suppressed', open=False, detail='The assignment was stopped; late evidence remains inspectable.')
+        if (self.service.assignments.blocked(sender, request.get('assignmentId'))
+                or wait.get('interruptionRevision') != sender.get('interruptionRevision', 0)):
+            wait.update(status='suppressed', open=False, detail='The saved wait was interrupted; late evidence remains inspectable.')
             self.save(request['requestId'], request)
             self.service.db.commit()
             return
