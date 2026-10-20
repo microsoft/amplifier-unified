@@ -455,6 +455,24 @@ async def stage(manager, generation, candidates, *, finalize=True):
         if row.get('kind') == 'runtime dependency':
             installed = locked.get(row['package'])
             policies[row['package']] = verify_resolution(installed, row)
+    declared = {package_name(name): source for name, source in declared.items()}
+    for row in observed:
+        if (row.get('kind') != 'runtime dependency' or row['package'] in policies
+                or row.get('override') or not row.get('url') or not row.get('ref')):
+            continue
+        installed = locked.get(row['package'])
+        source = declared.get(row['package'])
+        if source and (source.get('git') != row['url']
+                or (source.get('branch') or source.get('rev') or source.get('tag')) != row['ref']
+                or source.get('subdirectory', '') != row.get('subdirectory', '')):
+            continue  # A changed manifest's policy is not the old source policy.
+        if installed is not None and installed.fragment == row.get('current'):
+            try:
+                # A different tier can leave a source unchanged while uv
+                # normalizes its ref. Retain only that exact prior identity.
+                policies[row['package']] = verify_resolution(installed, {**row, 'latest': row['current']})
+            except ValueError:
+                pass  # Never apply an old policy to a changed or ambiguous source.
     if not receipt.exists():
         # Handoff checked policy separately from uv's representation. Freeze
         # binds it again to installed identity; recorded generations stay intact.

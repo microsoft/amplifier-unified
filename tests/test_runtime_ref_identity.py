@@ -130,3 +130,48 @@ async def test_stage_finalization_keeps_branch_policy_without_freeze(normalized_
     (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
     row = next(row for row in environments.inventory(manager.home, graph=[]) if row.get('package') == ROW['package'])
     assert row['ref'] == 'main' and row['eligible']
+
+
+@pytest.mark.parametrize('ref', ['main', REVISION])
+async def test_tiered_update_preserves_unchanged_unselected_source_policy(normalized_runtime, monkeypatch, ref):
+    manager, generation, receipt, graph = normalized_runtime
+    original = environments.update_manifest
+
+    async def unchanged(home):
+        rows, content = await original(home)
+        # The selected tier contains another source. This dependency is already
+        # current and must retain its moving ref (or intentional explicit pin).
+        content = content.replace(b'rev="main"', ('rev="' + ref + '"').encode())
+        return [{**rows[0], 'current': REVISION, 'ref': ref}], content
+
+    monkeypatch.setattr(environments, 'update_manifest', unchanged)
+    prepared = await environments.stage(manager, generation, [{'kind': 'bundle', 'updateTier': 'other'}], finalize=False)
+    await qualification.freeze(manager, generation, prepared)
+    policy = json.loads((receipt / 'runtime-sources.json').read_text())[ROW['package']]
+    assert policy['ref'] == ref
+    (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    row = next(row for row in environments.inventory(manager.home) if row.get('package') == ROW['package'])
+    assert row['ref'] == ref and row['eligible'] == (ref == 'main')
+
+
+@pytest.mark.parametrize('change', ['commit', 'repository', 'subdirectory', 'manifest-ref'])
+async def test_unselected_old_policy_cannot_relabel_changed_source(normalized_runtime, monkeypatch, change):
+    manager, generation, receipt, graph = normalized_runtime
+    original = environments.update_manifest
+
+    async def unchanged(home):
+        rows, content = await original(home)
+        previous = {**rows[0], 'current': REVISION}
+        if change == 'commit':
+            previous['current'] = 'c' * 40
+        elif change == 'repository':
+            previous['url'] = 'https://example.invalid/other'
+        elif change == 'subdirectory':
+            previous['subdirectory'] = 'other'
+        else:
+            content = content.replace(b'rev="main"', b'rev="stable"')
+        return [previous], content
+
+    monkeypatch.setattr(environments, 'update_manifest', unchanged)
+    await environments.stage(manager, generation, [{'kind': 'bundle', 'updateTier': 'other'}], finalize=False)
+    assert ROW['package'] not in json.loads((receipt / 'runtime-sources.json').read_text())
