@@ -428,6 +428,7 @@ def cleanup_preparation(home, row, config):
             result = dependencies.cleanup(config, storage.directory(home, row))
     except (OSError, ValueError, KeyError, TypeError, TimeoutError):
         result = {'complete': False, 'status': 'unknown', 'reason': 'The owned preparation cleanup could not be verified.'}
+    result = {**result, 'complete': result.get('complete') is True}
     row = save(home, row, preparationCleanup=result, preparationPending=not result['complete'])
     return row, result
 

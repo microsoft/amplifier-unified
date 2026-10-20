@@ -201,7 +201,11 @@ def artifact(root, payload):
     path = Path(archives[index]['destination'])
     if not path.is_relative_to(root) or any(p.is_symlink() for p in (path, *path.parents)):
         raise ValueError('The retained archive no longer belongs to this owner.')
-    with path.open('rb') as stream:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_size != archives[index]['bytes']:
+            raise ValueError('The retained archive identity changed.')
         stream.seek(offset)
         content = stream.read(CHUNK)
     return {'ok': True, 'content': base64.b64encode(content).decode(), 'offset': offset + len(content),
@@ -266,6 +270,8 @@ def dispatch(request):
             raise ValueError('The original source and target owner are required.')
         if action == 'artifact':
             return artifact(root, payload)
+        if action in {'execute', 'job_start'}:
+            profiles.validate_timeout(saved['profileId'], payload.get('timeoutSeconds'), saved.get('timingRequest'))
         row = row_for(payload)
         reservation = read(root / 'reservation.json')
         if reservation:
@@ -279,7 +285,12 @@ def dispatch(request):
             if previous:
                 if previous['intent'] != intent:
                     raise ValueError('The original effect arguments changed.')
-                return previous.get('result', {'ok': False, 'status': 'unknown', 'message': 'The original target operation has no confirmed result. It was not repeated.'})
+                if action != 'cleanupDependencies' or previous.get('result', {}).get('complete') is True:
+                    return previous.get('result', {'ok': False, 'status': 'unknown', 'message': 'The original target operation has no confirmed result. It was not repeated.'})
+                # Cleanup is an explicit recovery step: the original effect
+                # lock has settled, and preparation.cleanup reobserves the
+                # exact builder/image owner before bounded removal. It cannot
+                # launch or repeat a test; an incomplete observation may improve.
             # This is the target-side dispatch fence. Persist before *any* build,
             # create, test, stop or export effect; keep it after lost replies.
         if action in {'start', 'prepareDependencies'}:
@@ -366,6 +377,12 @@ def reconcile_launch(root, payload, result, row):
 
 def main():
     try:
+        if sys.version_info < (3, 13):
+            if '--qualified-runtime' in sys.argv:
+                raise ValueError('The registered adapter requires Python 3.13 or later for bounded archive handling.')
+            config = configuration()
+            interpreter = config['interpreter']
+            os.execv(interpreter, [interpreter, '-I', str(Path(__file__).resolve()), '--qualified-runtime'])
         encoded = sys.stdin.buffer.read(MAX_CONTROL + 1)
         if len(encoded) > MAX_CONTROL:
             raise ValueError('The controller request exceeds its bound.')

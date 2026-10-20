@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip('fcntl', reason='Registered target controller is native Linux only')
+
 from amplifier_web import registered_test_runners as client
 from amplifier_web import test_runner_controller as controller
 from amplifier_web import test_host_resources as host
@@ -155,7 +157,7 @@ def test_read_only_routing_selects_free_machine_and_keeps_frozen_request(tmp_pat
     monkeypatch.setattr(environments, 'capacity', lambda app, config: {'available': False})
     observed = {'supported': True, 'effective': {'maxReservedCpu': 4, 'maxReservedMemoryMiB': 8192, 'minAvailableMemoryMiB': 1024, 'minFreeBytes': 1024, 'maxLoadPercent': 200}, 'reserved': {'cpus': 0, 'memoryMiB': 0}, 'observed': {'availableMemoryMiB': 16000, 'freeBytes': 10000, 'loadPercent': 10}}
     calls = []
-    monkeypatch.setattr(client, 'call', lambda runner, p: calls.append(p) or {'ok': True, 'available': True, 'machineResources': observed})
+    monkeypatch.setattr(client, 'call', lambda runner, p, timeout=60: calls.append(p) or {'ok': True, 'available': True, 'machineResources': observed})
     job = {'runnerCandidates': list(keys), 'resourceRequest': profiles.freeze('linux-python')}
     original = copy.deepcopy(job)
     assert client.select(app, job, local) == remote

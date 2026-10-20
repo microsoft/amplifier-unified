@@ -351,6 +351,7 @@ class TestQueue:
                 # The saved result survives a temporarily unavailable inbox.
                 pass
         capacities = {}
+        runner_observations = {}
         for receipt in self.active_page():
             identity = receipt['requestId']
             task = self.tasks.get(identity)
@@ -372,24 +373,28 @@ class TestQueue:
             if self.admission.locked():
                 continue
             if receipt['job'].get('runnerCandidates') and not receipt['job'].get('targetBound'):
-                selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config)
-                receipt = self.get(identity)
-                if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
-                    continue
-                if selected is None:
-                    receipt['job']['detail'] = 'Waiting for room on an approved test machine.'
-                    self.save(receipt)
-                    continue
-                config = selected
-                receipt['job'].update(backendKey=environments.config_key(config), targetBound=True,
-                    testMachine=({key: config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if config.get('remoteRunner') else None))
-                self.save(receipt)  # Bind before source transfer or any target effect.
+                selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff)
+                async with self.app.lock:
+                    receipt = self.get(identity)
+                    if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
+                        continue
+                    if selected is None or not registered_runners.enabled(self.app, selected):
+                        receipt['job']['detail'] = 'Waiting for room on an approved test machine.'
+                        self.save(receipt)
+                        continue
+                    self.guard(receipt)
+                    config = selected
+                    receipt['job'].update(backendKey=environments.config_key(config), targetBound=True,
+                        testMachine=({key: config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if config.get('remoteRunner') else None))
+                    self.save(receipt)  # Bind before source transfer or any target effect.
             key = receipt['job']['backendKey']
             if key not in capacities:
                 retry, delay = self.backoff.get(key, (0, 5))
                 if retry > time.time():
                     continue
-                capacity = await asyncio.to_thread(environments.capacity, self.app, config)
+                capacity = runner_observations.get(key)
+                if capacity is None:
+                    capacity = await asyncio.to_thread(environments.capacity, self.app, config)
                 limits, counts = capacity.get('limits', {}), capacity.get('counts', {})
                 maximum = limits.get('max_running', 1)
                 preparing = self.pending_count(preparing_backend=key)
@@ -458,6 +463,13 @@ class TestQueue:
             async with self.admission:
                 receipt = self.get(identity)
                 config = self.guard(receipt)
+                if receipt['job'].get('targetBound') and not receipt['job'].get('resourceId') and not registered_runners.enabled(self.app, config):
+                    receipt['job'].pop('targetBound', None)
+                    receipt['job'].pop('testMachine', None)
+                    receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
+                    receipt['job']['detail'] = 'Waiting for an enabled test machine.'
+                    self.save(receipt)
+                    return
                 # tick shares one physical observation across this FIFO batch.
                 # The backend rechecks atomically immediately before launch.
                 job = receipt['job']
@@ -489,6 +501,10 @@ class TestQueue:
                     receipt['job'].pop('resourceId', None)
                     receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
                     receipt['job']['status'] = 'queued'
+                    if receipt['job'].get('runnerCandidates'):
+                        receipt['job'].pop('targetBound', None)
+                        receipt['job'].pop('testMachine', None)
+                        receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
                     if launch['result'].get('machineResources'):
                         receipt['job']['capacity'] = {'available': False, 'machineResources': launch['result']['machineResources']}
                     self.save(receipt)

@@ -129,6 +129,52 @@ try{
  await page.screenshot({path:process.env.EXECUTION_SETTINGS_SCREENSHOT||'/tmp/execution-settings-browser.png',fullPage:true});
  await execution.getByLabel('Small Python check: Memory (MiB)',{exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/execution-profile-browser.png',fullPage:true});
+ // Mounted remote-target setup is a bounded protocol fixture, not a host install.
+ let targets={revision:'r1',runners:[],scope:'Approved machines, shared per account.'},targetWrites=0,refreshes=0;
+ const backendDefaults={maxRunning:15,maxInstances:256,minFreeBytes:10*1024**3};
+ let targetPolicy={revision:'p1',limits:{},defaults:backendDefaults,effective:backendDefaults,scope:'This target account and Incus project.',behavior:'Lowering limits keeps active checks running.'};
+ await page.route('**/api/actions',async route=>{
+  const request=route.request().postDataJSON(),action=request?.action;
+  if(!action?.startsWith('testing.runners.')){await route.continue();return}
+  const args=request.args||request.arguments||{};
+  let result;
+  if(action==='testing.runners.read') result=targets;
+  else if(action==='testing.runners.register'){
+   targetWrites++;targets={...targets,revision:'r2',runners:[{id:'target',machineId:'authority',name:args.name,connection:args.connection,configPath:args.configPath||'',enabled:true,profiles:['linux-python']}]};
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:false,error:'Acknowledgement lost'})});return;
+  }else if(action==='testing.runners.refresh'){refreshes++;result=targets}
+  else if(action==='testing.runners.enable'){targets={...targets,revision:'r3',runners:targets.runners.map(item=>({...item,enabled:args.enabled}))};result=targets}
+  else if(action==='testing.runners.machine.read')result={supported:false,reason:'Machine observation fixture'};
+  else if(action==='testing.runners.capacity.read')result=targetPolicy;
+  else if(action==='testing.runners.capacity.save'){targetPolicy={...targetPolicy,revision:'p2',limits:args.limits,effective:{...backendDefaults,...args.limits}};result=targetPolicy}
+  else throw Error('Unexpected target action '+action);
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:true,result})});
+ });
+ const targetsRegion=page.getByRole('region',{name:'Other test machines',exact:true});
+ await targetsRegion.getByRole('button',{name:'Refresh test machines',exact:true}).click();
+ await targetsRegion.getByText('Connect a test machine',{exact:true}).click();
+ await targetsRegion.getByLabel('Machine name',{exact:true}).fill('Office testing machine');
+ await targetsRegion.getByLabel('Saved SSH connection',{exact:true}).fill('office-tests');
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();
+ await expect(page.getByRole('alertdialog')).toContainText('Other test machines');
+ await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await targetsRegion.getByRole('button',{name:'Connect test machine',exact:true}).click();
+ await expect(targetsRegion.getByRole('status').first()).toContainText('saved test machine matches');
+ assert.equal(targetWrites,1);
+ await targetsRegion.getByText('Office testing machine · Available for new checks',{exact:true}).click();
+ const targetLimits=targetsRegion.getByRole('region',{name:'Office testing machine environment limits'});
+ await targetLimits.getByText('Advanced environment limits',{exact:true}).click();
+ await targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true}).fill('0');
+ await targetLimits.getByRole('button',{name:'Save environment limits',exact:true}).click();
+ await expect(targetLimits.getByRole('status')).toContainText('Environment limits saved');
+ assert.equal(targetPolicy.effective.maxRunning,0);
+ await targetsRegion.getByRole('button',{name:'Refresh test controller',exact:true}).click();
+ await expect(targetsRegion.getByRole('status').first()).toContainText('refreshed for future checks');assert.equal(refreshes,1);
+ await targetsRegion.getByRole('button',{name:'Pause new checks',exact:true}).click();
+ await expect(targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true})).toBeVisible();
+ await targetsRegion.scrollIntoViewIfNeeded();
+ await page.screenshot({path:'/tmp/registered-test-machines-browser.png',fullPage:true});
+
  assert.deepEqual(errors,[]);
  console.log('PASS: global settings without a runner, zero override, lost-acknowledgement readback without replay, stale writer protection, preserved draft, narrow layout and cold reopen');
 }catch(error){failure=error;throw error}

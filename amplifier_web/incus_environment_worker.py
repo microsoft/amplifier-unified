@@ -522,8 +522,8 @@ def execute_call(payload):
             if state != 'ready' or not ready:
                 raise BackendFailure('source_unknown', 'The exact source and running environment are not confirmed. No check started.', admitted=False)
             seconds = payload.get('timeoutSeconds', 60)
-            if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 300:
-                raise ValueError('The command timeout must be between 1 and 300 seconds.')
+            if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2147483647:
+                raise ValueError('The command timeout exceeds its supported serialization bound.')
             command = payload['command']
             if not isinstance(command, str) or not command or len(command) > 16384:
                 raise ValueError('The command is invalid.')
