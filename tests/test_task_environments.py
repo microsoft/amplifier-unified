@@ -369,8 +369,7 @@ async def test_stop_while_waiting_prevents_backend_start(app, backend, monkeypat
 
 
 def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatch):
-    pin = 'a' * 40
-    monkeypatch.setattr(owner, 'DTU_COMMIT', pin)
+    pin = owner.DTU_COMMIT
     monkeypatch.setattr(owner, 'SUPPORTED_HOST', True)
     app.smart_tools = SimpleNamespace(state={'installations': []}, close=AsyncMock())
     identity = 'b' * 24

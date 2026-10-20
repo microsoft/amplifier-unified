@@ -284,6 +284,10 @@ async def freeze(manager, generation, project):
     # Filesystem scans and payload hashing must not stall the serving event
     # loop while existing conversations continue on their pinned generation.
     graph = await asyncio.to_thread(installed_graph, project)
+    from .runtime_registry_updates import verify_candidate, RECEIPT as registry_receipt
+    registry_path = receipt / registry_receipt
+    if registry_path.exists():
+        verify_candidate(project, json.loads(registry_path.read_text()), graph=graph)
     from .runtime_source_policy import freeze_policies
     policies = freeze_policies(manager.home, generation, project, graph)
     checked_path = receipt / 'runtime-sources.json'

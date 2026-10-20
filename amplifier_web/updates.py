@@ -733,6 +733,13 @@ class UpdateManager:
                     return await git_revision(url, ref, process)
                 async def check_row(row):
                     if not row.get('eligible') or row.get('kind') == 'runtime environment': return
+                    if row.get('registryManaged'):
+                        from .runtime_registry_updates import check as check_registry
+                        try:
+                            await check_registry(row)
+                        except (ValueError, RuntimeError, TimeoutError):
+                            row['status'] = 'check_failed'
+                        return
                     key = (row['url'],row['ref'])
                     task = remote_tasks.setdefault(key, None)
                     if task is None:

@@ -44,6 +44,11 @@ async def test_passive_read_does_not_create_setup_or_install(app):
 
 
 async def test_setup_returns_before_work_and_reuses_exact_managed_core(app, monkeypatch):
+    # A qualified older installation remains available for its existing owners;
+    # new setup must still request the current reviewed snapshot.
+    previous = {'id': 'b' * 24, 'commit': '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04',
+                'status': 'installed', 'extras': []}
+    app.smart_tools.state['installations'].append(previous)
     entered, release = asyncio.Event(), asyncio.Event()
     async def backend(base, selected, owned, record, step):
         await step('checking_profile', 'Checking')
@@ -68,6 +73,7 @@ async def test_setup_returns_before_work_and_reuses_exact_managed_core(app, monk
     config = app.data_dir / 'test-environments.json'
     assert config.stat().st_mode & 0o777 == 0o600
     assert json.loads(config.read_text())['commit'] == owner.DTU_COMMIT
+    assert app.smart_tools.state['installations'] == [previous]
 
 
 async def test_revoke_before_external_effect_never_installs(app, monkeypatch):
