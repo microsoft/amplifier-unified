@@ -860,6 +860,13 @@ It runs as an affected-flow smoke in the owned DTU and in Extended browser
 checks; it adds no broad publication gate.
 
 
+## Model capacity waiting settings — October 20
+
+`frontend/tests/model-capacity-settings-browser.mjs` owns the global Advanced settings journey using the production built UI and AppService with a synthetic runtime. It proves finite and unlimited waiting, two-client stale-save refusal, retained private edits, exact command retry after a lost acknowledgement and reopen, no extra saved mutation, unchanged worker starts/stops, saved cold reopen, and desktop/narrow layouts. No paid provider or live-host policy change is involved.
+
+This additive owner gives this isolated branch 100 registered scenarios and 143 distinct readiness/extended browser scripts (142 excluding the attachment script). The original 65-scenario identity is unchanged. This focused qualification does not add a broad browser census as a release gate.
+
+
 ### Global test capacity (October 20)
 
 **TEST-CAPACITY** adds `testing-settings` to Extended browser checks and the
@@ -879,6 +886,22 @@ has 100 registered scenarios and 143 distinct source/readiness browser scripts
 (142 excluding attachment consumption). Integrating other additive owners must
 reconcile these totals without altering the frozen 65-scenario baseline.
 
+
+### Shared machine test resources (October 20)
+
+**TEST-MACHINE-RESOURCES** extends the registered `testing-settings` owner with
+shared-account machine limits, effective sources, observations/reservations, lost
+save acknowledgement readback, stale installation-writer refusal and narrow build
+slot controls. Its fixture uses a private synthetic authority and never changes
+a real host policy. `test_test_host_resources.py` owns bounded simultaneous
+admissions across backends and machine identities, frozen requests, pressure and
+zero overrides, queue reuse, unknown outcomes and exact owner cleanup.
+
+This is additive ownership for the existing browser scenario; it does not change
+the frozen inventory, add a duplicate browser lane, or claim remote/native-device
+qualification. Remote and unsupported machine authority remains an explicit
+boundary while existing backend testing continues.
+
 ### Existing-chat adoption (October 20)
 
 `assignment-adoption` owns the new existing-chat assignment flow in Extended
@@ -895,3 +918,22 @@ has 100 registered scenarios and 143 distinct source/readiness browser scripts
 reconcile these totals without altering the frozen 65-scenario baseline.
 
 The integrated branch containing both testing settings and existing-chat adoption has 101 registered scenarios, 144 distinct readiness/extended scripts, and 143 excluding attachment consumption. Both additive owners preserve the original 65-scenario identity.
+
+
+### Test execution limits (October 20)
+
+**TEST-EXECUTION-LIMITS** extends the registered `testing-settings` browser owner
+with global future-job queue depth, zero waiting expiry, profile CPU and check
+durations, effective values, stale edits, lost-acknowledgement readback, narrow
+unsaved-close/Keep settings open and cold reopen. The settings fixture remains
+private and synthetic; no production policy is changed.
+
+`test_test_execution_settings.py` owns global authority, private revisioned
+settings, complete journal counts and pagination beyond 64 requests, frozen
+accepted policy and historical direct-execution defaults. Durable queue coverage
+checks that a restarted scheduler retains resources and timeouts after settings
+change. Preparation tests cover one saved waiting/build deadline and independent
+dependency recipe identity. This adds no duplicate browser scenario or broad
+publication gate and does not claim physical-runner deployment acceptance.
+
+Integrated model-capacity, testing settings and existing-chat adoption coverage totals 102 registered scenarios and 145 distinct readiness/extended scripts (144 excluding attachment consumption), preserving the frozen 65-scenario baseline.

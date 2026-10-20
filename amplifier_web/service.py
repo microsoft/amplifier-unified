@@ -249,6 +249,8 @@ ACTION_DEFINITIONS.update(computation_definitions())
 
 from .capacity import definitions as capacity_definitions
 ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
+from .model_capacity_settings import definitions as model_capacity_definitions
+ACTION_DEFINITIONS.update(model_capacity_definitions(schema, string))
 from .configuration_authority import definitions as configuration_authority_definitions
 ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
 from .access_mode import definitions as access_mode_definitions
@@ -361,6 +363,8 @@ from .task_environments import definitions as environment_definitions
 ACTION_DEFINITIONS.update(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
 ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+from .test_execution_settings import definitions as test_execution_definitions
+ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
 ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
@@ -417,7 +421,7 @@ for _access, _actions in {
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
-        "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
+        "diagnostics.records", "task.get", "capacity.read", "modelCapacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
@@ -1937,6 +1941,9 @@ class AppService:
         if action in test_capacity_definitions(schema, string):
             from .test_capacity_settings import dispatch as test_capacity_dispatch
             return await test_capacity_dispatch(self, action, args, configuration_authority)
+        if action in test_execution_definitions(schema, string):
+            from .test_execution_settings import dispatch as test_execution_dispatch
+            return await test_execution_dispatch(self, action, args, configuration_authority)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
         if action in environment_definitions(schema, string):
@@ -2103,6 +2110,9 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('assignment.'):
             return await self.assignments.dispatch(action, args, origin, command_id, caller_session_id)
+        if action.startswith("modelCapacity."):
+            from .model_capacity_settings import dispatch as model_capacity_dispatch
+            return await model_capacity_dispatch(self, action, args, origin, command_id)
         if action.startswith("capacity."):
             from .capacity import dispatch as capacity_dispatch
             return await capacity_dispatch(self, action, args, origin, command_id, include_state)
@@ -4684,8 +4694,11 @@ class AppService:
                     return {**result, 'inputIds': args.get('_contextInputs', [])}
                 return self.surface_context.read(session_id, args, bindings)
         if operation == "capacity.admit":
-            from .capacity import admission
-            return await admission(self, session_id, args)
+            from .capacity_wait import admit
+            return await admit(self, session_id, args)
+        if operation == 'capacity.abandoned':
+            from .capacity import abandoned
+            return await abandoned(self, session_id, args)
         if operation == "history":
             from .history_query import query_history
             return await query_history(self, args, session_id)

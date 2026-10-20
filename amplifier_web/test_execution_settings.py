@@ -1,0 +1,133 @@
+"""Global future-job execution policy; accepted jobs retain their own snapshot."""
+from __future__ import annotations
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import uuid
+from . import test_environment_profiles as profiles
+
+QUEUE_DEFAULTS = {'maxPending': 64, 'defaultWaitSeconds': 3600}
+PROFILE_FIELDS = (*profiles.RESOURCE_FIELDS, *profiles.TIMING_FIELDS)
+
+
+def definitions(schema, string):
+    queue = schema({key: {'type': 'integer', 'minimum': 1 if key == 'maxPending' else 0,
+                          'maximum': profiles.MAX_SECONDS} for key in QUEUE_DEFAULTS}, [])
+    fields = schema({key: {'type': 'integer', 'minimum': 1,
+                          'maximum': 1048576 if key in profiles.RESOURCE_FIELDS else profiles.MAX_SECONDS}
+                     for key in PROFILE_FIELDS}, [])
+    return {
+        'testing.execution.read': ('Read global execution defaults and effective profiles without starting work.', schema({}, [])),
+        'testing.execution.save': ('Save app-wide queue and test profile limits for future requests. Accepted work retains its saved limits.', schema({
+            'expectedRevision': string(64), 'queue': queue,
+            'profiles': schema({item['id']: fields for item in profiles.catalog()}, [])}, ['expectedRevision', 'queue', 'profiles'])),
+    }
+
+
+def validate(value):
+    if not isinstance(value, dict) or set(value) != {'version', 'queue', 'profiles'} or value['version'] != 1:
+        raise ValueError('Test execution settings have an unsupported format.')
+    queue = value['queue']
+    if not isinstance(queue, dict) or set(queue) - QUEUE_DEFAULTS.keys():
+        raise ValueError('Choose supported queue limits.')
+    for key, item in queue.items():
+        if type(item) is not int or not (1 if key == 'maxPending' else 0) <= item <= profiles.MAX_SECONDS:
+            raise ValueError('Queue limits must be whole numbers; maximum pending must be positive.')
+    saved = value['profiles']
+    if not isinstance(saved, dict) or set(saved) - {item['id'] for item in profiles.catalog()}:
+        raise ValueError('Choose supported test profiles.')
+    for identity, fields in saved.items():
+        if not isinstance(fields, dict) or set(fields) - set(PROFILE_FIELDS):
+            raise ValueError('Choose supported profile limits.')
+        for key, item in fields.items():
+            maximum = 1048576 if key in profiles.RESOURCE_FIELDS else profiles.MAX_SECONDS
+            if type(item) is not int or not 1 <= item <= maximum:
+                raise ValueError('Profile limits must be positive whole numbers within the supported numeric range.')
+        profiles.resources(identity, profiles.freeze(identity, fields))
+        profiles.freeze_timing(identity, fields)
+    return value
+
+
+def load(app):
+    path = Path(app.data_dir) / 'test-execution.json'
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError('Test execution settings must be a regular file, not a link.')
+        handle = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except FileNotFoundError:
+        return {'version': 1, 'queue': {}, 'profiles': {}}
+    with os.fdopen(handle, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        after = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or not stat.S_ISREG(after.st_mode)
+                or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)
+                or (info.st_dev, info.st_ino) != (after.st_dev, after.st_ino)
+                or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
+                or (os.name != 'nt' and info.st_mode & 0o077)
+                or info.st_nlink != 1 or info.st_size > 65536):
+            raise ValueError('Test execution settings must be a private regular file.')
+        value = json.load(stream)
+    return validate(value)
+
+
+def accepted(app, profile_id):
+    policy = load(app)
+    fields = policy['profiles'].get(profile_id, {})
+    return ({**QUEUE_DEFAULTS, **policy['queue']}, profiles.freeze(profile_id, fields), profiles.freeze_timing(profile_id, fields))
+
+
+def snapshot(app):
+    policy = load(app)
+    effective = []
+    for item in profiles.catalog():
+        fields = policy['profiles'].get(item['id'], {})
+        effective.append({**item, 'preparationTimeoutSeconds': 1800, **fields})
+    return {'revision': hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest(),
+            'queue': policy['queue'], 'profiles': policy['profiles'],
+            'effectiveQueue': {**QUEUE_DEFAULTS, **policy['queue']}, 'effectiveProfiles': effective,
+            'scope': 'All workspaces on this Amplifier installation. Only new requests use these values; accepted and recovered work keeps its saved limits.'}
+
+
+def write(app, policy):
+    # Replacement is atomic; no partial policy is visible to admission.
+    path = Path(app.data_dir) / 'test-execution.json'
+    temporary = path.with_name('.test-execution-' + uuid.uuid4().hex)
+    content = json.dumps(policy, sort_keys=True).encode()
+    if len(content) > 65536:
+        raise ValueError('The saved test execution settings exceed their supported bound.')
+    try:
+        with os.fdopen(os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'wb') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        # Windows has no directory-open/fsync contract. The same portable
+        # replacement convention is used by the app's settings publishers.
+        if hasattr(os, 'O_DIRECTORY'):
+            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+async def dispatch(app, action, args, authority):
+    from .service import AppError
+    async with app.lock:
+        try:
+            current = snapshot(app)
+            if action.endswith('.save'):
+                app.configuration_authority.check(authority)
+                if args['expectedRevision'] != current['revision']:
+                    raise ValueError('Execution settings changed. Refresh before saving your edits.')
+                value = validate({'version': 1, 'queue': args['queue'], 'profiles': args['profiles']})
+                write(app, value)
+                current = snapshot(app)
+            return {'accepted': True, 'result': current}
+        except (OSError, ValueError, TypeError) as exc:
+            raise AppError(str(exc), 409) from None

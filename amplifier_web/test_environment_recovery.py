@@ -263,7 +263,10 @@ def project(app, row, request):
                                reason='The test guest is absent. Its owned dependency preparation still needs cleanup.')
             else:
                 changes['status'] = 'retired'
-    return owner.save(app.data_dir, row, **changes)
+    updated = owner.save(app.data_dir, row, **changes)
+    if verified and result['status'] in {'stopped', 'absent'} and (not updated.get('preparationPending') or updated.get('preparedDependencies')):
+        owner.host_resources.settle(updated, release=True)
+    return updated
 
 
 def repair(app, row):

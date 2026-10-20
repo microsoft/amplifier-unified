@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.193",
+      "title": "Wait for model capacity and control test resources",
+      "changes": [
+        "Wait for temporary model capacity instead of saving a budget denial. Global queue and waiting-time controls respect cancellation, current limits and uncertain outcomes.",
+        "Share test-machine resource limits across cooperating local installations, with verified machine identity and reservations retained until owned cleanup is confirmed.",
+        "Adjust queued-test depth, waiting time, resource budgets and execution deadlines globally. Newly accepted work keeps its saved limits through recovery; edits do not change work already accepted.",
+        "Recover qualifying Incus creation results from exact recorded operations. Support current local address metadata and bounded shared-project inspection while preserving older controller ownership and uncertain outcomes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.192",
       "title": "Recover coordinated work and manage test capacity",
       "changes": [
