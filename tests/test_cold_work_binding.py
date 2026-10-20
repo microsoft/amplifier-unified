@@ -511,13 +511,55 @@ async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(sourc
 
 class _InitialCatalogCompletion:
     """Observe the first scheduled refresh; never start another refresh."""
-    def __init__(self, refresh, home=None, *, root='root'):
+    def __init__(self, refresh, home=None, *, root='root',
+                 native_project=None, native_identity=None):
         self.refresh = refresh
         self.home = home
         self.root = root
+        self.native_project, self.native_identity = native_project, native_identity
+        self.observation_errors = 0
         self.owner = None
         self.entry = self.completion = None
         self.finished = asyncio.get_running_loop().create_future()
+
+    def _issues(self, history):
+        """Only fixed kinds/counts/owner relations; never paths or issue text."""
+        issues = history.get('issues', [])
+        count = history.get('issueCount', len(issues) if type(issues) is list else None)
+        valid = type(issues) is list and type(count) is int and 0 <= count <= 10000
+        if not valid:
+            return {'count': None, 'returned': None, 'coverage': 'unknown', 'items': []}
+        complete = len(issues) == count and len(issues) <= 8
+        items = []
+        kinds = {'unresolved-workspace', 'unreadable', 'recovered',
+                 'unavailable-root', 'unavailable-catalog-cache'}
+        def relation(value, expected):
+            if value is None:
+                return 'absent'
+            if type(value) is not str or not value or expected is None:
+                return 'unknown'
+            return 'same' if value == expected else 'other'
+        for issue in issues[:8]:
+            if type(issue) is not dict:
+                complete = False
+                items.append({'kind': 'unknown', 'project': 'unknown', 'identity': 'unknown'})
+                continue
+            kind = issue.get('kind')
+            kind = kind if type(kind) is str and kind in kinds else 'unknown'
+            item = {'kind': kind,
+                    'project': relation(issue.get('nativeProject'), self.native_project),
+                    'identity': relation(issue.get('nativeIdentity'), self.native_identity)}
+            complete = complete and 'unknown' not in item.values()
+            items.append(item)
+        return {'count': count, 'returned': min(len(issues), 10000),
+                'coverage': 'complete' if complete else 'incomplete', 'items': items}
+
+    def _emit(self):
+        try:
+            print('CATALOG-INITIAL-COMPLETION', json.dumps(
+                {'entry': self.entry, 'completion': self.completion}, sort_keys=True))
+        except Exception:
+            self.observation_errors += 1
 
     def _snapshot(self, owner):
         service = owner.service
@@ -527,6 +569,7 @@ class _InitialCatalogCompletion:
                 'hasIssues': bool(history.get('issues') or history.get('issueCount')),
                 'phase': phase if phase in {'ready', 'complete', 'reconciling', 'recovering'} else 'other',
                 'closed': service.closed,
+                'issueEvidence': self._issues(history),
                 'rootCount': sum(row.get('id') == self.root for row in service._state.get('sessions', []))}
 
     async def observe(self, owner, *args, **kwargs):
@@ -550,6 +593,7 @@ class _InitialCatalogCompletion:
                 except Exception:
                     self.completion = {'observationError': True}
                 self.finished.set_result(failure)
+                self._emit()
 
     async def wait(self, owner, timeout=10):
         failure = await asyncio.wait_for(asyncio.shield(self.finished), timeout)
@@ -559,8 +603,91 @@ class _InitialCatalogCompletion:
         assert not self.entry.get('observationError') and not self.completion.get('observationError')
         assert self.entry['rootCount'] == self.completion['rootCount'] == 1
         assert self.completion['loading'] is False and not self.completion['hasError'], self.completion
+        assert self.observation_errors == 0, 'Initial catalog diagnostic delivery failed'
+        assert self.completion['issueEvidence']['coverage'] == 'complete', self.completion
         assert not self.completion['closed'] and not self.completion['hasIssues'], self.completion
         assert not owner.service.closed and self._snapshot(owner)['rootCount'] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['same', 'other', 'absent', 'unknown', 'truncated',
+                                'malformed', 'count-mismatch', 'empty-malformed'])
+async def test_initial_catalog_issue_evidence_is_bounded_and_never_waives_issues(case):
+    issue = {'kind': 'unresolved-workspace', 'nativeProject': 'fixture-project',
+             'nativeIdentity': 'native-root', 'message': 'NEVER-EXPORT-ISSUE-TEXT'}
+    if case == 'other':
+        issue.update(nativeProject='other-project', nativeIdentity='other-root')
+    elif case == 'absent':
+        issue.pop('nativeProject')
+        issue.pop('nativeIdentity')
+    elif case == 'unknown':
+        issue['kind'] = 'NEVER-EXPORT-UNKNOWN-KIND'
+    issues = [issue] * (9 if case == 'truncated' else 1)
+    state = {'sessions': [{'id': 'root'}],
+             'sharedHistory': {'loading': False, 'error': None,
+                               'issues': issues, 'issueCount': len(issues)}}
+    if case == 'malformed':
+        state['sharedHistory']['issueCount'] = True
+    elif case == 'count-mismatch':
+        state['sharedHistory']['issueCount'] = 2
+    elif case == 'empty-malformed':
+        state['sharedHistory'].update(issues=[], issueCount=0.0)
+    owner = SimpleNamespace(service=SimpleNamespace(_state=state, closed=False))
+    expected, calls = object(), []
+    async def refresh(actual):
+        calls.append(actual)
+        return expected
+    completion = _InitialCatalogCompletion(refresh,
+        native_project='fixture-project', native_identity='native-root')
+    assert await completion.observe(owner) is expected
+    evidence = completion.completion['issueEvidence']
+    assert len(evidence['items']) <= 8
+    encoded = json.dumps(evidence)
+    assert 'NEVER-EXPORT' not in encoded and 'fixture-project' not in encoded
+    if case in {'same', 'other', 'absent'}:
+        assert evidence['items'] == [{'kind': 'unresolved-workspace',
+                                      'project': case, 'identity': case}]
+        assert evidence['coverage'] == 'complete'
+    else:
+        assert evidence['coverage'] != 'complete'
+    with pytest.raises(AssertionError):
+        await completion.wait(owner)
+    assert calls == [owner]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('boundary', ['collect-return', 'collect-raise', 'emit-return', 'emit-raise'])
+async def test_initial_catalog_observation_failure_preserves_refresh_and_cleanup(monkeypatch, boundary):
+    state = {'sessions': [{'id': 'root'}], 'sharedHistory': {'loading': False}}
+    owner = SimpleNamespace(service=SimpleNamespace(_state=state, closed=False))
+    expected, failure, calls, cleanup = object(), ValueError('synthetic primary'), [], []
+    async def refresh(actual, *, force):
+        calls.append((actual, force))
+        if boundary.endswith('raise'):
+            raise failure
+        return expected
+    completion = _InitialCatalogCompletion(refresh)
+    def broken(*args, **kwargs):
+        raise OSError('NEVER-EXPORT-DIAGNOSTIC-ERROR')
+    if boundary.startswith('collect'):
+        monkeypatch.setattr(completion, '_issues', broken)
+    else:
+        monkeypatch.setattr('builtins.print', broken)
+    try:
+        if boundary.endswith('raise'):
+            with pytest.raises(ValueError) as caught:
+                await completion.observe(owner, force=False)
+            assert caught.value is failure
+            with pytest.raises(ValueError) as waited:
+                await completion.wait(owner)
+            assert waited.value is failure
+        else:
+            assert await completion.observe(owner, force=False) is expected
+            with pytest.raises(AssertionError):
+                await completion.wait(owner)
+    finally:
+        cleanup.append('closed')
+    assert cleanup == ['closed'] and calls == [(owner, False)]
 
 
 @asynccontextmanager

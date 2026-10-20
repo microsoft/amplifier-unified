@@ -970,14 +970,31 @@ def test_first_persist_error_observer_failure_cannot_replace_original_exception(
     assert calls == [(diagnostic, items, config)] and trace.observation_errors == 1
 
 
-def fixture(tmp_path, monkeypatch, count=140):
+def fixture(tmp_path, monkeypatch, count=140, *, workspace=None):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
     monkeypatch.delenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', raising=False)
-    path = tmp_path / 'native/projects/p/sessions/s/context-intelligence/events.jsonl'
+    project = 'p'
+    if workspace is not None:
+        from amplifier_web.session_files import project_slug
+        assert workspace.is_dir()
+        project = project_slug(workspace)
+    path = tmp_path / 'native/projects' / project / 'sessions/s/context-intelligence/events.jsonl'
     path.parent.mkdir(parents=True)
+    if workspace is not None:
+        # The HTTP fixture participates in real catalog discovery. Prepare its
+        # metadata before publishing events; do not fabricate transcript/turns.
+        (path.parent.parent / 'metadata.json').write_text(json.dumps({
+            'session_id': 's', 'working_dir': str(workspace), 'turn_count': 0,
+        }))
+        (path.parent / 'metadata.json').write_text(json.dumps({
+            'format': 'context-intelligence', 'version': '1.0.0',
+            'session_id': 's', 'workspace': project, 'working_dir': str(workspace),
+            'parent_id': '', 'started_at': 0, 'last_event_at': 0, 'status': 'completed',
+        }))
     path.write_text(''.join(json.dumps({'event': 'tool:post', 'timestamp': n,
         'session_id': 's', 'data': {'tool_call_id': str(n), 'tool_name': 'read', 'result': 'value-' + str(n)}}) + '\n' for n in range(count)))
-    session = {'id': 's', 'nativeProject': 'p', 'nativeIdentity': 's', 'workspace': '/fixture',
+    session = {'id': 's', 'nativeProject': project, 'nativeIdentity': 's',
+        'workspace': str(workspace) if workspace is not None else '/fixture',
         'messages': [{'id': 'user', 'role': 'user', 'text': 'hi', 'createdAt': 0}],
         'execution': {'nodes': [], 'turns': [], 'retiredUsageNodes': [{'id': 'protected'}]}}
     service = SimpleNamespace(data_dir=tmp_path / 'app', closed=False, instance_id='host',
@@ -986,6 +1003,44 @@ def fixture(tmp_path, monkeypatch, count=140):
     owner = WorkWindows(service)
     owner.projector = FakeProjector(service.data_dir)
     return owner, session, path, service
+
+
+@pytest.mark.parametrize('layout', ['matching', 'mismatched'])
+def test_http_raw_fixture_preserves_events_and_catalog_identity(tmp_path, monkeypatch, layout):
+    from amplifier_web.native_history import NativeHistory
+    from amplifier_web.session_files import project_slug, validate_capture
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    _, source, path, service = fixture(
+        tmp_path, monkeypatch, workspace=workspace if layout == 'matching' else None)
+    expected = ''.join(json.dumps({'event': 'tool:post', 'timestamp': n,
+        'session_id': 's', 'data': {'tool_call_id': str(n), 'tool_name': 'read',
+                                   'result': 'value-' + str(n)}}) + '\n' for n in range(140))
+    assert path.read_text() == expected
+    assert source['nativeIdentity'] == 's'
+    assert not (path.parent.parent / 'transcript.jsonl').exists()
+    assert not (service.data_dir / 'diagnostics/events.sqlite3').exists()
+    if layout == 'matching':
+        assert source['workspace'] == str(workspace)
+        assert source['nativeProject'] == project_slug(workspace) == path.parents[3].name
+        assert validate_capture(path.parent)['working_dir'] == str(workspace)
+        assert json.loads((path.parent.parent / 'metadata.json').read_text())['turn_count'] == 0
+    else:
+        assert source['nativeProject'] == 'p' != project_slug(workspace)
+        assert source['workspace'] == '/fixture'
+        assert not (path.parent / 'metadata.json').exists()
+        assert not (path.parent.parent / 'metadata.json').exists()
+    history = NativeHistory(tmp_path / 'native', known_workspaces=[{'path': str(workspace)}])
+    try:
+        snapshot = history.scan()
+        assert snapshot['sessions'] == []  # Raw observations are not invented chats.
+        if layout == 'matching':
+            assert snapshot['issues'] == []
+            assert snapshot['workspaces'][0]['path'] == str(workspace)
+        else:
+            assert {'kind': 'unresolved-workspace', 'nativeProject': 'p'} in snapshot['issues']
+    finally:
+        history.close()
 
 
 @pytest.mark.asyncio
@@ -1551,12 +1606,16 @@ async def test_six_browser_interests_rotate_past_four_active_read_slots(tmp_path
 async def test_http_work_pages_use_exact_window_cursor_without_hydrating(authenticated_client, tmp_path, monkeypatch):
     from amplifier_web.automatic_history import AutomaticHistory
     from amplifier_web.server import create_app
+    from amplifier_web.session_files import project_slug
     from test_cold_work_binding import _InitialCatalogCompletion
     from test_service import Runtime
-    _, source, path, _ = fixture(tmp_path, monkeypatch)
+    _, source, path, _ = fixture(tmp_path, monkeypatch, workspace=tmp_path)
+    assert source['nativeProject'] == project_slug(tmp_path) == path.parents[3].name
+    assert source['workspace'] == str(tmp_path) and source['nativeIdentity'] == 's'
     home = tmp_path / 'http'
     root_id = '21000000-0000-4000-8000-000000000001'
-    completion = _InitialCatalogCompletion(AutomaticHistory.refresh, home=home, root=root_id)
+    completion = _InitialCatalogCompletion(AutomaticHistory.refresh, home=home, root=root_id,
+        native_project=source['nativeProject'], native_identity=source['nativeIdentity'])
     with monkeypatch.context() as observation:
         async def refresh(owner, *args, **kwargs):
             return await completion.observe(owner, *args, **kwargs)
@@ -1572,6 +1631,8 @@ async def test_http_work_pages_use_exact_window_cursor_without_hydrating(authent
             identity = session['id']
             assert identity == root_id
             session.update({key: value for key, value in source.items() if key != 'id'})
+            assert session['id'] != session['nativeIdentity'] == 's'
+            assert session['nativeProject'] == project_slug(session['workspace'])
             service.event_log_view.windows.projector = FakeProjector(service.data_dir)
             service.clients.attach('window-browser')
             client = await authenticated_client(app)
