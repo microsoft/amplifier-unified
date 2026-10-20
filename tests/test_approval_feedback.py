@@ -65,3 +65,92 @@ async def test_concurrent_child_feedback_reaches_only_its_own_context(monkeypatc
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize('outcome', ['success', 'lost_reply', 'append_failed', 'stopped', 'cancelled_waiter'])
+async def test_overlapping_approval_retries_share_delivery_and_settle_waiter(monkeypatch, outcome):
+    from amplifier_web import runtime_worker
+    events, messages = [], []
+    monkeypatch.setattr(runtime_worker, 'publish', events.append)
+    worker = Worker()
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def add(message):
+        messages.append(message)
+        entered.set()
+        await release.wait()
+        if outcome == 'append_failed':
+            raise OSError('Synthetic failure after append')
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda _: SimpleNamespace(add_message=add)))
+    waiter = asyncio.create_task(worker.ask('Original request', ['allow', 'deny'], identity='request'))
+    await asyncio.sleep(0)
+    command = {'op': 'approval', 'id': 'first', 'approval_id': 'request',
+               'decision': 'allow', 'comment': 'Use the temporary copy.'}
+    first = asyncio.create_task(worker.command(command))
+    retry = None
+    try:
+        await entered.wait()
+        if outcome == 'lost_reply':
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+        retry = asyncio.create_task(worker.command({**command, 'id': 'retry'}))
+        await asyncio.sleep(0)
+        assert len(messages) == 1
+        assert not waiter.done()
+        if outcome == 'stopped':
+            worker.stop_revision += 1
+        elif outcome == 'cancelled_waiter':
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+        release.set()
+        await asyncio.gather(first, retry, return_exceptions=True)
+        if outcome in {'success', 'lost_reply'}:
+            result = await waiter
+            assert result == 'allow' and result.comment == command['comment']
+            assert any(e.get('id') == 'retry' and e.get('result', {}).get('accepted') for e in events)
+            assert not any(e.get('error') for e in events)
+        elif outcome == 'cancelled_waiter':
+            assert waiter.cancelled()
+        else:
+            with pytest.raises(RuntimeError, match='no approval was applied'):
+                await waiter
+            await worker.command({**command, 'id': 'late-retry'})
+            assert not any(e.get('result', {}).get('accepted') for e in events)
+        assert len(messages) == 1
+        assert not worker.approvals
+        assert not worker.approval_deliveries
+    finally:
+        release.set()
+        for task in [first, retry, waiter, *worker.tasks]:
+            if task:
+                task.cancel()
+        await asyncio.gather(*(t for t in [first, retry, waiter, *worker.tasks] if t), return_exceptions=True)
+
+
+async def test_conflicting_reply_cannot_replace_inflight_decision(monkeypatch):
+    from amplifier_web import runtime_worker
+    events, messages = [], []
+    monkeypatch.setattr(runtime_worker, 'publish', events.append)
+    worker = Worker()
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def add(message):
+        messages.append(message)
+        entered.set()
+        await release.wait()
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda _: SimpleNamespace(add_message=add)))
+    waiter = asyncio.create_task(worker.ask('Original request', ['allow', 'deny'], identity='request'))
+    await asyncio.sleep(0)
+    command = {'op': 'approval', 'id': 'first', 'approval_id': 'request', 'decision': 'deny', 'comment': 'Do not write.'}
+    first = asyncio.create_task(worker.command(command))
+    try:
+        await entered.wait()
+        await worker.command({**command, 'id': 'conflict', 'decision': 'allow', 'comment': 'Write now.'})
+        assert any(e.get('id') == 'conflict' and 'different decision' in e.get('error', '') for e in events)
+        release.set()
+        await first
+        assert await waiter == 'deny'
+        assert len(messages) == 1 and 'Do not write.' in messages[0]['content']
+    finally:
+        release.set()
+        first.cancel()
+        waiter.cancel()
+        await asyncio.gather(first, waiter, return_exceptions=True)
