@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import AsyncExitStack
 from contextvars import ContextVar
 import json
 import time
@@ -82,7 +83,7 @@ def definitions(schema, string):
             "idleStart": {"type": "boolean"}, "allowCreate": {"type": "boolean"},
         }, ["sessionId", "participants", "purpose", "modes"])),
         "coordination.revoke": ("Retired. Legacy work cannot resume; use ordinary human Stop for current task work.", schema({**sid, "grantId": string(200)}, ["sessionId", "grantId"])),
-        "coordination.context": ("Read bounded related request receipts and historical grants without loading peer transcripts.", schema(sid, ["sessionId"])),
+        "coordination.context": ("Read bounded related receipts, current admitted humanInput identity and historical grants without loading peer transcripts. humanInput is null outside the current human-backed root generation; it is not a permission grant.", schema(sid, ["sessionId"])),
         "coordination.recap": ("Compare bounded saved work with an optional private caller cursor. Passive; no model, history hydration or shared read-state write. nextCursor advances only returned changes; retain it only after presenting those changes.", schema({**sid, "cursor": string(16000)}, ["sessionId"])),
         "coordination.diagnostics": ("Read portable bounded phase/timing metadata for this root. Hashed correlation IDs, no prompts, drafts, paths or tool payloads; unavailable timing remains explicit. Does not start work.", schema(sid, ["sessionId"])),
         "coordination.decide": ("Retired. Legacy pending proposals cannot authorize new work.", schema({
@@ -422,6 +423,23 @@ class Collaboration:
             self.error("Collaboration requires the current transport-bound root generation.")
         return binding, active
 
+    def current_human_input(self, source):
+        """Expose a bounded current-input identity, never a permission grant."""
+        from .service import AppError
+        from .schedule_handoff import latest_human
+        try:
+            binding, active = self.active_binding(source)
+        except AppError:
+            return None
+        human = latest_human(source)
+        admitted = set(active.get('inputIds', [])) & {
+            row.get('inputId') for row in binding.get('_inputBindings', [])}
+        if (not human or human.get('questionId') or human.get('scheduledRunId')
+                or human.get('inputId') not in admitted):
+            return None
+        return {'sourceMessageId': human['id'], 'sourceInputId': human['inputId'],
+                'createdAt': human.get('createdAt'), 'generationId': active['id']}
+
     def validate_reply(self, source, args):
         binding, active = self.active_binding(source)
         request = self.receipt(args["requestId"])
@@ -688,8 +706,8 @@ class Collaboration:
             resuming = peer_resume.pending(receipt)
             if resuming and (reason := peer_resume.guard(self.service, receipt, source, target)):
                 return reason
-            if target.get("status") in {"stopping", "interrupted", "error"} or (
-                    target.get("status") == "stopped" and not resuming):
+            if target.get("status") in {"stopping", "interrupted"} or (
+                    target.get("status") in {"stopped", "error"} and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
             if task.get("status") in {"paused", "blocked", "completed"} and not resuming:
@@ -1318,6 +1336,7 @@ class Collaboration:
                 self.error("Current coordination context belongs to the caller.")
             result = self.current(args["sessionId"])
             source = self.service._session(args['sessionId'])
+            result['humanInput'] = self.current_human_input(source)
             from .workspace_awareness import packet, observed_intent
             result['awareness'] = packet(self.service, source['id'], principal=PRINCIPAL.get())
             result['writeIntent'] = observed_intent(self.service, source)
@@ -1376,7 +1395,7 @@ class Collaboration:
             prepared_artifacts = await prepare(self, source, args, origin, identity, digest)
             if prepared_artifacts.get('duplicate'):
                 return prepared_artifacts['duplicate']
-        async with self.service.lock:
+        async with self.service.lock, AsyncExitStack() as recovery_boundary:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
@@ -1496,7 +1515,7 @@ class Collaboration:
                 resume = None
                 if args.get('resume'):
                     from .peer_resume import prepare
-                    resume = prepare(self.service, source, target, args['resume'], lineage)
+                    resume = prepare(self.service, source, target, args['resume'], lineage, recovery_boundary)
                     envelope['humanResume'] = {
                         'sourceMessageId': resume['sourceMessageId'],
                         'instruction': 'The host verified a fresh human resume request in the commissioning owner. '

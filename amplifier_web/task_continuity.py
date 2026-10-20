@@ -78,7 +78,10 @@ class TaskController:
         self.apply()
         task = self.record()
         capacity = getattr(self.controls, "capacity", None)
-        if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
+        # A saved denial blocks automatic continuation, not a fresh
+        # host-verified human recovery input. Every provider call still asks
+        # the host to evaluate current conversation AND assignment limits.
+        if not resume and capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
             return False
         # Explicit human-backed input can discuss a completed task too. This
         # never reactivates that objective or enables its automatic continuation.
