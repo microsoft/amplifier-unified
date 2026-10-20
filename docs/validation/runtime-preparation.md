@@ -155,3 +155,26 @@ A universal lock's `branch` entry is not selected-intent proof: uv can collapse 
 selected marker-specific SHA and an inactive branch at the same commit into that
 one entry. Such conflicts stay exact unless an independent matching checked
 policy already exists. Actual resolver regressions cover both marker selections.
+
+## Cached source reference proof
+
+The cache/shared-binding follow-up verifies an untyped ref against both its exact
+branch and same-name tag in one remote response. Availability checks join identical
+repository/ref lookups within the existing access scope; a cached branch-only
+lookup cannot substitute for this proof. Tag-only and same-name branch/tag sources
+remain protected, while missing/failed evidence is reported as a failed check.
+A normal unambiguous branch continues to update without a name allowlist.
+
+Fresh qualification also proves newly inferred cache-module policies at the
+installed revision. Changed, unavailable or ambiguous evidence preserves the exact
+commit with its original reference and reason. An already checked policy still
+requires the existing installed-identity validation and is not reinterpreted.
+Active and recorded generations are never rewritten for this check.
+
+Real local Git/uv regressions exercise both legacy cache metadata and Foundation's
+actual shared binding/build view through installed graph, production freeze,
+recorded verification and next inventory. Separate production updater checks
+cover tag-only, conflicting-name, ordinary branch and offline cases. Focused
+tests cover grouped queries, access boundaries, fresh-check cache invalidation,
+changed revisions, cancellation and preservation of checked policy. This is
+isolated qualification, not deployment or live-provider evidence.

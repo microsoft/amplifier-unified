@@ -312,6 +312,8 @@ async def freeze(manager, generation, project):
             }
             raise error
         policies[name] = policy
+    from .runtime_source_policy import qualify_cache_policies
+    policies = await qualify_cache_policies(policies, checked, process)
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')
     content = frozen_manifest(environments.manifest_path().read_bytes(), graph)
