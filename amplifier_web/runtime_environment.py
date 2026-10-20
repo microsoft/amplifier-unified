@@ -233,13 +233,14 @@ def inventory(home, *, installed=None, graph=None):
                      **({'registryMigration': True} if registry_migration else {}),
                      'eligible': eligible, 'usage': 'configured',
                      'usageEvidence': ['Conversation worker environment', source['provenance'], *policy_evidence]})
-    from .runtime_policy_reconciliation import pending
+    from .runtime_policy_reconciliation import annotate_retained, pending
+    annotate_retained(home, generation, rows)
     policy_refresh = pending(home, generation, rows)
     if policy_refresh and not any(row.get('id') == 'runtime:environment' for row in rows):
         rows.insert(0, {'id': 'runtime:environment', 'kind': 'runtime environment',
-                       'label': 'Conversation component update policy', 'status': 'update', 'eligible': True,
+                       'label': 'Refresh included components', 'status': 'update', 'eligible': True,
                        'current': 'legacy-policy', 'latest': policy_refresh['configuration'],
-                       'usage': 'configured', 'usageEvidence': ['Reconcile older generated version pins with selected sources']})
+                       'usage': 'configured', 'usageEvidence': ['Check versions used by your current setup']})
     return rows
 
 

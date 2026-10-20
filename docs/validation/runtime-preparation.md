@@ -113,8 +113,9 @@ Older pins without recorded origin remain unchanged. Their update-source detail
 reports that the origin is not recorded, so an intentional pin is not silently
 converted into branch tracking. Resolving a legacy policy requires the actual
 source declarations and configuration; conflicting bundle declarations require
-an explicit compatibility decision. This change does not automatically migrate
-legacy pins, alter registry component policy, or refresh qualified test adapters.
+an explicit compatibility decision. This preservation step does not migrate legacy pins, alter registry component
+policy, or refresh qualified test adapters. The separate reconciliation path below
+can recover selected source policy in a fresh candidate.
 
 Focused tests cover declaration recovery before freeze, direct/transitive
 requirements, policy origin across stage/freeze/next check, exact identity drift,
@@ -126,8 +127,8 @@ behavior, not deployment or fresh-worker adoption on a user's installation.
 ### Reconciling earlier generated pins
 
 Older worker receipts may have recorded a resolver-normalized commit as their
-standing update policy. The ordinary component Updates flow offers one policy
-refresh when these receipts have no origin. It does not load bundles while
+standing update policy. The ordinary component Updates flow offers “Refresh included components”
+when these receipts have no recorded origin or an unresolved reference. It does not load bundles while
 checking or browsing settings. During an unpublished candidate only, a
 collection-only pass observes the effective selected bundle, include and module
 sources after configuration precedence, and binds them to the dependency
@@ -142,6 +143,10 @@ missing ownership evidence never grants migration. The normal installed graph,
 source identity and immutable freeze checks still decide qualification.
 
 A generation receipt records migrated, protected and unselected packages.
+A receipt matching the current configuration and exact installed identity marks
+packages absent from the offered-profile batch as usage unknown, kept for existing
+chats. It does not claim they are globally unused or remove them. Changing profile
+configuration invalidates that classification.
 Unselected catalog providers remain unresolved; merely offering a provider
 does not select its source. The receipt suppresses repeated no-op update
 prompts for the same configuration. If another component already prompts a

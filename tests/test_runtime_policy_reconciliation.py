@@ -338,3 +338,31 @@ async def test_unrelated_update_and_freeze_preserve_unknown_origin_for_later_rec
     (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
     candidates = migration.legacy_candidates(environments.inventory(manager.home, graph=graph))
     assert ROW['package'] in candidates
+
+
+@pytest.mark.parametrize('kind', ['unrecorded', 'unresolved-reference'])
+def test_unresolved_reference_still_allows_selected_branch_proof(kind):
+    assert NAME in migration.legacy_candidates([row(policyOrigin={'kind': kind, 'originalRef': 'stable'})])
+
+
+@pytest.mark.parametrize('change', ['none', 'configuration', 'identity', 'present', 'old-receipt', 'protected'])
+def test_retained_extra_usage_requires_matching_completed_profile_selection(selected, monkeypatch, change):
+    s = selected
+    monkeypatch.setattr('amplifier_web.host.config.read_config', lambda *a, **kw: s.config)
+    rows = [row(usage='configured', usageEvidence=['Conversation worker environment'])]
+    saved = {
+        'version': 1, 'configuration': migration.configuration(s.config),
+        'remaining': migration.legacy_candidates(rows), 'decisions': {NAME: 'unselected'},
+        'offeredPackages': ['another-package'],
+    }
+    if change == 'configuration': saved['configuration'] = 'old'
+    if change == 'identity': saved['remaining'][NAME]['current'] = NEW
+    if change == 'present': saved['offeredPackages'].append(NAME)
+    if change == 'old-receipt': del saved['offeredPackages']
+    if change == 'protected': saved['decisions'][NAME] = 'authored-constraint'
+    receipt = s.home / 'updates/baseline-runtime'
+    receipt.mkdir()
+    receipt.joinpath(migration.RECEIPT).write_text(json.dumps(saved))
+    migration.annotate_retained(s.home, None, rows)
+    assert rows[0]['usage'] == ('unknown' if change == 'none' else 'configured')
+    assert rows[0]['current'] == OLD

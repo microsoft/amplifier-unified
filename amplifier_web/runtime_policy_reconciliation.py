@@ -24,7 +24,7 @@ def legacy_candidates(rows):
             and not row.get('override') and row.get('url')
             and re.fullmatch('[a-f0-9]{40}', row.get('ref', ''))
             and row.get('ref') == row.get('current')
-            and (row.get('policyOrigin') or {}).get('kind', 'unrecorded') == 'unrecorded'}
+            and (row.get('policyOrigin') or {}).get('kind', 'unrecorded') in {'unrecorded', 'unresolved-reference'}}
 
 
 def configuration(config):
@@ -62,6 +62,32 @@ def pending(home, generation, rows, *, honor_receipt=True):
     except (OSError, ValueError, TypeError):
         pass
     return {'version': VERSION, 'configuration': key, 'candidates': candidates}
+
+
+def annotate_retained(home, generation, rows):
+    """A matching completed selection probe narrows usage, never deletes data."""
+    from .runtime_environment import receipt_directory
+    from .host.config import read_config
+    try:
+        saved = json.loads((receipt_directory(home, generation) / RECEIPT).read_text())
+        if (saved.get('version') != VERSION or saved.get('configuration') !=
+                configuration(read_config(home, home=home, global_only=True))):
+            return
+        offered = saved.get('offeredPackages')
+        if not isinstance(offered, list):
+            return
+        candidates = legacy_candidates(rows)
+        for row in rows:
+            name = row.get('package')
+            if (name in candidates and saved.get('remaining', {}).get(name) == candidates[name]
+                    and saved.get('decisions', {}).get(name) == 'unselected' and name not in offered):
+                row['usage'] = 'unknown'
+                row['usageEvidence'] = [
+                    'Kept for existing chats; not selected by current offered profiles',
+                    *row.get('usageEvidence', []),
+                ]
+    except (OSError, ValueError, TypeError):
+        return
 
 
 class Collector:
@@ -318,5 +344,6 @@ async def reconcile(manager, stage, project, collect):
     result = {'version': VERSION, 'configuration': request['configuration'],
               'decisions': {name: ('migrated' if name in selected else status) for name, status in decisions.items()},
               'remaining': {name: old for name, old in request['candidates'].items() if name not in selected},
+              'offeredPackages': sorted(first.get('packages', {})),
               'migrated': {name: checked[name] for name in selected}}
     write_private(stage / RECEIPT, json.dumps(result, indent=2) + '\n')
