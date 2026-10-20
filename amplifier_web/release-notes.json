@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.195",
+      "title": "Reliable component preparation and Core updates",
+      "changes": [
+        "Prepare downloaded bundles at the exact source revision checked for the update, preventing stale cached sources from replacing the checked runtime during preparation.",
+        "Preserve local and pinned source choices during preparation, and reject copied Git checkouts that redirect writes outside the update candidate.",
+        "Check and update app-managed Core wheels from their recorded package registry while preserving explicit custom sources and index settings.",
+        "Use the newly qualified test-environment runner for new setups while retaining the original runner for existing environments and their cleanup.",
+        "Show clearer component-update failure guidance and restore affected preparation checks in post-release verification."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.194",
       "title": "Approved test machines and ordered chat checks",
       "changes": [
