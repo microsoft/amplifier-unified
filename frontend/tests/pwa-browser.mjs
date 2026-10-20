@@ -24,6 +24,9 @@ try{
  // Authenticate only this disposable fixture; never touch the real user's login.
  await context.setExtraHTTPHeaders({Authorization:'Bearer fixture-browser-control-token'});
  await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
+ await expect(page.locator('.a-adaptive-home')).toBeVisible();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await page.getByRole('button',{name:'Settings test',exact:true}).click();
  await page.waitForFunction(()=>document.title==='Settings test - Amplifier');
  await page.evaluate(()=>window.amplifier.dispatch('session.rename',{id:window.amplifier.getState().selectedSessionId,title:'A renamed chat'}));
  await page.waitForFunction(()=>document.title==='A renamed chat - Amplifier');

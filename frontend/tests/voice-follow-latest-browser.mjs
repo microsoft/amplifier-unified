@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Production UI + real transcript persistence, synthetic signaling; no real audio.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -21,7 +22,7 @@ try {
   };
   navigator.mediaDevices.getUserMedia=async()=>{const track=new EventTarget();Object.assign(track,{enabled:true,muted:false,readyState:'live',stop(){this.readyState='ended'}});return {getTracks:()=>[track],getAudioTracks:()=>[track]}};
  });
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const selected=()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const workReady=async(target=page)=>{
@@ -37,7 +38,7 @@ try {
  const bottom=()=>expect.poll(remaining).toBeLessThan(3);
  const scrollBack=async()=>{await workReady();const box=await pane.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,-800);await expect.poll(remaining).toBeGreaterThan(500);await page.waitForTimeout(150)};
  await append(other,12);await action('session.select',{id:call});await append(call,12);
- const observer=await page.context().newPage();await observer.goto(url);await observer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const observer=await page.context().newPage();await observer.goto(url);await showFixtureConversation(observer);await observer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await observer.evaluate(id=>window.amplifier.dispatch('session.select',{id}),call);
  const observerPane=observer.locator('.a-messages');await expect(observerPane).toContainText('Spoken item '+sequence+'\n');
  await observerPane.evaluate(el=>{el.dispatchEvent(new WheelEvent('wheel',{deltaY:-800}));el.scrollTop=1000;el.dispatchEvent(new Event('scroll'))});

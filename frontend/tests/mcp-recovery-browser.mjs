@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -72,7 +73,7 @@ try{
  const context=await browser.newContext({viewport:{width:1450,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const operation=async(name,args)=>{
   const receipt=await action(name,args);
@@ -172,7 +173,7 @@ try{
  // A second independently attached client holds the original saved document.
  secondBrowser=await chromium.launch({headless:true});
  const secondContext=await secondBrowser.newContext({viewport:{width:1100,height:850},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const second=await secondContext.newPage();await second.goto(url);
+ const second=await secondContext.newPage();await second.goto(url);await showFixtureConversation(second);
  await second.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await second.evaluate(async before=>{await window.amplifier.dispatch('session.select',{id:before.session});await window.amplifier.dispatch('canvas.select',{id:before.id});},before);
  await dismissFixtureSetup(second,'second client');

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
@@ -32,7 +33,7 @@ try{
  const observed=()=>page.request.get(ready.url+'/fixture/observations').then(response=>response.json());
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const record=async()=>writeFile(out+'/observations.json',JSON.stringify({checks,observations:await observed(),state:await state(),errors},null,2)+'\n');
- await page.goto(ready.url);
+ await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await expect(composer).toBeEditable();await composer.fill('Keep this private chat draft');
  const original=(await observed()).messages;

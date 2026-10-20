@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
@@ -15,7 +16,7 @@ try{
  page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST'){const body=request.postDataJSON();if(body.action==='session.titlePreview')previews.push(body.args)}});
  const act=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
- await page.goto(ready.url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(ready.url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await act('view.update',{patch:{navPinned:true,navExpanded:true}});
  await act('session.select',{id:ready.sessionId});
  await expect(page.locator('.a-work-heading strong')).toHaveText('Plan a neighborhood garden');

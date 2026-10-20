@@ -1,4 +1,5 @@
 import {once} from 'node:events';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -15,12 +16,12 @@ try{
  browser=await chromium.launch({headless:true,args:JSON.parse(process.env.AMPLIFIER_CHROMIUM_ARGS||'[]')});
  const context=await browser.newContext({viewport:{width:1280,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const facts=async()=>{const response=await page.request.get(url+'/fixture/environments');assert.equal(response.status(),200);return response.json()};
  const openEnvironments=async(target,initialSetup=false)=>{
   const setup=target.getByRole('dialog',{name:'Settings',exact:true});
   if(initialSetup){await expect(setup).toBeVisible();await setup.getByRole('button',{name:'Close panel',exact:true}).click();await expect(setup).toHaveCount(0)}
-  await target.locator('[data-part="header"] .a-work-crumb').click();
+  await target.locator('[data-part="header"] .a-work-crumb:not(.a-work-home-crumb)').click();
   await target.getByRole('group',{name:'Workspace view',exact:true}).getByRole('button',{name:'Details',exact:true}).click();
   await target.getByText('Managed resources',{exact:true}).click();
  };
@@ -58,7 +59,7 @@ try{
  await expect(panel.getByText('workspace check passed',{exact:true})).toBeVisible();
  await expect(panel.getByText('Exit code: 0',{exact:true})).toBeVisible();
  await page.request.post(url+'/fixture/environment-mode',{data:{executeTimeout:true}});
- const peer=await context.newPage();await peer.goto(url);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const peer=await context.newPage();await peer.goto(url);await showFixtureConversation(peer);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await openEnvironments(peer);
  const peerPanel=peer.getByRole('region',{name:'Test environments',exact:true});
  await peerPanel.getByLabel('Check command',{exact:true}).fill('python slow_check.py');

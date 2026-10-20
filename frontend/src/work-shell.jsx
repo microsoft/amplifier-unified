@@ -6,6 +6,7 @@ import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {createPortal} from 'react-dom';
 import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal,CalendarClock} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
+import {AdaptiveWorkHome} from './adaptive-work.jsx';
 import {useNavigationController,ChatList,NavigationEditor,ChatSearch} from './shell/navigation-components';
 import {WorkspaceCleanup} from './storage-settings';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -14,7 +15,7 @@ import {WorkspaceReadiness,WorkspaceResources} from './workspace-starters';
 import {WorkspaceBundleDefault} from './bundle-controls';
 import {newChatSetup} from './new-chat';
 import {useActivityClock,CopyDetail} from './navigation-details';
-import {useModalFocus} from './responsive-navigation';
+import {useModalFocus,useNarrowScreen} from './responsive-navigation';
 import {ShellSlot} from './shell/runtime';
 import {CanvasToggle} from './shell-panels';
 import {AttentionBadge} from './attention';
@@ -32,11 +33,11 @@ export function WorkDialog({label,onClose,children,initialFocus}){
 export function ComposerWorkspace({state,act}){
  const [open,setOpen]=useState(false),trigger=useRef(null),setup=newChatSetup(state),workspace=state.workspaces?.find(row=>row.path===setup.workspace);
  const close=()=>{setOpen(false);requestAnimationFrame(()=>trigger.current?.focus())};
- return <><button type="button" ref={trigger} className="a-composer-workspace" aria-label="Choose workspace" aria-expanded={open} onClick={event=>{event.currentTarget.focus();setOpen(true)}}><Folder/><span>{setup.location?.kind==='managed'||!setup.workspace?'No workspace':workspace?.name||setup.workspace.split('/').at(-1)}</span><ChevronRight/></button>{open&&<WorkDialog initialFocus='input[type="search"]' label="Choose a workspace" onClose={close}><WorkspacePicker state={state} act={act} setup={setup} onChange={async value=>{const result=await act('view.update',{patch:{newSessionDraft:{...setup,...value}}});if(!result?.accepted)throw Error(result?.error||'Could not select this workspace.');close()}}/></WorkDialog>}</>;
+ return <><button type="button" ref={trigger} className="a-composer-workspace" aria-label="Choose project" aria-expanded={open} onClick={event=>{event.currentTarget.focus();setOpen(true)}}><Folder/><span>{setup.location?.kind==='managed'||!setup.workspace?'On its own':workspace?.name||setup.workspace.split('/').at(-1)}</span><ChevronRight/></button>{open&&<WorkDialog initialFocus='input[type="search"]' label="Choose a project" onClose={close}><WorkspacePicker state={state} act={act} setup={setup} onChange={async value=>{const result=await act('view.update',{patch:{newSessionDraft:{...setup,...value}}});if(!result?.accepted)throw Error(result?.error||'Could not select this workspace.');close()}}/></WorkDialog>}</>;
 }
 export function WorkspaceCreation({state,act,onClose}){
  const nav=useContext(WorkNavigationContext);
- return <WorkDialog label="Workspace" onClose={onClose}><WorkspaceForm state={state} act={act} fromDraft={!state.selectedSessionId} onCancel={onClose} onDone={result=>{onClose();if(result?.workspaceId)nav.browse('workspace',result.workspaceId);else nav.browse('workspaces')}}/></WorkDialog>;
+ return <WorkDialog label="Project" onClose={onClose}><WorkspaceForm state={state} act={act} fromDraft={!state.selectedSessionId} onCancel={onClose} onDone={result=>{onClose();if(result?.workspaceId)nav.browse('workspace',result.workspaceId);else nav.browse('workspaces')}}/></WorkDialog>;
 }
 function ActionMenu({label,children,icon=<MoreHorizontal/>,badge,caption}){
  const ref=useRef(null),[open,setOpen]=useState(false);
@@ -46,7 +47,7 @@ function ActionMenu({label,children,icon=<MoreHorizontal/>,badge,caption}){
 export function AppFooter({state,connected,open,act}){
  return <div className="a-work-footer">
   <button type="button" className="a-footer-action" onClick={()=>open('automation')}><CalendarClock/><span>Automation</span></button>
-  <button type="button" className="a-footer-action" onClick={()=>open('activity')}><Bell/><span>Activity</span><AttentionBadge state={state}/></button>
+  <button type="button" className="a-footer-action" title="Activity and unread notifications" onClick={()=>open('activity')}><Bell/><span>Activity</span><AttentionBadge state={state}/></button>
   <button type="button" className="a-footer-action" onClick={()=>open('settings')}><Settings/><span>Settings</span><AttentionBadge state={state} settings/></button>
   <div className="a-footer-status"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span>{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options"><button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button></ActionMenu></ShellSlot></div>
  </div>;
@@ -56,11 +57,12 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
  const displayTitle=useChatTitle(session,{eager:!browsing}).title;
  const setup=!session&&!browsing?newChatSetup(state):null;
  const workspace=state.workspaces?.find(row=>setup?setup.location?.kind!=='managed'&&row.path===setup.workspace:row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
- const title=surface==='workspaces'?'All workspaces':surface==='chats'?'Search chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
+ const navigationNarrow=useNarrowScreen('(max-width: 900px)');
+ const title=surface==='home'?'Home':surface==='workspaces'?'All projects':surface==='chats'?'Search chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
  return <header className="a-work-header" data-part="header" inert={!!state.view?.panel}>
   <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
-  {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
-  <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
+  {(navigationNarrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!navigationNarrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
+  <ShellSlot name="conversation.header"><nav className="a-work-heading" aria-label="Breadcrumb">{surface!=='home'&&<><button type="button" className="a-work-crumb a-work-home-crumb" onClick={()=>nav.home({navExpanded:false})}>Home</button><ChevronRight aria-hidden="true"/></>}{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page">{title}</strong></nav></ShellSlot>
   <div className="a-work-header-actions">
    {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
@@ -105,7 +107,7 @@ export function WorkspaceFiles({workspace,state,act}){
 }
 function WorkBrowser({host,workspaceHost,state,act}){
  const model=useNavigationController(host,'chats'),workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),now=useActivityClock(),nav=useContext(WorkNavigationContext);
- const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=surface!=='chat';
+ const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=!['chat','home'].includes(surface);
  const workspacePending=surface==='workspace'&&(workspaceModel.state.navigationWorkspacePending||model.state.navigationWorkspacePending);
  const setTab=tab=>act('view.update',{patch:{workWorkspaceTab:tab}});
  const view=surface==='chats'?{...model.view,...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,navChatScope:'all'}:{...model.view,navChatScope:'workspace'};
@@ -113,13 +115,13 @@ function WorkBrowser({host,workspaceHost,state,act}){
  const pageResource=surface==='chats'?'sidebarSearch':'sidebarWorkspace';
  const viewAct=(name,args)=>{if(name!=='view.update'||surface!=='chats')return model.act(name,args);const next={...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,...args.patch};if(!Object.hasOwn(args.patch,'navChatPage'))delete next.navChatPage;return model.act(name,{patch:{navRecentView:next}})};
  return <div className="a-work-browser" data-part="work-browser"><NavigationEditor model={model} deleteOwner={active}/><NavigationEditor model={workspaceModel}/>{active&&<>
-  <div className="a-work-browser-heading"><div><h1>{surface==='workspace'?workspacePending?'Loading workspace…':workspace?.name||'Workspace unavailable':surface==='workspaces'?'Your workspaces':'Search chats'}</h1><p>{surface==='workspace'?'A place for related chats and files.':surface==='workspaces'?'Keep related work together. Each workspace has its own chats and files.':'Find a chat by name, workspace or saved description.'}</p></div><button type="button" className="a-primary" disabled={surface==='workspace'&&(workspacePending||!workspace)} onClick={()=>surface==='workspaces'?nav.create():nav.newChat(surface==='workspace'?workspace?.path:undefined)}><Plus/>{surface==='workspaces'?'New workspace':'New chat'}</button></div>
+  <div className="a-work-browser-heading"><div><h1>{surface==='workspace'?workspacePending?'Loading workspace…':workspace?.name||'Workspace unavailable':surface==='workspaces'?'Your projects':'Search chats'}</h1><p>{surface==='workspace'?'A place for related chats and files.':surface==='workspaces'?'Keep related chats and files together.':'Find a chat by name, project or saved description.'}</p></div><button type="button" className="a-primary" disabled={surface==='workspace'&&(workspacePending||!workspace)} onClick={()=>surface==='workspaces'?nav.create():nav.newChat(surface==='workspace'?workspace?.path:undefined)}><Plus/>{surface==='workspaces'?'New project':'New chat'}</button></div>
  </>}<WorkspaceResources state={state} act={act} workspaceId={surface==='workspace'&&tab==='details'?workspace?.id:undefined}/>{active&&<>
   {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceBundleDefault key={workspace.id} workspace={workspace} state={state} act={act}/>}
   {surface==='workspaces'?<><NavigationResourceStatus state={workspaceModel.state} resource="workspaceExplorer" label="workspaces" refresh={workspaceModel.refreshResources}/>{hasNavigationResource(workspaceModel.state,'workspaceExplorer')?<WorkspaceExplorer state={workspaceModel.state} act={workspaceModel.act} onEdit={workspaceModel.setDraft} heading={false} onSelect={row=>nav.browse('workspace',row.workspaceId)}/>:!workspaceModel.state.navigationResourcePending?.workspaceExplorer&&<p role="status">Loading workspaces…</p>}</>:<>
    {surface==='workspace'&&workspace&&!workspacePending&&<WorkspaceWork key={workspace.id} workspace={workspace} session={state.sessions?.find(row=>row.id===state.selectedSessionId)} dispatch={act} onOpenChat={id=>act('session.select',{id})}/>}
    {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceReadiness state={state} act={act} workspaceId={workspace.id}/>}
-   {surface==='workspace'&&workspace&&<><div className="a-work-tabs" role="group" aria-label="Workspace view">{['chats','files','details'].map(key=><button key={key} type="button" aria-pressed={tab===key} data-action="view.update" onClick={()=>setTab(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div>{tab==='details'&&<div className="a-work-details"><CopyDetail label="Folder" value={workspace.path}/><p>Chats are discovered from native Amplifier history for this folder. Files stay in place and are visible from your terminal.</p><button className="a-soft" onClick={()=>workspaceModel.setDraft({mode:'rename',id:workspace.id,name:workspace.name})}>Rename workspace</button><WorkspaceCleanup key={workspace.id} id={workspace.id} act={act}/><WorkspaceConfiguration key={workspace.id} workspace={workspace} state={state} act={act}/></div>}{tab==='files'&&<WorkspaceFiles key={workspace.id} workspace={workspace} state={state} act={act}/>}</>}
+   {surface==='workspace'&&workspace&&<><div className="a-work-tabs" role="group" aria-label="Workspace view">{['chats','files','details'].map(key=><button key={key} type="button" aria-pressed={tab===key} data-action="view.update" onClick={()=>setTab(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div>{tab==='details'&&<div className="a-work-details"><CopyDetail label="Folder" value={workspace.path}/><p>Chats are discovered from native Amplifier history for this folder. Files stay in place and are visible from your terminal.</p><button className="a-soft" onClick={()=>workspaceModel.setDraft({mode:'rename',id:workspace.id,name:workspace.name})}>Rename project</button><WorkspaceCleanup key={workspace.id} id={workspace.id} act={act}/><WorkspaceConfiguration key={workspace.id} workspace={workspace} state={state} act={act}/></div>}{tab==='files'&&<WorkspaceFiles key={workspace.id} workspace={workspace} state={state} act={act}/>}</>}
 
    {page&&<NavigationResourceStatus state={model.state} quietRefresh={surface==='workspace'} resource={pageResource} label={surface==='chats'?'chat search':'workspace chats'} refresh={model.refreshResources}/>}
    {surface==='workspace'&&workspacePending?<p role="status">Loading workspace…</p>:surface==='workspace'&&!workspace?<p>This workspace is no longer available. Choose another workspace from the sidebar.</p>:surface==='chats'?<ChatSearch page={page} model={model} view={view} viewAct={viewAct} now={now}/>:tab==='chats'&&<ChatList planAct={surface==='workspace'?act:undefined} page={page} model={model} view={view} viewAct={viewAct} now={now} showLocation={surface==='chats'}/>}
@@ -129,7 +131,7 @@ function WorkBrowser({host,workspaceHost,state,act}){
 export function WorkSurface({shell,state,act}){
  const chats=shell.composition.instances.find(row=>row.package==='builtin.chats'),workspaces=shell.composition.instances.find(row=>row.package==='builtin.workspaces');
  if(!chats)return <div className="a-work-browser"><p>Your custom navigation is available in the sidebar. This browser uses the standard Chats component.</p><a href="?shell=recovery">Open with standard navigation</a></div>;
- return <div className="a-work-browser-host" hidden={workSurface(state)==='chat'}><WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/></div>;
+ return <div className="a-work-browser-host" hidden={workSurface(state)==='chat'}>{workSurface(state)==='home'?<AdaptiveWorkHome host={shell.hostFor(chats)} state={state} act={act} presentation={shell.composition.presentation}/>:<WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/>}</div>;
 }
 
 // Live controls stay outside the conversation, which is hidden during browsing.

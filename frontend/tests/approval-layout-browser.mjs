@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {once} from 'node:events';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -25,7 +26,7 @@ const sameGeometry=(a,b)=>typeof a==='number'&&typeof b==='number'?near(a,b)
 // Independent fixture expectations, not the product's fitPanels calculation.
 // Equal approval/composer widths alone also accept a stale docked mobile nav.
 const layoutMatches=(s,e)=>{
- const narrow=e.width<=760,right=box=>box.x+box.width;
+ const narrow=e.width<=900,right=box=>box.x+box.width;
  if(s.viewport.width!==e.width||s.viewport.height!==e.height||s.scheme!==e.scheme
   ||s.narrow!==narrow||s.canvasOpen!==!!e.canvasOpen||s.canvasOverlay
   ||!near(s.workspace.x,0)||!near(s.workspace.width,e.width))return false;
@@ -152,7 +153,7 @@ try{
   await capture(record,'content');
   record.status='passed';
  };
- await page.goto(ready.url);await expect(card).toBeVisible();
+ await page.goto(ready.url);await showFixtureConversation(page);await patch({navPinned:true});await expect(card).toBeVisible();
  await expect(card.locator('[data-approval-id]')).toHaveCount(3);
  const before=await check();
  await probe('desktop-light',{width:1600,height:1000,scheme:'light',navWidth:240});

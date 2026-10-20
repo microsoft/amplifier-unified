@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -28,12 +29,12 @@ try{
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const inspect=()=>page.request.get(url+'/fixture/ordinary-work').then(r=>r.json());
  const seed=path=>page.request.post(url+'/fixture/ordinary-work/'+path).then(async r=>{assert.equal(r.ok(),true);return r.json()});
- await page.goto(url);
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await expect(composer).toBeEditable();await composer.fill('Keep the ordinary inspection draft');
  const initial=await inspect();
  // Public breadcrumb -> Workspace work. No API preopened panel or surface.
- await page.locator('[data-part="header"] .a-work-crumb').click();
+ await page.locator('[data-part="header"] .a-work-crumb:not(.a-work-home-crumb)').click();
  const workspaceView=page.getByRole('group',{name:'Workspace view',exact:true});
  await expect(workspaceView).toBeVisible();
  await page.locator('.a-workspace-work-entry > summary').click();

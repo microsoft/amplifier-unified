@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 // Build an independently authored package only after the production app opens.
 import {spawn} from 'node:child_process';
@@ -14,7 +15,7 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const inspect=()=>action('shell.inspect',{clientId}).then(row=>row.result);

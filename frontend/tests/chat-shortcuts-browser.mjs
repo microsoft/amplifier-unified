@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Real sidebar and guarded selection; browser-reserved keys remain untouched.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -99,7 +100,7 @@ try{
  const targetMap=()=>rows.filter({has:page.locator('.a-chat-shortcut')}).evaluateAll(nodes=>nodes.map(n=>({id:n.dataset.sessionId,number:Number(n.querySelector('kbd').textContent)})));
  const reveal=async()=>{await blur();await hold();await expect.poll(()=>badges.count()).toBeGreaterThan(0);return targetMap()};
  const shortcut=async id=>{const targets=await reveal(),target=targets.find(row=>row.id===id);assert.ok(target,`Chat ${id} must be in the bounded shortcut list`);await page.keyboard.press('Digit'+target.number);await release()};
- await page.goto(vite.resolvedUrls.local[0]);await expect(rows).toHaveCount(20);await blur();
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:true});await expect(rows).toHaveCount(20);await blur();
  const before=await geometry();await hold();await expect(badges).toHaveCount(0);await expect(badges).toHaveCount(9);assert.deepEqual(await geometry(),before);
  await page.screenshot({path:out+'/revealed.png'});
  const frozen=await rows.filter({has:page.locator('.a-chat-shortcut')}).evaluateAll(nodes=>nodes.map(n=>({id:n.dataset.sessionId,number:Number(n.querySelector('kbd').textContent)})));

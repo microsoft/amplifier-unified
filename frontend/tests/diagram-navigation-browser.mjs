@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdirSync,writeFileSync} from 'node:fs';
@@ -55,7 +56,7 @@ try{
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const saved=()=>page.evaluate(()=>window.amplifier.getState().canvas.view||{});
  const record=(kind,name,passed,measurements={})=>results.push({kind,name,passed,...measurements});
- await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  await act('session.create',{});await act('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:700}});
  for(const kind of ['mermaid','dot']){
   const content=kind==='mermaid'?'flowchart TD\n'+Array.from({length:10},(_,i)=>`N${i}[Step ${i}] --> N${i+1}[Step ${i+1}]`).join('\n'):'digraph { '+Array.from({length:10},(_,i)=>`n${i}->n${i+1};`).join(' ')+' }';

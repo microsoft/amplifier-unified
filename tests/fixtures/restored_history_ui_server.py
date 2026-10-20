@@ -33,6 +33,7 @@ async def main(home):
     previous.clients.attach('previous-browser')
     with previous.clients.bind('previous-browser'):
         previous.state['selectedSessionId'] = sid
+        previous.state['view']['workSurface'] = 'chat'
         previous.clients.draft(sid, 'Saved unsent draft')
         previous._save()
     await previous.close()

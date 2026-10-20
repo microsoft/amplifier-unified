@@ -1,5 +1,5 @@
 import './composer-test-helpers.mjs';
-import {openChatAdvancedPage} from './browser-chat-pages.mjs';
+import {openChatAdvancedPage,showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -15,7 +15,7 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const action=(name,args={},meta={})=>page.evaluate(([name,args,meta])=>window.amplifier.dispatch(name,args,meta),[name,args,meta]);
  const activity=(sid,status)=>page.request.post(url+'/fixture/activity',{data:{sessionId:sid,status}});
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const workspace=(await page.evaluate(()=>window.amplifier.getState())).workspaces[0];
  const first=await action('session.create',{workspace:workspace.path,title:'Primary writer'});
  const second=await action('session.create',{workspace:workspace.path,title:'Independent writer',select:false});
@@ -42,7 +42,7 @@ try{
  assert.equal((await read()).result.paths[0].path,'src/');
  // Another client sees only submitted declaration content.
  const other=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- await other.goto(url);await other.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await other.goto(url);await showFixtureConversation(other);await other.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const observed=await other.evaluate(sid=>window.amplifier.dispatch('coordination.context',{sessionId:sid}),first.sessionId);
  assert.ok(!JSON.stringify(observed).includes('PRIVATE-UNSENT-PLAN'));
  await other.close();

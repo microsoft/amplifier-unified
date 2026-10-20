@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import './composer-test-helpers.mjs';
 // Real host, production assets and filesystem; synthetic runtime only.
@@ -15,7 +16,7 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  assert.equal((await (await page.request.get(url+'/fixture')).json()).foundationCachePresent,false);
  await action('view.update',{patch:{panel:'settings',settingsExpanded:['workspaces']}});
  const settings=page.getByRole('region',{name:'Settings content'});
@@ -88,14 +89,14 @@ try{
  await page.locator('button[aria-label="Close panel"]:visible, button[aria-label="Close Settings"]:visible').click();await expect(settings).toHaveCount(0);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Retain this draft through starter setup');
  await action('attachment.add',{sessionId:null,name:'notes.txt',base64:'aGVsbG8='});
- await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
- await page.getByRole('button',{name:'New workspace',exact:true}).click();
- let form=page.getByRole('form',{name:'Create workspace'});
+ await page.getByRole('button',{name:'Choose project',exact:true}).click();
+ await page.getByRole('button',{name:'New project',exact:true}).click();
+ let form=page.getByRole('form',{name:'Create project'});
  await form.getByLabel('Workspace name',{exact:true}).fill('Team project');
  await expect(form.getByLabel('Start from…',{exact:true}).locator('option').filter({hasText:'My team starter'})).toHaveCount(1);
  await form.getByLabel('Start from…',{exact:true}).selectOption({label:'My team starter'});
  await page.screenshot({path:out+'/start-from.png'});
- await form.getByRole('button',{name:'Create workspace',exact:true}).click();
+ await form.getByRole('button',{name:'Create project',exact:true}).click();
  await expect(form).toHaveCount(0);await expect(composer).toHaveDraft('Retain this draft through starter setup');
  let current=await state();assert.equal(current.draftAttachments.length,1);assert.equal(current.sessions.length,0);
  const folder=current.view.newSessionDraft.workspace;

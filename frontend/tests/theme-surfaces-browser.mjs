@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -23,7 +24,7 @@ try{
  const style=selector=>page.locator(selector).evaluate(el=>{const s=getComputedStyle(el),r=el.getBoundingClientRect();return {left:r.left,right:r.right,bottom:r.bottom,width:r.width,gap:s.columnGap,tl:s.borderTopLeftRadius,tr:s.borderTopRightRadius,bl:s.borderBottomLeftRadius,br:s.borderBottomRightRadius,art:s.backgroundImage}});
  const chat='.a-conversation',canvas='#workspace-canvas',nav='.a-nav-rail';
  const assertFits=async()=>assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal page overflow');
- await page.goto(url);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
  const draft='Keep this unfinished thought.';await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);
  await page.getByRole('button',{name:'Open Website refresh brief in canvas',exact:true}).click();
  for(const [id,gap,radius] of [['aurora',10,22],['atelier',7,10],['graphite',4,4],['default',0,0]]){

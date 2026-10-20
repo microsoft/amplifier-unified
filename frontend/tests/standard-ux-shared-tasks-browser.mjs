@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
@@ -13,7 +14,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')writes.push(request.postDataJSON())});
  const inspect=()=>page.request.get(url+'/fixture').then(response=>response.json());
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private task board draft');const initial=await inspect();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private task board draft');const initial=await inspect();
  await openChatAdvancedPage(page,'Work & automation');await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  const assignment=page.locator('.a-assignment');await assignment.getByText('Shared tasks and assignment',{exact:true}).click();await assignment.getByRole('button',{name:'Start assignment',exact:true}).click();await expect(assignment).toContainText('Assignment active');
  await assignment.getByText('Shared task list',{exact:true}).click();const board=assignment.locator('.a-assignment-tasks');await expect(board).toContainText('No shared tasks yet.');

@@ -4,7 +4,7 @@ import json
 NAVIGATION_RESOURCES = frozenset({
     'chatNavigation', 'homeNavigation', 'pinnedNavigation', 'recentNavigation',
     'workspaceShortcuts', 'workspaceExplorer', 'sidebarSearch', 'sidebarWorkspace',
-    'sidebarRecent', 'sidebarPinned', 'workspaceOverview',
+    'sidebarRecent', 'sidebarPinned', 'workspaceOverview', 'workHome',
 })
 
 

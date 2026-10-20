@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Private canonical JSONL history, real browser/host; no external provider.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -23,7 +24,7 @@ try{
  const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
  let targetId,sourceId,detached,canonicalBeforeReactions;
  await probe('native-older-page',['messages.rail'],async()=>{
-  await page.goto(base);await expect(page.locator('[data-message-id]')).toHaveCount(100);sourceId=(await state()).selectedSessionId;
+  await page.goto(base);await showFixtureConversation(page,{navPinned:true});await expect(page.locator('[data-message-id]')).toHaveCount(100);sourceId=(await state()).selectedSessionId;
   await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this old-page draft');
   await click('Load earlier saved messages',page.getByRole('button',{name:'Load earlier conversation',exact:true}));
   const target=page.locator('[data-message-id]').filter({hasText:/^Saved message 150\b/});await expect(target).toHaveCount(1);targetId=await target.getAttribute('data-message-id');

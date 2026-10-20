@@ -3,6 +3,7 @@
 export function navigationResources(state){
  const resources=['pinnedNavigation','recentNavigation','workspaceShortcuts'];
  const view=state?.view||{},surface=view.workSurface||'chat';
+ if(surface==='home')resources.push('workHome');
  if(surface==='chats')resources.push('sidebarSearch');
  if(surface==='workspace'&&(view.workWorkspaceTab||'chats')==='chats')resources.push('sidebarWorkspace');
  if(surface==='workspaces')resources.push('workspaceExplorer');

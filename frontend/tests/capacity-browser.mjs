@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -11,7 +12,7 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  const post=async(path)=>{const response=await page.request.post(ready.url+path,{data:{}});assert.equal(response.status(),200,await response.text());return await response.json()};
- await page.goto(ready.url);await openChatAdvancedPage(page,'Model & tools');
+ await page.goto(ready.url);await showFixtureConversation(page);await openChatAdvancedPage(page,'Model & tools');
  const panel=page.getByRole('region',{name:'Task usage and budget'});
  await panel.getByRole('button',{name:'Inspect task usage'}).click();await expect(panel.getByRole('status')).toHaveText('Budget disabled · 0 recorded model calls');
  await panel.getByLabel('Enable cumulative task budget').check();await panel.getByLabel('Total token limit',{exact:true}).fill('100');await panel.getByRole('button',{name:'Save budget'}).click();await expect(panel.getByRole('status')).toHaveText('Budget active · 0 recorded model calls');

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -19,7 +20,7 @@ try{
  browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
  const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:headers}),errors=[],payloadReads=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/[?&]field=(request|response)/.test(r.url()))payloadReads.push(r.url())});
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  // Delegated calls after the assistant's pause remain grouped even though
  // the worker itself belongs to the earlier message gap.
  await page.setViewportSize({width:1280,height:1000});

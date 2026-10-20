@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -27,7 +28,7 @@ const workReady=()=>page.waitForFunction(()=>{
  return session?.workProjection?.status==='ready'&&!document.querySelector('[data-part="work-projection-status"]');
 });
 try{
- await page.goto(base);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(base);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await action('theme.reset');
  await action('session.create',{title:'Improve mobile navigation and Canvas'});
  await action('conversation.send',{text:'How can we make navigation work better on a phone?'});
