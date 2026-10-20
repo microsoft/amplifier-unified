@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -17,7 +18,7 @@ const browser=await chromium.launch({headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1300,height:1050},extraHTTPHeaders:headers}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base);
+ await page.goto(base);await showFixtureConversation(page);
  const turn=page.locator('[data-group-id="inspect@long-answer"]');
  // Wait for canonical groups before clicking; positional locators can retarget as history arrives.
  await expect.poll(async()=>{

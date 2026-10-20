@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public setup/recovery entry with private synthetic configuration prerequisites.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -13,7 +14,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const inspect=()=>page.request.get(url+'/fixture').then(response=>response.json());
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();
  // Establish a returning first-use setup state; all route transitions below
  // use the same controls available to an ordinary user.
  await act('view.update',{patch:{setupJourney:'welcome'}});

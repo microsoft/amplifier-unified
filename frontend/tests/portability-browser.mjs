@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -32,7 +33,7 @@ try{
  const state=async()=>{const response=await page.request.get(ready.url+'/fixture/portability-state');assert.equal(response.status(),200);return response.json();};
  const screenshot=async name=>{if(screenshots){await mkdir(screenshots,{recursive:true});await page.screenshot({path:join(screenshots,name)});}};
 
- await page.goto(ready.url);
+ await page.goto(ready.url);await showFixtureConversation(page);
  await openChatAdvancedPage(page,'Work & automation');
  const panel=page.getByRole('region',{name:'Move task between hosts'});
  const worktrees=page.getByRole('region',{name:'Task worktrees'});

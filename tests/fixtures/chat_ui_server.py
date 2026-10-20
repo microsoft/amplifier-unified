@@ -1,5 +1,5 @@
 """Isolated chat shell fixture. Never contacts a model provider."""
-import asyncio, copy
+import asyncio, copy, sys
 from pathlib import Path
 import tempfile
 from aiohttp import web
@@ -70,4 +70,6 @@ async def main(home):
 
 if __name__=='__main__':
  with tempfile.TemporaryDirectory(prefix='amplifier-chat-ui-') as tmp:
-  web.run_app(main(Path(tmp)),host='127.0.0.1',port=8958,print=None)
+  # aiohttp calls this only after the fixture itself successfully binds.
+  ready=(lambda _: print('PWA fixture bound http://127.0.0.1:8958',flush=True)) if '--print-ready' in sys.argv else None
+  web.run_app(main(Path(tmp)),host='127.0.0.1',port=8958,print=ready)

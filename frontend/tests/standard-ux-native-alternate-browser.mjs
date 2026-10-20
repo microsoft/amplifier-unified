@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Explicit native-history display is separate from authoritative saved web rows.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -16,7 +17,7 @@ try{
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:950},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>requests.push(new URL(request.url())));
  const inspect=async()=>{const response=await page.request.get(ready.url+'/api/fixture/nativeWindow');assert.equal(response.status(),200);return response.json()};
- await page.goto(ready.url);await expect(page.getByRole('button',{name:'Close panel',exact:true})).toBeVisible();await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});await expect(page.getByRole('button',{name:'Close panel',exact:true})).toBeVisible();await page.getByRole('button',{name:'Close panel',exact:true}).click();
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep private alternate-history draft');
  const original=await inspect(),messages=page.locator('article[data-message-id]');
  await expect.poll(()=>messages.evaluateAll(rows=>rows.map(row=>row.dataset.messageId))).toEqual(original.messageIds);

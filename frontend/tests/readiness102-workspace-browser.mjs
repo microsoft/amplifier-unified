@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -22,7 +23,7 @@ try{
  const url=vite.resolvedUrls.local[0];
  const dispatch=(p,action,args={})=>p.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const view=(p,patch)=>dispatch(p,'view.update',{patch});
- for(const p of [page,peer]){await p.goto(url);await p.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId)}
+ for(const p of [page,peer]){await p.goto(url);await showFixtureConversation(p,{navPinned:true});await p.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId)}
  const info=await page.evaluate(async()=>await(await fetch('/api/fixture/readiness')).json());
  for(const p of [page,peer]){await dispatch(p,'session.select',{id:info.sessionId});await view(p,{panel:null,workSurface:'chat'})}
  await dispatch(page,'session.markUnread',{id:info.sessionId});
@@ -42,7 +43,7 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),info.sessionId);
  await dispatch(page,'workspace.archive',{id:info.workspaceId});
  await view(page,{workSurface:'workspaces'});
- const filter=page.getByRole('combobox',{name:'Workspace archive filter'});
+ const filter=page.getByRole('combobox',{name:'Project archive filter'});
  await filter.selectOption('archived');
  await page.getByRole('searchbox',{name:'Filter workspaces'}).fill('Cleanup demo');
  await expect(page.locator('.a-work-browser .a-workspace-row').filter({hasText:'Cleanup demo'})).toBeVisible();

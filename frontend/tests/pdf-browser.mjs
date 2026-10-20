@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Real app routes and PDF.js, synthetic files only. Run inside the project DTU.
 import {spawn,execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -23,7 +24,7 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const page=await browser.newPage({viewport:{width:1500,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await action('session.create',{});
  const workspace=await page.evaluate(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).workspace);

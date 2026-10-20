@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Actual Work retry while its owner changes; independent saved-usage oracle.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -15,7 +16,7 @@ try{
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
  let fail=true,hold=false,heldReady,finished;const arrival=new Promise(resolve=>heldReady=resolve),resume=new Promise(resolve=>release=resolve),delivered=new Promise(resolve=>finished=resolve);let attempted=0;
  await page.route('**/api/conversation/detail?**',async route=>{const url=new URL(route.request().url());if(url.searchParams.get('field')!=='output')return route.continue();attempted++;if(fail){fail=false;return route.fulfill({status:503,json:{error:'Owned initial result unavailable'}})}if(hold){hold=false;held=await route.fetch();heldReady();await resume;try{await route.fulfill({response:held})}catch(error){if(!/closed|aborted|canceled/i.test(error.message))throw error}finally{finished()}return}return route.continue()});
- await page.goto(base);await expect(page.getByRole('textbox',{name:'Message Amplifier',exact:true})).toBeEditable();
+ await page.goto(base);await showFixtureConversation(page,{navPinned:true});await expect(page.getByRole('textbox',{name:'Message Amplifier',exact:true})).toBeEditable();
  for(const button of await page.locator('button.a-execution-turn-line').all())await button.click();
  const tool=page.locator('[data-group-id="inspect@long-answer"] [data-kind="tool"]');await tool.locator('button.a-execution-action-line').click();await expect(tool.getByRole('button',{name:'Retry result',exact:true})).toBeVisible();
  hold=true;await tool.getByRole('button',{name:'Retry result',exact:true}).click();await arrival;assert.equal(attempted,2);

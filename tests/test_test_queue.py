@@ -109,12 +109,11 @@ async def test_expiry_while_waiting_admission_does_not_start(app, queue, backend
     assert record(queue, app)['job']['status'] not in PENDING and not backend
 
 
-async def test_revoked_authority_does_not_kill_queue(app, queue, backend):
+async def test_stop_cancels_owned_check_without_killing_queue(app, queue, backend):
     source = app.state['sessions'][0]
-    authority = await grant(app, ['test_environments'], ['session'])
     args = {**scope(app), 'requestId': 'check', 'profileId': environments.PROFILE, 'command': 'true', 'notify': False}
     await agent(app, source, 'workspace.tests.submit', args, 'agent-submit')
-    await revoke(app, authority)
+    await app.dispatch('conversation.stop', {'sessionId': source['id']})
     await drive(queue)
     assert record(queue, app)['job']['status'] == 'cancelled' and not backend
     await submit(app, 'user-check')
@@ -362,7 +361,8 @@ async def test_known_preservation_failure_uses_separate_cleanup_without_repeatin
         if action in {'remove','finishCleanup'}:
             backend.append((action, dict(args)))
             if action == 'remove':
-                return {'ok': False, 'status': 'stopped', 'effectAdmitted': False, 'phase': 'verifying'}
+                return {'ok': False, 'status': 'stopped', 'effectAdmitted': False,
+                        'phase': 'verifying', 'code': 'archive_verification_failed'}
             return {'ok': True, 'status': 'removed'}
         return original(config, home, row, action, args)
     monkeypatch.setattr(environments, 'invoke', invoke)
@@ -378,13 +378,18 @@ async def test_known_preservation_failure_uses_separate_cleanup_without_repeatin
     assert record(queue, app, 'next')['job']['status'] == 'passed'
 
 
-async def test_owner_recheck_failure_does_not_admit_cleanup_continuation(app, queue, backend, monkeypatch):
+@pytest.mark.parametrize('phase,code', [
+    ('rechecking', 'ownership_conflict'), ('verifying', 'owner_unverified'),
+    ('verifying', 'retention_storage'), ('verifying', 'unrecognized_failure'),
+    ('verifying', None),
+])
+async def test_owner_recheck_failure_does_not_admit_cleanup_continuation(app, queue, backend, monkeypatch, phase, code):
     original = environments.invoke
     def invoke(config, home, row, action, args):
         if action == 'remove':
             backend.append((action, dict(args)))
             return {'ok': False, 'status': 'unknown', 'effectAdmitted': False,
-                    'phase': 'rechecking', 'code': 'ownership_conflict'}
+                    'phase': phase, 'code': code}
         return original(config, home, row, action, args)
     monkeypatch.setattr(environments, 'invoke', invoke)
     await submit(app)

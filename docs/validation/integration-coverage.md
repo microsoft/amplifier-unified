@@ -127,6 +127,54 @@ For installed-PWA acceptance, use `integration_clients.py prepare` and
 interpreter/environment to `integration_checks.py run --lane browser-installed`.
 A headless substitute does not satisfy this owner.
 
+The existing installed-wheel adapter also provides two **separate opt-in**
+hosted stages. They do not join the automatic matrix or change IC-13/desktop
+defaults. On an explicitly reviewed candidate, select **one**:
+
+```sh
+gh workflow run integration-checks.yml --repo microsoft/amplifier-unified \
+  --ref REVIEWED_CANDIDATE_REF -f root_guest=true
+# Or, separately:
+gh workflow run integration-checks.yml --repo microsoft/amplifier-unified \
+  --ref REVIEWED_CANDIDATE_REF -f installed_pwa=true
+```
+
+The reusable/direct `default-installed.yml` accepts the same flags; the fixed
+adapter arguments are `--root-guest` and `--installed-pwa`. Conflicting stages
+fail before preparation. This is a route definition, **not a qualification
+result or permission to dispatch**.
+
+The root owner runs all eight unchanged `test_durable_guest_jobs.py` cases in
+an offline, read-only, private-PID container. Only SETUID, SETGID and KILL are
+added after dropping all capabilities. The Python 3.13 supervisor remains
+root; workloads use actual `/usr/bin/python3` as UID 65534. Temporary ancestors
+are traversable, but supervisor controls and receipts stay private. Preflight
+must demonstrate the UID transition, `/proc` identity reads, cross-UID
+termination and denied workload access to private control storage. This never
+runs pytest as root on the host.
+
+The existing `browser-installed` owner retains its single unchanged behavior
+case. Its adapter stage uses an unprivileged container, a private Xvfb display,
+and Python Playwright/Chromium matched to the frontend lock. Browser preparation
+is reused without running `uv sync` or replacing the noneditable candidate
+installation. The real headed CDP install, login, launch, relaunch and uninstall
+remain required; overlay assertions stay conditional on the browser's reported
+overlay. A failed uninstall still closes the browser context and still fails.
+Only the bounded synthetic `installed-pwa.png` and `installed-pwa.json` are copied
+from pytest temporary storage before teardown, never the profile, cookies or
+app state. This is Linux headed-browser evidence, not physical-device, macOS,
+native-control or dragging acceptance.
+
+Both stages require exactly eight or one unique named JUnit cases, respectively,
+with no extras, skips, failures or errors; nonzero exit or unresolved cleanup
+cannot pass. They retain the existing two-CPU, 4-GiB, 256-PID and workflow limits,
+one running owned container at a time, exact source/wheel/dependency identity
+before and after, and live-tmpfs evidence transfer before removal. The new
+stages additionally attest wheel files, system prerequisites and browser files.
+Missing binaries or unsupported display/CDP behavior fail visibly; do not
+substitute headless execution or widen privileges. Shared base-image cache is
+retained and is not counted as owned teardown.
+
 For profiling, prepare a native environment with
 `integration_native.py prepare --profiling-source file:///clean/library ...` and run
 `integration_checks.py run --lane profiling` in that environment. The library
@@ -198,6 +246,51 @@ log and JUnit alongside the check result. Missing prerequisites, module skips,
 per-test skips or absent selectors mean **unqualified**, even if ordinary pytest
 exits zero. The isolated installed probes reject checkout/editable imports;
 keep their original guards rather than bypassing them to fit the native lane.
+
+### Installed desktop safety continuation
+
+The `default-desktop-safety` manual owner covers the whole
+`tests/test_default_desktop_safety.py` module, including its optional collection
+prerequisites. It uses the existing installed-default adapter with
+`--desktop-safety`, **not** the `default-installed` IC-13 command or a generic
+pytest lane. Manual planning includes this owner for affected paths; automatic
+planning does not launch it.
+
+On the exact reviewed candidate ref, dispatch the existing integration bridge:
+
+```sh
+gh workflow run integration-checks.yml --repo microsoft/amplifier-unified \
+  --ref REVIEWED_CANDIDATE_REF \
+  -f default_installed=true -f desktop_safety=true
+```
+
+The reusable/direct `default-installed.yml` workflow accepts the same
+`desktop_safety=true` input. Its hosted invocation supplies the adapter's required
+arguments:
+
+```sh
+python scripts/qualify_default_installed.py run --desktop-safety \
+  --loop-source "$GITHUB_WORKSPACE/.ci/default-loop" \
+  --work "$RUNNER_TEMP/default-installed-inputs" \
+  --output "$RUNNER_TEMP/default-installed-evidence"
+```
+
+The private loop checkout must match the committed pin and must not carry
+credentials into the guest. The adapter requires a GitHub-hosted Linux runner;
+this command does not authorize using a live installation or a borrowed runtime.
+
+Require separate `desktop-preserved-22.xml` and `desktop-remote-defaults.xml`
+results: all **22 preserved cases plus 3 remote-default cases** must execute
+without failures, errors, skips or missing/duplicate identities. The adapter
+checks those fixed counts in `desktop-safety-result.json`; generic module
+presence in JUnit is insufficient. Adapter helpers are reported separately.
+Retain installed wheel/source/dependency identities, unchanged before/after
+attestations, both group receipts and confirmed owned-resource cleanup.
+
+This stage reports `baselineExecuted: false`. It neither runs nor inflates the
+separate IC-13 baseline's four modules and 12 cases. Registration is not
+acceptance, physical-desktop or SSH-transport qualification, or permission to
+enable desktop writes.
 
 ### Installed local status owner, October 17
 

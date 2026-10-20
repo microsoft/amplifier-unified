@@ -76,6 +76,20 @@ class Runtime:
         await self.begin(session, input_id, emit)
         return {"accepted": True, "inputId": input_id, "completed": False}
 
+    async def steer(self, session, text, input_id, emit):
+        from amplifier_web.message_delivery import find_message
+        message = find_message(session, input_id)
+        target = message['steering']['generationId']
+        context = self.contexts[session['id']]
+        if not context['active'] or target != context['generationId']:
+            return {'accepted': False, 'reason': 'The scripted generation ended.'}
+        self.sent.append({'sessionId':session['id'], 'text':text, 'inputId':input_id,
+                          'kind':'human-steer', 'allowNextTurn':message['steering']['allowNextTurn']})
+        context['inputIds'].append(input_id)
+        await self.event('runtime.steering', {'sessionId':session['id'], 'event':'steering.applied',
+            'input_id':input_id, 'target_generation_id':target}, emit)
+        return {'accepted': True, 'disposition':'applied'}
+
     async def collaboration_approval(self, sid, prompt, identity):
         self.approvals.append({"sessionId": sid, "id": identity, "prompt": prompt})
         raise AssertionError("Fresh scripted collaboration must not request approval.")

@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,writeFile,unlink} from 'node:fs/promises';
@@ -24,6 +25,7 @@ try{
  const uiActions=[];
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')uiActions.push(request.postDataJSON())});
  await page.goto(url);
+ await showFixtureConversation(page);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.fill('Preserve this unsent draft');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));

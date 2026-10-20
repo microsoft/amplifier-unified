@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -12,7 +13,7 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(`http://127.0.0.1:${port}`);
+ await page.goto(`http://127.0.0.1:${port}`);await showFixtureConversation(page,{navPinned:true});
  const draft=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await draft.fill('Keep this unfinished draft.');
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);

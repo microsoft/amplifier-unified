@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Focused installed-wheel pin retention acceptance; synthetic history, no inference.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -23,7 +24,7 @@ try{
  const pinned=page.locator('[data-shell-instance=chats] [data-sidebar-section=pinned]');
  const ids=region=>region.locator('.a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
  const projection=()=>page.evaluate(()=>window.amplifier.getShellState()?.snapshots?.chats?.recentNavigation);
- await page.goto(boot.url);await expect(recent.locator('.a-nav-chat[data-session-id]')).toHaveCount(20);
+ await page.goto(boot.url);await showFixtureConversation(page,{navPinned:true});await expect(recent.locator('.a-nav-chat[data-session-id]')).toHaveCount(20);
  const metrics=async()=>{const response=await page.request.get(boot.url+'/fixture/metrics');assert.ok(response.ok());return response.json()};
  const initial=await metrics(),clientId=(await state()).client.id;
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});

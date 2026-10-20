@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -79,7 +80,7 @@ try{
   await expect.poll(async()=>{observed=await shell();return (observed?.resolvedInstances||[]).filter(row=>['builtin.chats','builtin.workspaces'].includes(row.package)).map(row=>{const snapshot=observed.snapshots[row.id];return Object.keys(snapshot?.navigationResourcePending||{}).length?[]:snapshot?.navigationResources})}).toEqual([resources,resources]);
   shape(observed,resources);checks.push({resources});
  };
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await expect(composer).toBeVisible();await waitCoverage([]);
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await expect(composer).toBeVisible();await waitCoverage([]);
  const home=path.dirname((await state()).workspaceDefaults.root),workspaces=[],chats=[];fixtureHome=home;
  for(const name of ['Scoped A','Scoped B']){
   const folder=path.join(home,name);await mkdir(folder);await writeFile(path.join(folder,name+'.txt'),'Synthetic file');
@@ -212,7 +213,7 @@ try{
  await body.getByRole('searchbox',{name:'Search chats',exact:true}).fill('');
  await waitCoverage(['sidebarSearch']);
  checks.push({coldFailureIsUnavailableNotLoadingOrEmpty:true});
- await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'Your workspaces',exact:true})).toBeVisible();
+ await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'Your projects',exact:true})).toBeVisible();
  await act('session.select',{id:chats[0]});await waitCoverage([]);await expect(composer).toHaveDraft('Keep this unsent scoped-navigation draft');
  assert.equal(await page.evaluate(()=>window.scopedDocument===document.querySelector('#amp-one')&&window.scopedFrame===document.querySelector('.a-canvas-html')),true);
  await expect(page.frameLocator('.a-canvas-html').getByRole('textbox')).toHaveValue('preserved canvas input');

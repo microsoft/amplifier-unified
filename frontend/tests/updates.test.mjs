@@ -163,6 +163,23 @@ test('prepared app failure is visibly an error and allows the existing install a
  await renderAct(async()=>root.unmount());
 });
 
+test('queued release refresh is read-only and only available before an app handoff',async()=>{
+ const queued={pendingApp:{...application,status:'update',latest:'v0.6.4'},phase:'app-staged'};
+ for(const patch of [{},{applicationCheckPending:true},{pendingApp:{...queued.pendingApp,featureSelection:{requestId:'chosen'}}},{pendingRestart:{version:'0.6.4'}},{pendingReplacement:{attemptId:'unknown'}},{phase:'staging'},{pendingRelease:'components'},{pendingSmartTools:[{id:'tool'}]}]){
+  const calls=[];let root;
+  try{
+   await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state({...queued,...patch}),act:(action,args)=>calls.push({action,args})}))});
+   const check=root.root.findByProps({'data-action':'updates.check'});
+   assert.equal(check.props.disabled,Object.keys(patch).length>0,JSON.stringify(patch));
+   assert.deepEqual(calls,[]);
+   if(!check.props.disabled){assert.match(JSON.stringify(root.toJSON()),/Check for newer release/);await renderAct(async()=>check.props.onClick());assert.deepEqual(calls,[{action:'updates.check',args:undefined}])}
+  }finally{await renderAct(async()=>root.unmount())}
+ }
+ const offline=render({...queued,applicationCheckWarning:'Could not check for a newer release. The prepared update is still available.'});
+ assert.match(offline,/prepared update is still available/);assert.match(offline,/Waiting for your work to finish/);
+ assert.doesNotMatch(offline,/Updates need attention/);
+});
+
 test('a rejected restart keeps its work gate but displays actionable failure instead of restarting',()=>{
  const html=render({phase:'activating',pendingRestart:{version:'0.6.4',requestStatus:'rejected'},
   error:'The app installed, but the managed restart request was rejected. Run amplifier-unified service restart.',

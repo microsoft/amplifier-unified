@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 // Uses the real chat UI and isolated runtime. No model or existing user data.
 // Vite serves source directly, so this regression does not rebuild static assets.
@@ -58,7 +59,7 @@ try{
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  const requests=[];page.on('request',request=>requests.push(new URL(request.url()).pathname));
- await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:true});await page.waitForSelector('#amp-one');
 
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const calls=[];page.on('request',request=>{if(request.url().includes('/api/actions')){try{calls.push(request.postDataJSON())}catch{}}});

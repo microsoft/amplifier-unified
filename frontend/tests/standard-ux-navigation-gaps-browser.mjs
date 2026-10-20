@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -23,7 +24,7 @@ try{
  const act=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const click=(name,target)=>evidence.action(name,()=>target.click());
  const probe=async(id,flows,run)=>{const result=await evidence.probe(id,flows,async()=>{await run();return await evidence.snapshot(page,id,'#amp-one')});if(result.status!=='passed')throw Error('Stopped after '+id)};
- await page.goto(base);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();const initial=await info(),a=initial.initialSession,b=initial.quietSession;
+ await page.goto(base);await showFixtureConversation(page,{navPinned:true});await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();const initial=await info(),a=initial.initialSession,b=initial.quietSession;
  const section=id=>page.locator(`[data-sidebar-section="${id}"]`),toggle=id=>section(id).locator('.a-sidebar-section-heading>button').first();
  const pinned=section('pinned'),composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await probe('section-isolation-and-empty-pins',['nav.sections'],async()=>{
@@ -60,7 +61,7 @@ try{
   await click('Return to exact Alpha',choose(a));await agree(a,'Alpha 201','Saved response for alpha-201');await expect(composer).toHaveDraft('Alpha private draft');
  });
  await probe('workspace-hierarchy-and-page-scope',['nav.workspace-browse'],async()=>{
-  await click('Open All workspaces',page.getByRole('button',{name:'All workspaces',exact:true}));
+  await click('Open All workspaces',page.getByRole('button',{name:'All projects',exact:true}));
   const explorer=page.locator('.a-work-browser .a-workspace-explorer'),filter=explorer.getByRole('searchbox',{name:'Filter workspaces',exact:true});
   await filter.fill('*/paged/team-*');
   // The old unfiltered page also has100 rows and two pages. Wait for the exact

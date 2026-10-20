@@ -18,7 +18,7 @@ try{
   if(body.action==='configuration.defaults'&&++reads===1)await held;
   await route.continue();
  });
- await page.goto(url);
+ await page.goto(url);await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();
  const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true});
  await expect.poll(()=>reads).toBe(1);
  await expect(model).toContainText('Loading model');

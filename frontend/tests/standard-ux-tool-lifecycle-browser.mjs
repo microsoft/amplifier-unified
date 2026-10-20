@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public standard Installed → setup → local transport, dependency refusal and removal.
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
@@ -15,7 +16,7 @@ try{
  const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Tool fixture timeout')),20000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',d=>{text+=d;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page.on('pageerror',e=>errors.push(e.message));
  const inspect=async()=>{const r=await page.request.get(ready.url+'/fixture/tool-lifecycle');assert.equal(r.status(),200);return r.json()};
- await page.goto(ready.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private local-tool draft');const before=await inspect();
+ await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private local-tool draft');const before=await inspect();
  await openSettingsPage(page,'smart-tools');const tools=page.locator('[data-part="smart-tools-settings"][data-simple="true"]');await expect(tools).toBeVisible();
  const installed=()=>tools.getByRole('region',{name:'Installed tools',exact:true}).getByRole('button',{name:/^Owned local proof Installed/});
  await installed().click();await tools.getByRole('button',{name:'Open setup instructions',exact:true}).click();await tools.getByRole('button',{name:'Configure MCP connection',exact:true}).click();

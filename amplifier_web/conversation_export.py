@@ -193,6 +193,40 @@ def _label(value):
     return re.sub(r'[\r\n]+', ' ', str(value)).replace('`', '\\`')
 
 
+def chat_reference_lines(references, message, *, include_ids=False):
+    """Inert labels in source position; no target contents or executable URLs."""
+    if message.get('role') != 'assistant' or message.get('observation'):
+        return []
+    import html
+    def plain(value):
+        text = html.escape(re.sub(r'[\r\n]+', ' ', str(value)), quote=False)
+        return re.sub(r'([\\`*_{}\[\]()#+.!~:|>-])', r'\\\1', text)
+    result = []
+    for item in references:
+        if message.get('id') not in item['messageIds']:
+            continue
+        # Export/copy may read after asynchronous qualification. Match the
+        # frozen row's exact bytes/index as well, never merely its old UUID.
+        import hashlib
+        expected = item['messageHashes'].get(message.get('id'))
+        if expected is not None:
+            if hashlib.sha256(message.get('text', '').encode()).hexdigest() != expected:
+                continue
+        elif item['canonicalMessageId'] and type(message.get('nativeIndex')) is int:
+            from .automatic_history import display_identity
+            if display_identity(item['sourceScope'], message['nativeIndex'], 'assistant',
+                                message.get('text', '')) != item['canonicalMessageId']:
+                continue
+        else:
+            continue
+        text = 'Chat reference: ' + plain(item['title']) + ' — ' + plain(item['workspace'])
+        text += ' (host-local reference; ' + ('unavailable' if not item['available'] else 'open in Unified') + ')'
+        if include_ids:
+            text += ' — ID: ' + plain(item['targetSessionId'])
+        result.append(text)
+    return result
+
+
 def _timestamp(value):
     from datetime import datetime, timezone
     if type(value) not in (int, float):
@@ -228,7 +262,7 @@ def _execution_summaries(session, selected_ids, scope):
     return result
 
 
-def snapshot(home, session, artifacts, options=None, *, resolver=None, message_rows=None):
+def snapshot(home, session, artifacts, options=None, *, resolver=None, message_rows=None, chat_references=()):
     options = options or {}
     rows = messages(home, session) if message_rows is None else message_rows
     scope = options.get('scope', 'all')
@@ -287,6 +321,7 @@ def snapshot(home, session, artifacts, options=None, *, resolver=None, message_r
         if options.get('includeTimestamps') and (stamp := _timestamp(row.get('createdAt'))):
             blocks.append('Recorded: ' + stamp)
         blocks.append(row.get('text', ''))
+        blocks.extend(chat_reference_lines(chat_references, row, include_ids=reference_ids))
         blocks.extend(execution.get(row.get('id'), []))
         for item in row.get('attachments', []):
             if isinstance(item, dict):

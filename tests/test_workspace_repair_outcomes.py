@@ -127,8 +127,14 @@ async def test_saved_wait_reserves_outcome_slot_and_old_stop_releases_reservatio
     source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
     app.collaboration.require_inbox_slot(source['id'])
     await finish(app, target, 'result-request')
-    continuation = app.collaboration.receipt(app.collaboration.receipt('result-request')['subscription']['continuationId'])
-    assert app.collaboration.guard(continuation) is not None
+    retained = app.collaboration.receipt('result-request')
+    identity = retained['subscription']['continuationId']
+    assert retained['subscription']['status'] == 'suppressed'
+    assert retained['subscription']['open'] is False
+    assert retained['response']['status'] == 'sealed'
+    assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone()
+    assert not any(message.get('inputId') == identity for message in source['messages'])
+    app.collaboration.require_inbox_slot(source['id'])
 
 
 @pytest.mark.parametrize('assignment', [False, True])

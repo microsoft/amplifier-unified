@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Packaged UI, real HTTP/state stream and synthetic discovery; no disabled effects.
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
@@ -32,7 +33,7 @@ try{
  page.on('request',r=>{if(r.url().includes('/api/')&&!r.url().includes('/api/events')){pending.add(r);lastRequest=performance.now()}});
  const finished=r=>{if(pending.delete(r))lastRequest=performance.now()};
  page.on('requestfinished',finished);page.on('requestfailed',finished);
- await page.goto(meta.url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ await page.goto(meta.url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  const action=(name,args={})=>page.evaluate(([n,a])=>window.amplifier.dispatch(n,a),[name,args]);
  const settle=async()=>{await expect.poll(async()=>{const m=await api('/fixture/demand');return m.pending+m.catalogPending+pending.size+(performance.now()-lastRequest<500?1:0)},{timeout:30000}).toBe(0)};
  await settle();
@@ -105,7 +106,7 @@ try{
  // where creating a second incognito context can terminate Chromium.
  peerBrowser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
  const peer=await peerBrowser.newPage({extraHTTPHeaders:{Authorization:headers.Authorization}});
- await peer.goto(meta.url);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await peer.goto(meta.url);await showFixtureConversation(peer);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await expect(peer.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('');await peerBrowser.close();peerBrowser=null;
  // Reconnect uses a fresh full baseline without replay or draft loss.
  await settle();const beforeReconnect=await api('/fixture/demand');

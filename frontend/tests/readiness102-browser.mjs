@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
@@ -18,7 +19,7 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.UNIFIED_BROWSER_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
  // Simulate the Mac modifier contract in Chromium; native PWA acceptance is separate.
  await page.evaluate(()=>Object.defineProperty(navigator,'platform',{configurable:true,value:'MacIntel'}));
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:null,draft:'Keep my draft'}}));

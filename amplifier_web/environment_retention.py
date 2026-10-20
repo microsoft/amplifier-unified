@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import tarfile
+import tempfile
 from pathlib import Path
 
 INPUT_LIMIT = 8 * 1024 ** 3
@@ -245,8 +246,32 @@ def verify_artifacts(archives):
     return result
 
 
-def verify_retention(root, archives, mode='files'):
+def publish_record(path, value):
+    """Publish one complete private JSON record; never replace earlier evidence."""
+    path = Path(path)
+    descriptor, temporary = tempfile.mkstemp(prefix='.retention-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)
+        Path(temporary).unlink()
+        for directory in (path.parent, path.parent.parent):
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def verify_retention(root, archives, mode='files', *, publish=True):
     """Persist byte-verified selection receipts; this never scans the live guest."""
+    if not publish:
+        # Observation must not change caller-owned records or existing receipts.
+        archives = copy.deepcopy(archives)
     if mode in {'files', 'archive-only'} and (len(archives) != 2 or {row.get('source') for row in archives} != {'/workspace', '/artifacts'}):
         raise ValueError('Both distinct selected filesystems must be retained.')
     if len({row.get('destination') for row in archives}) != len(archives):
@@ -265,11 +290,11 @@ def verify_retention(root, archives, mode='files'):
     result = {'archiveBytes': total, 'sourceBytes': source_size, 'totalBytes': total + source_size,
               'format': 'tar', 'policy': mode, 'verified': True,
               'selection': ['/workspace', '/artifacts'] if mode in {'files', 'archive-only'} else ['/'],
-              'archiveOnly': mode == 'archive-only',
               'sourceSha256': source_hash}
-    directory = Path(archives[0]['destination']).parent
-    with (directory / 'retention.json').open('x') as output:
-        json.dump(result, output)
-        output.flush()
-        os.fsync(output.fileno())
+    # Existing ordinary receipts have no archiveOnly field. Passive verification
+    # must preserve that exact historical shape without rewriting old evidence.
+    if mode == 'archive-only':
+        result['archiveOnly'] = True
+    if publish:
+        publish_record(Path(archives[0]['destination']).parent / 'retention.json', result)
     return result

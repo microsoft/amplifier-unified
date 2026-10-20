@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Exact sidebar reading state while selection demand is deliberately held.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -24,7 +25,7 @@ try{
  const rows=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"] .a-nav-chat[data-session-id]');
  const older=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"]').getByRole('button',{name:'Load older chats',exact:true});
  const rail=page.locator('.a-nav-content');
- await page.goto(vite.resolvedUrls.local[0]);await expect(rows).toHaveCount(20);
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:true});await expect(rows).toHaveCount(20);
  await older.click();await expect(rows).toHaveCount(40);await expect(page.getByText(/Recent changed during the read/)).toHaveCount(0);
  // Put an existing row near the middle. Select it without scrolling the rail.
  await rows.nth(23).scrollIntoViewIfNeeded();

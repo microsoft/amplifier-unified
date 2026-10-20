@@ -22,10 +22,10 @@ try{
  const picker=page.getByRole('combobox',{name:'Workspace',exact:true});await expect(picker).toBeVisible();
  await composer.fill('Keep this draft through workspace setup');
  await action('attachment.add',{sessionId:null,name:'notes.txt',base64:'aGVsbG8='});
- await picker.selectOption(':create:');let form=page.getByRole('form',{name:'Create workspace'});
+ await picker.selectOption(':create:');let form=page.getByRole('form',{name:'Create project'});
  await form.getByLabel('Workspace name',{exact:true}).fill('Launch plan');
  await page.screenshot({path:out+'/name-first.png'});
- await form.getByRole('button',{name:'Create workspace',exact:true}).click();
+ await form.getByRole('button',{name:'Create project',exact:true}).click();
  await expect(form).toHaveCount(0);await expect(composer).toHaveDraft('Keep this draft through workspace setup');
  let current=await state();assert.equal(current.sessions.length,0);assert.equal(current.draftAttachments.length,1);assert.equal(current.view.newSessionDraft.workspace,path.join(current.workspaceDefaults.root,'launch-plan'));
  assert.equal(current.view.newSessionDraft.location.kind,'workspace');
@@ -41,7 +41,7 @@ try{
  await picker.selectOption(':attach:');form=page.getByRole('form',{name:'Use existing folder'});await form.getByRole('textbox',{name:/Folder on/}).fill(existing);await form.getByRole('button',{name:'Use folder',exact:true}).click();
  await expect(form).toHaveCount(0);await expect(composer).toHaveDraft('Keep this draft through workspace setup');
  assert.equal((await state()).view.newSessionDraft.workspace,existing);assert.equal(await readFile(path.join(existing,'keep.txt'),'utf8'),'Do not replace');
- await picker.selectOption(':create:');form=page.getByRole('form',{name:'Create workspace'});await form.getByLabel('Workspace name',{exact:true}).fill('Launch plan');await form.getByRole('button',{name:'Create workspace',exact:true}).click();
+ await picker.selectOption(':create:');form=page.getByRole('form',{name:'Create project'});await form.getByLabel('Workspace name',{exact:true}).fill('Launch plan');await form.getByRole('button',{name:'Create project',exact:true}).click();
  await expect(form.getByRole('button',{name:'Open workspace',exact:true})).toBeVisible();await form.getByRole('button',{name:'Open workspace',exact:true}).click();
  await expect(composer).toHaveDraft('Keep this draft through workspace setup');
  for(const scheme of ['light','dark']){await action('view.update',{patch:{scheme,navPinned:false,navExpanded:false}});for(const width of [320,390]){await page.setViewportSize({width,height:844});await picker.selectOption(':attach:');await expect(page.getByRole('form',{name:'Use existing folder'})).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`No horizontal clipping at ${width}`);await page.screenshot({path:out+`/attach-${scheme}-${width}.png`});await page.getByRole('button',{name:'Cancel workspace setup'}).click()}}
@@ -49,7 +49,7 @@ try{
  await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByRole('button',{name:'Workspaces',exact:true}).click();
  const root=path.join(home,'my-workspaces');await page.getByRole('textbox',{name:/Default workspace folder/}).fill(root);await page.getByRole('button',{name:'Save',exact:true}).click();await expect(page.getByRole('status').filter({hasText:'Saved. Existing workspaces'})).toBeVisible();
  await page.screenshot({path:out+'/workspace-settings.png'});await page.getByRole('button',{name:'Close panel',exact:true}).click();
- await expect(composer).toHaveDraft('Keep this draft through workspace setup');await picker.selectOption(':create:');form=page.getByRole('form',{name:'Create workspace'});await form.getByLabel('Workspace name',{exact:true}).fill('Research');await form.getByRole('button',{name:'Create workspace',exact:true}).click();await expect(form).toHaveCount(0);assert.equal((await state()).view.newSessionDraft.workspace,path.join(root,'research'));
+ await expect(composer).toHaveDraft('Keep this draft through workspace setup');await picker.selectOption(':create:');form=page.getByRole('form',{name:'Create project'});await form.getByLabel('Workspace name',{exact:true}).fill('Research');await form.getByRole('button',{name:'Create project',exact:true}).click();await expect(form).toHaveCount(0);assert.equal((await state()).view.newSessionDraft.workspace,path.join(root,'research'));
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();current=await state();assert.equal(current.sessions.length,1);assert.equal(current.sessions[0].workspace,path.join(root,'research'));assert.equal(current.sessions[0].messages[0].attachments[0].name,'notes.txt');
  await page.screenshot({path:out+'/sidebar.png'});
  // Default navigation retains direct ordering and never changes the active chat

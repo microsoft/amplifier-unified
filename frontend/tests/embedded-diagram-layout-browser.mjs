@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Production UI and renderers; isolated synthetic host, no provider calls.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -11,7 +12,7 @@ try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
  const page=await browser.newPage({viewport:{width:1450,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
- page.on('pageerror',error=>errors.push(error.message));await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ page.on('pageerror',error=>errors.push(error.message));await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await action('session.create');await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:640}});
  const mermaid='flowchart TD\n'+Array.from({length:35},(_,i)=>`N${i}[Step ${i}] --> N${i+1}[Step ${i+1}]`).join('\n');
