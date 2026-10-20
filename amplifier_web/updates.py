@@ -745,9 +745,9 @@ class UpdateManager:
                 rows = await self.inventory_sources(indexed=True)
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
                 remote_tasks = {}
-                from .update_checks import git_revision
-                async def remote(url, ref):
-                    return await git_revision(url, ref, process)
+                from .update_checks import git_revision, ref_policy
+                async def remote(url, ref, prove_kind):
+                    return await ref_policy(url, ref, process) if prove_kind else await git_revision(url, ref, process)
                 async def check_row(row):
                     from .managed_runner_backend import backend, skip_key
                     if row.get('runnerKind'):
@@ -766,12 +766,36 @@ class UpdateManager:
                         except (ValueError, RuntimeError, TimeoutError):
                             row['status'] = 'check_failed'
                         return
-                    key = (row['url'],row['ref'])
+                    origin = row.get('policyOrigin') or {}
+                    typed_policy = (origin.get('kind') in {'prepared-manifest', 'selected-declaration',
+                                                          'verified-cache-branch', 'checked-source'}
+                                    and all(origin.get(key, '') == row.get(key, '')
+                                            for key in ('url', 'ref', 'subdirectory'))
+                                    and origin.get('revision') == row.get('current'))
+                    # PEP 610 requested_revision has no ref kind. Legacy/raw
+                    # installed Git rows need the same proof as cache URIs;
+                    # retain an exact already-qualified authored policy.
+                    prove_kind = bool(row.get('cacheManaged') or row.get('sharedSource')
+                        or row.get('kind') == 'bundle / module'
+                        or row.get('kind') == 'runtime dependency' and not typed_policy)
+                    key = (row['url'], row['ref'], prove_kind)
                     task = remote_tasks.setdefault(key, None)
                     if task is None:
                         task = remote_tasks[key] = asyncio.create_task(remote(*key))
                     try:
-                        row['latest'] = await task
+                        result = await task
+                        if prove_kind:
+                            if result['kind'] == 'unresolved':
+                                row.update(status='check_failed', detail='This source reference could not be verified. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            if result['kind'] != 'branch':
+                                row.update(status='pinned', eligible=False,
+                                    detail='This source reference is not an unambiguous branch. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            result = result['revision']
+                        row['latest'] = result
                         row['status'] = 'update' if row['latest'] != row.get('current') else 'current'
                         if (row.get('kind') == 'smart tool' and row['status'] == 'update'
                                 and state.get('skippedSmartTools', {}).get(skip_key(row)) == row['latest']):
@@ -1100,6 +1124,20 @@ class UpdateManager:
                     if not task.done(): task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         if fresh:
+            from .runtime_policy_reconciliation import reconcile, legacy_candidates, RECEIPT
+            async def collect_source_policy():
+                target = stage / 'selected-source-declarations.json'
+                overrides = await self.diagnostics.run('ecosystem-runtime-policy', prepare_overrides,
+                    project, receipt / 'runtime-install-overrides.txt')
+                command = [shutil.which('uv'), 'run', '--locked', '--no-sync', '--project', str(project),
+                           '--python', '3.13', 'python', str(Path(__file__).with_name('update_probe.py'))]
+                await self.diagnostics.run('ecosystem-source-policy', process, *command, str(workspace), profiles[0],
+                    '--install-overrides', str(overrides), '--global-only', '--profiles', str(profiles_file),
+                    '--source-policy-only', str(target), env=env, timeout=900)
+                return json.loads(target.read_text())
+            previous = receipt_directory(self.home, active_release(self.home).get('current'))
+            if legacy_candidates(self.inventory) or (previous / RECEIPT).exists():
+                await self.diagnostics.run('ecosystem-source-policy', reconcile, self, stage, project, collect_source_policy)
             await self.publish(detail='Preparing changed dependencies in an isolated runtime…')
             # The refresh activator dies with each short-lived probe process.
             # Capture after dynamic module installation, then recreate an

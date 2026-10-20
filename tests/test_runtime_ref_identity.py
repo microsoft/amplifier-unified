@@ -54,7 +54,7 @@ def test_matching_original_ref_is_unchanged(key):
 def normalized_runtime(tmp_path, monkeypatch):
     """Real stage/freeze receipts, controlled resolver and installed metadata."""
     manifest = tmp_path / 'manifest.toml'
-    manifest.write_text('[project]\nname="fixture-worker"\nversion="1"\n'
+    manifest.write_text('[project]\nname="fixture-worker"\nversion="1"\ndependencies=["fixture-component"]\n'
                         '[tool.uv.sources]\nfixture-component={git="' + ROW['url'] + '",rev="main",subdirectory="module"}\n')
     monkeypatch.setattr(environments, 'manifest_path', lambda: manifest)
     monkeypatch.setattr(environments.shutil, 'which', lambda _: '/fixture/uv')
