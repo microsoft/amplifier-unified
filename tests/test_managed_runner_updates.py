@@ -35,6 +35,7 @@ def app(tmp_path, monkeypatch):
         return item
     old = install('a' * 24, OLD)
     new = install('b' * 24, NEW)
+    new['runnerCandidate'] = True
     value.smart_tools.install = AsyncMock(return_value=new)
     raw = {'enabled': True, 'installationId': old['id'], 'commit': OLD,
            'dockerHost': 'unix:///owned/docker.sock'}
@@ -663,6 +664,7 @@ async def test_allowlisted_new_generation_still_requires_exact_runtime_and_retai
     request = {**source(app), 'latest': OLD}
     staged = await updates.stage(app, request)
     record = private.read_json(updates.record_path(app, staged['runnerUpdate']))
+    assert record['candidate']['runnerQualificationRequired'] is True
     assert record['normalized']['runnerQualificationRequired'] is True
     with pytest.raises(ValueError, match='not passed'):
         environments.validate_configuration_value(app, record['candidate'])

@@ -209,6 +209,7 @@ async def stage(app, source):
     if target.get('commit') != revision:
         raise RunnerUpdateError()
     candidate = {**raw, 'installationId': target['id'], 'commit': revision,
+                 'runnerQualificationRequired': True,
                  'capacityPolicyId': execution_key(previous_normalized)}
     # Retain the exact installed candidate before validation/hash can fail.
     # Skip can then remove only this unused install through normal owner guards.
