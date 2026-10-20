@@ -9,6 +9,7 @@ from amplifier_web.update_diagnostics import CommandFailure,CommandTimeout,PROBE
 from amplifier_web.service import AppService
 from test_service import Runtime
 from test_app_updates import prepared_activation
+from test_runtime_ref_identity import normalized_runtime
 
 
 @pytest.mark.parametrize('code, reason', [(errno.ENOSPC, 'disk-full'), (errno.EDQUOT, 'disk-quota-exceeded'),
@@ -434,3 +435,82 @@ def test_probe_location_rejects_paths_messages_and_nonlibrary_frames():
                   'private_project:run:1', 'amplifier_web.host:run:1 secret', {}, None]:
         result = probe_record(PROBE_PREFIX + json.dumps({'ok': False, 'failureLocation': value}))
         assert result == {'ok': False}
+
+
+async def test_installed_source_mismatch_has_safe_actionable_receipt(tmp_path):
+    from amplifier_web.update_diagnostics import failure_guidance
+    from amplifier_web.update_report import event
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    async def fail():
+        error = ValueError('private source path /private/cache with credential')
+        error.diagnostic_facts = {
+            'reason': 'runtime-installed-source-mismatch', 'package': 'amplifier-foundation',
+            'resolutionMismatches': ['revision', 'private/path', 'revision', {'secret': 'token'}],
+            'stdout': 'private credential', 'path': '/private/cache',
+        }
+        raise error
+    try:
+        with pytest.raises(ValueError):
+            await manager.diagnostics.run('ecosystem-validation', fail)
+        receipt = manager.diagnostics.state['lastFailure']
+        exported = event(receipt)
+        assert receipt['reason'] == exported['reason'] == 'runtime-installed-source-mismatch'
+        assert exported['package'] == 'amplifier-foundation'
+        assert exported['resolutionMismatches'] == ['revision']
+        assert 'kept the current components active' in failure_guidance(receipt)
+        assert 'private' not in json.dumps(receipt)
+        assert 'credential' not in json.dumps(exported)
+    finally:
+        await service.close()
+
+
+async def test_real_freeze_mismatch_reaches_install_error_and_sanitized_report(normalized_runtime, monkeypatch):
+    """Exercise install/validate/stage/freeze; only external resolver/probe is controlled."""
+    from amplifier_web import updates, runtime_environment as environments
+    from amplifier_web.update_report import event
+    from test_runtime_ref_identity import ROW
+
+    fixture_manager, _, _, graph = normalized_runtime
+    runtime = Runtime()
+    service = AppService(fixture_manager.home, runtime, workspace=fixture_manager.home.parent)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    manager.inventory = [{**ROW, 'status': 'update', 'label': 'Fixture component'}]
+    resolver = updates.process
+    preparation_probes = []
+
+    async def process(*args, **kwargs):
+        if '--profiles' in args:
+            preparation_probes.append(args)
+            # The dynamic preparation finishes with a different installed commit.
+            # Do not seed diagnostic facts: the production freeze guard must emit them.
+            graph[0]['directUrl']['vcs_info']['commit_id'] = 'd' * 40
+        return await resolver(*args, **kwargs)
+
+    monkeypatch.setattr(updates, 'process', process)
+    before = json.loads(json.dumps(service.state['sessions']))
+    try:
+        await manager.install()
+        assert len(preparation_probes) == 1
+        state = service.state['updates']
+        failure = state['diagnostics']['lastFailure']
+        assert state['phase'] == 'error' and state['pendingRelease'] is None
+        assert failure['phase'] == 'ecosystem-validation'
+        assert failure['reason'] == 'runtime-installed-source-mismatch'
+        assert failure['resolutionMismatches'] == ['revision']
+        assert 'kept the current components active' in state['error']
+        assert 'Check for an app update' in state['error']
+        assert 'during ecosystem validation' not in state['error']
+        assert event(failure)['resolutionMismatches'] == ['revision']
+        exported = json.dumps(event(failure))
+        assert ROW['url'] not in exported and str(fixture_manager.home) not in exported
+        assert service.state['sessions'] == before
+        assert not runtime.started and not runtime.stopped and not runtime.sent
+        assert not (manager.directory / 'active.json').exists()
+        receipt = environments.receipt_directory(manager.home, failure['revision'])
+        assert not (receipt / 'runtime.lock').exists()
+        assert not (receipt / 'runtime-installed.json').exists()
+    finally:
+        await service.close()

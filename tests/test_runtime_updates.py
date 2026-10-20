@@ -328,7 +328,7 @@ def test_local_override_conceals_no_locked_git_source_and_is_never_rewritten(env
     assert '/private/' not in json.dumps(local)
 
 
-async def test_freeze_captures_post_preparation_graph_and_preserves_future_branch_policy(installed_transitive):
+async def test_freeze_captures_post_preparation_graph_and_protects_untyped_policy(installed_transitive):
     from amplifier_web.runtime_qualification import freeze, installed_graph, verify_recorded
     manager, current, row, old, new, repo = installed_transitive
     generation = '1' * 32
@@ -343,22 +343,24 @@ async def test_freeze_captures_post_preparation_graph_and_preserves_future_branc
     assert before and final != current
     (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
     child = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
-    assert child['current'] == old and child['ref'] == 'main' and child['eligible']
-    assert not any(row['kind'] == 'runtime environment' for row in environments.inventory(manager.home))
+    assert child['current'] == old and child['ref'] == old and not child['eligible']
+    assert child['policyOrigin']['kind'] == 'unresolved-reference'
+    assert child['policyOrigin']['originalRef'] == 'main'
+    refresh = next(row for row in environments.inventory(manager.home) if row['kind'] == 'runtime environment')
+    assert refresh['current'] == 'legacy-policy' and refresh['eligible']
+    assert refresh['label'] == 'Refresh included components'
     frozen = (receipt / 'runtime.lock').read_bytes()
     await environments.stage(manager, generation, [{**child, 'latest': new}])
     assert (receipt / 'runtime.lock').read_bytes() == frozen
     with pytest.raises(ValueError, match='cannot be refreshed'):
         await freeze(manager, generation, final)
-    # Frozen constraints are receipts, never the next update's branch policy.
-    next_generation = '4' * 32
-    environments.receipt_directory(manager.home, next_generation).mkdir(parents=True)
-    refreshed = await environments.stage(manager, next_generation, [{**child, 'latest': new}])
-    assert environments.locked_sources(refreshed)['amplifier-fixture-child'].fragment == new
-    assert (receipt / 'runtime.lock').read_bytes() == frozen
+    # This fixture's transitive @main carries no selected branch-kind proof.
+    # Only selected-source reconciliation can grant future branch updates; a
+    # freeze or cold reopen must not guess from the reference's familiar name.
     shutil.rmtree(final / '.venv')
     cold = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
-    assert cold['ref'] == 'main' and cold['current'] == old and cold['eligible']
+    assert cold['ref'] == old and cold['current'] == old and not cold['eligible']
+    assert cold['policyOrigin'] == child['policyOrigin']
 
 
 async def test_editable_foundation_cache_has_real_source_evidence_and_freezes(installed_transitive):

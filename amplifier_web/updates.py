@@ -745,9 +745,9 @@ class UpdateManager:
                 rows = await self.inventory_sources(indexed=True)
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
                 remote_tasks = {}
-                from .update_checks import git_revision
-                async def remote(url, ref):
-                    return await git_revision(url, ref, process)
+                from .update_checks import git_revision, ref_policy
+                async def remote(url, ref, prove_kind):
+                    return await ref_policy(url, ref, process) if prove_kind else await git_revision(url, ref, process)
                 async def check_row(row):
                     from .managed_runner_backend import backend, skip_key
                     if row.get('runnerKind'):
@@ -766,12 +766,36 @@ class UpdateManager:
                         except (ValueError, RuntimeError, TimeoutError):
                             row['status'] = 'check_failed'
                         return
-                    key = (row['url'],row['ref'])
+                    origin = row.get('policyOrigin') or {}
+                    typed_policy = (origin.get('kind') in {'prepared-manifest', 'selected-declaration',
+                                                          'verified-cache-branch', 'checked-source'}
+                                    and all(origin.get(key, '') == row.get(key, '')
+                                            for key in ('url', 'ref', 'subdirectory'))
+                                    and origin.get('revision') == row.get('current'))
+                    # PEP 610 requested_revision has no ref kind. Legacy/raw
+                    # installed Git rows need the same proof as cache URIs;
+                    # retain an exact already-qualified authored policy.
+                    prove_kind = bool(row.get('cacheManaged') or row.get('sharedSource')
+                        or row.get('kind') == 'bundle / module'
+                        or row.get('kind') == 'runtime dependency' and not typed_policy)
+                    key = (row['url'], row['ref'], prove_kind)
                     task = remote_tasks.setdefault(key, None)
                     if task is None:
                         task = remote_tasks[key] = asyncio.create_task(remote(*key))
                     try:
-                        row['latest'] = await task
+                        result = await task
+                        if prove_kind:
+                            if result['kind'] == 'unresolved':
+                                row.update(status='check_failed', detail='This source reference could not be verified. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            if result['kind'] != 'branch':
+                                row.update(status='pinned', eligible=False,
+                                    detail='This source reference is not an unambiguous branch. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            result = result['revision']
+                        row['latest'] = result
                         row['status'] = 'update' if row['latest'] != row.get('current') else 'current'
                         if (row.get('kind') == 'smart tool' and row['status'] == 'update'
                                 and state.get('skippedSmartTools', {}).get(skip_key(row)) == row['latest']):
@@ -951,7 +975,7 @@ class UpdateManager:
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,detail='Update prepared; making it available to new conversation work.')
             except BaseException as error:
-                from .update_diagnostics import exception_facts
+                from .update_diagnostics import exception_facts, failure_guidance
                 interrupted=isinstance(error,asyncio.CancelledError)
                 status='interrupted' if interrupted else 'failed'
                 failure=self.diagnostics.state.get('lastFailure',{})
@@ -960,7 +984,7 @@ class UpdateManager:
                 failure=self.diagnostics.state['lastFailure']
                 self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
                 await self.publish(phase='interrupted' if interrupted else 'error',pendingRelease=None,
-                    error='Ecosystem update '+('interrupted' if interrupted else 'failed')+' during '+failure['phase'].replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
+                    error=failure_guidance(failure) or 'Ecosystem update '+('interrupted' if interrupted else 'failed')+' during '+failure['phase'].replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
                 if not isinstance(error,Exception):raise
                 return
         await self.activate()
@@ -986,25 +1010,32 @@ class UpdateManager:
                         self.diagnostics.record('ecosystem-source-preflight', 'failed', **exception_facts(error))
                     raise
         async def prepare(row):
+            from .staged_sources import owned_git_checkout, owned_path, require_exclusive_registry_owner
             target=stage/'foundation'/row['path']
-            if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
+            async def guard():
+                await owned_git_checkout(target, stage/'foundation')
+                require_exclusive_registry_owner(stage/'foundation/registry.json', row['url'], row['ref'], target)
+            await guard()
             phase='ecosystem-source-preflight'
             current=await self.diagnostics.run(phase,process,'git','rev-parse','HEAD',cwd=target)
             dirty,artifacts=await self.diagnostics.run(phase,cache_changes,target)
             if dirty or current!=row['current']: raise ValueError('Source changed since check')
-            meta=target/'.amplifier_cache_meta.json'
+            meta=owned_path(target/'.amplifier_cache_meta.json', stage/'foundation')
             data=json.loads(meta.read_text())
             if source_key(data['git_url'], data.get('ref') or 'HEAD') != source_key(row['url'], row['ref']):
                 raise ValueError('Source identity changed since check')
             if artifacts:
                 # Restore only verified tracked artifacts in this copy.
                 # Rechecking here also protects edits made after check.
+                await guard()
                 await self.diagnostics.run(phase,process,'git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
             await self.publish(detail='Downloading '+row['label']+'…')
+            await guard()
             await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
+            await guard()
             await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
             data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
-            meta.write_text(json.dumps(data))
+            owned_path(meta, stage/'foundation').write_text(json.dumps(data))
         tasks = [asyncio.create_task(stage_one(row)) for row in rows]
         try:
             await asyncio.gather(*tasks)
@@ -1044,6 +1075,9 @@ class UpdateManager:
             await self.diagnostics.run('ecosystem-runtime-prepare', process, shutil.which('uv'), 'sync', '--locked',
                 '--project', str(project), '--python', '3.13', timeout=900)
         shared = store_environment(self.home) if worker_supports_shared(project) else {}
+        if fresh:
+            from .runtime_source_alignment import align_checked_sources
+            await self.diagnostics.run('ecosystem-source-preflight', align_checked_sources, self, stage)
         if fresh and shared:
             await self.diagnostics.run('ecosystem-source-sharing', adopt_clean_sources, self, stage)
         env={**os.environ,**shared,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':'','AMPLIFIER_INSTALL_PREPARATION':uuid.uuid4().hex}
@@ -1090,6 +1124,20 @@ class UpdateManager:
                     if not task.done(): task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         if fresh:
+            from .runtime_policy_reconciliation import reconcile, legacy_candidates, RECEIPT
+            async def collect_source_policy():
+                target = stage / 'selected-source-declarations.json'
+                overrides = await self.diagnostics.run('ecosystem-runtime-policy', prepare_overrides,
+                    project, receipt / 'runtime-install-overrides.txt')
+                command = [shutil.which('uv'), 'run', '--locked', '--no-sync', '--project', str(project),
+                           '--python', '3.13', 'python', str(Path(__file__).with_name('update_probe.py'))]
+                await self.diagnostics.run('ecosystem-source-policy', process, *command, str(workspace), profiles[0],
+                    '--install-overrides', str(overrides), '--global-only', '--profiles', str(profiles_file),
+                    '--source-policy-only', str(target), env=env, timeout=900)
+                return json.loads(target.read_text())
+            previous = receipt_directory(self.home, active_release(self.home).get('current'))
+            if legacy_candidates(self.inventory) or (previous / RECEIPT).exists():
+                await self.diagnostics.run('ecosystem-source-policy', reconcile, self, stage, project, collect_source_policy)
             await self.publish(detail='Preparing changed dependencies in an isolated runtime…')
             # The refresh activator dies with each short-lived probe process.
             # Capture after dynamic module installation, then recreate an

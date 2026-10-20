@@ -475,3 +475,21 @@ test('runner-only wait keeps availability refresh usable without exposing unrela
  }
  await renderAct(async()=>root.unmount());
 });
+
+
+test('prepared source mismatch explains preservation and exports only mismatch field names',()=>{
+ const failure={id:'mismatch',attemptId:'candidate',phase:'ecosystem-validation',status:'failed',
+  errorType:'ValueError',reason:'runtime-installed-source-mismatch',package:'amplifier-foundation',
+  resolutionMismatches:['revision','private/source', {path:'/private/cache'},'revision'],
+  path:'/private/cache',message:'credential-bearing failure'};
+ const diagnostics={attemptId:'candidate',lastFailure:failure,events:[failure]};
+ const html=render({phase:'error',diagnostics});
+ assert.match(html,/amplifier-foundation/);
+ assert.match(html,/component changed to a different source during update preparation/);
+ assert.match(html,/kept the current components active/);
+ assert.match(html,/share the update details/);
+ const exported=JSON.parse(diagnosticReceipt(diagnostics));
+ assert.deepEqual(exported.lastFailure.resolutionMismatches,['revision']);
+ assert.deepEqual(exported.events[0].resolutionMismatches,['revision']);
+ assert.doesNotMatch(JSON.stringify(exported),/private|credential/);
+});

@@ -288,32 +288,32 @@ async def freeze(manager, generation, project):
     registry_path = receipt / registry_receipt
     if registry_path.exists():
         verify_candidate(project, json.loads(registry_path.read_text()), graph=graph)
-    policies = environments.shared_build_policies(manager.home, generation, graph)
-    for row in graph:
-        vcs = row.get('directUrl', {}).get('vcs_info', {})
-        if vcs.get('vcs') == 'git':
-            policies[row['name']] = {'url': row['directUrl']['url'], 'ref': vcs.get('requested_revision') or vcs['commit_id'],
-                                     'subdirectory': row['directUrl'].get('subdirectory', '')}
-    # Already checked manifest branches remain policy when the refresh install
-    # encoded their qualified override commit as its requested revision.
-    from urllib.parse import parse_qs
-    for name, source in environments.locked_sources(project).items():
-        query = parse_qs(source.query)
-        ref = next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '')
-        record = next((row for row in graph if row['name'] == name), None)
-        vcs = (record or {}).get('directUrl', {}).get('vcs_info', {})
-        if name in policies and vcs.get('commit_id') == source.fragment and ref:
-            policies[name]['ref'] = ref
+    from .runtime_source_policy import freeze_policies
+    policies = freeze_policies(manager.home, generation, project, graph)
     checked_path = receipt / 'runtime-sources.json'
     checked = json.loads(checked_path.read_text()) if checked_path.exists() else {}
     installed = environments.installed_sources(project, graph=graph, tracked=checked)
     for name, policy in checked.items():
         source = installed.get(name, {})
-        if (source.get('override') or source.get('current') != policy['revision']
-                or source.get('url') != policy['url']
-                or source.get('subdirectory', '') != policy.get('subdirectory', '')):
-            raise ValueError('The installed worker differs from its checked source policy.')
+        mismatches = []
+        if not source or source.get('override'):
+            mismatches.append('source')
+        for field, actual, expected in (
+                ('repository', source.get('url'), policy['url']),
+                ('revision', source.get('current'), policy['revision']),
+                ('subdirectory', source.get('subdirectory', ''), policy.get('subdirectory', ''))):
+            if actual != expected:
+                mismatches.append(field)
+        if mismatches:
+            error = ValueError('The installed worker differs from its checked source policy.')
+            error.diagnostic_facts = {
+                'reason': 'runtime-installed-source-mismatch', 'package': name,
+                'resolutionMismatches': mismatches,
+            }
+            raise error
         policies[name] = policy
+    from .runtime_source_policy import qualify_cache_policies
+    policies = await qualify_cache_policies(policies, checked, process)
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')
     content = frozen_manifest(environments.manifest_path().read_bytes(), graph)
