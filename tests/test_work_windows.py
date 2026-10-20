@@ -570,6 +570,11 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
             assert initial['event'] == 'state'
             assert initial['data']['client']['id'] == identity
             assert not service.shell.resources.registered(identity)
+        # Initial transcript reads notify this same outer cache. Join their real
+        # per-session owners before isolating the Work notification below.
+        async with asyncio.timeout(5):
+            for identity in (sid, other_sid):
+                await service.history.load(identity, only_if_changed=True, display=True)
         # A real requested physical page waits at the projector boundary. Only
         # its completion may set ready; no status injection or broad publish.
         read = windows.request(sid)
