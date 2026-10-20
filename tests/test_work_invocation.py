@@ -1,4 +1,4 @@
-"""Proposed commissioned-input Work association contract: authored, not executed.
+"""Commissioned-input Work contract; original absent-API baseline is retained.
 
 Use the real AppService, receipt transactions and existing synthetic transport
 fixtures. These tests do not pretend to be native worker, tool:pre, nested-tool or
@@ -614,3 +614,113 @@ async def test_restart_retains_lineage_but_does_not_replay_or_reuse_old_generati
         assert not restored.runtime.inputs
     finally:
         await restored.close()
+
+
+@pytest.mark.parametrize('failure_at', ['link_event', 'initial_receipt'])
+async def test_initial_work_transaction_rolls_back_before_admission(app, monkeypatch, failure_at):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'atomic-failure')
+    before = retained_bytes(app)
+    work_receipts = {key: raw for key, raw in before.items()
+                     if key == item['id'] or json.loads(raw).get('workItemId') == item['id']}
+    insert = app.collaboration.insert
+    injected = []
+
+    def fail_after_write(identity, digest, receipt):
+        insert(identity, digest, receipt)
+        child_link = (receipt.get('commandAction') == 'workspace.work.event'
+                      and receipt.get('kind') == 'link'
+                      and receipt.get('link', {}).get('sessionId') != owner['id'])
+        initial = identity == 'atomic-failure-commission:brief'
+        if not injected and (child_link if failure_at == 'link_event' else initial):
+            injected.append(identity)
+            raise RuntimeError('Synthetic failure after staged ' + failure_at)
+
+    monkeypatch.setattr(app.collaboration, 'insert', fail_after_write)
+    plan(app, owner)
+    created = await commission(app, owner, identity='atomic-failure-commission',
+                               workReferences=[reference(item)], returnNotification=False)
+    await until(lambda: app.collaboration.receipt(created['requestId'])['delivery'] == 'unknown')
+    assert len(injected) == 1 and not app.runtime.inputs
+    after = retained_bytes(app)
+    assert {key: raw for key, raw in after.items()
+            if key == item['id'] or json.loads(raw).get('workItemId') == item['id']} == work_receipts
+    assert created['initialInputId'] not in after
+    assert not json.loads(after[created['requestId']]).get('workAssociation')
+    child = app._session(created['sessionId'])
+    assert not any(message.get('inputId') == created['initialInputId'] for message in child['messages'])
+    repeated = await commission(app, owner, identity='atomic-failure-commission',
+                                workReferences=[reference(item)], returnNotification=False)
+    assert repeated['duplicate'] and repeated['delivery'] == 'unknown'
+    assert retained_bytes(app) == after and not app.runtime.inputs
+
+
+async def test_eight_work_manifest_pages_remain_bounded_and_complete(app):
+    owner = app.state['sessions'][0]
+    items = [await prepared_work(app, owner, 'many-' + str(n),
+             title='\U0001d11e' * 200, interpretation='\u03bb' * 4000) for n in range(8)]
+    plan(app, owner)
+    created = await commission(app, owner, identity='eight-work-commission',
+                               workReferences=[reference(item) for item in items], returnNotification=False)
+    await initial_accepted(app, created['initialInputId'])
+    child = app._session(created['sessionId'])
+    await generation(app, child, 'eight-work-generation', [created['initialInputId']])
+    packet = await current_work(app, child)
+    assert len(json.dumps(packet, ensure_ascii=False).encode()) <= 12 * 1024
+    header = packet['required']
+    assert header['status'] == 'available' and header['workCount'] == 8 and header['requirementCount'] == 16
+    args = {'sessionId': child['id'], 'expectedVersion': header['version'], 'limit': 3}
+    all_rows = []
+    for _ in range(16):
+        result = await agent_action(app, child, 'workspace.work.invocation', args, 'eight-manifest')
+        assert len(json.dumps(result, ensure_ascii=False).encode()) <= 12 * 1024
+        page = result['result']
+        assert page['items'] and page['version'] == header['version']
+        all_rows.extend(page['items'])
+        if page['nextAfter'] is None:
+            break
+        args['after'] = page['nextAfter']
+    else:
+        pytest.fail('Eight-item manifest did not make bounded progress')
+    assert len(all_rows) == 16
+    assert {(row['workId'], row['kind']) for row in all_rows} == {
+        (item['id'], kind) for item in items for kind in ['promise', 'source']}
+
+
+async def test_missing_middle_correction_is_incomplete_not_silently_omitted(app):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'missing-middle')
+    middle = None
+    for n in range(3):
+        message = source(app, owner, 'Correction ' + str(n))
+        item = (await revise(app, owner, item, 'middle-correction-' + str(n),
+                            source=message, constraints=['Condition ' + str(n)]))['result']['item']
+        if n == 1:
+            middle = retained_source_event(app, item['id'], message)['id']
+    _, child = await commissioned(app, owner, item)
+    assert (await current_work(app, child))['required']['status'] == 'available'
+    app.db.execute('DELETE FROM commands WHERE id=?', (middle,))
+    app.db.commit()  # Labelled corrupt-history fault, never a positive association.
+    required = (await current_work(app, child))['required']
+    assert required['status'] == 'unavailable' and required['version'] is None
+    assert 'source' in required['reason'] and required['coverage']['complete'] is False
+    assert required['workCount'] is None and required['effectAuthorized'] is False
+    assert len(app.runtime.inputs) == 1
+
+
+async def test_association_link_corruption_fails_without_replay(app):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'corrupt-link')
+    created, child = await commissioned(app, owner, item)
+    assert (await current_work(app, child))['required']['status'] == 'available'
+    operation = app.collaboration.receipt(created['requestId'])
+    # Fault injection changes an existing canonical event, not a fabricated success.
+    event_id = operation['workAssociation']['references'][0]['linkEventId']
+    event = app.collaboration.receipt(event_id)
+    event['link']['candidate'] = 'c' * 40
+    app.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(event), event_id))
+    app.db.commit()
+    required = (await current_work(app, child))['required']
+    assert required['status'] == 'unavailable' and required['version'] is None
+    assert required['coverage']['complete'] is False and required['effectAuthorized'] is False
+    assert len(app.runtime.inputs) == 1

@@ -1,7 +1,8 @@
 # Shared Work invocation association — v1 candidate
 
-Status: **proposed, test-first, unimplemented**. Based on the preserved Shared Work
-backend checkpoint. This specifies the first commissioning producer, not universal
+Status: **first producer/reader implementation, qualification pending**. The
+test-first source and its failed absent-API baseline remain preserved. Based on
+the preserved Shared Work backend checkpoint, this covers commissioning, not universal
 runtime enforcement. It does not replace the accepted Work contract or grant any
 operation permission. The bundled consumer and host must adopt one exact revision.
 
@@ -155,6 +156,13 @@ into every provider request. A stale current revision refuses rather than mixing
 old and new pages. Immutable source pages remain readable, but final currentness
 must still be checked before a dependent effect.
 
+This first resolver inspects at most 16 delivered input identities, eight distinct
+Work items and 4096 source metadata rows per item. Overflow is explicit unavailable
+coverage, never a silently shortened relevant set or permission to act. It reads
+source metadata only; bodies stay in the existing source reader. Missing earlier
+promise revisions also make coverage unavailable. The limits do not erase Work or
+change the existing independent list/history/source readers.
+
 Exact proposed result fields, inside the ordinary `{accepted:true,result:...}`
 shared-action envelope:
 
@@ -228,8 +236,13 @@ cannot qualify actual effect admission.
 checks using the repository's existing commissioning and transport fixtures. No
 successful invocation association, claim or check receipt is manually inserted to
 make a positive case pass. Fault cases may deliberately corrupt retained state and
-must be labelled as faults. These tests are authored, **unrun**, and expected to need
-implementation. They neither emulate a native worker nor demonstrate tool execution.
+must be labelled as faults. The retained test-first baseline executed all 26
+invocation cases: 25 failed at the absent outer `workReferences` schema and one at
+the absent `work` projection. Four added publication controls and the previous
+250-case backend selection passed. That baseline did not reach the deeper invocation
+assertions. The first implementation adds five rollback, bounded multi-item and
+missing/corrupt-lineage controls; its changed-candidate results remain pending.
+These tests neither emulate a native worker nor demonstrate dependent tool execution.
 
 | Required boundary case | Authored service discriminator | Still required from continuity/runtime owner |
 | --- | --- | --- |
@@ -242,5 +255,8 @@ implementation. They neither emulate a native worker nor demonstrate tool execut
 Publication's existing authority guard additionally needs strict unlinked, stale-promise
 and stale-candidate reporter controls. That is test coverage, not a claimed current
 product defect. The frozen backend and all earlier passing/failing evidence remain
-unchanged on their original branch. No source implementation, test execution, new
-instance, paid-model probe or provider configuration change belongs to this checkpoint.
+unchanged on their original branch. This increment changes only the commissioning
+owner, Work resolver/read projections and their service registration, plus scoped
+tests and this coverage record. Existing UI DTOs and continuity adapters are
+unchanged. No new instance, paid-model probe, provider configuration, publication,
+merge or deployment belongs to this increment.

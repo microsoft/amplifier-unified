@@ -705,6 +705,8 @@ class AppService:
         self.assignments = Assignments(self)
         from .workspace_work import WorkspaceWork
         self.workspace_work = WorkspaceWork(self)
+        from .workspace_work_invocation import WorkInvocation
+        self.work_invocation = WorkInvocation(self)
         from .test_queue import TestQueue
         self.test_queue = TestQueue(self)
         from .peer_attribution import PeerAttribution
@@ -4441,6 +4443,12 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'work.invocation.revalidate':
+            if set(args) != {'version'} or not isinstance(args['version'], str) or len(args['version']) > 64:
+                raise AppError('Revalidation requires only the observed invocation version.')
+            required, _ = self.work_invocation.required(session_id)
+            return {'current': required['status'] == 'available' and required['version'] == args['version'],
+                    'required': required, 'effectAuthorized': False}
         if operation == "coordination.continuation_ready":
             return self.collaboration.continuation_ready(session_id, args)
         if operation == "coordination.admit":
@@ -4452,7 +4460,8 @@ class AppService:
                 "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
                 "detail": "No retained collaboration reference; discover current coordination.context."})
             return {**reference, 'awareness': packet(self, session_id, principal=PRINCIPAL.get()),
-                    'assignment': self.assignments.summary(self._session(session_id, hydrate=False))}
+                    'assignment': self.assignments.summary(self._session(session_id, hydrate=False)),
+                    'work': self.work_invocation.current(session_id)}
         def visual_origin(explicit=None):
             if input_origin is None:
                 return

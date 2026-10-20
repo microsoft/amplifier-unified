@@ -25,6 +25,7 @@ SOURCE_CHARS = 131072
 def definitions(schema, string):
     from .workspace_work_evidence import definitions as evidence_definitions
     from .workspace_work_coverage import definitions as coverage_definitions
+    from .workspace_work_invocation import definitions as invocation_definitions
     scope = {'workspaceId': string(100)}
     actor = {'sessionId': string(200)}
     target = {**scope, 'id': string(200)}
@@ -40,6 +41,7 @@ def definitions(schema, string):
     return {
         **evidence_definitions(schema, string),
         **coverage_definitions(schema, string),
+        **invocation_definitions(schema, string),
         'workspace.work.list': ('Read bounded durable promises without starting models or workers. Coverage is not a complete historical inventory.', schema({**scope, **page,
             'filter': {'enum': ['accepted', 'all', 'proposed', 'closed', 'attention']},
             'query': string(200)}, ['workspaceId'])),
@@ -393,6 +395,12 @@ class WorkspaceWork:
     async def dispatch(self, action, args, origin, command_id, caller):
         verb = action.removeprefix('workspace.work.')
         workspace = self.workspace(args, origin, caller)
+        if verb == 'invocation':
+            if caller != args['sessionId']:
+                self.error('Invocation requirements belong to the calling root.', 403)
+            return {'accepted': True, 'result': self.service.work_invocation.manifest(caller, args)}
+        if verb == 'promise':
+            return {'accepted': True, 'result': self.service.work_invocation.promise(args, origin, caller)}
         if verb == 'wait':
             def observe():
                 current = self.workspace(args, origin, caller)

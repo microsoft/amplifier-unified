@@ -57,6 +57,7 @@ def outcome_sender(request):
 
 def definitions(schema, string):
     from .result_artifacts import REFERENCE_HELP
+    from .workspace_work_invocation import references_schema
     sid = {"sessionId": string(200)}
     references = {"type": "array", "maxItems": 16, "items": string(2000)}
     message = {**sid, "senderSessionId": string(200), "grantId": string(200),
@@ -90,6 +91,7 @@ def definitions(schema, string):
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
             "returnNotification": {"type": "boolean", "default": True},
+            "workReferences": references_schema(schema, string),
         }, ["title", "text"])),
         "coordination.read": ("Read a bounded window from one existing native conversation without selecting or warming it.", schema({
             **sid, "scope": {"enum": ["workspace", "all"]}, "messageId": string(200), "offset": {"type": "integer", "minimum": 0},
@@ -632,6 +634,8 @@ class Collaboration:
         if (source['workspace'] != receipt['workspace']
                 or (source.get('workingDirectory') or source['workspace']) != receipt['result']['workingDirectory']):
             return 'The requester execution placement changed.'
+        if receipt.get('workReferences'):
+            return self.service.work_invocation.plan_reason(receipt)
 
     def can_steer(self, target):
         active = target.get("collaborationGeneration") or {}
@@ -1361,7 +1365,7 @@ class Collaboration:
             prepared_artifacts = await prepare(self, source, args, origin, identity, digest)
             if prepared_artifacts.get('duplicate'):
                 return prepared_artifacts['duplicate']
-        async with self.service.lock:
+        async with self.service.lock, self.service.work_invocation.initial_transaction(action, identity):
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
@@ -1436,6 +1440,8 @@ class Collaboration:
             elif action == "coordination.create":
                 if source.get('fileAccessPending'):
                     self.error('Finish applying the source chat’s file settings before creating another task.', 409)
+                if args.get('workReferences'):
+                    self.service.work_invocation.validate_references(source, args['workReferences'])
                 # Creation is handled outside the service lock below.
                 self.require_continuation()
                 receipt = None
@@ -1504,6 +1510,8 @@ class Collaboration:
                 if creation and identity == creation[4]['requestId'] + ':brief':
                     operation = self.receipt(creation[4]['requestId'])
                     if operation.get('creationVersion') == 1:
+                        if operation.get('workReferences'):
+                            self.service.work_invocation.seal(operation, receipt, source, target)
                         receipt['creationOperationId'] = operation['requestId']
                         wait = operation.get('subscription')
                         if wait:
@@ -1548,6 +1556,8 @@ class Collaboration:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 return duplicate
+            if args.get('workReferences'):
+                self.service.work_invocation.validate_references(source, args['workReferences'])
             # A root occupies one slot while executable work is outstanding.
             # Idle history and uncertain historical receipts are not work; their
             # evidence stays unknown and is never resolved/replayed by this cap.
@@ -1601,6 +1611,8 @@ class Collaboration:
                 'sourceTaskId': task.get('id'), 'sourceTaskRevision': task.get('revision'),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
             receipt['assignmentId'] = assignment_id
+            if args.get('workReferences'):
+                receipt['workReferences'] = copy.deepcopy(args['workReferences'])
             if notify:
                 receipt['subscription'] = self.saved_wait(source, identity, status='reserved')
             self.service.db.execute('INSERT INTO collaboration_preparations(request_id,configuration) VALUES(?,?)',
