@@ -154,6 +154,19 @@ def become_worker():
     os.setuid(65534)
 
 
+def worker_environment(payload):
+    return {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/artifacts/home', 'LANG': 'C.UTF-8',
+            **payload.get('environment', {})}
+
+
+def execute(payload):
+    """Replace this foreground helper; the backend still owns bounds/receipts."""
+    environment = worker_environment(payload)
+    become_worker()
+    os.chdir(WORKSPACE)
+    os.execve('/bin/sh', ['/bin/sh', '-c', payload['command']], environment)
+
+
 def supervise(payload):
     root, expected = directory(payload)
     if read(root / 'admission.json')['binding'] != expected:
@@ -169,10 +182,8 @@ def supervise(payload):
                      result={'stdout': '', 'stderr': '', 'exit_code': None, 'truncated': False})
         publish(root / 'state.json', state)
         return
-    environment = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/artifacts/home', 'LANG': 'C.UTF-8',
-                   **payload.get('environment', {})}
     process = subprocess.Popen(['/bin/sh', '-c', payload['command']], cwd=WORKSPACE,
-        env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=worker_environment(payload), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         close_fds=True, start_new_session=True, preexec_fn=become_worker)
     state.update(state='running', process=process_identity(process.pid))
     publish(root / 'state.json', state)
@@ -241,9 +252,10 @@ def supervise(payload):
 
 def main():
     action, payload = sys.argv[1], json.loads(sys.argv[2])
-    functions = {'job_start': start, 'job_read': observe, 'job_cancel': cancel, 'supervise': supervise}
+    functions = {'job_start': start, 'job_read': observe, 'job_cancel': cancel, 'supervise': supervise,
+                 'execute': execute}
     result = functions[action](payload)
-    if action != 'supervise':
+    if action not in {'supervise', 'execute'}:
         print(json.dumps(result))
 
 

@@ -201,3 +201,14 @@ next admission check.
   machine must share that machine's authority before being called machine-wide.
 - Queue depth/wait controls, profile execution timeout controls, artifact retention
   limits and broader host registration remain distinct from these resource budgets.
+
+### Legacy export-limit cleanup continuation
+
+A qualified legacy returned export-limit failure keeps its original UNKNOWN
+receipt. If its separately admitted cleanup verifies guest removal but cannot
+finish dependency cleanup, the next `finishCleanup` names that confirmed guest
+removal request. It revalidates the persisted legacy qualification against the
+original receipt and unchanged owner/source/backend bindings, then finishes only
+dependency cleanup. It does not issue another guest removal or create another
+operation identity. Missing or changed qualification, another unresolved removal,
+and unverified guest removal remain held. Restart does not weaken these checks.

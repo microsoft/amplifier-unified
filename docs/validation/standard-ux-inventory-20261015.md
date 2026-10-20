@@ -874,6 +874,11 @@ or physical-device qualification. The original frozen inventory and 65 baseline
 scenarios are preserved. The new owner runs as an affected-flow smoke and in the
 post-release browser schedule, without an unrelated census gate.
 
+Global testing settings adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
+
 
 ### Shared machine test resources (October 20)
 
@@ -889,6 +894,23 @@ This is additive ownership for the existing browser scenario; it does not change
 the frozen inventory, add a duplicate browser lane, or claim remote/native-device
 qualification. Remote and unsupported machine authority remains an explicit
 boundary while existing backend testing continues.
+
+### Existing-chat adoption (October 20)
+
+`assignment-adoption` owns the new existing-chat assignment flow in Extended
+browser checks and focused affected-flow qualification. It covers stale target
+review, lost acknowledgement with the same request identity, one committed
+member, retained drafts and history, no input or Stop replay, cold reopen,
+and desktop/phone layout. The fixture uses the production service and built
+client with a synthetic runtime. Live provider execution and production adoption
+remain separate evidence. The frozen baseline inventory is unchanged.
+
+Existing-chat adoption adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
+
+The integrated branch containing both testing settings and existing-chat adoption has 101 registered scenarios, 144 distinct readiness/extended scripts, and 143 excluding attachment consumption. Both additive owners preserve the original 65-scenario identity.
 
 
 ### Test execution limits (October 20)
