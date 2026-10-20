@@ -3,7 +3,10 @@
 No general write endpoint, provider call, fabricated verification receipt, or
 private history import. This module is enabled only by --shared-work.
 """
+import asyncio
 import hashlib
+import json
+import time
 
 from aiohttp import web
 
@@ -127,3 +130,33 @@ async def install(app, runtime):
             'pendingWarmups': len(service.warmup.pending)})
 
     app.router.add_get('/fixture/shared-work', inspect)
+
+    # Observe the production wait without changing its timeout, cancellation or
+    # result. stdout records survive the HTTP connection and server shutdown.
+    dispatch = service.workspace_work.dispatch
+    sequence = 0
+
+    async def observed_dispatch(action, args, origin, command_id, caller):
+        nonlocal sequence
+        if action != 'workspace.work.wait':
+            return await dispatch(action, args, origin, command_id, caller)
+        sequence += 1
+        identity = sequence
+
+        def emit(phase, **fields):
+            print(json.dumps({'workWait': {'id': identity, 'phase': phase,
+                'at': time.monotonic(), 'waitMs': args.get('waitMs', 30000), **fields}}), flush=True)
+
+        emit('entered')
+        try:
+            response = await dispatch(action, args, origin, command_id, caller)
+        except asyncio.CancelledError:
+            emit('cancelled')
+            raise
+        except Exception as error:
+            emit('failed', error=type(error).__name__)
+            raise
+        emit('returned', changed=response.get('changed'), timedOut=response.get('timedOut'))
+        return response
+
+    service.workspace_work.dispatch = observed_dispatch

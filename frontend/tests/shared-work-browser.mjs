@@ -22,12 +22,29 @@ const observePage=(page,client)=>{
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/empty_host_ui_server.py','--chat-controls','--shared-work'],{stdio:['ignore','pipe','inherit']});
-const stop=ownFixture(fixture,{label:'Shared Work fixture'});
+// An admitted HTTP Work wait is shielded from transport cancellation and can
+// naturally take 30s. Keep escalation a failure; allow its actual drain first.
+const stop=ownFixture(fixture,{label:'Shared Work fixture',timeoutMs:40000});
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
 let browser,originalError,result,page,fixtureUrl;
-const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null};
+const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null,workWaits:[],cleanupComplete:null,observationErrors:[]};
+let observationBuffer='';
+fixture.stdout.on('data',chunk=>{
+ observationBuffer+=String(chunk);
+ if(observationBuffer.length>65536){termination.observationErrors.push('Fixture observation exceeded 64KiB');observationBuffer='';return}
+ let end;
+ while((end=observationBuffer.indexOf('\n'))>=0){
+  const line=observationBuffer.slice(0,end);observationBuffer=observationBuffer.slice(end+1);
+  if(!line.trim())continue;
+  try{
+   const row=JSON.parse(line);
+   if(row.workWait){if(termination.workWaits.length<200)termination.workWaits.push(row.workWait);else if(!termination.observationErrors.length)termination.observationErrors.push('Wait observation overflow')}
+   if(row.sharedWorkCleanup)termination.cleanupComplete=row.sharedWorkCleanup;
+  }catch{if(termination.observationErrors.length<10)termination.observationErrors.push('Malformed fixture observation')}
+ }
+});
 fixture.once('close',(code,signal)=>{termination.fixtureClose={code,signal,at:Date.now()}});
 try {
  const url=await new Promise((resolve,reject)=>{
@@ -83,7 +100,7 @@ try {
  }
  assert.deepEqual([...found].sort(),[...manifest.acceptedIds].sort(),'Every accepted-open record reachable through bounded pages');
  assert.ok(!found.has(manifest.proposal.id));assert.ok(!found.has(manifest.closed.id));
- await work.getByRole('textbox',{name:'Find work'}).fill('Retain the original promise');
+ await work.getByRole('searchbox',{name:'Find work'}).fill('Retain the original promise');
  const row=work.locator(`[data-work-id="${manifest.target.id}"]`);
  await row.focus();await page.keyboard.press('Enter');
  const detail=work.getByRole('article',{name:'Work details'});
@@ -142,7 +159,7 @@ try {
  await peerWork.getByRole('combobox',{name:'Show work'}).selectOption('closed');
  await expect(peerWork.locator(`[data-work-id="${manifest.closed.id}"]`)).toBeVisible();
  await expect(filter).toHaveValue('accepted');
- await expect(work.getByRole('textbox',{name:'Find work'})).toHaveValue('Retain the original promise');
+ await expect(work.getByRole('searchbox',{name:'Find work'})).toHaveValue('Retain the original promise');
  assertPassiveActions(calls.slice(before)); // Includes both clients, before explicit Open chat.
  observer.assertHealthy(); // Rejects session.warm across the whole observation.
  // Only explicit Open chat traverses the existing guarded navigation path.
@@ -182,7 +199,18 @@ try {
 }
 finally {
  termination.closeRequestedAt=Date.now();
- try{await finishFixture({label:'Shared Work fixture',close:[['browser',()=>browser?.close()]],stop,originalError})}
+ try{
+  await finishFixture({label:'Shared Work fixture',close:[['browser',()=>browser?.close()]],stop,originalError});
+  try{
+   assert.deepEqual(termination.observationErrors,[]);
+   assert.ok(termination.cleanupComplete,'Real runner.cleanup must return');
+   const entered=termination.workWaits.filter(row=>row.phase==='entered');
+   assert.ok(entered.length>0,'Real Work wait entered before teardown');
+   for(const row of entered)assert.ok(termination.workWaits.some(end=>end.id===row.id&&end.phase==='returned'),'Wait must drain, not be cancelled: '+row.id);
+   assert.ok(termination.workWaits.some(row=>row.phase==='returned'&&row.timedOut===true),'Observe natural long-poll deadline');
+   assert.ok(!termination.workWaits.some(row=>['cancelled','failed'].includes(row.phase)),'No hidden wait cancellation');
+  }catch(error){if(originalError)console.error('Work wait drain verification failed:',error);else throw error}
+ }
  finally{
   try{await writeFile(path.join(output,'termination.json'),JSON.stringify(termination,null,2)+'\n')}
   catch(error){if(originalError)console.error('Termination evidence unavailable:',error.message);else throw error}

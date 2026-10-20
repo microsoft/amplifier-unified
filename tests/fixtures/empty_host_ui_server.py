@@ -277,6 +277,8 @@ async def main(home):
         try:
             release_query_gate()
             await runner.cleanup()
+            if '--shared-work' in sys.argv:
+                print(json.dumps({'sharedWorkCleanup': {'complete': True, 'at': time.monotonic()}}), flush=True)
         finally:
             for signum in shutdown_signals:
                 loop.remove_signal_handler(signum)
