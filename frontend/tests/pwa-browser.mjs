@@ -3,10 +3,24 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'ignore'});
-for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
-const browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url)),'--print-ready'],{stdio:['ignore','pipe','pipe']});
+const stopFixture=ownFixture(fixture,{label:'PWA fixture'});
+const ready=new Promise((resolve,reject)=>{
+ let output='',errors='';
+ const timer=setTimeout(()=>reject(new Error('PWA fixture did not report its own bound listener')),15000);
+ fixture.stderr.on('data',chunk=>{errors=(errors+chunk).slice(-4000)});
+ fixture.stdout.on('data',chunk=>{
+  output+=chunk;
+  if(output.split('\n').includes('PWA fixture bound http://127.0.0.1:8958')){clearTimeout(timer);resolve()}
+ });
+ fixture.once('error',error=>{clearTimeout(timer);reject(error)});
+ fixture.once('exit',(code,signal)=>{clearTimeout(timer);reject(new Error(`PWA fixture exited before readiness (${code??signal}): ${errors}`))});
+});
+let browser,originalError;
 try{
+ await ready;
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
  const context=await browser.newContext({viewport:{width:1100,height:850}}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto('http://127.0.0.1:8958/');await page.getByRole('heading',{name:'Welcome back'}).waitFor();
@@ -56,4 +70,5 @@ try{
  assert.equal(await page.evaluate(()=>fetch('/api/state').then(r=>r.status)),401);
  assert.deepEqual(sends,[]);
  assert.deepEqual(errors,[]);console.log('PWA browser passed: installability, signed-out branding, worker registration, dynamic chat titles, public-only cache, automatic offline recovery, saved draft, no replay and authentication boundary.');
-}finally{await browser.close();fixture.kill()}
+}catch(error){originalError=error;throw error}
+finally{await finishFixture({label:'PWA fixture',close:browser?[['browser',()=>browser.close()]]:[],stop:stopFixture,originalError})}

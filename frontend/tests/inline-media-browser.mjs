@@ -271,7 +271,7 @@ async function newClient(options={}){
   sharedStorage=await context.storageState();
   await record('empty-descriptor-completed','PASS',{status:200,items:[],completed:true,explicitRead:true,
    automaticRequests:metadataRequests.length,emptyLongMessages:boot.emptyLongMessageCount});
- }else await page.goto(boot.url);
+ }else{await page.goto(boot.url);await showFixtureConversation(page)}
  await page.waitForSelector('#amp-one');
  const article=page.locator(`[data-message-id="${boot.messageId}"]`);
  await expect(article).toBeVisible();

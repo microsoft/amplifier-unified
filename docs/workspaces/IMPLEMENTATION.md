@@ -336,6 +336,27 @@ and the separate registered-history scope. These are not OS,
 universal credential, per-tool or multi-tenant isolation guarantees. Existing
 registered own-history access is independent of configuration grants.
 
+## Human-directed member resume — 2026-10-20
+
+`coordination.send` accepts `resume: {sourceMessageId,
+expectedInterruptionRevision}` for a fresh queued request from a commissioning
+owner to a current member of its active assignment. The host verifies the latest
+actual human input against the calling root's admitted input bindings. It must
+postdate the recipient's Stop; peer prose, questions and scheduled inputs cannot
+authorize resume. Assignment, task, source/recipient Stop and latest human input
+are rechecked during preparation and native admission.
+
+The one-input exception permits a stopped recipient and a paused/blocked task to
+receive the reconciliation request. It does not rewrite the task or reset its
+saved goal progress. The recipient deliberately resumes its own task after
+checking its blockers. Capacity policy and saved turn budgets still apply.
+Completed objectives stay completed: an explicit reconciliation/follow-on input
+can reach their chat without reactivating the old goal. Independent chats and
+failed/unsettled runtimes are ineligible.
+The retained receipt consumes this human/member/Stop authorization once, including
+unknown admission outcomes; old suppressed or uncertain requests are not replayed.
+Assignment admission itself still uses the existing explicit `assignment.resume`.
+
 ## Assignment admission and scoped Stop — 2026-10-14
 
 New commissioned roots now share their initiating root's assignment. Nested
@@ -362,6 +383,18 @@ Stop targets. The current adapter cannot interrupt or account for one request
 inside an independent mixed conversation. Stop reports that limitation. With
 an enabled token/cost limit, queue/steer to such peers is refused; informational
 notices remain available, and commissioned helpers share the budget.
+
+Explicit user recovery uses revision-bound `assignment.resume` on the commissioning
+chat after interruption receipts, roots, native workers, preparations and current
+generations have settled. It preserves membership, task records, cumulative
+accounting and limits. It does not send input, resume paused local tasks or clear
+interruption revisions. Queued outbound requests and saved waits retain their
+original interruption binding; reopening cannot admit old requests or manufacture
+late continuation messages. A fresh user request may then start new work.
+Separately paused chat tasks and persisted local budget denials remain paused;
+the existing task/budget controls own their explicit revision-bound recovery.
+Stopped-assignment input is rejected before appending history or starting a worker,
+with guidance to the existing Shared tasks and assignment controls.
 
 The browser exposes assignment controls under Related work, with private drafts,
 revision conflicts and exact lost-response retries. Attached HTTP/session clients

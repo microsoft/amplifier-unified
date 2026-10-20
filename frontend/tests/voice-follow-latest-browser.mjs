@@ -25,8 +25,8 @@ try {
  await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const selected=()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId);
- const workReady=async(target=page)=>{
-  await target.waitForFunction(()=>{const pane=document.querySelector('.a-messages');try{const receipt=JSON.parse(pane?.dataset.workProjection);return receipt.status==='ready'&&receipt.current===true&&!pane.querySelector('[data-part="work-projection-status"]')}catch{return false}});
+ const workReady=async(target=page,sessionId=null)=>{
+  await target.waitForFunction(expected=>{const pane=document.querySelector('.a-messages'),selected=window.amplifier?.getState()?.selectedSessionId;try{const receipt=JSON.parse(pane?.dataset.workProjection);return (!expected||selected===expected)&&pane.dataset.sessionId===selected&&receipt.sessionId===selected&&receipt.status==='ready'&&receipt.current===true&&!pane.querySelector('[data-part="work-projection-status"]')}catch{return false}},sessionId);
   await target.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  };
  const readingPosition=()=>pane.evaluate(el=>{const top=el.getBoundingClientRect().top,node=[...el.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>top);return {id:node?.dataset.messageId,offset:node?.getBoundingClientRect().top-top}});
@@ -52,7 +52,13 @@ try {
  // Work preparation notices may appear above messages while an append is read.
  // Compare raw scrollTop only after they settle, and retain the visible anchor.
  await scrollBack();const held=await top(),heldReading=await readingPosition();await append(call,2);await page.waitForTimeout(250);assert.deepEqual(await readingPosition(),heldReading,'Call scrollback retains the visible message and offset');assert.ok(Math.abs(await top()-held)<3,'Deliberate scrollback pauses call following');
- await action('session.select',{id:other});await scrollBack();const otherTop=await top();await append(call,2);await workReady();await page.waitForTimeout(250);assert.ok(Math.abs(await top()-otherTop)<3,'Call updates must not scroll a different conversation');
+ await action('session.select',{id:other});await scrollBack();const otherTop=await top(),otherReading=await readingPosition();await append(call,2);await page.waitForTimeout(250);
+ // An unrelated update can briefly insert a Work preparation notice. Keep the
+ // visible reading anchor throughout; compare raw scrollTop after it settles.
+ assert.deepEqual(await readingPosition(),otherReading,'Call updates preserve the other conversation reading anchor');
+ await workReady(page,other);
+ assert.deepEqual(await readingPosition(),otherReading,'The other conversation reading anchor remains after Work settles');
+ assert.ok(Math.abs(await top()-otherTop)<3,'Call updates must not scroll a different conversation');
  await action('session.select',{id:call});await workReady();await expect.poll(top).toBeCloseTo(held,0);
  await page.getByRole('button',{name:'Jump to latest messages'}).click();await bottom();await append(call,2);await bottom();
  await page.setViewportSize({width:390,height:844});await append(call,2);await bottom();

@@ -455,6 +455,7 @@ class UpdateManager:
             if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
+        state['applicationCheckPending'] = False
         from .app_features import reconcile_requests
         reconcile_requests(state)
         state.setdefault('items', [])
@@ -651,7 +652,8 @@ class UpdateManager:
 
     async def check(self, *, tier='application', install=False, fresh=True):
         state = self.service.state['updates']
-        if self.closed or self.awaiting_restart() or state.get('pendingApp') or state.get('pendingRelease') or state.get('pendingSmartTools'):
+        if (self.closed or self.awaiting_restart() or state.get('pendingRelease') or state.get('pendingSmartTools')
+                or (state.get('pendingApp') or {}).get('featureSelection')):
             return  # A timing measurement must not change a pending handoff.
         if self.check_task and not self.check_task.done():
             # Join only an equivalent availability operation. A manual refresh
@@ -678,10 +680,15 @@ class UpdateManager:
         return await asyncio.shield(self.check_task)
 
     async def _check(self, *, tier='application', install=False):
-        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease') or self.service.state['updates'].get('pendingSmartTools'): return
+        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingRelease') or self.service.state['updates'].get('pendingSmartTools'): return
         from .update_sequence import summary
         async with self.lock:
             state = self.service.state['updates']
+            if state.get('pendingApp'):
+                if not state['pendingApp'].get('featureSelection'):
+                    from .app_updates import check_staged
+                    await check_staged(self)
+                return
             sequence = ({'stage': 'application', 'install': install,
                          'included': summary([], checked=False), 'other': summary([], checked=False)}
                         if tier == 'application' else {**state.get('sequence', {}), 'stage': tier, 'install': install})
@@ -790,9 +797,19 @@ class UpdateManager:
 
     async def app(self):
         if self.lock.locked() or self.awaiting_restart():return
-        from .app_updates import stage,activate
+        from .app_updates import stage,activate,supersedes_staged
+        state = self.service.state['updates']
+        pending = state.get('pendingApp')
+        if (pending and not pending.get('featureSelection') and not self.busy()
+                and time.time() - (state.get('pendingAppCheckAt') or 0) >= 60):
+            # The idle window may arrive between scheduled checks. Refresh once
+            # before activation; a recent check also avoids duplicate requests.
+            await self.check(fresh=True)
         async with self.lock:
-            if not self.service.state['updates'].get('pendingApp'):
+            if self.closed or self.awaiting_restart():return
+            state = self.service.state['updates']
+            pending = state.get('pendingApp')
+            if not pending or supersedes_staged(state.get('application', {}), pending):
                 await stage(self)
         await activate(self)
 
@@ -813,8 +830,7 @@ class UpdateManager:
                 await self.activateSmartTools()
             return
         if self.service.state['updates'].get('pendingApp'):
-            from .app_updates import activate
-            await activate(self)
+            await self.app()
             return
         if self.service.state['updates'].get('pendingRelease'):
             await self.activate()
@@ -1232,8 +1248,10 @@ class UpdateManager:
             if state.get('phase') not in {'error', 'interrupted'}: await self.activateSmartTools()
             return
         if state.get('pendingApp'):
-            from .app_updates import activate
-            await activate(self)
+            if state.get('phase') in {'error', 'interrupted'}:return
+            if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
+                await self.check(fresh=True)
+            await self.app()
             return
         if state.get('pendingRelease'):
             await self.activate()

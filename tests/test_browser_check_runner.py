@@ -236,6 +236,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'smart-tool-updates': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/smart-tool-updates-artifacts'},
         'archive-feedback': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/archive-feedback'},
         'update-restart': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-restart-artifacts'},
+        'update-effects': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-effects'},
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
@@ -398,7 +399,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # and the approval reading-column regression now have owners too. The two
     # recovery additions retain distinct component and full-journey commands;
     # the existing-chat card and adaptive Home each add a browser journey.
-    assert len(readiness_scripts | extended_scripts) == 138
+    assert len(readiness_scripts | extended_scripts) == 139
+    assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
                for row in plan['scenarios']) == 1

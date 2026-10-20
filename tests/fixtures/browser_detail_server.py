@@ -98,7 +98,8 @@ async def main():
             if op=='setup':
                 write_private(temp/'native'/'settings.yaml',yaml.safe_dump(provider_settings if args.get('connected') else {'config':{'providers':[]}}))
                 manager=SetupManager(temp/'app')
-                service.state['setup'].update(providers=manager.provider_rows(alpha),providersLoadedAt=time.time(),providersWorkspace=str(alpha))
+                workspace = Path(service._session(args['sessionId'])['workspace']) if args.get('sessionId') else alpha
+                service.state['setup'].update(providers=manager.provider_rows(workspace),providersLoadedAt=time.time(),providersWorkspace=str(workspace))
                 service.state['view']['setupJourney']=args.get('journey','done')
             elif op=='native-history':
                 from amplifier_web.session_files import project_slug

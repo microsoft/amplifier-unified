@@ -28,6 +28,7 @@ on:
       - 'frontend/src/main.jsx'
       - 'tests/test_coordination.py'
       - 'tests/test_coordination_generation.py'
+      - 'tests/test_coordination_revisions.py'
       - 'tests/test_coordination_bridge_returns.py'
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_collaboration_input.py'
@@ -88,6 +89,7 @@ jobs:
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
+          tests/test_coordination_revisions.py
           tests/test_coordination_bridge_returns.py
           tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py

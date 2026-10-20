@@ -2442,6 +2442,8 @@ class AppService:
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
+                if action != 'question.answer' and current and self.assignments.blocked(current):
+                    raise AppError('This assignment is stopped. Open Shared tasks and assignment in the commissioning chat and choose Resume assignment before sending new work.', 409, code='assignment_stopped')
                 if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
                     raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
