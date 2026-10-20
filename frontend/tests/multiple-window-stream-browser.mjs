@@ -38,6 +38,9 @@ try{
  await retry.routeWebSocket('**/api/events/ws?**',socket=>{if(first){first=false;socket.close()}else socket.connectToServer()});
  await retry.goto(url);await retry.getByRole('button',{name:'Retry connection',exact:true}).waitFor({timeout:15000});
  await retry.getByRole('button',{name:'Retry connection',exact:true}).click();
+ // This fresh client arrives at Home, just like the initial eight windows.
+ await showFixtureConversation(retry);
+ await expect(retry.getByText('Connected',{exact:true})).toHaveCount(1);
  await retry.getByRole('button',{name:'View error details',exact:true}).waitFor();
  assert.deepEqual(errors,[]);console.log(JSON.stringify({windows:8,privateClients:true,imageLoaded:true,reconnected:true,startupRetry:true,requests:results}));
 }finally{await browser?.close();fixture.kill('SIGTERM')}

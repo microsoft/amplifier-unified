@@ -224,21 +224,19 @@ async def test_only_verified_removal_publishes_retained_file_accounting(app, bac
         assert 'accounting' not in result['resource']['retention']
 
 
-async def test_reconcile_agent_authority_root_peer_and_revocation(app, backend, monkeypatch):
+async def test_reconcile_agent_requires_current_owner_without_extra_approval(app, backend, monkeypatch):
     row = (await start(app))['resource']
     source, peer = app.state['sessions']
     args = {**scope(app), 'id': row['id'], 'expectedRevision': row['revision'], 'requestId': 'agent-inspect'}
     calls = observer(monkeypatch, 'running')
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.reconcile', args, 'no-grant')
-    authority = await grant(app, ['test_environments'], ['session'])
     with pytest.raises(AppError, match='calling conversation'):
         await agent(app, source, 'workspace.environments.reconcile', {**args, 'sessionId': peer['id']}, 'peer-inspect')
-    result = await agent(app, source, 'workspace.environments.reconcile', args, 'with-grant')
+    result = await agent(app, source, 'workspace.environments.reconcile', args, 'no-extra-grant')
     assert result['result']['request']['state'] == 'completed' and calls == ['reconcile']
-    await revoke(app, authority)
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.reconcile', {**args, 'requestId': 'revoked'}, 'revoked')
+    assert not source['approvals'] and not app.configuration_authority.rows(source['id'])
+    source['collaborationGeneration']['terminal'] = True
+    with pytest.raises(AppError, match='current transport-bound root generation'):
+        await agent(app, source, 'workspace.environments.reconcile', {**args, 'requestId': 'retired'}, 'retired')
     assert calls == ['reconcile']
 
 

@@ -8,7 +8,7 @@ import pytest
 
 from amplifier_web import task_environments as owner
 from amplifier_web.service import AppError
-from test_configuration_authority import app, grant, revoke
+from test_configuration_authority import app, grant
 from test_coordination_generation import agent, until
 from test_task_environments import backend, scope, act
 from test_test_queue import queue, record, submit, drive
@@ -229,11 +229,10 @@ async def test_public_preparation_recovery_rejects_unbound_or_changed_proof(app,
         app.operations.requests.read(sid, 'rejected-recovery')
 
 
-@pytest.mark.parametrize('change', ['revoked', 'stopped'])
-async def test_public_preparation_recovery_rechecks_authority_before_dependency_cleanup(app, backend, prepared, monkeypatch, change):
+@pytest.mark.parametrize('change', ['moved', 'stopped'])
+async def test_public_preparation_recovery_rechecks_owner_before_dependency_cleanup(app, backend, prepared, monkeypatch, change):
     row, original = await pending_preparation_cleanup(app, monkeypatch)
     source = app.state['sessions'][0]
-    authority = await grant(app, ['test_environments'], ['session'])
     before = app.operations.requests.list(row['sessionId'])
     entered, release = threading.Event(), threading.Event()
     require_resolved = owner.require_resolved_removal
@@ -252,13 +251,13 @@ async def test_public_preparation_recovery_rechecks_authority_before_dependency_
     task = asyncio.create_task(agent(app, source, 'workspace.environments.finishCleanup', args, 'guarded-recovery'))
     try:
         assert await asyncio.to_thread(entered.wait, 5)
-        if change == 'revoked':
-            await revoke(app, authority)
+        if change == 'moved':
+            source['workingDirectory'] = str(app.data_dir / 'moved-source')
         else:
             # Same Stop revision boundary used by the existing environment tests.
             source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
         release.set()
-        with pytest.raises(AppError, match='revoked|moved or stopped'):
+        with pytest.raises(AppError, match='moved or stopped'):
             await asyncio.wait_for(task, 5)
     finally:
         release.set()

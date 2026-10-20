@@ -21,7 +21,14 @@ class Approvals:
         self.runtime = runtime
         self.ask = ask
 
+    @property
+    def interactive(self):
+        """Transport availability only; never a permission or remembered grant."""
+        return callable(self.ask)
+
     def for_context(self, get_context):
+        if not self.interactive:
+            return Approvals(self.runtime, None)
         async def ask(prompt, options):
             token = REQUEST_CONTEXT.set(get_context())
             try:
@@ -41,10 +48,21 @@ class Approvals:
             timeout = request.timeout
             options = ["allow", "deny"]
         options = list(options or ["allow", "deny"])
+        # Worker/service wire choices are canonical. Preserve the caller's
+        # exact labels at this adapter boundary, including denial on timeout.
+        aliases = {"allow": "allow", "approve": "allow", "deny": "deny", "reject": "deny"}
+        choices = {}
+        for option in options:
+            canonical = aliases.get(option.casefold()) if isinstance(option, str) else None
+            if canonical is None or canonical in choices:
+                raise ValueError("Approval choices must be one unambiguous allow and deny pair")
+            choices[canonical] = option
+        if set(choices) != {"allow", "deny"}:
+            raise ValueError("Approval choices must be one unambiguous allow and deny pair")
         if not callable(self.ask):
             raise RuntimeError("This operation requires approval, but no user approval surface is connected")
         # A default of allow is not human authorization. Timeouts never approve.
-        result = self.ask(prompt, options)
+        result = self.ask(prompt, list(choices))
         if not inspect.isawaitable(result):
             raise TypeError("The app approval callback must be asynchronous")
         try:
@@ -53,10 +71,10 @@ class Approvals:
             if provider_request:
                 from amplifier_core import ApprovalResponse
                 return ApprovalResponse(approved=False, reason="User approval timed out", remember=False)
-            return "deny"
-        if decision not in options:
+            return choices["deny"]
+        if decision not in choices:
             raise ValueError("The approval response is not one of the offered choices")
         if provider_request:
             from amplifier_core import ApprovalResponse
             return ApprovalResponse(approved=decision in {"allow", "approve"}, reason=getattr(decision, "comment", None), remember=False)
-        return decision
+        return ApprovalDecision(choices[decision], getattr(decision, "comment", None))
