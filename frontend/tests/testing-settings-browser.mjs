@@ -76,6 +76,7 @@ try{
  const execution=page.getByRole('region',{name:'Test execution limits',exact:true});
  await execution.getByText('Advanced execution limits',{exact:true}).click();
  await execution.getByLabel('Maximum pending checks',{exact:true}).fill('128');
+ await execution.getByLabel('Maximum pending checks per chat',{exact:true}).fill('3');
  await execution.getByLabel('Default queue wait (seconds)',{exact:true}).fill('0');
  await execution.getByLabel('Small Python check: CPU cores',{exact:true}).fill('3');
  await execution.getByLabel('Small Python check: Maximum check time (seconds)',{exact:true}).fill('7200');
@@ -88,15 +89,22 @@ try{
  await page.route('**/api/actions',lostExecution);
  await execution.getByRole('button',{name:'Save execution limits'}).click();
  await expect(execution.getByRole('status')).toContainText('Current execution limits match');
- assert.equal(executionSaves,1);await page.unroute('**/api/actions',lostExecution);
+ assert.equal(executionSaves,1);
+ assert.equal((await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveQueue.maxPendingPerChat,3);
+ await page.unroute('**/api/actions',lostExecution);
  await expect(execution.getByText('Waiting checks stay queued until stopped or cancelled.',{exact:false})).toBeVisible();
  await execution.getByLabel('Maximum pending checks',{exact:true}).fill('200');
- await page.evaluate(async()=>{const current=(await window.amplifier.dispatch('testing.execution.read',{})).result;await window.amplifier.dispatch('testing.execution.save',{expectedRevision:current.revision,queue:{maxPending:150,defaultWaitSeconds:0},profiles:current.profiles})});
+ await execution.getByLabel('Maximum pending checks per chat',{exact:true}).fill('4');
+ await page.evaluate(async()=>{const current=(await window.amplifier.dispatch('testing.execution.read',{})).result;await window.amplifier.dispatch('testing.execution.save',{expectedRevision:current.revision,queue:{maxPending:150,maxPendingPerChat:5,defaultWaitSeconds:0},profiles:current.profiles})});
  await execution.getByRole('button',{name:'Save execution limits'}).click();
  await expect(execution.getByRole('alert')).toContainText('changed');
  await expect(execution.getByLabel('Maximum pending checks',{exact:true})).toHaveValue('200');
+ await expect(execution.getByLabel('Maximum pending checks per chat',{exact:true})).toHaveValue('4');
  await execution.getByRole('button',{name:'Discard execution edits and refresh'}).click();
  await expect(execution.getByLabel('Maximum pending checks',{exact:true})).toHaveValue('150');
+ await expect(execution.getByLabel('Maximum pending checks per chat',{exact:true})).toHaveValue('5');
+ await execution.getByLabel('Maximum pending checks per chat',{exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:`/tmp/per-chat-queue-settings-${page.viewportSize().width}.png`,fullPage:true});
 
  // Saved global settings remain reachable on narrow layouts and cold reopen.
  await page.setViewportSize({width:390,height:844});
@@ -117,6 +125,9 @@ try{
  await expect(section.getByLabel('Running test environments',{exact:true})).toHaveValue('10');
  await execution.getByText('Advanced execution limits',{exact:true}).click();
  await expect(execution.getByLabel('Maximum pending checks',{exact:true})).toHaveValue('150');
+ await expect(execution.getByLabel('Maximum pending checks per chat',{exact:true})).toHaveValue('5');
+ await execution.getByLabel('Maximum pending checks per chat',{exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:`/tmp/per-chat-queue-settings-${page.viewportSize().width}.png`,fullPage:true});
  await expect(execution.getByLabel('Small Python check: CPU cores',{exact:true})).toHaveValue('3');
  await execution.getByLabel('Maximum pending checks',{exact:true}).fill('160');
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
