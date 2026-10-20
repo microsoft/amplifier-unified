@@ -312,3 +312,48 @@ async def test_machine_reservation_is_retained_before_dependency_builder(app, na
     assert host.snapshot()['reserved']['memoryMiB'] == 6144
     await act(app, 'stop', result['resource'], 'stop-prepared')
     assert host.snapshot()['reserved']['count'] == 0
+
+
+def test_systemd_activation_requires_exact_socket_service_and_daemon(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    socket = tmp_path / 'incus.socket'
+    socket.touch()
+    alias = tmp_path / 'alias'; alias.symlink_to(socket)
+    values = {('incus.socket', 'Listen'): str(socket) + ' (Stream)', ('incus.socket', 'Triggers'): 'incus.service', ('incus.service', 'MainPID'): '42'}
+    def run(args, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=values[(args[2], args[3].split('=')[1])].encode())
+    monkeypatch.setattr(host.subprocess, 'run', run)
+    original = Path.read_text
+    monkeypatch.setattr(Path, 'read_text', lambda p, *a, **kw: 'incusd\n' if str(p) == '/proc/42/comm' else original(p, *a, **kw))
+    assert host.activated_daemon(alias, {'incusd'})
+    assert not host.activated_daemon(tmp_path / 'other.socket', {'incusd'})
+    values['incus.socket', 'Triggers'] = 'socket-proxy.service'
+    assert not host.activated_daemon(alias, {'incusd'})
+
+
+def test_systemd_daemon_restart_during_proof_is_not_accepted(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    socket = tmp_path / 'incus.socket'; socket.touch()
+    pids = iter(['42', '43'])
+    def run(args, **kwargs):
+        field = args[3].split('=')[1]
+        value = str(socket) + ' (Stream)' if field == 'Listen' else 'incus.service' if field == 'Triggers' else next(pids)
+        return SimpleNamespace(returncode=0, stdout=value.encode())
+    monkeypatch.setattr(host.subprocess, 'run', run)
+    monkeypatch.setattr(Path, 'read_text', lambda p: 'incusd\n')
+    assert not host.activated_daemon(socket, {'incusd'})
+
+
+def test_incus_local_target_accepts_both_single_endpoint_formats(monkeypatch):
+    from amplifier_web import incus_environment_worker as worker
+    endpoint = {'Addr': 'unix://'}
+    def run(args, env, **kwargs):
+        content = 'local\n' if 'get-default' in args else json.dumps({'local': endpoint})
+        return {'exit_code': 0, 'stdout': content, 'stderr': '', 'truncated': False}
+    monkeypatch.setattr(worker, 'run', run)
+    monkeypatch.setattr(worker.common.host_resources, 'local_target', lambda value, names: {'supported': value == 'unix://'})
+    assert worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']
+    endpoint.clear(); endpoint['Addrs'] = ['unix://']
+    assert worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']
+    endpoint['Addrs'].append('https://another-machine')
+    assert not worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']

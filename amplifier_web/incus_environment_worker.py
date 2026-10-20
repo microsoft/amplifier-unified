@@ -404,7 +404,10 @@ def host_target(config, env):
     try:
         current = checked(run([config['incusExecutable'], 'remote', 'get-default'], env, output_bytes=CONTROL_BYTES))['stdout'].strip()
         remotes = json.loads(checked(run([config['incusExecutable'], 'remote', 'list', '--format', 'json'], env, output_bytes=CONTROL_BYTES))['stdout'])
-        address = remotes[current].get('Addr', remotes[current].get('addr'))
+        remote = remotes[current]
+        address = remote.get('Addr', remote.get('addr'))
+        if address is None and isinstance(remote.get('Addrs'), list) and len(remote['Addrs']) == 1:
+            address = remote['Addrs'][0]
         return common.host_resources.local_target(address, {'incusd'})
     except (KeyError, TypeError, ValueError, BackendFailure):
         return {'supported': False, 'reason': 'The Incus execution target has no verified local machine authority. Backend limits still apply.'}
