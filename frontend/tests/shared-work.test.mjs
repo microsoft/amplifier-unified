@@ -1,5 +1,5 @@
-// Test-first contract. No SharedWorkBrowser implementation exists at this checkpoint.
-// These are authored checks, not executed/passing evidence.
+// Shared Work contracts, originally authored against the missing implementation.
+// Execution evidence belongs to each exact candidate, not this source comment.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -131,6 +131,36 @@ test('bounded list pagination sends exact opaque cursor and rejects a changed sn
  await click(root,'Next work');assert.equal(calls.at(-1)[1].after,'opaque-cursor');
  assert.match(text(root.toJSON()),/Work changed/);assert.match(text(root.toJSON()),/Retain exact original words/);
  assert.match(text(root.toJSON()),/stale|previous observation/i);assert.doesNotMatch(text(root.toJSON()),/No work yet/);await unmount(root);
+});
+
+test('remounted stale cursor can restart explicitly without losing query, filter or selected detail',async()=>{
+ let stale=false;const calls=[],row=item();
+ const dispatch=async(action,args)=>{
+  calls.push([action,args]);
+  if(action==='workspace.work.read')return accepted(detail(row));
+  assert.equal(action,'workspace.work.list');
+  if(args.after&&stale)return {accepted:false,error:'Work changed; refresh the list.'};
+  return accepted(page([row],args.after?{}:{total:21,truncated:true,nextAfter:'saved-cursor'}));
+ };
+ let root=await mount(dispatch);
+ await act(async()=>root.root.findByProps({'aria-label':'Show work'}).props.onChange({target:{value:'attention'}}));
+ await act(async()=>root.root.findByProps({'aria-label':'Find work'}).props.onChange({target:{value:'Retain'}}));
+ await click(root,'Next work');await inspect(root);await unmount(root);
+ stale=true;calls.length=0;root=await mount(dispatch);
+ assert.deepEqual(calls.filter(([name])=>name==='workspace.work.list').map(([,args])=>args.after),['saved-cursor']);
+ assert.equal(root.root.findAllByProps({'data-work-id':row.id}).length,0,'No first page was accepted');
+ assert.match(text(root.toJSON()),/Work changed/);
+ assert.ok(button(root,'Restart Work pages'),'Restart exists even without a page');
+ assert.ok(root.root.findByProps({'aria-label':'Work details'}));
+ await click(root,'Restart Work pages');
+ const lists=calls.filter(([name])=>name==='workspace.work.list');
+ assert.equal(lists.length,2,'One explicit restart, not an automatic retry loop');
+ assert.deepEqual(lists.at(-1)[1],{workspaceId:workspace.id,filter:'attention',query:'Retain',limit:20});
+ assert.equal(root.root.findByProps({'aria-label':'Show work'}).props.value,'attention');
+ assert.equal(root.root.findByProps({'aria-label':'Find work'}).props.value,'Retain');
+ assert.equal(root.root.findByProps({'data-work-id':row.id}).props['aria-pressed'],true);
+ assert.ok(root.root.findByProps({'aria-label':'Work details'}));
+ await unmount(root);
 });
 
 test('participant return keeps all six facts distinct and missing cleanup stays unknown',async()=>{

@@ -1,5 +1,5 @@
-// Test-first real-host journey. Run only in the owned isolated guest after build.
-// The baseline has no Work tab; no result is claimed until this script executes.
+// Real-host Shared Work journey. Run in the owned isolated guest after build.
+// Preserve baseline failures separately; results identify the exact candidate.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';

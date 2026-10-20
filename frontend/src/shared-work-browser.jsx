@@ -228,13 +228,13 @@ function WorkList({workspace,dispatch,onOpenChat,hostInstanceId=''}){
    <div className="a-shared-filters"><label>Show work<select aria-label="Show work" value={saved.filter} onChange={event=>change({filter:event.target.value,after:null,previous:[]})}>{filters.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
     <label>Find work<input aria-label="Find work" type="search" maxLength={200} value={saved.query} onChange={event=>change({query:event.target.value,after:null,previous:[]})}/></label></div>
    <button type="button" className="a-link" disabled={busy||!visible} onClick={reload}>Refresh work</button><ReadStatus busy={busy} error={error} data={page}/>
+   {error&&saved.after&&<button type="button" className="a-link" disabled={busy||!visible} onClick={()=>{invalidate();persist({...savedRef.current,after:null,previous:[]})}}>Restart Work pages</button>}
    {page&&<><p className="a-caption">{page.total} matching records · workspace revision {page.version} · observed {when(page.observedAt)}</p>
     <ul className="a-shared-items">{page.items.map(row=><li key={row.id}><button ref={node=>{if(node)buttons.current.set(row.id,node);else buttons.current.delete(row.id)}} type="button" data-work-id={row.id} aria-pressed={saved.selected===row.id} onClick={()=>inspect(row)}><strong>{row.title}</strong><span>{row.attentionReasons?.length?row.attentionReasons.map(words).join(' · '):words(row.commitment)+' · '+words(row.disposition)}</span><small>Record {row.revision} · promise {row.promiseRevision}</small></button><small>Owner {row.ownerSessionId} · {row.ownerObservation?.activityObserved?words(row.ownerObservation.status):row.ownerObservation?.available?'Activity not observed':'Owner unavailable — reconciliation needed'}. Activity is not completion.</small></li>)}</ul>
     {!page.items.length&&page.total===0&&!page.truncated&&!error&&<p>No matching recorded work.</p>}
     <PageLimit page={page} label="Work list"/>
     <div className="a-shared-actions"><button type="button" className="a-soft" disabled={busy||!visible||!saved.previous.length} onClick={()=>{invalidate();persist({...savedRef.current,after:saved.previous.at(-1),previous:saved.previous.slice(0,-1)})}}>Previous work</button>
      <button type="button" className="a-soft" disabled={busy||!visible||!page.nextAfter} onClick={()=>{invalidate();persist({...savedRef.current,after:page.nextAfter,previous:[...saved.previous,saved.after]})}}>Next work</button>
-     {error&&saved.after&&<button type="button" className="a-link" onClick={()=>change({after:null,previous:[]})}>Restart Work pages</button>}
     </div>
    </>}
    <Coverage workspaceId={workspace.id} dispatch={dispatch} enabled={visible}/>
