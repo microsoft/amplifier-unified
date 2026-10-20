@@ -287,6 +287,9 @@ class Children:
         self.prepared[session.session_id] = prepared
         self.sessions[session.session_id] = session
         coordinator = session.coordinator
+        from .approvals import Approvals
+        coordinator.register_capability("approval.interactive",
+            isinstance(self.approvals, Approvals) and self.approvals.interactive)
         coordinator.register_capability("session.spawn", self.spawn)
         async def resume(sub_session_id, instruction, parent_session=None, provider_preferences=None, model_role=None):
             return await self.resume(sub_session_id, instruction, parent_session or session, provider_preferences, model_role)
