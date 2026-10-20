@@ -2,6 +2,7 @@ import {AccessMode} from './access-mode';
 import {ConfigurationBoundary} from './configuration-scope';
 import {RegistrySettings} from './registry';
 import {StorageSettings} from './storage-settings';
+import {TestingSettings} from './testing-settings';
 import {createPortal} from 'react-dom';
 import {SetupJourney,AssistedSettingsButton} from './setup-journey';
 import {isTopLevelChat} from './chat-navigation';
@@ -61,6 +62,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  let content;
  if(['overview','ai-connections','image-generation','providers','routing','registries'].includes(page))content=<ConfigurationBoundary state={state} act={dispatch||act}>{config=>['overview','ai-connections','image-generation'].includes(page)?<AIConnections imagesOnly={page==='image-generation'} {...config} navigate={navigate} onReturnToChat={navigation.dismiss}/>:page==='providers'?<ProviderSettings {...config} navigate={navigate}/>:page==='routing'?<RoutingSettings {...config}/>:<RegistrySettings {...config}/>}</ConfigurationBoundary>;
  else if(page==='storage')content=active==='storage'?<StorageSettings state={state} act={dispatch||act} onPrivacy={()=>navigate('privacy')}/>:null;
+ else if(page==='testing')content=<TestingSettings act={dispatch||act} navigate={navigate}/>;
  else if(page==='access-approvals')content=<AccessMode globalOnly act={dispatch||act}/>;
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
