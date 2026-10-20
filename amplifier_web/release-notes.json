@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.186",
+      "title": "Clearer access choices and reliable approval guidance",
+      "changes": [
+        "Choose the app-wide access default from Settings \u2192 Privacy & files \u2192 Access & approvals, even without a chat selected. Existing chat and project overrides remain in effect.",
+        "Run routine operations for task-owned test environments through their existing ownership controls without an extra approval prompt.",
+        "Clear obsolete approval cards after Stop, restart, workspace changes or expiration without starting or replaying work.",
+        "Add guidance when allowing or denying an approval. Overlapping replies deliver that guidance once to the paused conversation, including child conversations.",
+        "Steer an active conversation while a file-access change waits to apply, without starting a new turn under the previous access policy."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.185",
       "title": "Resume member chats through their manager",
       "changes": [
