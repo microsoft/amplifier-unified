@@ -860,6 +860,13 @@ It runs as an affected-flow smoke in the owned DTU and in Extended browser
 checks; it adds no broad publication gate.
 
 
+## Model capacity waiting settings — October 20
+
+`frontend/tests/model-capacity-settings-browser.mjs` owns the global Advanced settings journey using the production built UI and AppService with a synthetic runtime. It proves finite and unlimited waiting, two-client stale-save refusal, retained private edits, exact command retry after a lost acknowledgement and reopen, no extra saved mutation, unchanged worker starts/stops, saved cold reopen, and desktop/narrow layouts. No paid provider or live-host policy change is involved.
+
+This additive owner gives this isolated branch 100 registered scenarios and 143 distinct readiness/extended browser scripts (142 excluding the attachment script). The original 65-scenario identity is unchanged. This focused qualification does not add a broad browser census as a release gate.
+
+
 ### Global test capacity (October 20)
 
 **TEST-CAPACITY** adds `testing-settings` to Extended browser checks and the
@@ -928,3 +935,5 @@ checks that a restarted scheduler retains resources and timeouts after settings
 change. Preparation tests cover one saved waiting/build deadline and independent
 dependency recipe identity. This adds no duplicate browser scenario or broad
 publication gate and does not claim physical-runner deployment acceptance.
+
+Integrated model-capacity, testing settings and existing-chat adoption coverage totals 102 registered scenarios and 145 distinct readiness/extended scripts (144 excluding attachment consumption), preserving the frozen 65-scenario baseline.
