@@ -224,19 +224,19 @@ async def test_only_verified_removal_publishes_retained_file_accounting(app, bac
         assert 'accounting' not in result['resource']['retention']
 
 
-async def test_reconcile_ordinary_root_work_still_rejects_peer_and_stopped_generation(app, backend, monkeypatch):
+async def test_reconcile_agent_requires_current_owner_without_extra_approval(app, backend, monkeypatch):
     row = (await start(app))['resource']
     source, peer = app.state['sessions']
     args = {**scope(app), 'id': row['id'], 'expectedRevision': row['revision'], 'requestId': 'agent-inspect'}
     calls = observer(monkeypatch, 'running')
     with pytest.raises(AppError, match='calling conversation'):
         await agent(app, source, 'workspace.environments.reconcile', {**args, 'sessionId': peer['id']}, 'peer-inspect')
-    result = await agent(app, source, 'workspace.environments.reconcile', args, 'ordinary-root')
+    result = await agent(app, source, 'workspace.environments.reconcile', args, 'no-extra-grant')
     assert result['result']['request']['state'] == 'completed' and calls == ['reconcile']
+    assert not source['approvals'] and not app.configuration_authority.rows(source['id'])
     source['collaborationGeneration']['terminal'] = True
-    with pytest.raises(AppError):
-        await agent(app, source, 'workspace.environments.reconcile',
-                    {**args, 'requestId': 'after-stop'}, 'after-stop')
+    with pytest.raises(AppError, match='current transport-bound root generation'):
+        await agent(app, source, 'workspace.environments.reconcile', {**args, 'requestId': 'retired'}, 'retired')
     assert calls == ['reconcile']
 
 
