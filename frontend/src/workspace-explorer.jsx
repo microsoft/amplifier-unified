@@ -25,9 +25,9 @@ export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compa
   {compact&&workspace&&<button type="button" className="a-icon a-workspace-new-chat" data-action="session.draft" aria-label={'New chat in '+row.path} title={canDraft?'New chat in '+row.path:'Workspace folder unavailable'} disabled={!canDraft} onClick={e=>{e.stopPropagation();newChat(row)}}><MessageSquarePlus/></button>}
  </>;
  const className=`a-workspace-row ${workspace?'is-workspace':''} ${selected?'is-selected':''}`;
- if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
- if(!workspace)return <div className={className} data-workspace-path={row.path}>{content}</div>;
- return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
+ if(floating)return <div className={className} data-show-paths={!!state.settings?.workspaces?.showPaths}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
+ if(!workspace)return <div className={className} data-show-paths={!!state.settings?.workspaces?.showPaths} data-workspace-path={row.path}>{content}</div>;
+ return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-show-paths={!!state.settings?.workspaces?.showPaths} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
   <button type="button" className="a-link" data-action="workspace.select" onClick={()=>{close();open(row)}}><MessageCircle/>Open chats</button>
   <button type="button" data-action={row.archived?'workspace.restore':'workspace.archive'} onClick={()=>{close();act(row.archived?'workspace.restore':'workspace.archive',{id:row.workspaceId})}}>{row.archived?'Restore workspace':'Archive workspace'}</button>
   <button type="button" data-action="workspace.pin" aria-label={(row.pinned?'Unpin workspace ':'Pin workspace ')+row.path} onClick={()=>{close();act('workspace.pin',{id:row.workspaceId,pinned:!row.pinned})}}>{row.pinned?<PinOff/>:<Pin/>}{row.pinned?'Unpin workspace':'Pin workspace'}</button>

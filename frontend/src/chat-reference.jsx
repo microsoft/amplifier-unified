@@ -175,9 +175,8 @@ export function ChatReferences({sessionId,messageId,revision='',available,config
    key={JSON.stringify([sessionId,messageId,item.id,item.version,item.revision])}
    item={item} sessionId={sessionId} messageId={messageId} revision={revision}
    blocked={configurationBusy||!fresh||!!failure} dispatch={dispatch}/>)}
-  {!!current?.items.length&&!failure&&(configurationBusy||!fresh)&&
-   <p className="a-chat-reference-help" role="status">{configurationBusy?
-    'Chat settings are changing. Open chat is paused.':'Refreshing chat references…'}</p>}
+  {!!current?.items.length&&!failure&&configurationBusy&&
+   <p className="a-chat-reference-help" role="status">Chat settings are changing. Open chat is paused.</p>}
   {failure&&<div className="a-chat-reference-failure">
    <p className="a-chat-reference-error" role="alert">{failure}</p>
    <button type="button" className="a-soft" data-action="outputs.chatReferences"

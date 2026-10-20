@@ -53,6 +53,49 @@ try{
  await page.screenshot({path:join(output,'desktop-status-studio.png')});
  report.checks.push('Brief pairs waiting/ready work; Studio separates three status columns; both sidebar actions remain accessible on Home');
 
+ // Both views use the same chat row and respect the existing path preference.
+ const completed=before.state.sessions.find(row=>row.nativeIdentity==='alpha-198');
+ const chatRow=()=>sidebar.locator(`.a-nav-chat[data-session-id="${completed.id}"]`).first();
+ const rowStyle=()=>chatRow().evaluate(node=>({
+  height:node.getBoundingClientRect().height,
+  location:getComputedStyle(node.querySelector('.a-nav-chat-workspace')).display,
+  text:node.querySelector('.a-nav-chat-workspace').textContent,
+  status:node.querySelector('.a-navigation-status').dataset.kind
+ }));
+ const statusStyle=await rowStyle();assert.equal(statusStyle.location,'none');
+ await switchTo('Browse');await settled();
+ assert.deepEqual(await rowStyle(),statusStyle);
+ for(const mode of ['Browse','Status']){
+  await switchTo(mode);await settled();
+  await act('settings.update',{patch:{workspaces:{showPaths:true}}});await settled();
+  await expect(chatRow().locator('.a-nav-chat-workspace')).toBeVisible();
+  assert.equal((await rowStyle()).text,completed.workspace);
+  assert.equal((await rowStyle()).height,54);
+  await act('settings.update',{patch:{workspaces:{showPaths:false}}});await settled();
+  await expect(chatRow().locator('.a-nav-chat-workspace')).toBeHidden();
+ }
+ for(const level of ['detailed','minimal','standard']){
+  const current=await page.evaluate(()=>window.amplifier.getShellState());
+  const composition=structuredClone(current.composition);
+  composition.presentation={...composition.presentation,interfaceDetail:level,executionDetail:level};
+  const clientId=(await state()).client.id;
+  const prepared=await act('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition});
+  await act('shell.changes.apply',{clientId,expectedRevision:current.revision,changeId:prepared.result.id});
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail',level);
+  const styles=[];
+  for(const mode of ['Browse','Status']){
+   await switchTo(mode);await settled();styles.push(await rowStyle());
+  }
+  assert.deepEqual(styles[0],styles[1],level+' keeps the two sidebar presentations aligned');
+  assert.equal(styles[0].location,level==='detailed'?'block':'none');
+  if(level==='detailed')assert.equal(styles[0].height,54);
+ }
+ await act('history.refresh',{});await settled();
+ await expect(home).not.toContainText('Updating your work');
+ await expect(sidebar).not.toContainText(/Updating|Finding existing chats/);
+ assert.deepEqual(await rowStyle(),statusStyle);
+ report.checks.push('Browse and Status share row height/status/location; folder-path preference is honored in both; background refresh leaves no updating text');
+
  const idle=sidebar.locator('[data-status-group=idle]');
  await idle.getByRole('button',{name:'Show more pick up again chats',exact:true}).click();
  const first=(await shell()).workStatusIdle;

@@ -406,10 +406,11 @@ test('call work stays stoppable in chat and targets the call even after navigati
  assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
  await act(async()=>root.unmount());
 });
-test('quiet navigation keeps discovery status, failures and refresh access',()=>{
+test('quiet navigation retains rows without refresh text and keeps failures and refresh access',()=>{
  const state={...snapshot,sharedHistory:{loading:true,issueCount:2,error:'History unavailable'}};
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state}})));
- assert.match(html,/Finding existing chats/);assert.doesNotMatch(html,/Some saved folders or chats need attention/);
+ assert.doesNotMatch(html,/Finding existing chats|Some saved folders or chats need attention/);
+ assert.match(html,/Research ideas/);
  assert.match(html,/History unavailable/);assert.match(html,/Refresh workspaces and chats/);
 });
 
