@@ -237,8 +237,155 @@ class RuntimeManager:
         self._retired = {}
         self._execution_state = None
         self.home = None
+        self._maintenance_observer = self._maintenance_authorizer = None
+        self._maintenance_guard = self._maintenance_admission = self._maintenance_loader = None
+        self._maintenance_receipts = {}
+        self._maintenance_tasks = set()
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
+
+    def set_maintenance_observer(self, callback):
+        self._maintenance_observer = callback
+
+    def set_maintenance_authorizer(self, callback):
+        self._maintenance_authorizer = callback
+
+    def set_maintenance_resume_guard(self, callback):
+        self._maintenance_guard = callback
+
+    def set_maintenance_admission(self, callback):
+        self._maintenance_admission = callback
+
+    def set_maintenance_loader(self, callback):
+        self._maintenance_loader = callback
+
+    def _maintenance_admit(self, sid, operation):
+        if self._maintenance_admission:
+            self._maintenance_admission(sid, operation)
+
+    def maintenance_snapshot(self):
+        rows = []
+        for sid in sorted(set(self.workers) | set(self._preparations) | set(self._maintenance_receipts)):
+            worker = self.workers.get(sid)
+            if worker and worker["process"].returncode is None:
+                retained = self._maintenance_receipts.get(sid, {})
+                if (retained.get("status") in {"suspended", "quiescent", "uncertain"}
+                        and retained.get("epoch") == worker.get("maintenanceEpoch")):
+                    rows.append(dict(retained))
+                    continue
+                origins = {}
+                if worker.get("activeGeneration"):
+                    origins[worker["activeGeneration"]] = set(worker.get("generationInputs", []))
+                terminal = worker.get("maintenanceTerminal")
+                if terminal:
+                    origins.setdefault(terminal["generationId"], set()).update(terminal["inputIds"])
+                jobs = list(worker.get("ownedJobs", {}).values())
+                for job in jobs:
+                    if job.get("generationId"):
+                        origins.setdefault(job["generationId"], set()).update(job["inputIds"])
+                rows.append({**self._maintenance_receipts.get(sid, {}),
+                    "sessionId": sid, "runtimeId": worker.get("runtime_id", sid),
+                    "status": self._maintenance_receipts.get(sid, {}).get("status", "waiting"),
+                    "generationId": worker.get("activeGeneration"),
+                    "inputIds": sorted(set(worker.get("pendingInputs", [])) |
+                                       {value for values in origins.values() for value in values}),
+                    "pendingInputIds": sorted(worker.get("pendingInputs", [])),
+                    "ownedGenerations": [{"generationId": identity, "inputIds": sorted(values)}
+                                         for identity, values in sorted(origins.items())],
+                    "rootGenerationTerminal": terminal, "jobOrigins": jobs})
+            elif sid in self._preparations:
+                rows.append({"sessionId": sid, "runtimeId": sid, "status": "waiting",
+                             "generationId": None, "inputIds": [], "reason": "preparing"})
+            elif sid in self._maintenance_receipts:
+                rows.append(dict(self._maintenance_receipts[sid]))
+        return rows
+
+    async def _observe_maintenance(self, sid, receipt):
+        value = {**receipt, "sessionId": sid}
+        if self._maintenance_observer:
+            if await self._maintenance_observer(value) is not True:
+                raise RuntimeError("Maintenance checkpoint was not acknowledged by its host owner")
+        self._maintenance_receipts[sid] = value
+        row = self.workers.get(sid)
+        if row:
+            row["maintenanceEpoch"] = value.get("epoch")
+        if (value.get("status") == "quiescent" and row
+                and row["process"].returncode is None and not row.get("maintenance_release")):
+            row["maintenance_release"] = asyncio.create_task(self._release_maintenance(sid, row, value["epoch"]))
+        return True
+
+    async def _release_maintenance(self, sid, row, epoch):
+        row["maintenance_released"] = True
+        row["closing"] = True
+        await self._request_unlocked(sid, "maintenance.release", epoch=epoch)
+        await row["process"].wait()
+        # This path has no timeout escalation. A failed release remains visible
+        # and requires a separate explicit emergency decision.
+        await self._stop_row(sid, row)
+
+    async def maintenance_pause(self, epoch):
+        captured = {row["sessionId"]: row for row in self.maintenance_snapshot()}
+        async def request(sid, row):
+            try:
+                await asyncio.shield(row["ready"])
+                if self.workers.get(sid) is not row or row["process"].returncode is not None:
+                    raise RuntimeError("Worker ownership changed")
+                await self._request_unlocked(sid, "maintenance.pause", epoch=epoch)
+            except Exception as exc:
+                await self._observe_maintenance(sid, {**captured[sid], "epoch": epoch,
+                    "status": "unsupported", "reason": type(exc).__name__})
+        for sid, row in tuple(self.workers.items()):
+            if row["process"].returncode is None:
+                row["maintenanceEpoch"] = epoch
+                row["maintenanceTerminal"] = None
+                task = asyncio.create_task(request(sid, row))
+                self._maintenance_tasks.add(task)
+                task.add_done_callback(self._maintenance_tasks.discard)
+        # Preparation has accepted no native input. Its final synchronous
+        # admission check holds execution; it is not called a saved turn.
+        for sid in tuple(self._preparations):
+            await self._observe_maintenance(sid, {**captured[sid],
+                "epoch": epoch, "status": "quiescent", "reason": "preparation-held"})
+        return self.maintenance_snapshot()
+
+    async def maintenance_resume(self, epoch, session_ids):
+        results = []
+        for sid in session_ids:
+            async with self._admission(sid):
+                row = self.workers.get(sid)
+                if row is None or row["process"].returncode is not None:
+                    if self._maintenance_loader is None:
+                        raise RuntimeError("No current maintenance restoration owner")
+                    session, emit = await self._maintenance_loader(sid)
+                    await self._start_locked(session, emit, maintenance_restore=epoch)
+                await self._request_unlocked(sid, "maintenance.resume", epoch=epoch)
+                receipt = self._maintenance_receipts.get(sid)
+                if not receipt or receipt.get("epoch") != epoch or receipt.get("status") != "resumed":
+                    raise RuntimeError("Runtime resumption did not produce an acknowledged receipt")
+                results.append(dict(receipt))
+        return results
+
+    async def maintenance_stop(self, epoch):
+        # Each subprocess was created start_new_session=True by this manager.
+        # This never sends signals to the app, shared DTU or unowned processes.
+        captured = {row["sessionId"]: row for row in self.maintenance_snapshot()}
+        for preparation in self._preparations.values():
+            preparation.update(stopped=True, stop_reason="stopped")
+            if preparation.get("task"):
+                preparation["task"].cancel()
+        rows = tuple(self.workers.items())
+        for sid, row in rows:
+            row["stop_reason"], row["closing"] = "stopped", True
+            process = row["process"]
+            if process.returncode is None:
+                if os.name != "nt":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+        await asyncio.gather(*(self.stop(sid) for sid, _ in rows), return_exceptions=False)
+        for sid, row in rows:
+            await self._observe_maintenance(sid, {**captured[sid], "epoch": epoch, "status": "stopped"})
+        return self.maintenance_snapshot()
 
     def bind_execution_state(self, read):
         """Host-owned synchronous authority; never supplied by a model command."""
@@ -363,7 +510,8 @@ class RuntimeManager:
             except TimeoutError as exc:
                 raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
-    async def _start_locked(self, session, emit, *, preserve_emit=False, guard=None, preserve_configuration=False):
+    async def _start_locked(self, session, emit, *, preserve_emit=False, guard=None, preserve_configuration=False,
+                            maintenance_restore=None):
         # Host callbacks only: no command argument can authorize a restart.
         if preserve_configuration and guard is None:
             raise ValueError('Placement-only startup requires the retained host operation guard.')
@@ -386,6 +534,8 @@ class RuntimeManager:
                 'runtimeSessionId', 'nativeIdentity', 'forkContext') if key in session}
             await asyncio.wait_for(asyncio.shield(current["ready"]), self.startup_timeout)
             return
+        if maintenance_restore is None:
+            self._maintenance_admit(sid, "start")
         await emit("runtime.status", {"sessionId": sid, "status": "starting", "phase": "runtime-setup",
             "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies.", "elapsedSeconds": 0})
         from .host.config import worker_environment
@@ -434,6 +584,8 @@ class RuntimeManager:
                 # readers or a registered cleanup owner.
                 update_pending = generation != active_release(home).get('current')
                 if guard is not None: guard()
+                if maintenance_restore is None:
+                    self._maintenance_admit(sid, "start")
                 proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                     start_new_session=os.name != "nt", env=environment)
@@ -522,6 +674,8 @@ class RuntimeManager:
         # browser's execution logs, catalogs and attachment history is redundant.
         config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        if maintenance_restore is not None:
+            config["_maintenanceRestore"] = maintenance_restore
         if preserve_configuration:
             config['_preserveConfiguration'] = True
         row['runtime_id'] = config['id']
@@ -538,6 +692,8 @@ class RuntimeManager:
                 raise RuntimeStartupError("Runtime preparation was stopped before input admission.")
             try:
                 if guard is not None: guard()
+                if maintenance_restore is None:
+                    self._maintenance_admit(sid, "start")
                 await self._write(row, {"op": "start", "session": config})
             except (BrokenPipeError, ConnectionResetError) as exc:
                 # A worker can exit between spawn and stdin.drain(). Let the
@@ -596,11 +752,29 @@ class RuntimeManager:
 
     async def _bridge(self, sid, row, data):
         try:
-            if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
+            # Shutdown may observe an already-authorized paused checkpoint
+            # while releasing this exact worker. It cannot authorize resumption
+            # or any application effect through the closing bridge.
+            releasing = row.get("maintenance_released") and data.get("operation") == "_maintenance.observe"
+            if self.workers.get(sid) is not row or (row.get("closing") and not releasing) or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
                 raise RuntimeError("The calling runtime no longer owns this bridge.")
-            if not self.app_bridge:
+            operation, arguments = data["operation"], data.get("args", {})
+            if operation.startswith("_maintenance."):
+                receipt = dict(arguments.get("receipt") or {})
+                if receipt.get("sessionId") != row["runtime_id"]:
+                    raise RuntimeError("Maintenance proof belongs to another runtime")
+                if operation == "_maintenance.observe":
+                    result = await self._observe_maintenance(sid, receipt)
+                else:
+                    callback = (self._maintenance_authorizer if operation == "_maintenance.authorize"
+                                else self._maintenance_guard if operation == "_maintenance.validate" else None)
+                    if callback is None:
+                        raise RuntimeError("Maintenance authority is unavailable")
+                    result = await callback(sid, receipt.get("epoch"), {**receipt, "sessionId": sid})
+            elif not self.app_bridge:
                 raise RuntimeError("App controls are not connected")
-            result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
+            else:
+                result = await self.app_bridge(operation, arguments, sid)
             reply = {"op": "bridge.result", "id": data["id"], "result": result}
         except Exception as exc:
             reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
@@ -801,8 +975,33 @@ class RuntimeManager:
                                 data['event'][key] = sid
                     emitter = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
                     root_emitter = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
+                    if data.get("type") == "input.accepted" and data.get("kind") in {"user", "steer", "service"} and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        row.setdefault("pendingInputs", set()).add(data["input_id"])
+                    if data.get("type") in {"input.delivered", "steering.applied", "steering.held", "steering.unknown"} and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        row.setdefault("pendingInputs", set()).discard(data.get("input_id"))
                     if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
+                        if data.get("input_id") not in row.setdefault("generationInputs", []):
+                            row["generationInputs"].append(data["input_id"])
+                    if data.get("type") == "generation.started" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        row["activeGeneration"] = data.get("generation_id")
+                        row["generationInputs"] = list(data.get("input_ids") or [])
+                    if data.get("type") in {"generation.finished", "generation.failed", "generation.detached"} and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        if row.get("maintenanceEpoch") and row.get("activeGeneration"):
+                            row["maintenanceTerminal"] = {
+                                "generationId": row["activeGeneration"],
+                                "inputIds": sorted(row.get("generationInputs", []))}
+                        row["activeGeneration"], row["generationInputs"] = None, []
+                    if data.get("type") == "job.queued" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        row.setdefault("ownedJobs", {})[data["job_id"]] = {
+                            "jobId": data["job_id"], "generationId": data.get("generation_id"),
+                            "inputIds": sorted(data.get("input_ids") or []), "status": "pending"}
+                    if data.get("type") in {"job.returned", "job.failed", "job.cancelled"} and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        row.setdefault("ownedJobs", {}).pop(data.get("job_id"), None)
+                    if data.get("type") == "session.resumed" and emitter == row["runtime_id"]:
+                        receipt = self._maintenance_receipts.get(sid)
+                        if receipt:
+                            await self._observe_maintenance(sid, {**receipt, "status": "resumed"})
                     if data.get("type") in {"input.delivered", "steering.applied"} and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
                         continue  # Child input cannot mutate root admission provenance.
                     if data.get("type", "").startswith("generation.") or data.get("type") == "collaboration.checkpoint":
@@ -864,6 +1063,10 @@ class RuntimeManager:
     async def _execution_ended(self, sid, row, status):
         """Only a confirmed process exit settles independent background calls."""
         if row.get("executionEnded"): return
+        if row.get("maintenance_released"):
+            await row["emit"]("runtime.warmth", {"sessionId": sid, "status": "cold"})
+            row["executionEnded"] = True
+            return
         shutdown = row.get('stop_reason') == 'shutdown'
         await row["emit"]("runtime.ended", {"sessionId": sid, "status": 'interrupted' if shutdown else status,
             **({'reason': 'shutdown'} if shutdown else {}), "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
@@ -902,6 +1105,8 @@ class RuntimeManager:
     async def _admit(self, sid, op, args):
         if self._closed:
             raise RuntimeHostClosingError()
+        if op in {"send", "retry", "worker.message", "worker.steer"}:
+            self._maintenance_admit(sid, op)
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
@@ -1382,6 +1587,13 @@ class RuntimeManager:
         if not row["ready"].done():
             row["ready"].cancel()
         proc = row["process"]
+        if (row.get("stop_reason") == "shutdown"
+                and self._maintenance_receipts.get(session_id, {}).get("status") in {"suspended", "quiescent"}
+                and proc.returncode is None):
+            row["maintenance_released"] = True
+            await self._write(row, {"op": "maintenance.release",
+                "epoch": self._maintenance_receipts[session_id]["epoch"]})
+            await proc.wait()
         if proc.returncode is None:
             try:
                 await self._write(row, {"op": "stop"})
@@ -1405,7 +1617,7 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
+        cold = row.get('maintenance_released') or row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if cold else "stopped"})
         if self.workers.get(session_id) is row:

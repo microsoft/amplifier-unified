@@ -463,6 +463,11 @@ class Maintenance:
                             or _identity(proof) == _identity(row['proof']))):
                 return False
             status = proof['status']
+            if row['phase'] == 'resume-requested' and status == 'suspended':
+                # Paused remount observes the same durable checkpoint before
+                # claiming its continuation. Acknowledge that observation
+                # without erasing the explicit, not-yet-consumed resume intent.
+                return _continuation(proof) == _continuation(row['proof'])
             if row['phase'] in {'resuming', 'resumed'}:
                 if status not in {'resumed', 'uncertain', 'stopped'}:
                     return False

@@ -161,6 +161,28 @@ async def test_restart_retains_pause_and_explicit_resume_consumes_once(tmp_path)
         await other.close()
 
 
+async def test_remount_checkpoint_observation_preserves_unconsumed_resume_intent(tmp_path):
+    runtime = Runtime()
+    host = Host(tmp_path, runtime)
+    try:
+        epoch = await paused(host)
+        original = runtime.maintenance_resume
+        async def remount_then_resume(epoch, identities):
+            proof = runtime.inventory[0]
+            assert host.maintenance._row('root')['phase'] == 'resume-requested'
+            assert await host.maintenance.observe(proof)
+            assert host.maintenance._row('root')['phase'] == 'resume-requested'
+            assert not await host.maintenance.observe({**proof, 'checkpointId': 'replacement'})
+            return await original(epoch, identities)
+        runtime.maintenance_resume = remount_then_resume
+        await command(host, 'resume', {'epoch': epoch}, 'resume')
+        await host.settled()
+        assert runtime.effects == [('root', 'checkpoint-root')]
+        assert host.maintenance._row('root')['phase'] == 'resumed'
+    finally:
+        await host.close()
+
+
 @pytest.mark.parametrize('change', ['stop', 'child_stop', 'placement', 'edit', 'configuration',
                                   'task', 'ownership', 'assignment', 'budget'])
 async def test_current_authority_wins_resume(tmp_path, change):

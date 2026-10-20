@@ -67,6 +67,7 @@ class Worker:
         self.context_bindings = {}
         self.context_inputs = []
         self.root_generation_outcome = None
+        self.maintenance = None
         if __package__:
             from .response_completion import ResponseBlocks
         else:
@@ -605,6 +606,25 @@ class Worker:
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
             self.session.coordinator.register_capability("live.park", self.park)
+            from amplifier_web.host.execution_pause import ExecutionPause
+            children = self.session.coordinator.get_capability("live.children")
+            async def maintenance_authorize(receipt):
+                return await self.bridge("_maintenance.authorize", {"receipt": receipt}) is True
+            async def maintenance_validate(receipt):
+                return await self.bridge("_maintenance.validate", {"receipt": receipt}) is True
+            async def maintenance_observe(receipt):
+                return await self.bridge("_maintenance.observe", {"receipt": receipt})
+            self.maintenance = ExecutionPause(
+                self.home / "sessions" / config["id"] / "maintenance", config["id"], children.store,
+                authorize=maintenance_authorize, validate=maintenance_validate,
+                observe=maintenance_observe)
+            restore_epoch = config.get("_maintenanceRestore")
+            if restore_epoch is not None:
+                if restore_epoch != self.maintenance.control["epoch"] or not self.maintenance.control["held"]:
+                    raise ValueError("The requested maintenance checkpoint changed")
+            else:
+                await self.maintenance.begin_fresh()
+            await self.maintenance.install(self.session.coordinator, restore=restore_epoch is not None)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
@@ -845,6 +865,16 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        if op in {"maintenance.pause", "maintenance.release"}:
+            # A tool control can await human input under command_lock. The
+            # durable hold must reach all native owners without waiting for it.
+            token = self.bind_activation() if not self.parked and self.activation_gate else None
+            try:
+                await self._command_serial(data)
+            finally:
+                if token is not None:
+                    self.activation_gate.reset(token)
+            return
         if op in {"approval", "coordination.approval"}:
             # A control can await a human decision while owning command_lock.
             # Both the independent question and its UI answer must bypass it;
@@ -879,7 +909,7 @@ class Worker:
                 if settled:
                     self.shutdown.set()
             return
-        if op not in {"send", "retry", "resume", "control", "worker.steer", "worker.stop", "worker.message", "approval"}:
+        if op not in {"send", "retry", "resume", "maintenance.resume", "control", "worker.steer", "worker.stop", "worker.message", "approval"}:
             await self._command_serial(data)
             return
         try:
@@ -1049,6 +1079,31 @@ class Worker:
                 if not self.session or not self.execution or self.execution.done():
                     raise RuntimeError('The session has not finished loading successfully.')
                 result = {"accepted": True}
+            elif op == "maintenance.pause":
+                if self.maintenance is None:
+                    raise RuntimeError("Safe-boundary pause is unavailable until preparation finishes")
+                result = await self.maintenance.request(data["epoch"], dispatch=not self.parked)
+                if self.parked:
+                    # Idle retention already relinquished the history writer.
+                    # There is no running continuation to checkpoint/remount.
+                    result = {"sessionId": self.runtime.session_id, "runtimeId": self.runtime.session_id,
+                              "epoch": data["epoch"], "status": "quiescent", "generationId": None,
+                              "inputIds": [], "pendingInputIds": [], "ownedGenerations": [],
+                              "jobOrigins": [], "children": []}
+                    if await self.maintenance.observe(result) is not True:
+                        raise ValueError("Idle maintenance boundary was not acknowledged")
+            elif op == "maintenance.resume":
+                if self.maintenance is None:
+                    raise RuntimeError("Safe-boundary resume is unavailable")
+                result = await self.maintenance.resume(data["epoch"])
+            elif op == "maintenance.release":
+                if self.maintenance is None:
+                    raise RuntimeError("Safe-boundary release is unavailable")
+                if self.parked:
+                    self.shutdown.set()
+                else:
+                    await self.runtime.release_paused(data["epoch"])
+                result = {"accepted": True}
             elif op == "approval":
                 result = await self.resolve_approval(data)
             elif op == "coordination.approval":
@@ -1067,6 +1122,8 @@ class Worker:
                 self.start_task = asyncio.create_task(self.start(data["session"]))
                 return
             elif op == "stop":
+                if self.maintenance is not None:
+                    await self.maintenance.revoke()
                 if self.runtime and not self.runtime.closed:
                     from amplifier_module_loop_live.runtime import Input
                     await self.runtime.submit(Input("stop"))
