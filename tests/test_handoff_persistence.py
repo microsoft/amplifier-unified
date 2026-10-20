@@ -53,8 +53,9 @@ async def test_recovery_preflight_failure_retains_fence_and_explicit_reconciliat
         assert owner['workingDirectory'] == str(root) and owner['executionRevision'] == 0
         runtime.quiesce_for_handoff.assert_not_awaited()
         runtime.collaboration_input.assert_not_awaited()
-        with pytest.raises(AppError, match='Applying conversation settings'):
+        with pytest.raises(AppError, match=r'\AApplying or reconciling conversation settings; new input must wait\.\Z') as blocked:
             await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'must remain fenced'})
+        assert blocked.value.status == 409
         response = await app.dispatch('worktree.reconcile', {'sessionId': sid,
             'id': saved['id'], 'expectedRevision': saved['revision'],
             'destination': 'source', 'evidence': 'The original folder is intact; keep it.'}, command_id='reconcile')

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Isolated real UI and service, with all GitHub operations intercepted.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -70,7 +71,7 @@ try{
  const page=await context.newPage(),errors=[];diagnosticPage=page;let pending;
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const command=request.postDataJSON();if(command?.action==='feedback.comment')pending=command.args}});
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:false});await page.waitForSelector('#amp-one');
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await composer.fill('Keep my private original-chat draft');
  await expect(composer).toHaveDraft('Keep my private original-chat draft');

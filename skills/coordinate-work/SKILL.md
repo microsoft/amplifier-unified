@@ -56,6 +56,25 @@ compare those exact links, not equal message text.
    (including replacement for an update) keeps the conversation eligible for
    this ordinary guarded input. It does not clear an actual Stop, a blocked task
    or a failed turn, and does not replay previously suppressed requests.
+   When the human explicitly asks you to resume your commissioned chats, inspect
+   their current task, completed effects and `signal.interruptionRevision` through
+   `coordination.list`. For each intended unfinished member, send one fresh
+   queued request with `resume: {sourceMessageId, expectedInterruptionRevision}`.
+   Use `humanInput.sourceMessageId` returned by `coordination.context` for the
+   actual latest human message admitted in your current generation. A null
+   `humanInput` means no eligible current human instruction; do not guess an ID
+   or search guessed state paths. This observation does not itself grant permission.
+   This supported path lets you act on the user's resume instruction without
+   asking them to visit each chat and press Continue. The assignment must already
+   be active; `assignment.resume` still reopens only assignment admission.
+   The host verifies commissioning ownership and rechecks human input, membership,
+   assignment/task revisions and Stop before native admission. A newer Stop wins.
+   A receiving chat gets an attributed peer message with host-verified resume
+   provenance; reconcile results first and deliberately resume your own paused
+   task if its blocker is resolved. This does not complete questions, grant tool
+   permissions, change budgets, restart completed tasks or enroll independent
+   chats. Inspect the receipt after a lost acknowledgement; even a different
+   request ID cannot reuse the same human/member/Stop authorization.
    Steer admits only to
    the recipient's exact current generation when its runtime supports request-boundary
    steering. Accepted is not applied; held/unknown never becomes a later turn.
@@ -274,3 +293,5 @@ independently verified artifact correctness, even if the host seals its declarat
 Pause, stop, changed task and exhausted budget suppress automatic
 admission. Messages remain readable. Never broaden authority to recover a blocked
 exchange, take over another native owner, or allocate infrastructure implicitly.
+
+A fresh human-backed member resume may recover a failed turn only after the host confirms native settlement. Inspect retained outcomes; never replay failed or unknown input. Tool and provider safety stops remain in effect.

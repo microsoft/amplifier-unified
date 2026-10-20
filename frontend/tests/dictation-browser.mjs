@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Production UI and draft persistence, simulated browser speech events only.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -14,7 +15,7 @@ try{
  await context.addInitScript(()=>{window.speechCalls=0;window.SpeechRecognition=class{constructor(){window.speech=this}start(){window.speechCalls++}stop(){this.onend?.()}abort(){this.aborted=true}}});
  const page=await context.newPage(),errors=[],actions=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().endsWith('/api/actions'))actions.push(r.postDataJSON()?.action)});
- await page.goto(url);const input=page.getByRole('textbox',{name:'Message Amplifier'});await input.waitFor();
+ await page.goto(url);await showFixtureConversation(page);const input=page.getByRole('textbox',{name:'Message Amplifier'});await input.waitFor();
  const act=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const text=()=>page.evaluate(()=>window.amplifier.getState().view.draft);
  const speak=value=>page.evaluate(value=>speech.onresult({resultIndex:0,results:[Object.assign([{transcript:value}],{isFinal:true})]}),value);

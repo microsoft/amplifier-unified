@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
@@ -22,7 +23,7 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:headers,permissions:['clipboard-read','clipboard-write']});
  await context.addCookies([{name:'amplifier_unified_session',value:started.cookie,url:base,httpOnly:true,sameSite:'Strict'}]);
  const page=await context.newPage(),errors=[];debugPage=page;debugErrors=errors;page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(15000);
- await control({op:'interim-start'});await page.goto(base);
+ await control({op:'interim-start'});await page.goto(base);await showFixtureConversation(page);
  await expect(page.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await control({op:'interim-finish'});
  await expect(page.getByText('The final next step.',{exact:true})).toBeVisible();
@@ -60,7 +61,7 @@ try{
  otherBrowser=await chromium.launch(launchOptions);
  const other=await otherBrowser.newContext({extraHTTPHeaders:headers});
  await other.addCookies([{name:'amplifier_unified_session',value:started.cookie,url:base,httpOnly:true,sameSite:'Strict'}]);
- const second=await other.newPage();await second.goto(base);
+ const second=await other.newPage();await second.goto(base);await showFixtureConversation(second);
  await expect(second.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await otherBrowser.close();otherBrowser=null;
  await control({op:'interim-start'});await expect(group).toHaveCount(0);

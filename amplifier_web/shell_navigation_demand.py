@@ -1,10 +1,11 @@
 """Explicit navigation resource selection for the bundled browser transport."""
 import json
+from .adaptive_work import STATUS_RESOURCES
 
 NAVIGATION_RESOURCES = frozenset({
     'chatNavigation', 'homeNavigation', 'pinnedNavigation', 'recentNavigation',
     'workspaceShortcuts', 'workspaceExplorer', 'sidebarSearch', 'sidebarWorkspace',
-    'sidebarRecent', 'sidebarPinned', 'workspaceOverview',
+    'sidebarRecent', 'sidebarPinned', 'workspaceOverview', 'workHome', *STATUS_RESOURCES,
 })
 
 

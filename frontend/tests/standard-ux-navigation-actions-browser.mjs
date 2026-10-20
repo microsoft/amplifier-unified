@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public rename/error retention, all Search choices and explicit saved-chat refresh.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -14,7 +15,7 @@ try{
  const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Navigation fixture timed out')),15000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Navigation fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}})});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page.on('pageerror',error=>errors.push(error.message));
  const inspect=async()=>{const r=await page.request.get(ready.url+'/fixture/navigation');assert.equal(r.status(),200);return r.json()};
- await page.goto(ready.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private navigation draft');
+ await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private navigation draft');
  const before=await inspect(),selected=ready.ids[0];assert.deepEqual(before.runtime,{started:[],sent:[],stopped:[]});
  const recent=page.locator('[data-sidebar-section="recent"]'),row=recent.locator(`[data-session-id="${selected}"]`);
  await expect(row).toBeVisible();await row.hover();await row.getByRole('button',{name:'Details and actions for Alpha ordinary',exact:true}).click();

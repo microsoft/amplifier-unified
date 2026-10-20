@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -19,7 +20,7 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1300,height:1000},extraHTTPHeaders:headers,permissions:['clipboard-read','clipboard-write']});
  const page=await context.newPage(),errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',request=>{if(request.method()==='POST'){try{const body=request.postDataJSON();if((body.name||body.action)==='capacity.read'||body.args?.name==='capacity.read')requests.push(body)}catch{}}});
- await page.goto(base);await page.locator('#amp-one').waitFor();
+ await page.goto(base);await showFixtureConversation(page);await page.locator('#amp-one').waitFor();
  await openSettingsPage(page,'appearance');
  const prefs=page.locator('.a-observability-preferences');await prefs.locator('summary').click();
  await prefs.getByLabel('Individual steps',{exact:true}).uncheck();await prefs.getByLabel('Work summaries',{exact:true}).check();await prefs.getByLabel('Compact conversation status',{exact:true}).check();

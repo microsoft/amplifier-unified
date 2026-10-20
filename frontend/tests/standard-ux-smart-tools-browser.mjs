@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Standard Smart Tools catalog, exact selected installs, setup and source recovery.
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
@@ -16,7 +17,7 @@ try{
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page.on('pageerror',error=>errors.push(error.message));
  const observed=async()=>{const response=await page.request.get(ready.url+'/fixture/standard-tools');assert.equal(response.status(),200);return response.json()};
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(ready.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private tools draft');const original=await observed(),selected=(await state()).selectedSessionId;
+ await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private tools draft');const original=await observed(),selected=(await state()).selectedSessionId;
  await openSettingsPage(page,'smart-tools');const tools=page.locator('[data-part="smart-tools-settings"][data-simple="true"]');await expect(tools).toBeVisible();await tools.getByRole('button',{name:'Tool catalog',exact:true}).click();
  const rows=tools.locator('.a-tool-catalog-row');await expect(rows).toHaveCount(40);assert.deepEqual((await observed()).installCalls,{});
  await tools.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await tools.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();await tools.getByRole('button',{name:'Next',exact:true}).click();await expect(rows).toHaveCount(11);await tools.getByRole('checkbox',{name:'Select Tool 50',exact:true}).check();

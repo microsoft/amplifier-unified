@@ -38,7 +38,7 @@ try{
  }).toBe(text);
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const bootError=new Promise((_,reject)=>page.once('pageerror',reject));
- await page.goto(url);
+ await page.goto(url);await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();
  await Promise.race([page.getByRole('textbox',{name:'Message Amplifier'}).waitFor(),bootError]);
  const initial=await page.evaluate(()=>window.amplifier.getState());
  assert.equal(initial.sessions.length,0);

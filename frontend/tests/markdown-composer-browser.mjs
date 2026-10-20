@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -14,7 +15,7 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers}),errors=[],sends=[],serverErrors=[];
  page.on('response',r=>{if(r.status()>=500&&r.url().includes('/api/'))serverErrors.push(r.status()+' '+r.url())});
  page.on('pageerror',e=>{errors.push(e.message);console.log('PAGE ERROR',e.message)});page.on('request',r=>{if(r.url().endsWith('/api/actions'))try{const body=r.postDataJSON();if(body.action==='conversation.send')sends.push(body)}catch{}});
- await page.goto(url);const input=page.getByRole('textbox',{name:'Message Amplifier'});await input.waitFor();
+ await page.goto(url);await showFixtureConversation(page);const input=page.getByRole('textbox',{name:'Message Amplifier'});await input.waitFor();
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const draft=()=>page.evaluate(()=>window.amplifier.getState().view.draft);
  const clear=async()=>{await input.press('Control+a');await input.press('Backspace');await expect.poll(draft).toBe('');};

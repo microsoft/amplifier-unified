@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -11,7 +12,7 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(ready.url);
+ await page.goto(ready.url);await showFixtureConversation(page);
  const original=page.locator('.a-user').filter({hasText:'Recover this synthetic message with its attachment.'});
  await expect(original).toHaveCount(1);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});

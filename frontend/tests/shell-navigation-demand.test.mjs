@@ -11,7 +11,7 @@ const {useShell}=await vite.ssrLoadModule('/src/shell/runtime.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>vite.close());
 const instance={id:'chats',package:'builtin.chats',slot:'navigation'};
-const state=(view={workSurface:'chat'},extra={})=>({revision:1,shellDataKey:'ignored',shellBootstrapKey:'bootstrap-1',selectedSessionId:'chat-a',selectedWorkspaceId:'workspace-a',sessions:[],view,...extra});
+const state=(view={workSurface:'chat'},extra={})=>({revision:1,shellDataKey:'ignored',shellBootstrapKey:'bootstrap-1',selectedSessionId:'chat-a',selectedWorkspaceId:'workspace-a',sessions:[],view:{navPinned:true,...view},...extra});
 const descriptors=(key='bootstrap-1')=>({clientId:'test-client',hostInstanceId:'host-1',shellBootstrapKey:key,revision:1,resolvedInstances:[instance],effectiveComposition:{instances:[instance]},instanceGenerations:{chats:1}});
 function demandFor(call){
  if(call.options.method==='POST')return JSON.parse(call.options.body);

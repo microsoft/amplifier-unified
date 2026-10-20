@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -9,7 +10,7 @@ page.on('pageerror',error=>errors.push(error.message));
 const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const picker=()=>page.getByLabel('Registered root bundles',{exact:true});
 try{
- await page.goto('http://127.0.0.1:8963');await page.getByRole('button',{name:'Conversation bundle',exact:true}).waitFor();const source=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ await page.goto('http://127.0.0.1:8963');await showFixtureConversation(page);await page.getByRole('button',{name:'Conversation bundle',exact:true}).waitFor();const source=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.getByRole('button',{name:'Conversation bundle',exact:true}).click();
  await expect.poll(()=>picker().locator('option').evaluateAll(rows=>rows.map(row=>row.value))).toEqual(['anchors','anchors-amp-dev','work','work-amp-dev','anchors-work','broken']);
  assert.equal(await picker().locator('option[value="work-amp-dev"]').innerText(),'Work · Amplifier development');

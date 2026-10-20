@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public global settings; private synthetic providers and no inference or filesystem tool effects.
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
@@ -18,7 +19,7 @@ try{
  const unwrap=body=>body?.action==='shell.command'?(body.args.command||body.args):body;
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(unwrap(request.postDataJSON()))});
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep model and file policy draft');const initial=await state(),sid=initial.selectedSessionId,chat=initial.sessions.find(row=>row.id===sid),messages=JSON.stringify(chat.messages);
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep model and file policy draft');const initial=await state(),sid=initial.selectedSessionId,chat=initial.sessions.find(row=>row.id===sid),messages=JSON.stringify(chat.messages);
  await openSettingsPage(page,'ai-connections');const panel=page.locator('.a-settings-experience'),content=panel.locator('.a-settings-page-content:not([hidden])'),ai=content.locator('[data-part="ai-connections"]');
  const matrixPath=resolve(initial.settings.workspace,'..','native/routing/balanced.yaml'),matrixBefore=await readFile(matrixPath,'utf8');await ai.getByRole('button',{name:/OpenAI API.*one/}).click();await ai.getByRole('button',{name:'Choose model',exact:true}).click();const model=ai.getByRole('combobox',{name:'Model',exact:true});await expect(model.locator('option[value="fixture-alternative"]')).toHaveCount(1);
  await expect(ai).toContainText('This changes the connection’s default model. Existing model rules may choose a different model.');await model.selectOption('fixture-alternative');await expect(ai).toContainText('Model saved. Existing model rules are unchanged.');
