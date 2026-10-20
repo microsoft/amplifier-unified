@@ -1,8 +1,14 @@
-# Adaptive work views — preview contract
+# Adaptive work views — implementation and review notes
 
-Requested for an isolated user trial on 2026-10-19. This changes the web client's
-arrival experience; it does not adopt the separate AHP/ACP architecture or change
-conversation execution. No release or production adoption is implied.
+These notes record the web client's Home/sidebar design progression, concrete
+behavior, and bounded acceptance evidence. The current released baseline is
+[v0.20.188](https://github.com/microsoft/amplifier-unified/releases/tag/v0.20.188).
+The [Home/sidebar contract](work-discovery.v1.md) owns the observable promises;
+these notes supply implementation detail and historical context.
+
+Dated trial restrictions below describe their original checkpoints. Publication,
+live adoption, and designer acceptance remain separate facts. This work does
+not adopt the separate AHP/ACP architecture or change conversation execution.
 
 ## Three independent choices
 
@@ -185,3 +191,9 @@ chat accessible from both independently scrolled surfaces, including on Home.
 
 No extra model calls, summary jobs, history reprocessing or session lifecycle
 changes are introduced. Existing summary input/output is unchanged.
+
+## Changelog
+
+| Date | Change | Evidence |
+| --- | --- | --- |
+| 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../ux/decisions/20261020.md). |

@@ -1,40 +1,40 @@
 # Home and sidebar review basis
 
-This note separates the proposed agreement from implementation evidence and
+This note separates the accepted agreement from implementation evidence and
 questions for human review. Baseline: Unified commit
 `5da1e1ce137866b780c37d0ebb9a4b63aecfcadc`, released as v0.20.188.
 The [review entry](README.md) is the short starting point.
 
 ## What the documentation already says
 
-| Owner | Existing direction | Proposed treatment |
+| Owner | Existing direction | Current treatment |
 | --- | --- | --- |
 | [Family vision](../architecture/VISION.md) | Durable work, bounded discovery, independent clients, truthful recovery. | Keep. These constraints support the UX; a new protocol or architecture is not required for this review. |
-| [Client vision](../clients/VISION.md) | Continuity across devices and interfaces. | Add arrival, retrieval, and work that begins without project setup. Keep platform-specific layouts separate. |
-| [CX1 and CX8](../../contracts/client-experience.v1.md) | Orientation and economical interaction. | Add discovery without execution vocabulary; recognize useful repeated access from independently scrolled surfaces. |
-| [CS2](../../contracts/client-state.v1.md) | Separate private interaction from shared work. | Reference rather than duplicate. Remembered UI is not proof that the target client-local persistence migration is complete. |
+| [Client vision](../clients/VISION.md) | Continuity across devices and interfaces. | Now includes arrival, retrieval, and work that begins without project setup. Keep platform-specific layouts separate. |
+| [Client orientation and interaction](../../contracts/client-experience.v1.md) | Orientation and economical interaction. | Now includes discovery without execution vocabulary and useful repeated access from independently scrolled surfaces. |
+| [Private interaction state](../../contracts/client-state.v1.md) | Separate private interaction from shared work. | Reference rather than duplicate. Remembered UI is not proof that the target client-local persistence migration is complete. |
 | [Workspace vision](../workspaces/docs/VISION.md) | Start with purpose, names before paths, preserve native work. | Keep. Logical cross-folder projects remain a separate proposal. |
-| [Workspace experience P2](../workspaces/contracts/experience.v1.md) | Three collapsible sidebar sections, with other filters behind disclosure. | Amend: those are the Browse organization. Permit the explicit Status alternative and preserve section behavior. |
+| [Workspace navigation](../workspaces/contracts/experience.v1.md) | Three collapsible sidebar sections, with other filters behind disclosure. | Amended: those are the Browse organization. Permit the explicit Status alternative and preserve section behavior. |
 | [Appearance](../shell/appearance-contract.md) | Presentation can vary; required actions, meaning, and accessibility survive. | Keep and reference. The chosen starting view is separate from current view and screen size. |
-| [Adaptive work views](../shell/adaptive-work-views.md) | Detailed Home, Focus, sidebar, and acceptance history. | Separate a short draft agreement from these implementation notes. Its preview-only introduction is stale after release. |
-| [Working set](../../contracts/working-set.v1.md) | Bounded catalogs, on-demand detail, no dormant-worker hydration. | Keep. The new draft names the Home/sidebar application of these promises. |
+| [Adaptive work views](../shell/adaptive-work-views.md) | Detailed Home, Focus, sidebar, and acceptance history. | A short accepted agreement now governs these implementation notes; their preview-only framing is corrected. |
+| [Working set](../../contracts/working-set.v1.md) | Bounded catalogs, on-demand detail, no dormant-worker hydration. | Keep. The Home/sidebar contract names the Home/sidebar application of these promises. |
 
 The previous client-direction packet already reviewed Converge and Method on
 October 2. There is no earlier explicit request in the available UX conversation
 to establish this designer collaboration process. The recent implementation
-updated adaptive-work documentation, but did not amend the client vision or the
-older sidebar promise. That is the documentation gap this packet addresses.
+updated adaptive-work documentation, but had not amended the client vision or the
+older sidebar promise. The [accepted amendments](decisions/20261020.md) close that documentation gap.
 
-## Basis for the proposals
+## Basis for the accepted direction
 
-| Observation or expressed intent | Consequence for the proposal |
+| Observation or expressed intent | Consequence for the agreement |
 | --- | --- |
 | The product owner reported feedback that the experience felt too technical and workspaces felt confusing. | Make the intended arrival/retrieval experience explicit. These qualitative reports do not establish a measured usability improvement. |
 | The owner chose Focus, Brief, and Studio as different ways into the same work, with Appearance supplying defaults. | Preserve independent preferences and common meaning; leave visual composition open. |
-| Return navigation lost useful context; the owner explicitly requested remembered Home state. | Make continuity observable in WD3, including leaving while a search is pending. |
-| Live review found no way to pass an item temporarily, a redundant Home label, and a stale chat selection. | WD4 and WD5 preserve location truth and a temporary pass without disposition effects. |
+| Return navigation lost useful context; the owner explicitly requested remembered Home state. | Make continuity observable in the return-context promise, including leaving while a search is pending. |
+| Live review found no way to pass an item temporarily, a redundant Home label, and a stale chat selection. | Navigation and temporary-pass promises preserve location truth and a temporary pass without disposition effects. |
 | The owner requested Browse/Status in one row, a stable header toggle, and Search/New chat on Home's sidebar. | Amend the old sidebar promise and retain deliberate access from both scrolled regions. |
-| The owner limited this iteration to Home/sidebar and existing processing. | WD8 and the exclusions prevent design polish from silently expanding session or inference scope. |
+| The owner limited this iteration to Home/sidebar and existing processing. | The bounded-discovery promise and the exclusions prevent design polish from silently expanding session or inference scope. |
 
 The shipped changes are traceable through
 [#860](https://github.com/microsoft/amplifier-unified/pull/860),
@@ -90,7 +90,7 @@ Decision: pending / ratified / ratified with edits / declined / later
 Decision-maker, date, and exact accepted wording or hash:
 ```
 
-For example: “WD1; I thought Ready for you meant a finished deliverable, but it
+For example: “Use the same work facts; I thought Ready for you meant a finished deliverable, but it
 opened an unread progress response. Try wording that says it is an unread
 response. Keep the existing unread state and chat destination.” This proposes a
 label experiment; it does not request an output classifier or new review workflow.
@@ -102,7 +102,7 @@ agent's summary as that decision.
 
 ## Evidence available and still needed
 
-These are bounded observations against draft WD promises, not a declaration of
+These are bounded observations against the accepted promises, not a declaration of
 formal Converge conformance. The release qualification recorded 8 Home, 7 Focus,
 and 4 sidebar browser checks on a synthetic installed build. They were run for
 the release; this documentation review does not claim to rerun them.
@@ -112,10 +112,17 @@ the release; this documentation review does not claim to rerun them.
 | Independent sidebar and Home choices, reload, draft preservation, visible location, and narrow navigation | Kept for the recorded synthetic cases | [Sidebar browser checks](../../frontend/tests/home-sidebar-browser.mjs), source review and retained release receipt. No native-device or real-history usability claim. |
 | Focus paging, cursor continuity, and no attention/runtime mutation while stepping | Kept for the recorded synthetic cases | [Focus browser checks](../../frontend/tests/focus-navigation-browser.mjs). Changing scope/search deliberately starts a new pass. |
 | Bounded status pages and releasing hidden/closed sidebar demand | Kept for the recorded cases | Sidebar checks and [query ownership tests](../../tests/test_shell_query_owner.py). This is not a whole-host performance benchmark. |
-| The old P2 wording accommodates the new Status organization | Broken | It specifies the three sidebar sections without identifying them as Browse. The [P2 candidate](../workspaces/contracts/experience.v1-candidate.md) proposes reconciliation. |
-| A short, agreed UX contract connected to the shared-client vision | Not yet | The documents in this packet are pending review, not adopted promises. |
+| The workspace navigation agreement accommodates Status | Kept | The [accepted amendment](../workspaces/contracts/experience.v1.md) identifies the three sections as Browse and delegates the alternative's presentation. |
+| A short, agreed UX contract connected to the shared-client vision | Kept | The [product-owner decision](decisions/20261020.md) accepts the direction and the [Home/sidebar promises](../shell/work-discovery.v1.md). This establishes agreement, not implementation quality. |
 | Labels, hierarchy, and project terminology are clear to the designer using familiar work | Can't check | The planned human review has not occurred. Interaction tests cannot settle comprehension or taste. |
 | Full assistive-technology usability and target-device comfort | Can't check | Keyboard, narrow-layout, and forced-color fixtures cover only part of this. Record actual device and assistive-technology review separately. |
+
+The October 20 deployed-use feedback reports three remaining defects: an unread
+chat still offers Mark unread; routine refresh text shifts Home/sidebar content;
+Status rows ignore the display preferences used in Browse. These are **Broken**
+against the accepted promises until the corrected build is qualified. Preserve
+the earlier synthetic results as bounded observations rather than calling the
+whole experience conformant.
 
 A failed source check, unperformed journey, or subjective disagreement must keep
 its own result. “Can't check” is not a pass. “Pinned open” is appropriate only

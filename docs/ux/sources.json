@@ -1,6 +1,6 @@
 {
   "reviewDate": "2026-10-20",
-  "state": "proposal",
+  "state": "adopted-direction",
   "sources": [
     {
       "repository": "microsoft/amplifier-unified",
@@ -134,5 +134,7 @@
       "Retained release receipt inspected; no rerun in this review",
       "Synthetic installed build; not real-history comprehension, live-provider, or native-device evidence"
     ]
-  }
+  },
+  "decision": "decisions/20261020.md",
+  "proposalCommit": "2157b347be3d2a5678fdaaf6c1ea489415c3170b"
 }
