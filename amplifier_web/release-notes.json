@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.185",
+      "title": "Resume member chats through their manager",
+      "changes": [
+        "A manager can relay your current instruction to resume a stopped member chat in the same assignment. The request must refer to that member\u2019s current Stop and preserves task limits and usage.",
+        "Keep later Stops, changed instructions and duplicate resume requests from starting more work. Completed objectives remain completed, and requests with an uncertain outcome are not replayed.",
+        "Restore post-release smoke coverage for Home arrival, stopped conversations, queued updates and appearance-preview navigation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.184",
       "title": "Keep waiting app updates current",
       "changes": [
