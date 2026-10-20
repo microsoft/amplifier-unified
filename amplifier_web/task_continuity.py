@@ -74,13 +74,14 @@ class TaskController:
         if persist:
             self.controls.persist(task_only=True)
 
-    async def continuation_allowed(self):
+    async def continuation_allowed(self, *, resume=False):
         self.apply()
         task = self.record()
         capacity = getattr(self.controls, "capacity", None)
         if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
             return False
-        return task is None or (task["status"] == "active" and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
+        allowed = {"active", "paused", "blocked"} if resume else {"active"}
+        return task is None or (task["status"] in allowed and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
     async def yield_to_peer(self, event, data):
         """Supersede this goal execution, not the goal, before an automatic turn."""
