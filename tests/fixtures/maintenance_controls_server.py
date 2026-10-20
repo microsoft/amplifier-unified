@@ -31,6 +31,7 @@ class MaintenanceRuntime(Runtime):
     def set_maintenance_resume_guard(self, callback): self.guard = callback
     def set_maintenance_admission(self, callback): self.admit = callback
     def set_maintenance_loader(self, callback): self.load = callback
+    def set_maintenance_releaser(self, callback): self.release = callback
     def maintenance_snapshot(self): return copy.deepcopy(self.inventory)
 
     async def maintenance_pause(self, epoch):
@@ -44,6 +45,7 @@ class MaintenanceRuntime(Runtime):
 
     async def maintenance_resume(self, epoch, session_ids):
         self.calls.append({'operation': 'resume', 'epoch': epoch, 'sessionIds': session_ids})
+        assert await self.release(epoch, [row for row in self.inventory if row['sessionId'] in session_ids])
         result = []
         for sid in session_ids:
             proof = next(row for row in self.inventory if row['sessionId'] == sid)

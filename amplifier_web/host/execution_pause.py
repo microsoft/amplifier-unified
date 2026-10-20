@@ -34,12 +34,14 @@ def _write(path, value):
 
 
 class ExecutionPause:
-    def __init__(self, directory, root_id, store, *, authorize, validate, observe):
+    def __init__(self, directory, root_id, store, *, authorize, validate, observe, settle=None):
         self.directory = Path(directory)
         self.root_id, self.store = validate_id(root_id), store
         self.authorize, self.validate, self.observe = authorize, validate, observe
+        self.settle = settle
         self.lock = asyncio.Lock()
         self.controllers = {}
+        self.unsupported = {}
         path = self.directory / "control.json"
         self.control = json.loads(path.read_text()) if path.exists() else {
             "version": 1, "rootSessionId": root_id, "epoch": None, "held": False}
@@ -68,6 +70,14 @@ class ExecutionPause:
             runtime = controller.coordinator.get_capability("live.runtime")
             if runtime is not None and not runtime.closed:
                 await runtime.request_pause(epoch)
+        if dispatch and self.unsupported:
+            root = self.controllers.get(self.root_id)
+            children = root.coordinator.get_capability("live.children") if root else None
+            active = [identity for identity in self.unsupported
+                      if identity == self.root_id or children is None or
+                      (children.rows.get(identity) or {}).get("status") in {"starting", "running", "idle"}]
+            if active:
+                raise RuntimeError("An owned execution engine has no safe-boundary suspension API; its current operation is still running")
         return self.snapshot()
 
     async def revoke(self):
@@ -102,13 +112,17 @@ class ExecutionPause:
         generation = live.get("generation") or {}
         current = [row for row in records if row.get("epoch") == self.control["epoch"]]
         work = bool(live.get("turn") or live.get("pending") or live.get("jobs") or live.get("steering"))
+        jobs = {row["job_id"]: row for row in live.get("pause_jobs", {}).values()}
+        jobs.update({row["job_id"]: row for row in live.get("jobs", [])})
+        result_origins = live.get("pending_job_results", {})
         generations = [generation, live.get("pause_origin") or {},
-                       *(job.get("generation") or {} for job in live.get("jobs", []))]
+                       *(job.get("generation") or {} for job in jobs.values())]
         origins = {}
         for row in generations:
             if row.get("id"):
                 origins.setdefault(row["id"], set()).update(row.get("input_ids", []))
-        pending = sorted({row["id"] for row in [*live.get("pending", []), *live.get("steering", [])]})
+        pending = sorted({row["id"] for row in [*live.get("pending", []), *live.get("steering", [])]
+                          if row["id"] not in result_origins})
         inputs = sorted(set(pending) | {identity for values in origins.values() for identity in values})
         terminal = live.get("pause_terminal") or {}
         return {
@@ -120,16 +134,19 @@ class ExecutionPause:
             "generationId": generation.get("id"),
             "inputIds": inputs,
             "pendingInputIds": pending,
+            "pendingResults": [{"inputId": identity, **origin}
+                               for identity, origin in sorted(result_origins.items())],
             "ownedGenerations": [{"generationId": identity, "inputIds": sorted(values)}
                                  for identity, values in sorted(origins.items())],
             "rootGenerationTerminal": ({"generationId": terminal["id"],
                                        "inputIds": sorted(terminal.get("input_ids", []))}
                                       if terminal.get("id") else None),
             "jobOrigins": [{"jobId": job["job_id"],
+                            "callId": job["call_id"],
                             "generationId": (job.get("generation") or {}).get("id"),
                             "inputIds": sorted((job.get("generation") or {}).get("input_ids", [])),
                             "status": job.get("status")}
-                           for job in live.get("jobs", [])],
+                           for job in jobs.values()],
             "children": [{"sessionId": row["sessionId"], "runtimeId": row["sessionId"],
                           "parentSessionId": row.get("parentSessionId"), "callId": row.get("callId"),
                           "generationId": ((row.get("live") or {}).get("generation") or {}).get("id"),
@@ -139,7 +156,7 @@ class ExecutionPause:
                          for row in current if row["sessionId"] != self.root_id],
         }
 
-    async def resume(self, epoch):
+    async def prepare_resume(self, epoch):
         runtime = self.controllers[self.root_id].coordinator.get_capability("live.runtime")
         # Worker readiness confirms mounting, not the paused loop checkpoint.
         # Await its acknowledged settled boundary before consuming the host's
@@ -153,6 +170,11 @@ class ExecutionPause:
             raise ValueError("No matching suspended execution is available")
         if any(row["status"] != "suspended" for row in receipt["children"]):
             raise ValueError("A paused child changed or was stopped")
+        return receipt
+
+    async def resume(self, epoch):
+        receipt = await self.prepare_resume(epoch)
+        runtime = self.controllers[self.root_id].coordinator.get_capability("live.runtime")
         if await self.authorize(receipt) is not True:
             raise ValueError("Current host policy refused maintenance resumption")
         # Authorization is one-shot. A failed write or lost handoff is uncertain,
@@ -177,7 +199,11 @@ class ExecutionPause:
             return previous
         loop = coordinator.get("orchestrator")
         if not callable(getattr(loop, "resume", None)):
-            raise ValueError("This execution engine has no safe-boundary suspension API")
+            if restore:
+                raise ValueError("This execution engine has no safe-boundary suspension API")
+            self.unsupported[identity] = coordinator
+            coordinator.register_capability("web.execution_pause", self)
+            return None
         controller = Boundary(self, coordinator)
         self.controllers[identity] = controller
         coordinator.register_capability("execution.suspension", controller)
@@ -217,6 +243,11 @@ class Boundary:
 
     async def _record(self, *, frame=None, live=None):
         coordinator, owner = self.coordinator, self.owner
+        if live is not None and coordinator.session_id == owner.root_id and owner.settle is not None:
+            # The native loop owns its turns/jobs. Host-owned naming, memory
+            # and control operations must also finish before its final shared
+            # history checkpoint can honestly be released.
+            await owner.settle()
         if not self.requested() or owner.control.get("revoked"):
             raise ValueError("Maintenance no longer owns this pause")
         checkpoint = coordinator.get_capability("live.checkpoint")

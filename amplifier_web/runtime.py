@@ -207,6 +207,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time"),
             **({"routing": public_routing(event["routing"])} if "routing" in event else {}),
             **{key: event[key] for key in ("runId", "parentSessionId", "reportId", "reports", "reportTruncated", "reportSourceChars", "reportWindow", "event") if key in event}}
+    if kind == "session.closed" and event.get("status") == "paused":
+        return None  # Checkpoint release is neither completion nor user Stop.
     statuses = {"session.ready": "ready", "session.idle": "idle", "session.closed": "stopped",
                 "input.delivered": "working"}
     if kind in statuses:
@@ -239,8 +241,10 @@ class RuntimeManager:
         self.home = None
         self._maintenance_observer = self._maintenance_authorizer = None
         self._maintenance_guard = self._maintenance_admission = self._maintenance_loader = None
+        self._maintenance_releaser = None
         self._maintenance_receipts = {}
         self._maintenance_tasks = set()
+        self._maintenance_handoffs = {}
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
 
@@ -259,9 +263,24 @@ class RuntimeManager:
     def set_maintenance_loader(self, callback):
         self._maintenance_loader = callback
 
+    def set_maintenance_releaser(self, callback):
+        self._maintenance_releaser = callback
+
     def _maintenance_admit(self, sid, operation):
         if self._maintenance_admission:
             self._maintenance_admission(sid, operation)
+
+    @staticmethod
+    def _maintenance_effect(op, args):
+        from .runtime_controls import MAINTENANCE_SAFE_CONTROLS
+        return (op in {"send", "retry", "worker.message", "worker.steer"}
+                or op == "control" and args.get("operation") not in MAINTENANCE_SAFE_CONTROLS)
+
+    async def _wait_maintenance_handoff(self, sid, op, args):
+        if self._maintenance_effect(op, args):
+            gate = self._maintenance_handoffs.get(sid)
+            if gate and await asyncio.shield(gate["settled"]) is not True:
+                raise RuntimeError("This paused continuation's resume is unconfirmed. Inspect or Stop it before starting new work.")
 
     def maintenance_snapshot(self):
         rows = []
@@ -290,6 +309,8 @@ class RuntimeManager:
                     "inputIds": sorted(set(worker.get("pendingInputs", [])) |
                                        {value for values in origins.values() for value in values}),
                     "pendingInputIds": sorted(worker.get("pendingInputs", [])),
+                    "pendingResults": [{"inputId": identity, **origin} for identity, origin in
+                                       sorted(worker.get("pendingResults", {}).items())],
                     "ownedGenerations": [{"generationId": identity, "inputIds": sorted(values)}
                                          for identity, values in sorted(origins.items())],
                     "rootGenerationTerminal": terminal, "jobOrigins": jobs})
@@ -341,15 +362,38 @@ class RuntimeManager:
                 task = asyncio.create_task(request(sid, row))
                 self._maintenance_tasks.add(task)
                 task.add_done_callback(self._maintenance_tasks.discard)
-        # Preparation has accepted no native input. Its final synchronous
-        # admission check holds execution; it is not called a saved turn.
-        for sid in tuple(self._preparations):
-            await self._observe_maintenance(sid, {**captured[sid],
-                "epoch": epoch, "status": "quiescent", "reason": "preparation-held"})
+        # Final admission holds new execution, but preparation itself can still
+        # be installing/loading resources. It is not quiet until its exact
+        # owner has actually settled; graceful pause never cancels that work.
+        async def settle_preparation(sid, preparation):
+            task = preparation.get("settled")
+            if task is None:
+                await self._observe_maintenance(sid, {**captured[sid],
+                    "epoch": epoch, "status": "unsupported", "reason": "preparation-owner-unavailable"})
+                return
+            try:
+                await asyncio.shield(task)
+            except (Exception, asyncio.CancelledError):
+                pass
+            worker = self.workers.get(sid)
+            if worker and worker["process"].returncode is None:
+                await request(sid, worker)
+            else:
+                await self._observe_maintenance(sid, {**captured[sid],
+                    "epoch": epoch, "status": "quiescent", "reason": "preparation-settled"})
+        for sid, preparation in tuple(self._preparations.items()):
+            if sid not in self.workers:
+                task = asyncio.create_task(settle_preparation(sid, preparation))
+                self._maintenance_tasks.add(task)
+                task.add_done_callback(self._maintenance_tasks.discard)
         return self.maintenance_snapshot()
 
     async def maintenance_resume(self, epoch, session_ids):
-        results = []
+        # Remount and confirm every original checkpoint while global admission
+        # remains held. No root can execute (or call normal app actions) before
+        # the host durably releases the complete selected set.
+        prepared = []
+        owners = {}
         for sid in session_ids:
             async with self._admission(sid):
                 row = self.workers.get(sid)
@@ -358,12 +402,49 @@ class RuntimeManager:
                         raise RuntimeError("No current maintenance restoration owner")
                     session, emit = await self._maintenance_loader(sid)
                     await self._start_locked(session, emit, maintenance_restore=epoch)
-                await self._request_unlocked(sid, "maintenance.resume", epoch=epoch)
-                receipt = self._maintenance_receipts.get(sid)
-                if not receipt or receipt.get("epoch") != epoch or receipt.get("status") != "resumed":
-                    raise RuntimeError("Runtime resumption did not produce an acknowledged receipt")
-                results.append(dict(receipt))
-        return results
+                owners[sid] = self.workers[sid]
+                proof = await self._request_unlocked(sid, "maintenance.prepare", epoch=epoch)
+                prepared.append({**proof, "sessionId": sid})
+        gates = {sid: {"epoch": epoch, "worker": owners[sid],
+                      "settled": asyncio.get_running_loop().create_future()} for sid in session_ids}
+        self._maintenance_handoffs.update(gates)
+        async def resume_one(sid):
+            gate = gates[sid]
+            try:
+                async with self._admission(sid):
+                    row = self.workers.get(sid)
+                    if row is not gate["worker"] or row["process"].returncode is not None:
+                        raise RuntimeError("Prepared maintenance worker ownership changed")
+                    await self._request_unlocked(sid, "maintenance.resume", epoch=epoch)
+                    receipt = self._maintenance_receipts.get(sid)
+                    if not receipt or receipt.get("epoch") != epoch or receipt.get("status") != "resumed":
+                        raise RuntimeError("Runtime resumption did not produce an acknowledged receipt")
+                    if not gate["settled"].done():
+                        gate["settled"].set_result(True)
+                    return dict(receipt)
+            finally:
+                if not gate["settled"].done():
+                    gate["settled"].set_result(False)
+        try:
+            if self._maintenance_releaser is None or await self._maintenance_releaser(epoch, prepared) is not True:
+                raise RuntimeError("The host did not release the prepared maintenance continuations")
+            # Dispatch every prepared root independently: a resumed app action
+            # can address another root without waiting for an unrelated turn.
+            tasks = [asyncio.create_task(resume_one(sid)) for sid in session_ids]
+            self._maintenance_tasks.update(tasks)
+            for task in tasks:
+                task.add_done_callback(self._maintenance_tasks.discard)
+            results = await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+            return results
+        finally:
+            # No failed handoff becomes permission to dispatch an ordinary
+            # input; explicit Stop/new preparation can replace this exact gate.
+            for gate in gates.values():
+                if not gate["settled"].done():
+                    gate["settled"].set_result(False)
 
     async def maintenance_stop(self, epoch):
         # Each subprocess was created start_new_session=True by this manager.
@@ -547,7 +628,8 @@ class RuntimeManager:
         source_reservation = None
         proc = lease = None
         if guard is not None: guard()
-        preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None, "started_at": time.monotonic()}
+        preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None,
+                       "settled": asyncio.get_running_loop().create_future(), "started_at": time.monotonic()}
         self._preparations[sid] = preparation
         heartbeat = asyncio.create_task(self._preparation_progress(sid, preparation, emit))
         try:
@@ -661,6 +743,7 @@ class RuntimeManager:
                         candidate.unlink(missing_ok=True)
                     except OSError:
                         pass  # Preserve the original failed setup diagnosis.
+            preparation["settled"].set_result(None)
         row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
@@ -986,6 +1069,9 @@ class RuntimeManager:
                     if data.get("type") == "generation.started" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["activeGeneration"] = data.get("generation_id")
                         row["generationInputs"] = list(data.get("input_ids") or [])
+                        if data.get("result_origin"):
+                            row.setdefault("pendingResults", {}).pop(data.get("initial_input_id"), None)
+                            row.setdefault("ownedJobs", {}).pop(data["result_origin"]["jobId"], None)
                     if data.get("type") in {"generation.finished", "generation.failed", "generation.detached"} and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         if row.get("maintenanceEpoch") and row.get("activeGeneration"):
                             row["maintenanceTerminal"] = {
@@ -994,10 +1080,16 @@ class RuntimeManager:
                         row["activeGeneration"], row["generationInputs"] = None, []
                     if data.get("type") == "job.queued" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row.setdefault("ownedJobs", {})[data["job_id"]] = {
-                            "jobId": data["job_id"], "generationId": data.get("generation_id"),
+                            "jobId": data["job_id"], "callId": data["call_id"],
+                            "generationId": data.get("generation_id"),
                             "inputIds": sorted(data.get("input_ids") or []), "status": "pending"}
                     if data.get("type") in {"job.returned", "job.failed", "job.cancelled"} and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
-                        row.setdefault("ownedJobs", {}).pop(data.get("job_id"), None)
+                        job = row.setdefault("ownedJobs", {}).get(data.get("job_id"))
+                        if job:
+                            job["status"] = data["type"].split(".")[1]
+                    if data.get("type") == "job.result_queued" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        row.setdefault("pendingResults", {})[data["input_id"]] = {
+                            "jobId": data["job_id"], "callId": data["call_id"]}
                     if data.get("type") == "session.resumed" and emitter == row["runtime_id"]:
                         receipt = self._maintenance_receipts.get(sid)
                         if receipt:
@@ -1075,6 +1167,7 @@ class RuntimeManager:
         row["executionEnded"] = True
 
     async def _request(self, sid, op, *, guard=None, **args):
+        await self._wait_maintenance_handoff(sid, op, args)
         row = self.workers.get(sid)
         if op == 'approval' and row and not row['ready'].done():
             # A module can ask for approval during initialization. start() owns
@@ -1105,8 +1198,11 @@ class RuntimeManager:
     async def _admit(self, sid, op, args):
         if self._closed:
             raise RuntimeHostClosingError()
-        if op in {"send", "retry", "worker.message", "worker.steer"}:
+        if self._maintenance_effect(op, args):
             self._maintenance_admit(sid, op)
+            gate = self._maintenance_handoffs.get(sid)
+            if gate and (not gate["settled"].done() or gate["settled"].result() is not True):
+                raise RuntimeError("This paused continuation has not confirmed resume. Inspect or Stop it before starting new work.")
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
@@ -1617,6 +1713,15 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
+        receipt = self._maintenance_receipts.get(session_id)
+        if (row.get('stop_reason') == 'stopped' and receipt
+                and receipt.get('status') == 'suspended'):
+            await self._observe_maintenance(session_id, {**receipt, 'status': 'stopped'})
+        gate = self._maintenance_handoffs.get(session_id)
+        if row.get('stop_reason') == 'stopped' and gate and gate["worker"] is row:
+            if not gate["settled"].done():
+                gate["settled"].set_result(False)
+            self._maintenance_handoffs.pop(session_id, None)
         cold = row.get('maintenance_released') or row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if cold else "stopped"})

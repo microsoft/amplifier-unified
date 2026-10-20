@@ -68,6 +68,8 @@ class Worker:
         self.context_inputs = []
         self.root_generation_outcome = None
         self.maintenance = None
+        self.maintenance_changed = asyncio.Event()
+        self.control_tasks = set()
         if __package__:
             from .response_completion import ResponseBlocks
         else:
@@ -100,6 +102,7 @@ class Worker:
         finally:
             self.approvals.pop(identity, None)
             self.approval_contexts.pop(identity, None)
+            self.maintenance_changed.set()
 
     async def bridge(self, operation, args):
         timeout = 60
@@ -151,6 +154,7 @@ class Worker:
             raise
         finally:
             self.bridges.pop(identity, None)
+            self.maintenance_changed.set()
             if not future.done():
                 future.cancel()
 
@@ -391,6 +395,7 @@ class Worker:
             finally:
                 if event.get("phase") == "finished":
                     self.operation_ids.discard(identity)
+                    self.maintenance_changed.set()
                     task = asyncio.create_task(self.park())
                     self.tasks.add(task)
                     task.add_done_callback(self.tasks.discard)
@@ -546,6 +551,7 @@ class Worker:
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_handle_getter=lambda: self.shared_handle,
                 write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
+                preserve_execution_checkpoint=config.get("_maintenanceRestore") is not None,
                 execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
             if qualified_overrides is not None:
                 active_install_overrides(self.home, str(qualified_overrides))
@@ -617,7 +623,7 @@ class Worker:
             self.maintenance = ExecutionPause(
                 self.home / "sessions" / config["id"] / "maintenance", config["id"], children.store,
                 authorize=maintenance_authorize, validate=maintenance_validate,
-                observe=maintenance_observe)
+                observe=maintenance_observe, settle=self.settle_maintenance_auxiliaries)
             restore_epoch = config.get("_maintenanceRestore")
             if restore_epoch is not None:
                 if restore_epoch != self.maintenance.control["epoch"] or not self.maintenance.control["held"]:
@@ -861,6 +867,21 @@ class Worker:
                 publish({"type": "runtime.error", "error": f"{type(error).__name__}: {error}. Work was not replayed.", "errorType": type(error).__name__})
         self.shutdown.set()
 
+    async def settle_maintenance_auxiliaries(self):
+        """Wait for positively owned work; never cancel a tool to claim pause."""
+        while True:
+            self.maintenance_changed.clear()
+            naming = self.naming.pending if self.naming else None
+            for task in (naming, self.memory_task):
+                if task is not None and not task.done():
+                    task.add_done_callback(lambda _: self.maintenance_changed.set())
+            if (not self.approvals and not self.bridges and not self.operation_ids
+                    and not self.operation_controls and not self.control_tasks
+                    and not (naming is not None and not naming.done())
+                    and not (self.memory_task is not None and not self.memory_task.done())):
+                return
+            await self.maintenance_changed.wait()
+
     async def command(self, data):
         """Serialize admission with parking and bind a per-work write token."""
 
@@ -909,11 +930,14 @@ class Worker:
                 if settled:
                     self.shutdown.set()
             return
-        if op not in {"send", "retry", "resume", "maintenance.resume", "control", "worker.steer", "worker.stop", "worker.message", "approval"}:
+        if op not in {"send", "retry", "resume", "maintenance.prepare", "maintenance.resume", "control", "worker.steer", "worker.stop", "worker.message", "approval"}:
             await self._command_serial(data)
             return
+        if op == "control":
+            self.control_tasks.add(asyncio.current_task())
         try:
             async with self.command_lock:
+                self.require_maintenance_admission(data)
                 if self.ownership.yielding:
                     from amplifier_foundation.session import SessionBusyError
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
@@ -944,6 +968,7 @@ class Worker:
                 finally:
                     if isinstance(self.start_config, dict):
                         self.start_config.pop('_preserveConfiguration', None)
+                self.require_maintenance_admission(data)
                 if self.controls:
                     # Placement controls and their settled checkpoint preserve
                     # unrelated saved controls. The next ordinary mutation
@@ -965,6 +990,7 @@ class Worker:
                     await self._command_serial(data)
                 finally:
                     self.operation_controls -= 1
+                    self.maintenance_changed.set()
                     self.activation_gate.reset(token)
                     if memory_control and self.memory_task is asyncio.current_task():
                         self.memory_task = None
@@ -992,8 +1018,18 @@ class Worker:
             if preparation_failed:
                 self.shutdown.set()
         finally:
+            self.control_tasks.discard(asyncio.current_task())
             if memory_control and self.memory_task is asyncio.current_task():
                 self.memory_task = None
+            self.maintenance_changed.set()
+
+    def require_maintenance_admission(self, data):
+        from amplifier_web.runtime_controls import MAINTENANCE_SAFE_CONTROLS
+        if (self.maintenance is not None and self.maintenance.control.get("held")
+                and (data.get("op") in {"send", "retry", "worker.message", "worker.steer"}
+                     or data.get("op") == "control"
+                     and data.get("operation") not in MAINTENANCE_SAFE_CONTROLS)):
+            raise ValueError("New work is held for maintenance.")
 
     async def resolve_approval(self, data):
         identity = data['approval_id']
@@ -1092,6 +1128,10 @@ class Worker:
                               "jobOrigins": [], "children": []}
                     if await self.maintenance.observe(result) is not True:
                         raise ValueError("Idle maintenance boundary was not acknowledged")
+            elif op == "maintenance.prepare":
+                if self.maintenance is None:
+                    raise RuntimeError("Safe-boundary resume is unavailable")
+                result = await self.maintenance.prepare_resume(data["epoch"])
             elif op == "maintenance.resume":
                 if self.maintenance is None:
                     raise RuntimeError("Safe-boundary resume is unavailable")

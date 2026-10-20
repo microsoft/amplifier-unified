@@ -685,7 +685,7 @@ class Children:
             if install_access:
                 await install_access(coordinator)
             unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)
-            if ledger and parent_messages is not None:
+            if ledger and parent_messages is not None and execution_resume is None:
                 # Recover evidence only after original history and admission
                 # setup succeed. A pending dispatch becomes interrupted, never
                 # replayed; failed recovered-context restoration still must not

@@ -196,3 +196,74 @@ def test_new_leaf_tools_avoid_usage_rebuild_but_late_parents_reconcile(monkeypat
     execution.ingest(session, {'id': 'late-worker', 'kind': 'worker', 'turnId': 'turn'})
     assert rebuilds
     assert session['execution']['nodes'][-1]['aggregateUsage']['calls'] == 1
+
+
+def test_maintenance_projection_retains_original_turn_and_later_stop_wins():
+    from amplifier_web.execution import pause_for_maintenance, leave_maintenance_pause, finish, interrupt_unfinished
+    session = {'id': 'root', 'status': 'working', 'messages': [{'id': 'input', 'role': 'user'}]}
+    ensure_turn(session, 'input')
+    ingest(session, {'id': 'delegate', 'kind': 'tool', 'sessionId': 'root', 'phase': 'running'})
+    ingest(session, {'id': 'child-call', 'kind': 'llm', 'sessionId': 'child', 'phase': 'running'})
+    proof = {'epoch': 'pause', 'checkpointId': 'frame', 'inputIds': ['input'],
+             'children': [{'sessionId': 'child'}]}
+    pause_for_maintenance(session, proof)
+    assert not interrupt_unfinished(session)
+    assert session['status'] == 'paused'
+    assert all(row['phase'] == 'paused' for row in session['execution']['nodes'])
+    assert session['execution']['turns'][0]['phase'] == 'paused'
+    assert not leave_maintenance_pause(session, 'other', resumed=True)
+    assert leave_maintenance_pause(session, 'pause', resumed=True)
+    assert session['execution']['turns'][0]['phase'] == 'running'
+    assert session['messages'] == [{'id': 'input', 'role': 'user'}]
+    pause_for_maintenance(session, proof)
+    finish(session, 'cancelled')
+    session['status'] = 'stopped'
+    assert not leave_maintenance_pause(session, 'pause', resumed=True)
+    assert session['status'] == 'stopped'
+    assert session['execution']['turns'][0]['phase'] == 'cancelled'
+
+
+def test_only_proven_paused_worker_identities_release_update_blockers():
+    from types import SimpleNamespace
+    from amplifier_web.execution import pause_for_maintenance, leave_maintenance_pause
+    from amplifier_web.update_blockers import blockers
+    workers = [
+        {'id': 'child', 'kind': 'session', 'callId': 'call', 'parentSessionId': 'root',
+         'runId': 'original', 'persistent': True, 'status': 'idle'},
+        {'id': 'job', 'kind': 'job', 'callId': 'background', 'status': 'running'},
+        {'id': 'unowned', 'kind': 'session', 'callId': 'other', 'status': 'running'},
+    ]
+    session = {'id': 'root', 'status': 'working', 'workers': workers}
+    service = SimpleNamespace(state={'sessions': [session]})
+    proof = {'epoch': 'epoch', 'checkpointId': 'frame', 'inputIds': ['input'],
+             'children': [{'sessionId': 'child', 'parentSessionId': 'root',
+                           'callId': 'call', 'status': 'suspended'}],
+             'jobOrigins': [{'jobId': 'job', 'callId': 'background', 'status': 'paused'}]}
+    pause_for_maintenance(session, proof)
+    assert [row['status'] for row in workers] == ['paused', 'paused', 'running']
+    assert {row['kind'] for row in blockers(service)} == {'worker'}
+    workers[-1]['status'] = 'completed'
+    assert blockers(service) == []
+    # A replaced run or a later Stop is never restored by the old pause.
+    workers[0]['runId'] = 'replacement'
+    workers[0]['status'] = 'stopped'
+    workers[1]['status'] = 'cancelled'
+    assert leave_maintenance_pause(session, 'epoch', resumed=True)
+    assert [row['status'] for row in workers] == ['stopped', 'cancelled', 'completed']
+    assert all('maintenancePhase' not in row for row in workers)
+
+
+def test_confirmed_stop_settles_paused_child_after_root_stop_event():
+    from amplifier_web.execution import pause_for_maintenance, stop_maintenance_pause, finish
+    session = {'id': 'root', 'status': 'working', 'workers': [
+        {'id': 'child', 'kind': 'session', 'callId': 'call', 'parentSessionId': 'root',
+         'status': 'running'}]}
+    proof = {'epoch': 'epoch', 'checkpointId': 'frame', 'inputIds': ['input'],
+             'children': [{'sessionId': 'child', 'parentSessionId': 'root',
+                           'callId': 'call', 'status': 'suspended'}]}
+    pause_for_maintenance(session, proof)
+    finish(session, 'stopped')  # root event can precede confirmed process exit
+    session['status'] = 'stopped'
+    assert stop_maintenance_pause(session, 'epoch')
+    assert session['workers'][0]['status'] == 'stopped'
+    assert 'maintenancePhase' not in session['workers'][0]

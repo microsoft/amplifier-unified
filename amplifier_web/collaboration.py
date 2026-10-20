@@ -149,6 +149,21 @@ def restore_owner(session, host_instance):
 
 
 class Collaboration:
+    def resume_maintenance_generation(self, session, proof):
+        """Rebind only the exact generation consumed by the maintenance owner."""
+        active = session.get('collaborationGeneration') or {}
+        identity = proof.get('generationId')
+        origin = next((row for row in proof.get('ownedGenerations', [])
+                       if row['generationId'] == identity), None)
+        if not identity or not origin or active.get('id') != identity:
+            return
+        if set(active.get('inputIds', [])) != set(origin['inputIds']):
+            raise ValueError('Paused collaboration input attribution changed.')
+        active.update(terminal=False)
+        active.pop('detail', None)
+        active.pop('completed', None)
+        session['_collaborationHostInstanceId'] = self.service.instance_id
+
     def __init__(self, service):
         self.service = service
         self.draining = set()

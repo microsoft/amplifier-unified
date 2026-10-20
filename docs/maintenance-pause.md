@@ -50,7 +50,7 @@ remote effects can already be paused.
 
 Changes to the public loop capability are reviewed alongside Unified. Supported
 safe-boundary suspension must be distinguished from adapters that can only drain
-or cancel. No Spark-1 adoption, main merge or release is part of this work.
+or cancel. Live adoption, main merge and release are separate decisions.
 
 ## Host authority and native handoff
 
@@ -83,10 +83,18 @@ Finite children need no invented loop generation: native session, parent, tool
 call and checkpoint identities bind them to the original completion owner.
 Changing or missing input/job identities cannot be repaired by replay.
 
-Resume claims persist before runtime unlock. A lost claim/response or an
-interrupted host operation becomes uncertain and is not replayed on startup.
-Explicit Resume can reopen admission while leaving uncertain, blocked or
-unsupported roots untouched. Current Stop, task, history, placement, ownership,
+Resume first remounts every selected root while held and verifies every exact
+checkpoint. One durable release decision then reopens ordinary admission before
+any root can execute an app action. Each root still consumes its own claim once
+and rechecks current authority. Failure before that decision keeps the hold.
+Loss after that committed decision leaves unconfirmed roots uncertain without
+rolling back already released work or replaying a claim; a new explicit Pause
+captures the current inventory. Host restart during an unfinished handoff holds
+unconfirmed work for inspection and never reissues the operation.
+Explicit Resume can reopen admission only after every owned root has a confirmed
+settled boundary. Waiting, uncertain or unsupported roots must first settle or
+be positively stopped by a separate user action. A settled continuation whose
+authority later changed remains excluded from Resume. Current Stop, task, history, placement, ownership,
 configuration and budget checks apply again to every resumed effect. Disabled
 schedules remain disabled; the canonical scheduler records occurrences missed
 during the hold as skipped, including schedules configured to run the latest

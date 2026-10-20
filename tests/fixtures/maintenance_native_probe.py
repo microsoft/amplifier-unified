@@ -38,8 +38,10 @@ class FixtureProvider:
         root = Path(self.config["queue"])
         identity = uuid.uuid4().hex
         pending = root / (identity + ".request.json")
-        pending.write_text(json.dumps({"id":identity, "sessionId":self.coordinator.session_id,
+        staging = pending.with_suffix(".tmp")
+        staging.write_text(json.dumps({"id":identity, "sessionId":self.coordinator.session_id,
             "pid":os.getpid(), "request":request.model_dump(mode="json")}))
+        staging.replace(pending)
         reply = root / (identity + ".reply.json")
         async with asyncio.timeout(90):
             while not reply.exists():
@@ -50,17 +52,21 @@ async def mount(coordinator, config=None):
 '''
 
 TOOL = '''
-import json, os
+import asyncio, json, os
 from pathlib import Path
 from amplifier_core import ToolResult
 __amplifier_module_type__ = "tool"
 class Effect:
     name = "maintenance_effect"
     description = "Append exactly one synthetic effect."
-    input_schema = {"type":"object", "properties":{}}
+    input_schema = {"type":"object", "properties":{"hold":{"type":"boolean"}}}
     def __init__(self, coordinator, config):
         self.coordinator, self.config = coordinator, config or {}
     async def execute(self, arguments):
+        if arguments.get("hold"):
+            Path(self.config["effects"] + ".started").write_text("waiting")
+            while not Path(self.config["effects"] + ".release").exists():
+                await asyncio.sleep(.02)
         with Path(self.config["effects"]).open("a") as out:
             out.write(json.dumps({"sessionId":self.coordinator.session_id, "pid":os.getpid()})+"\\n")
             out.flush()
@@ -81,7 +87,7 @@ def stamp(pid):
     return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
 
 
-async def run(root):
+async def run(root, mode="restart"):
     root.mkdir(parents=True, exist_ok=False)
     workspace, shared, home, queue = [root / name for name in ("workspace", "shared", "app", "queue")]
     for path in (workspace, shared, home, queue):
@@ -177,7 +183,7 @@ async def run(root):
                 if (row["sessionId"] == native_id) == (role == "root"):
                     seen.add(path.name)
                     return row
-                if role == "child":
+                if role == "child" and mode != "completed-job":
                     raise AssertionError("The original child did not resume; the parent requested another call.")
         async with asyncio.timeout(40):
             while True:
@@ -186,8 +192,11 @@ async def run(root):
                 await asyncio.sleep(.02)
 
     def reply(row, text="", calls=None):
-        (queue / (row["id"] + ".reply.json")).write_text(json.dumps({
+        target = queue / (row["id"] + ".reply.json")
+        staging = target.with_suffix(".tmp")
+        staging.write_text(json.dumps({
             "content": [{"type": "text", "text": text}], "tool_calls": calls}))
+        staging.replace(target)
 
     def remember():
         for row in runtime.workers.values():
@@ -209,9 +218,75 @@ async def run(root):
         native_id = runtime.workers[sid]["runtime_id"]
         await action("conversation.send", {"sessionId": sid, "text": "One original request"})
         root_request = await request("root", native_id)
+        if mode in {"emergency", "held-tool"}:
+            if mode == "held-tool":
+                reply(root_request, calls=[{"id": "held-effect", "name": "maintenance_effect",
+                                           "arguments": {"hold": True}}])
+                await until(lambda: Path(str(effects) + ".started").exists())
+                await action("maintenance.pause")
+                await until(lambda: app.maintenance.value["held"])
+                epoch = app.maintenance.value["epoch"]
+                await action("maintenance.resume", {"epoch": epoch}, status=409)
+                await asyncio.sleep(16)
+                assert not app.maintenance.snapshot()["readyForRestart"]
+                assert not effects.exists() and all(process.returncode is None for process in processes)
+                report["stages"].append("running-tool-waits-without-timeout-escalation")
+            assert not app.state.get("updates", {}).get("staged")
+            preview = (await action("maintenance.stopPreview"))["result"]
+            await action("maintenance.stopNow", {key: preview[key] for key in
+                ("hostInstanceId", "targetDigest")} | {"confirm": True})
+            await until(lambda: app.maintenance.snapshot()["canResume"])
+            assert app.maintenance.snapshot()["roots"][0]["phase"] == "stopped"
+            assert all(process.returncode is not None for process in processes)
+            assert not effects.exists()
+            health = await client.get("/api/health", headers=headers)
+            assert health.status == 200 and (await health.json())["ok"]
+            epoch = app.maintenance.value["epoch"]
+            await action("maintenance.resume", {"epoch": epoch})
+            await until(lambda: not app.maintenance.value["held"])
+            assert not runtime.workers and not effects.exists()
+            report["stages"].append("confirmed-emergency-stop-without-update-app-remains-inspectable")
+            report["passed"] = True
+            return
         reply(root_request, calls=[{"id": "original-delegate", "name": "delegate",
-                                  "arguments": {"agent": "worker", "instruction": "One original child request"}}])
+                                  "arguments": {"agent": "worker", "instruction": "One original child request",
+                                                **({"async": True} if mode == "completed-job" else {})}}])
         child_request = await request("child", native_id)
+        if mode == "completed-job":
+            waiting_root = await request("root", native_id)
+            reply(child_request, calls=[{"id": "original-effect", "name": "maintenance_effect", "arguments": {}}])
+            finishing_child = await request("child", native_id)
+            assert len(effects.read_text().splitlines()) == 1
+            await action("maintenance.pause")
+            await until(lambda: any(json.loads(path.read_text()).get("held")
+                for path in (home / "sessions").glob("*/maintenance/control.json")))
+            reply(waiting_root, "Delegate is working")
+            reply(finishing_child, "Original child result retained")
+            await until(lambda: app.maintenance.snapshot()["readyForRestart"])
+            paused = app.maintenance.snapshot()
+            assert paused["roots"][0]["proof"]["pendingResults"]
+            assert paused["roots"][0]["proof"]["jobOrigins"][0]["status"] == "returned"
+            report["paused"] = paused
+            await client.close()
+            client = None
+            assert all(process.returncode is not None for process in processes)
+            client, app, runtime, headers = await launch()
+            assert app.maintenance.value["held"] and not runtime.workers
+            await action("maintenance.resume", {"epoch": paused["epoch"]})
+            await until(lambda: runtime.workers)
+            remember()
+            result_request = await request("root", native_id)
+            assert "Original child result retained" in str(result_request["request"]["messages"])
+            assert "original-delegate" in str(result_request["request"]["messages"])
+            assert len(effects.read_text().splitlines()) == 1
+            reply(result_request, "Original result received")
+            await until(lambda: any(row.get("text") == "Original result received"
+                for row in app._session(sid)["messages"]))
+            await until(lambda: not app.maintenance.value["held"])
+            assert len(effects.read_text().splitlines()) == 1
+            report["stages"].append("completed-delegate-result-survives-host-restart-once")
+            report["passed"] = True
+            return
         report["stages"].append("child-model-in-flight")
         await action("maintenance.pause")
         await until(lambda: any(path.exists() and json.loads(path.read_text()).get("held")
@@ -221,8 +296,13 @@ async def run(root):
         await until(lambda: app.maintenance.snapshot()["readyForRestart"])
         paused = app.maintenance.snapshot()
         assert paused["roots"][0]["phase"] == "suspended", paused
+        assert app._session(sid)["status"] == "paused"
+        assert app._session(sid)["execution"]["turns"][-1]["phase"] == "paused"
         assert not effects.exists()
         report["paused"] = paused
+        from amplifier_web.update_blockers import blockers
+        await until(lambda: not blockers(app), seconds=5)
+        report["updateBlockersAfterPause"] = blockers(app)
         report["stages"].append("root-and-child-checkpointed")
         await client.close()
         client = None
@@ -231,6 +311,8 @@ async def run(root):
         client, app, runtime, headers = await launch()
         assert app.maintenance.value["held"]
         assert not runtime.workers and not effects.exists()
+        assert app._session(sid)["status"] == "paused"
+        assert not app._session(sid).get("error")
         resumed_event_start = len(runtime_events)
         await action("conversation.send", {"sessionId": sid, "text": "STILL HELD"}, status=409)
         await action("maintenance.resume", {"epoch": paused["epoch"]})
@@ -255,6 +337,8 @@ async def run(root):
         assert len(effects.read_text().splitlines()) == 1
         report["resumed"] = app.maintenance.snapshot()
         assert report["resumed"]["roots"][0]["phase"] == "resumed", report["resumed"]
+        assert not app._session(sid).get("error")
+        assert app._session(sid)["collaborationGeneration"]["completed"]
         await action("maintenance.resume", {"epoch": paused["epoch"]}, status=409)
         report["stages"].append("same-child-root-resumed-once-after-restart")
         report["passed"] = True
@@ -310,4 +394,4 @@ if __name__ == "__main__":
     if sys.argv[1] == "--worker":
         asyncio.run(observed_worker(Path(sys.argv[2])))
     else:
-        asyncio.run(run(Path(sys.argv[1])))
+        asyncio.run(run(Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else "restart"))

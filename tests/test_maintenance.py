@@ -22,12 +22,14 @@ class Runtime:
         self.pause_wait = None
         self.before_effect = None
         self.lose_resume = False
+        self.prepare_wait = None
 
     def set_maintenance_observer(self, callback): self.observe = callback
     def set_maintenance_authorizer(self, callback): self.authorize = callback
     def set_maintenance_resume_guard(self, callback): self.guard = callback
     def set_maintenance_admission(self, callback): self.admit = callback
     def set_maintenance_loader(self, callback): self.load = callback
+    def set_maintenance_releaser(self, callback): self.release = callback
     def maintenance_snapshot(self): return copy.deepcopy(self.inventory)
 
     async def maintenance_pause(self, epoch):
@@ -40,11 +42,17 @@ class Runtime:
 
     async def maintenance_resume(self, epoch, ids):
         self.calls.append(('resume', epoch, ids))
-        result = []
+        proofs = []
         for sid in ids:
-            proof = next(row for row in self.inventory if row['sessionId'] == sid)
             source, emit = await self.load(sid)
             assert source['id'] == sid and callable(emit)
+            proofs.append(next(row for row in self.inventory if row['sessionId'] == sid))
+        if self.prepare_wait:
+            await self.prepare_wait.wait()
+        assert await self.release(epoch, proofs) is True
+        result = []
+        for proof in proofs:
+            sid = proof['sessionId']
             if not await self.authorize(sid, epoch, proof):
                 continue
             # Authorizing a root is a once-only handoff, never a reusable grant.
@@ -137,15 +145,43 @@ async def test_hold_is_durable_before_async_pause_and_duplicate_is_passive(tmp_p
         await host.close()
 
 
+async def test_resume_cannot_reopen_admission_before_delayed_pause_boundary(tmp_path):
+    runtime = Runtime()
+    runtime.pause_wait = asyncio.Event()
+    host = Host(tmp_path, runtime)
+    try:
+        receipt = await command(host, 'pause', identity='pause')
+        epoch = receipt['result']['epoch']
+        await asyncio.sleep(0)
+        assert not host.maintenance.snapshot()['canResume']
+        with pytest.raises(AppError, match='confirmed pause'):
+            await command(host, 'resume', {'epoch': epoch}, 'too-early')
+        assert held(host) and runtime.calls == [('pause', epoch)]
+        runtime.pause_wait.set()
+        await host.settled()
+        assert host.maintenance.snapshot()['canResume']
+        await command(host, 'resume', {'epoch': epoch}, 'after-boundary')
+        await host.settled()
+        assert not held(host) and runtime.effects == [('root', 'checkpoint-root')]
+    finally:
+        runtime.pause_wait.set()
+        await host.close()
+
+
 async def test_restart_retains_pause_and_explicit_resume_consumes_once(tmp_path):
     runtime = Runtime()
     host = Host(tmp_path, runtime)
-    epoch = await paused(host)
     before = copy.deepcopy(host.state['sessions'])
+    epoch = await paused(host)
+    assert host.state['sessions'][0]['status'] == 'paused'
+    original_proof = host.maintenance.snapshot()['roots'][0]['proof']
     await host.close()
     other = Host(tmp_path, runtime)
     try:
         assert held(other) and len(runtime.calls) == 1
+        assert other.maintenance.snapshot()['roots'][0]['proof'] == original_proof
+        # This owner-only fixture does not persist application session rows;
+        # real host restart and paused display are covered by the native probe.
         assert other.state['sessions'] == before
         await command(other, 'resume', {'epoch': epoch}, 'resume')
         await other.settled()
@@ -181,6 +217,138 @@ async def test_remount_checkpoint_observation_preserves_unconsumed_resume_intent
         assert host.maintenance._row('root')['phase'] == 'resumed'
     finally:
         await host.close()
+
+
+async def test_every_root_prepares_held_before_durable_release_and_normal_app_effects(tmp_path):
+    runtime = Runtime()
+    runtime.inventory.append({**runtime.inventory[0], 'sessionId': 'second', 'runtimeId': 'second'})
+    host = Host(tmp_path, runtime)
+    host.state['sessions'].append({**copy.deepcopy(host._session('root')), 'id': 'second'})
+    runtime.prepare_wait = asyncio.Event()
+    try:
+        epoch = await paused(host)
+        await command(host, 'resume', {'epoch': epoch}, 'resume')
+        await asyncio.sleep(0)
+        assert held(host) and not runtime.effects
+        for row in runtime.inventory:
+            assert not await runtime.authorize(row['sessionId'], epoch, row)
+        assert not await runtime.release(epoch, runtime.inventory[:1])
+        assert held(host)
+        async def ordinary_app_effect():
+            # Every original continuation can use canonical app admission once
+            # the complete set is prepared. No per-session bypass is granted.
+            assert runtime.admit('root', 'delegate') is True
+            assert not held(host)
+        runtime.before_effect = ordinary_app_effect
+        runtime.prepare_wait.set()
+        await host.settled()
+        assert len(runtime.effects) == 2
+        assert host.maintenance.value['releasedEpoch'] == epoch
+        assert not await runtime.release(epoch, runtime.inventory)
+    finally:
+        runtime.prepare_wait.set()
+        await host.close()
+
+
+async def test_runtime_preparation_is_waiting_until_complete_owner_settles():
+    from amplifier_web.runtime import RuntimeManager
+    runtime = RuntimeManager(command=['unused-fixture-command'])
+    ensure, settled = (asyncio.get_running_loop().create_future() for _ in range(2))
+    runtime._preparations['root'] = {'task': ensure, 'settled': settled}
+    receipts = []
+    async def observe(receipt):
+        receipts.append(receipt)
+        return True
+    runtime.set_maintenance_observer(observe)
+    try:
+        result = await runtime.maintenance_pause('epoch')
+        assert result[0]['status'] == 'waiting' and not receipts
+        ensure.set_result('qualified')
+        await asyncio.sleep(0)
+        assert not receipts and not settled.done()
+        runtime._preparations.pop('root')
+        settled.set_result(None)
+        await asyncio.gather(*tuple(runtime._maintenance_tasks))
+        assert receipts[0]['status'] == 'quiescent'
+        assert receipts[0]['reason'] == 'preparation-settled'
+    finally:
+        if not settled.done(): settled.set_result(None)
+        await asyncio.gather(*tuple(runtime._maintenance_tasks), return_exceptions=True)
+        runtime._preparations.clear()
+        await runtime.close()
+
+
+async def test_manager_new_input_waits_for_its_exact_resume_without_blocking_inspection():
+    from amplifier_web.runtime import RuntimeManager
+    runtime = RuntimeManager(command=['unused-fixture-command'])
+    release_seen = asyncio.Event()
+    first_reply, second_reply = asyncio.Event(), asyncio.Event()
+    effects = []
+    runtime.workers = {sid: {'process': SimpleNamespace(returncode=None)}
+                       for sid in ['first', 'second']}
+    async def release(epoch, proofs):
+        assert {row['sessionId'] for row in proofs} == {'first', 'second'}
+        release_seen.set()
+        return True
+    runtime.set_maintenance_releaser(release)
+    async def request(sid, op, **args):
+        if op == 'maintenance.prepare':
+            return {'checkpointId': sid, 'epoch': args['epoch']}
+        assert op == 'maintenance.resume'
+        await (first_reply if sid == 'first' else second_reply).wait()
+        runtime._maintenance_receipts[sid] = {'epoch': args['epoch'], 'status': 'resumed'}
+    runtime._request_unlocked = request
+    async def admit(sid, op, args):
+        effects.append((sid, op))
+        return ()
+    async def reply(*args, **kwargs):
+        return True
+    runtime._admit, runtime._reply = admit, reply
+    resume = asyncio.create_task(runtime.maintenance_resume('epoch', ['first', 'second']))
+    try:
+        await release_seen.wait()
+        send = asyncio.create_task(runtime._request('second', 'send', text='new work'))
+        cancelled = asyncio.create_task(runtime._request('second', 'send', text='cancelled caller'))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        await asyncio.gather(cancelled, return_exceptions=True)
+        assert not runtime._maintenance_handoffs['second']['settled'].cancelled()
+        assert not send.done() and not effects
+        # Safe inspection does not await a maintenance gate (the ordinary
+        # short transport lock remains owned until its resume RPC returns).
+        await runtime._wait_maintenance_handoff('second', 'control', {'operation': 'task.get'})
+        second_reply.set()
+        assert await asyncio.wait_for(send, 2)
+        assert effects == [('second', 'send')]
+        assert not resume.done()  # another root can still be finishing its ack
+        first_reply.set()
+        assert len(await resume) == 2
+    finally:
+        first_reply.set()
+        second_reply.set()
+        await asyncio.gather(resume, return_exceptions=True)
+        runtime.workers.clear()
+        await runtime.close()
+
+
+async def test_manager_holds_new_effect_controls_but_keeps_inspection_available():
+    from amplifier_web.runtime import RuntimeManager
+    runtime = RuntimeManager(command=['unused-fixture-command'])
+    calls = []
+    def deny(sid, operation):
+        calls.append((sid, operation))
+        raise AppError('New effects held', 409, code='maintenance_paused')
+    runtime.set_maintenance_admission(deny)
+    try:
+        for operation in ['memory.consolidate', 'session.naming', 'tool.invoke', 'unknown.control']:
+            with pytest.raises(AppError, match='effects held'):
+                await runtime._admit('root', 'control', {'operation': operation})
+        assert len(calls) == 4
+        with pytest.raises(RuntimeError, match='not running'):
+            await runtime._admit('root', 'control', {'operation': 'configuration.inspect'})
+        assert len(calls) == 4
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.parametrize('change', ['stop', 'child_stop', 'placement', 'edit', 'configuration',
@@ -243,11 +411,13 @@ async def test_lost_resume_ack_never_returns_claim_to_resumable(tmp_path):
         runtime.lose_resume = True
         await command(host, 'resume', {'epoch': epoch}, 'resume')
         await host.settled()
-        assert held(host) and len(runtime.effects) == 1
-        assert host.maintenance.snapshot()['roots'][0]['phase'] == 'uncertain'
-        await command(host, 'resume', {'epoch': epoch}, 'explicit-reopen')
-        await host.settled()
         assert not held(host) and len(runtime.effects) == 1
+        assert host.maintenance.value['releasedEpoch'] == epoch
+        assert host.maintenance.snapshot()['roots'][0]['phase'] == 'uncertain'
+        with pytest.raises(AppError, match='epoch changed'):
+            await command(host, 'resume', {'epoch': epoch}, 'explicit-reopen')
+        assert not held(host) and len(runtime.effects) == 1
+        assert not host.maintenance.snapshot()['canResume']
     finally:
         await host.close()
 
@@ -371,7 +541,8 @@ async def test_emergency_stop_overtakes_waiting_pause_without_reviving_it(tmp_pa
         runtime.pause_wait.set()
         await host.settled()
         assert host.maintenance.snapshot()['roots'][0]['phase'] == 'stopped'
-        assert host.maintenance.value['phase'] == 'stopping' and held(host)
+        assert host.maintenance.value['phase'] == 'paused' and held(host)
+        assert host.maintenance.snapshot()['canResume']
         assert not runtime.effects
     finally:
         await host.close()
@@ -496,6 +667,40 @@ def background_proofs(runtime, epoch):
     return root, suspended
 
 
+async def test_result_finishing_during_pause_requires_exact_owned_job_and_call(tmp_path):
+    runtime = Runtime()
+    initial, _ = background_proofs(runtime, 'unused')
+    initial['children'] = []
+    initial['jobOrigins'][0]['callId'] = 'original-call'
+    runtime.inventory = [initial]
+    host = Host(tmp_path, runtime)
+    try:
+        async def pause(epoch):
+            proof = copy.deepcopy(initial)
+            proof.update(epoch=epoch, generationId=None, status='suspended',
+                checkpointId='checkpoint-root', rootGenerationTerminal=initial['ownedGenerations'][0],
+                pendingResults=[{'inputId': 'derived-result', 'jobId': 'job', 'callId': 'original-call'}])
+            proof['jobOrigins'][0]['status'] = 'returned'
+            wrong = copy.deepcopy(proof)
+            wrong['pendingResults'][0]['callId'] = 'substituted-call'
+            with pytest.raises(ValueError, match='exact completed job'):
+                await host.maintenance.observe(wrong)
+            runtime.inventory = [proof]
+            return [proof]
+        runtime.maintenance_pause = pause
+        epoch = await paused(host)
+        saved = host.maintenance.snapshot()['roots'][0]
+        assert saved['phase'] == 'suspended' and host.maintenance.snapshot()['canResume']
+        replacement = copy.deepcopy(saved['proof'])
+        replacement['pendingResults'][0]['inputId'] = 'replacement-result'
+        assert not await host.maintenance.observe(replacement)
+        await command(host, 'resume', {'epoch': epoch}, 'resume')
+        await host.settled()
+        assert runtime.effects == [('root', 'checkpoint-root')]
+    finally:
+        await host.close()
+
+
 @pytest.mark.parametrize('finite_child', [False, True])
 async def test_terminal_root_with_exact_owned_background_job_can_resume(tmp_path, finite_child):
     runtime = Runtime()
@@ -590,9 +795,9 @@ async def test_restart_does_not_replay_an_unconfirmed_consumed_resume_claim(tmp_
         assert held(restored)
         assert restored.maintenance.value['phase'] == 'uncertain'
         assert restored.maintenance.snapshot()['roots'][0]['phase'] == 'uncertain'
-        await command(restored, 'resume', {'epoch': epoch}, 'reopen-only')
-        await restored.settled()
-        assert not held(restored) and not runtime.effects
+        with pytest.raises(AppError, match='confirmed pause'):
+            await command(restored, 'resume', {'epoch': epoch}, 'reopen-only')
+        assert held(restored) and not runtime.effects
     finally:
         await restored.close()
 

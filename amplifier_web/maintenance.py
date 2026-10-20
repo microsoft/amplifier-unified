@@ -54,6 +54,33 @@ def require_open(app):
         raise AppError(DETAIL, 409, code='maintenance_paused')
 
 
+def restore_projection(app, session):
+    """Restore a saved pause display without granting new runtime authority."""
+    marker = session.get('maintenancePause')
+    if not marker:
+        return False
+    from .execution import pause_for_maintenance, leave_maintenance_pause
+    try:
+        host_row = app.db.execute('SELECT value FROM host_maintenance WHERE id=1').fetchone()
+        root_row = app.db.execute('SELECT value FROM maintenance_roots WHERE session_id=?',
+                                 (session['id'],)).fetchone()
+        host = json.loads(host_row[0]) if host_row else {}
+        root = json.loads(root_row[0]) if root_row else {}
+        proof = _proof(root.get('proof'))
+        if (host.get('held') and host.get('phase') == 'paused'
+                and root.get('phase') == 'suspended'
+                and proof.get('epoch') == marker.get('epoch') == host.get('epoch')
+                and proof.get('checkpointId') == marker.get('checkpointId')):
+            pause_for_maintenance(session, proof)
+            return True
+    except (ValueError, TypeError, KeyError):
+        pass
+    # A replaced/uncertain owner is not a proved pause. Let ordinary restart
+    # recovery classify the old execution; this does not dispatch any input.
+    leave_maintenance_pause(session, marker.get('epoch'), resumed=False)
+    return False
+
+
 def starts_work(action, args):
     return (action in NEW_WORK
             or action == 'session.naming' and args.get('regenerate')
@@ -137,10 +164,28 @@ def _proof(value, *, child=False):
             if origin not in result.get('ownedGenerations', []):
                 raise ValueError('A job must retain an original owned generation.')
             result['jobOrigins'].append({**origin, 'jobId': _text(job.get('jobId')),
-                                         'status': _text(job.get('status'))})
+                                         'status': _text(job.get('status')),
+                                         **({'callId': _text(job['callId'])} if job.get('callId') else {})})
         if len({row['jobId'] for row in result['jobOrigins']}) != len(jobs):
             raise ValueError('Maintenance receipt repeats a job identity.')
         result['jobOrigins'].sort(key=lambda row: row['jobId'])
+    pending_results = value.get('pendingResults', [])
+    if not isinstance(pending_results, list) or len(pending_results) > 4:
+        raise ValueError('Maintenance result origins exceed their job bound.')
+    result['pendingResults'] = []
+    jobs = {job['jobId']: job for job in result.get('jobOrigins', [])}
+    for pending_result in pending_results:
+        item = {key: _text(pending_result.get(key)) for key in ('inputId', 'jobId', 'callId')}
+        job = jobs.get(item['jobId'])
+        if (not job or job.get('callId') != item['callId']
+                or job['status'] not in {'returned', 'failed', 'cancelled'}
+                or item['inputId'] in result['inputIds']):
+            raise ValueError('A pending result must retain its exact completed job owner.')
+        result['pendingResults'].append(item)
+    result['pendingResults'].sort(key=lambda row: row['inputId'])
+    if (len({row['inputId'] for row in result['pendingResults']}) != len(pending_results)
+            or len({row['jobId'] for row in result['pendingResults']}) != len(pending_results)):
+        raise ValueError('Maintenance repeats a pending result owner.')
     if child:
         for key in ('parentSessionId', 'callId'):
             if value.get(key) is not None:
@@ -161,12 +206,14 @@ def _proof(value, *, child=False):
 def _identity(value):
     return {**{key: value.get(key) for key in
                ('sessionId', 'runtimeId', 'generationId', 'inputIds', 'ownedGenerations', 'pendingInputIds')},
-            'jobOrigins': [{key: row[key] for key in ('jobId', 'generationId', 'inputIds')}
+            'jobOrigins': [{key: row.get(key) for key in ('jobId', 'callId', 'generationId', 'inputIds')}
                            for row in value.get('jobOrigins', [])]}
 
 
 def _pause_identity_matches(previous, proof):
     old, current = _identity(previous), _identity(proof)
+    if any(row not in proof.get('pendingResults', []) for row in previous.get('pendingResults', [])):
+        return False
     if old == current:
         return True
     # An admitted root can finish while one of its already-owned background
@@ -178,12 +225,15 @@ def _pause_identity_matches(previous, proof):
             and isinstance(terminal, dict) and terminal['generationId'] == old['generationId']
             and terminal in (old.get('ownedGenerations') or [])
             and (any(row['status'] in {'paused', 'suspended'} for row in proof.get('jobOrigins', []))
+                 or bool(proof.get('pendingResults'))
                  or proof['status'] == 'quiescent' and not proof.get('pendingInputIds')
-                 and not proof.get('jobOrigins') and not proof.get('children')))
+                 and all(row['status'] in {'returned', 'failed', 'cancelled'} for row in proof.get('jobOrigins', []))
+                 and not proof.get('children')))
 
 
 def _continuation(value):
     return {**_identity(value), 'checkpointId': value.get('checkpointId'),
+            'pendingResults': value.get('pendingResults', []),
             'rootGenerationTerminal': value.get('rootGenerationTerminal'),
             'children': [{**_identity(row), **{key: row.get(key) for key in
                           ('checkpointId', 'parentSessionId', 'callId')}}
@@ -232,6 +282,7 @@ class Maintenance:
             'set_maintenance_resume_guard': self.validate_resume,
             'set_maintenance_admission': self.admit,
             'set_maintenance_loader': self.load_resume,
+            'set_maintenance_releaser': self.release_resume,
         }.items():
             setter = getattr(self.app.runtime, name, None)
             if callable(setter):
@@ -259,6 +310,8 @@ class Maintenance:
         }
 
     def _project(self):
+        from .maintenance_auxiliary import snapshot as auxiliary_snapshot
+        auxiliary = auxiliary_snapshot(self.app)
         rows = self._rows()
         counts = {}
         for row in rows:
@@ -268,9 +321,16 @@ class Maintenance:
         # receipts are explicitly paged through maintenance.status.
         self.app.state['hostMaintenance'] = {
             **copy.deepcopy(self.value), 'counts': counts, 'total': len(rows),
-            'readyForRestart': bool(self.value['held'] and self.value['inventoryComplete']
+            'auxiliary': auxiliary,
+            'canPause': bool(not self.value['held'] and self.value['phase'] != 'resuming'),
+            'readyForRestart': bool(auxiliary['settled'] and self.value['held'] and self.value['inventoryComplete']
                 and self.value['phase'] in {'pausing', 'paused', 'stopping'}
                 and all(row.get('phase') in {'suspended', 'stopped', 'quiescent'} for row in rows)),
+            'canResume': bool(auxiliary['settled'] and self.value['held'] and self.value['inventoryComplete']
+                and self.value['phase'] == 'paused'
+                and all(row.get('phase') in {'suspended', 'blocked', 'stopped', 'quiescent'}
+                        and row['proof']['status'] in {'suspended', 'stopped', 'quiescent'}
+                        and _settled_children(row['proof']) for row in rows)),
         }
 
     def _commit(self):
@@ -432,10 +492,31 @@ class Maintenance:
     async def authorize_resume(self, session_id, epoch, receipt):
         async with self.app.lock:
             row = self._valid_resume(session_id, epoch, receipt, {'resume-requested'})
-            if row is None or self.value['phase'] != 'resuming':
+            if (row is None or self.value['phase'] != 'resuming'
+                    or self.value.get('releasedEpoch') != epoch or self.value['held']):
                 return False
             row.update(phase='resuming', claimedAt=time.time())
             self._put(row)
+            self._commit()
+            return True
+
+    async def release_resume(self, epoch, receipts):
+        """One durable decision after every selected root remounted still held."""
+        async with self.app.lock:
+            if (epoch != self.value['epoch'] or self.value['phase'] != 'resuming'
+                    or not self.value['held'] or self.value.get('releasedEpoch') == epoch):
+                return False
+            from .maintenance_auxiliary import snapshot as auxiliary_snapshot
+            if not auxiliary_snapshot(self.app)['settled']:
+                return False
+            expected = {row['sessionId'] for row in self._rows() if row['phase'] == 'resume-requested'}
+            if (not isinstance(receipts, list) or len(receipts) != len(expected)
+                    or {row.get('sessionId') for row in receipts} != expected):
+                return False
+            if any(self._valid_resume(row['sessionId'], epoch, row, {'resume-requested'}) is None
+                   for row in receipts):
+                return False
+            self.value.update(held=False, releasedEpoch=epoch, releasedAt=time.time())
             self._commit()
             return True
 
@@ -459,8 +540,8 @@ class Maintenance:
         async with self.app.lock:
             row = self._row(proof['sessionId'])
             if (row is None or proof.get('epoch') != self.value['epoch']
-                    or not (row['phase'] == 'waiting' and _pause_identity_matches(row['proof'], proof)
-                            or _identity(proof) == _identity(row['proof']))):
+                    or not (_pause_identity_matches(row['proof'], proof) if row['phase'] in {'waiting', 'unsupported'}
+                            else _identity(proof) == _identity(row['proof']))):
                 return False
             status = proof['status']
             if row['phase'] == 'resume-requested' and status == 'suspended':
@@ -492,6 +573,21 @@ class Maintenance:
                 row['reason'] = 'A child has not proved a settled maintenance boundary.'
             row.update(proof=proof, phase=status)
             self._put(row)
+            if status in {'suspended', 'resumed', 'stopped'}:
+                session = self.app._session(proof['sessionId'])
+                from .execution import pause_for_maintenance, leave_maintenance_pause, stop_maintenance_pause
+                if status == 'suspended':
+                    pause_for_maintenance(session, proof)
+                elif status == 'stopped':
+                    stop_maintenance_pause(session, proof['epoch'])
+                else:
+                    leave_maintenance_pause(session, proof['epoch'], resumed=True)
+                    collaboration = getattr(self.app, 'collaboration', None)
+                    if collaboration is not None:
+                        collaboration.resume_maintenance_generation(session, proof)
+                save = getattr(self.app, '_save', None)
+                if callable(save):
+                    save(session_ids={session['id']}, record_only=True)
             self._commit()  # awaited observer cannot report success before persistence
             return True
 
@@ -554,6 +650,9 @@ class Maintenance:
                     raise AppError('The maintenance epoch changed. Inspect it before resuming.', 409)
                 if self.value['phase'] == 'resuming':
                     raise AppError('The recorded resume is still pending; inspect it without replaying.', 409)
+                self._project()
+                if not self.app.state['hostMaintenance']['canResume']:
+                    raise AppError('Work has not reached confirmed pause boundaries. Wait or explicitly stop owned execution before resuming.', 409)
                 ids = []
                 for row in self._rows():
                     if row['phase'] != 'suspended':
@@ -626,13 +725,18 @@ class Maintenance:
                             row.update(phase='uncertain', reason='Resume was not positively confirmed; it will not be replayed.')
                             self._put(row)
                     self.value.update(held=False, phase='open', lastResumedAt=time.time())
-                elif operation == 'pause':
+                elif operation in {'pause', 'stop'}:
                     self.value['phase'] = 'paused'
                 self._commit()
         except BaseException as exc:
             async with self.app.lock:
                 if self.value['epoch'] == epoch and self.value['phase'] == phase:
-                    self.value.update(held=True, phase='uncertain', reason=str(exc)[:500])
+                    # A persisted release decision is not rolled back after
+                    # some roots may already execute. Unconfirmed roots remain
+                    # uncertain and are never replayed. A new explicit Pause
+                    # captures current work, including any newly admitted work.
+                    self.value.update(held=self.value.get('releasedEpoch') != epoch,
+                                      phase='uncertain', reason=str(exc)[:500])
                     for row in self._rows():
                         if row['phase'] in {'waiting', 'resume-requested', 'resuming', 'stopping'}:
                             row.update(phase='uncertain', reason='Runtime maintenance outcome could not be confirmed.')

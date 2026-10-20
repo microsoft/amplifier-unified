@@ -620,6 +620,8 @@ class AppService:
             if session.get("bundleChange", {}).get("phase") == "working":
                 session["bundleChange"] = {"phase":"error", "error":"The app restarted during a bundle change. Load the conversation and preview again; work was not replayed."}
             session.pop("bundlePreview", None)
+            from .maintenance import restore_projection
+            restore_projection(self, session)
             interrupt_unfinished(session)
             if session["status"] in {"working", "starting", "ready", "stopping"}:
                 session["status"] = "interrupted"
@@ -1218,6 +1220,10 @@ class AppService:
             for owner in self.state['sessions']:
                 if session_ids is None or owner['id'] in session_ids:
                     authority.reconcile(owner)
+        if (getattr(self, 'maintenance', None) is not None and
+                (session_ids is None or set(global_keys) & {'voice', 'voicePreviewBusy', 'smartTools', 'namingBackfill'})):
+            self.maintenance._project()
+            global_keys = set(global_keys) | {'hostMaintenance'}
         previous = self.state["revision"]
         self.state["revision"] = previous + 1
         self._publish_save_scope = session_ids
@@ -1473,6 +1479,8 @@ class AppService:
                 restore_observation(session)
                 restore(session)
                 settle_stream(session)
+                from .maintenance import restore_projection
+                restore_projection(self, session)
                 interrupt_unfinished(session)
                 from .management import Management
                 session['configurationBusy'] = Management.unresolved_configuration(session)
@@ -3644,6 +3652,8 @@ class AppService:
                 if action.startswith("smartTools."):
                     self.smart_tool_tasks.add(task)
                     task.add_done_callback(self.smart_tool_tasks.discard)
+                    from .maintenance_auxiliary import notify_task_settled
+                    task.add_done_callback(lambda _: notify_task_settled(self))
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         if action == 'conversation.send' and not result.get('steering'):result['delivery']='accepted'

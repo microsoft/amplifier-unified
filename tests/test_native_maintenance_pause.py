@@ -182,6 +182,56 @@ async def test_real_delegate_pause_release_remount_original_completion_owner(tmp
 
 
 @pytest.mark.asyncio
+async def test_delegate_finishing_during_pause_retains_pending_result_without_redispatch(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "shared"))
+    fixture = {"root": Provider(), "child": Provider(), "effect": Effect(),
+               "created": [], "claims": [], "receipts": []}
+    session, runtime, task, owner, registry = await mount(tmp_path, fixture)
+    try:
+        await runtime.submit(Input("user", "Delegate work", id="background-input"))
+        await fixture["root"].request()
+        generation = runtime.generation["id"]
+        await fixture["root"].reply(calls=[ToolCall(id="background-call", name="delegate", arguments={
+            "agent": "worker", "instruction": "One child effect", "async": True})])
+        await fixture["child"].request()
+        await fixture["root"].request()
+        await fixture["child"].reply(calls=[ToolCall(id="effect-call", name="effect", arguments={})])
+        await fixture["child"].request()
+        assert fixture["effect"].count == 1
+        await owner.request("result-epoch")
+        await fixture["root"].reply("Delegate is working")
+        await fixture["child"].reply("Child completed effect")
+        await runtime.wait_for(lambda event: event["type"] == "session.suspended", 5)
+        proof = owner.snapshot()
+        assert proof["status"] == "suspended"
+        assert proof["generationId"] is None
+        assert proof["inputIds"] == ["background-input"] and proof["pendingInputIds"] == []
+        assert proof["rootGenerationTerminal"] == {"generationId": generation, "inputIds": ["background-input"]}
+        assert proof["jobOrigins"][0]["status"] == "returned"
+        assert proof["pendingResults"] == [{"inputId": owner.read("root")["live"]["pending"][0]["id"],
+            "jobId": proof["jobOrigins"][0]["jobId"], "callId": "background-call"}]
+        await runtime.release_paused("result-epoch")
+        await asyncio.wait_for(task, 5)
+    finally:
+        await close(session, runtime, task)
+    session, runtime, task, owner, registry = await mount(tmp_path, fixture)
+    try:
+        await runtime.wait_for(lambda event: event["type"] == "session.suspended", 5)
+        assert owner.snapshot()["pendingResults"] == proof["pendingResults"]
+        await owner.resume("result-epoch")
+        request = await fixture["root"].request()
+        assert "Child completed effect" in str(request.messages)
+        assert "background-call" in str(request.messages)
+        assert fixture["effect"].count == 1 and fixture["child"].requests.empty()
+        await fixture["root"].reply("Result received")
+        await runtime.wait_for(lambda event: event["type"] == "generation.finished", 5)
+        assert len([parent for _, parent in fixture["created"] if parent == "root"]) == 1
+    finally:
+        await close(session, runtime, task)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("persistent", [False, True])
 async def test_paused_background_delegate_resumes_original_job_and_child(tmp_path, monkeypatch, persistent):
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "home"))
