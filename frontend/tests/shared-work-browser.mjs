@@ -115,7 +115,11 @@ try {
  await expect(detail.getByText(/Independent checks passed|Cleanup complete|Shipped/)).toHaveCount(0);
  const source=detail.getByRole('region',{name:'Original source'});
  for(let index=0;index<20&&!((await source.innerText()).includes('ORIGINAL-END'));index++) {
+  const previous=await source.locator('blockquote').textContent();
   await detail.getByRole('button',{name:'Read more source',exact:true}).click();
+  // A DOM click completes before the passive read does. Wait for the exact
+  // displayed page to advance before deciding whether another page exists.
+  await expect.poll(()=>source.locator('blockquote').textContent()).not.toBe(previous);
  }
  await expect.poll(()=>source.locator('blockquote').textContent()).toBe(manifest.originalText);
  await expect(source.getByText(manifest.originalSha256,{exact:true})).toBeVisible();
