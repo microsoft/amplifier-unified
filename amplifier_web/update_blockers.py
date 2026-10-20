@@ -18,6 +18,54 @@ def auxiliary_blockers(service):
     naming = getattr(service, 'naming_backfill', None)
     if naming is not None and naming.running:
         result.append({'kind': 'naming', 'label': 'Chat naming is still running'})
+    management = getattr(service, 'management', None)
+    configuration = getattr(management, 'maintenance_blockers', None)
+    if configuration is not None:
+        result.extend(configuration())
+    result.extend(test_work_blockers(service))
+    return result
+
+
+def test_work_blockers(service):
+    """Project bounded owner evidence; never probe or cancel a test machine."""
+    from contextlib import closing
+    from pathlib import Path
+    import sqlite3
+    from . import test_environment_setup as setup
+    result = []
+    queue = getattr(service, 'test_queue', None)
+    if queue is not None and any(not task.done() for task in queue.tasks.values()):
+        result.append({'kind': 'test-environments', 'label': 'An isolated check is preparing, running or settling'})
+    home = getattr(service, 'data_dir', None)
+    if home is None:
+        return result
+    ledger = Path(home) / 'workspace-resources' / 'reservations.sqlite3'
+    if ledger.exists():
+        try:
+            if ledger.is_symlink() or ledger.parent.is_symlink():
+                raise ValueError('The test owner ledger changed.')
+            with closing(sqlite3.connect(ledger.as_uri() + '?mode=ro', uri=True, timeout=.1)) as db:
+                active = db.execute("""SELECT 1 FROM allocations WHERE status!='retired'
+                    AND json_extract(body,'$.kind')='test-environment' AND (
+                    json_extract(body,'$.preparationPending')=1
+                    OR json_extract(body,'$.pendingRequest') IS NOT NULL
+                    OR (json_extract(body,'$.backendAdmitted')=1
+                        AND COALESCE(json_extract(body,'$.environmentState'),'unknown') NOT IN ('stopped','removed','not-started'))) LIMIT 1""").fetchone()
+            if active and not result:
+                result.append({'kind': 'test-environments', 'label': 'An isolated test machine still owns active or unconfirmed work'})
+        except (OSError, ValueError, sqlite3.Error):
+            result.append({'kind': 'test-environments', 'label': 'Isolated test ownership could not be confirmed'})
+    setup_busy = any(not task.done() for task in getattr(service, '_test_setup_tasks', {}).values())
+    try:
+        folder = setup.root(service, create=False)
+        latest = setup.read_json(folder / 'latest.json') if folder.exists() else None
+        record = setup.read_json(folder / (latest['id'] + '.json')) if latest else None
+        setup_busy = setup_busy or bool(record and record.get('state') in setup.ACTIVE | {'outcome_unknown'}
+            and record.get('cleanup', {}).get('state') != 'completed')
+    except (OSError, ValueError, KeyError, AttributeError):
+        setup_busy = True
+    if setup_busy:
+        result.append({'kind': 'test-setup', 'label': 'Test runner setup or cleanup still needs confirmation'})
     return result
 
 
@@ -57,7 +105,11 @@ def blockers(service):
             if unknown:
                 add('checkout-handoff', 'Checkout handoff needs inspection; restarting will not resolve it', sid)
             else:
-                add('configuration', 'Conversation settings are being applied', sid)
+                pending = session.get('pendingConfiguration') or {}
+                legacy = (not pending.get('operationId') and not pending.get('requestHash')
+                          and (pending.get('recoveryRequired') or pending.get('error')))
+                add('configuration', 'Earlier conversation settings need inspection; no change is being replayed'
+                    if legacy else 'Conversation settings are being applied', sid)
         if session.get('status') in {'working', 'starting', 'stopping'} or (session.get('status') == 'ready' and
                 any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', []))):
             add('conversation', 'Conversation work is running or finishing', sid)

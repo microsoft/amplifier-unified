@@ -157,7 +157,7 @@ def test_refresh_changes_only_future_descriptor_and_preserves_paused_preference(
     monkeypatch.setitem(sys.modules, 'amplifier_web.service', SimpleNamespace(AppError=AppError))
     async def scenario():
         checks = []
-        app = SimpleNamespace(data_dir=tmp_path, lock=asyncio.Lock(),
+        app = SimpleNamespace(data_dir=tmp_path, lock=asyncio.Lock(), state={},
             configuration_authority=SimpleNamespace(check=lambda authority: checks.append(authority)),
             test_queue=SimpleNamespace(backoff={}, wakeup=asyncio.Event(), start=lambda: None))
         old = {'id': 'a'*64, 'name': 'test machine', 'enabled': False, 'connection': 'test-target',

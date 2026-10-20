@@ -19,6 +19,7 @@ from . import test_environment_profiles as profiles
 from . import test_capacity_settings as capacity_settings
 from . import registered_test_runners as registered_runners
 from . import test_execution_settings as execution_settings
+from .maintenance import held, require_open
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -125,7 +126,7 @@ class TestQueue:
             with closing(environments.storage.connect(self.app.data_dir)) as db:
                 owned = db.execute("""SELECT body FROM allocations WHERE root=?
                     AND status!='retired' AND json_extract(body,'$.kind')=?""", (sid, environments.KIND)).fetchall()
-            command = identity+':start:'+str(receipt['job'].get('attempt', 0))
+            command = self.effect_id(receipt, 'start')
             # Preserve recovery of the allocation-before-queue-link crash gap.
             # prepare still validates every immutable field before reusing it.
             if any((row := json.loads(encoded[0])).get('commandId') != command
@@ -181,6 +182,15 @@ class TestQueue:
     def summary(self, request):
         return {key: request[key] for key in ('requestId', 'state', 'message') if key in request}
 
+    def effect_id(self, receipt, action, suffix=None):
+        job = receipt['job']
+        identity = receipt['requestId'] + ':' + (suffix or action)
+        if job.get('maintenanceAttempt'):
+            identity += ':maintenance:' + str(job['maintenanceAttempt'])
+        if action == 'start':
+            identity += ':' + str(job.get('attempt', 0))
+        return identity
+
     def guard(self, receipt):
         job = receipt['job']
         if job.get('cancelRequested'):
@@ -217,7 +227,7 @@ class TestQueue:
         Anything beyond that boundary remains owned for normal reconciliation.
         """
         job, sid = receipt['job'], receipt['senderSessionId']
-        command = receipt['requestId']+':start:'+str(job.get('attempt', 0))
+        command = self.effect_id(receipt, 'start')
         with closing(environments.storage.connect(self.app.data_dir)) as db:
             found = db.execute("""SELECT id FROM allocations WHERE root=? AND status='prepared'
                 AND json_extract(body,'$.kind')=? AND json_extract(body,'$.commandId')=?""",
@@ -283,7 +293,7 @@ class TestQueue:
         if action.endswith('.result'):
             receipt = self.get(identity)
             try:
-                request = self.app.operations.requests.read(source['id'], identity+':execute')
+                request = self.app.operations.requests.read(source['id'], self.effect_id(receipt, 'execute'))
             except ValueError:
                 request = {'state': 'not-started'}
             output = request.get('result', {}).get('result', {})
@@ -334,6 +344,7 @@ class TestQueue:
                 if previous[0] != digest:
                     owner.error('This test request ID already has different arguments.', 409)
                 return {'accepted': True, 'duplicate': True, 'result': self.public(json.loads(previous[1]))}
+            require_open(self.app)
             if origin not in {'ui', 'user'}:
                 owner.active_binding(source)
             if self.app.assignments.blocked(source):
@@ -438,8 +449,10 @@ class TestQueue:
             if task:
                 self.tasks.pop(identity)
             if receipt['job']['status'] != 'queued':
-                self.tasks[identity] = asyncio.create_task(self.recover(identity))
+                self.track(identity, self.recover(identity))
                 continue
+            if held(self.app):
+                continue  # Durable waiting work remains queued during maintenance.
             try:
                 if receipt['job'].get('expiresAt') is not None and receipt['job']['expiresAt'] <= time.time():
                     self.finish(receipt, 'expired', 'The saved check expired while waiting for capacity. No environment was started.')
@@ -454,7 +467,7 @@ class TestQueue:
                 selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff)
                 async with self.app.lock:
                     receipt = self.get(identity)
-                    if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
+                    if held(self.app) or receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
                         continue
                     if not self.chat_available(receipt):
                         continue
@@ -488,7 +501,7 @@ class TestQueue:
             async with self.app.lock:
                 receipt = self.get(identity)
                 task = self.tasks.get(identity)
-                if receipt['job']['status'] != 'queued' or (task and not task.done()):
+                if held(self.app) or receipt['job']['status'] != 'queued' or (task and not task.done()):
                     continue
                 try:
                     self.guard(receipt)
@@ -502,7 +515,14 @@ class TestQueue:
                 if free <= 0:
                     continue
                 capacities[key][1] -= 1
-                self.tasks[identity] = asyncio.create_task(self.run(identity, config))
+                self.track(identity, self.run(identity, config))
+
+    def track(self, identity, work):
+        task = self.tasks[identity] = asyncio.create_task(work)
+        def settled(_):
+            from .maintenance_auxiliary import notify_task_settled
+            notify_task_settled(self.app)
+        task.add_done_callback(settled)
 
     async def effect(self, receipt, config, action, *, cleanup=False, suffix=None, previous_request=None):
         job, app = receipt['job'], self.app
@@ -510,9 +530,7 @@ class TestQueue:
         if cleanup:
             active, _, _ = environments.configuration(app)
             config = environments.resolve_configuration(app, row, active)
-        request_id = receipt['requestId'] + ':' + (suffix or action)
-        if action == 'start':
-            request_id += ':'+str(job.get('attempt', 0))
+        request_id = self.effect_id(receipt, action, suffix)
         try:
             return app.operations.requests.read(receipt['senderSessionId'], request_id)
         except ValueError:
@@ -534,6 +552,7 @@ class TestQueue:
                 # waiting authority is revoked. It only stops that exact owner;
                 # it never starts work, changes settings or removes evidence.
                 if not cleanup:
+                    require_open(app)
                     current_config = self.guard(self.get(receipt['requestId']))
                     if capacity:
                         return capacity_settings.apply(app, current_config)
@@ -553,7 +572,7 @@ class TestQueue:
         try:
             async with self.admission:
                 receipt = self.get(identity)
-                if receipt['job']['status'] != 'queued':
+                if held(self.app) or receipt['job']['status'] != 'queued':
                     return
                 config = self.guard(receipt)
                 if not self.chat_available(receipt):
@@ -570,11 +589,17 @@ class TestQueue:
                 job = receipt['job']
                 row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
                     receipt['senderSessionId'], next(w['id'] for w in self.app.state['workspaces'] if w['path']==receipt['workspace']),
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'))
+                    job['actor'], job['source'], job['backendKey'], self.effect_id(receipt, 'start'), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'))
                 # Cancellation may arrive while local allocation is persisted.
                 # Never overwrite the newer cancellation/subscription record.
                 receipt = self.get(identity)
                 job = receipt['job']
+                if held(self.app):
+                    # Only the local allocation exists; no transport effect was admitted.
+                    environments.save(self.app.data_dir, row, status='retired', environmentState='not-started')
+                    job['attempt'] = job.get('attempt', 0) + 1
+                    self.save(receipt)
+                    return
                 try:
                     self.guard(receipt)
                 except Exception:
@@ -621,6 +646,10 @@ class TestQueue:
                 check = await self.effect(receipt, config, 'execute')
             except Exception as exc:
                 check = {'state': 'cancelled', 'message': str(exc)}
+            if (check.get('result') or {}).get('maintenanceDeferred'):
+                receipt = self.get(identity)
+                receipt['job']['maintenanceDeferred'] = True
+                self.save(receipt)
             row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
             if receipt['job'].get('durableVersion') == 1 and row.get('durableJob'):
                 return await self.monitor(identity, config, check)
@@ -674,10 +703,27 @@ class TestQueue:
             if removal['state'] != 'completed':
                 self.finish(receipt, 'unknown', 'The environment is stopped, but evidence export or removal was not confirmed. Its retained files and exact ownership remain available.')
                 return
+            if self.requeue_deferred(receipt):
+                return
             check = receipt['job'].get('check', {'state': 'outcome_unknown'})
             status = ('cancelled' if receipt['job'].get('cancelRequested') else
                       {'completed': 'passed', 'failed': 'failed', 'cancelled': 'cancelled'}.get(check['state'], 'unknown'))
             self.finish(receipt, status, 'The check outcome is '+status+'. Source, artifacts and operation receipts were retained before the owned environment was removed.')
+
+    def requeue_deferred(self, receipt):
+        job = receipt['job']
+        if not job.get('maintenanceDeferred') or job.get('cancelRequested') or job.get('removal', {}).get('state') != 'completed':
+            return False
+        # Only a positively refused check and confirmed exact cleanup can wait
+        # again. The next attempt owns distinct receipts, including after restart.
+        job['maintenanceAttempt'] = job.get('maintenanceAttempt', 0) + 1
+        job['attempt'] = job.get('attempt', 0) + 1
+        for key in ('resourceId', 'launch', 'check', 'cleanup', 'removal', 'previousRemoval', 'maintenanceDeferred'):
+            job.pop(key, None)
+        job.update(status='queued', detail='Waiting for maintenance to finish; no check was executed.')
+        self.save(receipt)
+        self.wakeup.set()
+        return True
 
     def wake_job(self, identity):
         event = self.job_wakeups.get(identity)
@@ -753,6 +799,8 @@ class TestQueue:
                 row = await asyncio.to_thread(environments.resume_preparation_removal, self.app, row, retained)
             if row['status'] == 'retired':
                 self.restore_operations(receipt)
+                if self.requeue_deferred(receipt):
+                    return
                 check = receipt['job'].get('check', {})
                 removal = receipt['job'].get('removal', {})
                 status = {'completed': 'passed', 'failed': 'failed'}.get(check.get('state'), 'unknown') if removal.get('state') == 'completed' else 'unknown'
@@ -782,6 +830,9 @@ class TestQueue:
     def restore_operations(self, receipt):
         for phase, operation in (('check', 'execute'), ('cleanup', 'stop'), ('removal', 'remove'), ('removal', 'finishCleanup')):
             try:
-                receipt['job'][phase] = self.summary(self.app.operations.requests.read(receipt['senderSessionId'], receipt['requestId']+':'+operation))
+                request = self.app.operations.requests.read(receipt['senderSessionId'], self.effect_id(receipt, operation))
+                receipt['job'][phase] = self.summary(request)
+                if operation == 'execute' and request.get('result', {}).get('maintenanceDeferred'):
+                    receipt['job']['maintenanceDeferred'] = True
             except ValueError:
                 pass

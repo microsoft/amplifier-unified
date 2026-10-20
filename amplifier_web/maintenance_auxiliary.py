@@ -30,6 +30,10 @@ def snapshot(app):
     items = []
     for row in auxiliary_blockers(app):
         kind = row['kind']
+        if kind == 'configuration-unresolved':
+            # Historical configuration uncertainty remains an Updates blocker,
+            # not active work that a global maintenance Resume could settle.
+            continue
         items.append({
             **row,
             'status': 'waiting',
@@ -39,6 +43,10 @@ def snapshot(app):
                 if kind == 'voice' else
                 'Wait for the current naming request to finish. Already accepted provider requests cannot be recalled.'
                 if kind == 'naming' else
+                'Wait for the original test operation or reconcile its exact owner. Remote tests and setup are not suspended or stopped by Pause all or Stop now.'
+                if kind in {'test-environments', 'test-setup'} else
+                'Wait for the admitted conversation settings operation to settle before restarting.'
+                if kind == 'configuration-active' else
                 'Wait for the operation to settle. If its outcome is unknown, inspect the tool; stopping a conversation worker does not prove remote work stopped.'
             ),
         })
