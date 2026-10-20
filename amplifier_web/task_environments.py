@@ -295,7 +295,7 @@ def invoke(config, home, row, action, args, *, _qualification=False):
         else:
             payload['image'] = prepared['image']
     environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
-    process = subprocess.Popen([config['python'], '-I', str(helper)], stdin=subprocess.PIPE,
+    process = subprocess.Popen([config['python'], '-I', '-B', str(helper)], stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False

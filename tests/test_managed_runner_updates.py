@@ -488,7 +488,7 @@ def identity_fixture(tmp_path, monkeypatch):
     executable.write_text('fixed interpreter')
     monkeypatch.setattr(sys, 'prefix', str(prefix))
     monkeypatch.setattr(sys, 'executable', str(executable))
-    monkeypatch.setitem(sys.modules, 'digital_twin_universe', SimpleNamespace(__file__=str(package)))
+    monkeypatch.setitem(sys.modules, 'digital_twin_universe', SimpleNamespace(__spec__=SimpleNamespace(origin=str(package))))
     monkeypatch.setattr(probe_identity.sysconfig, 'get_path', lambda _: str(package.parent.parent))
     monkeypatch.setattr(importlib.metadata, 'version', lambda _: '0.test')
     return probe_identity, prefix, package
@@ -525,7 +525,7 @@ def test_identity_rejects_redirected_dependency_parent(identity_fixture, monkeyp
 def test_fixed_incus_identity_mode_uses_specific_package(identity_fixture, monkeypatch):
     import sys
     identity, prefix, package = identity_fixture
-    monkeypatch.setitem(sys.modules, 'amplifier_bundle_digital_twin_universe', SimpleNamespace(__file__=str(package)))
+    monkeypatch.setitem(sys.modules, 'amplifier_bundle_digital_twin_universe', SimpleNamespace(__spec__=SimpleNamespace(origin=str(package))))
     assert identity.identity(incus_engine=True)['files'] == 1
 
 
@@ -692,3 +692,27 @@ def test_legacy_known_generation_keeps_existing_static_execution_path(app, monke
     assert status == 'ready' and 'runnerQualificationRequired' not in config
     monkeypatch.setattr(updates, 'runtime_identity', lambda *_: pytest.fail('legacy byte hashing'))
     updates.validate_execution(app.data_dir, config)
+
+
+@pytest.mark.parametrize('configured', [False, True])
+@pytest.mark.parametrize('with_mcp', [False, True])
+def test_public_tool_inventory_on_platform_without_posix_capabilities(tmp_path, monkeypatch, configured, with_mcp):
+    from amplifier_web.smart_tool_updates import ManagedUpdates
+    app = SimpleNamespace(data_dir=tmp_path)
+    manager = SimpleNamespace(service=app, state={'installations': [], 'servers': []})
+    app.smart_tools = manager
+    if with_mcp:
+        manager.state['installations'].append({'id': 'mcp', 'commit': 'a' * 40, 'repository': 'https://example.test/tool', 'binDir': '/tool/bin'})
+        manager.state['servers'].append({'installationId': 'mcp', 'transport': 'stdio', 'command': '/tool/bin/tool'})
+    if configured:
+        (tmp_path / 'test-environments.json').write_text('{}')
+    for name in ('getuid', 'O_NOFOLLOW', 'O_DIRECTORY'):
+        monkeypatch.delattr(updates.os, name)
+    rows = ManagedUpdates.update_sources(manager)
+    ordinary = [row for row in rows if row.get('installationId') == 'mcp']
+    assert len(ordinary) == int(with_mcp)
+    rows = [row for row in rows if row.get('installationId') != 'mcp']
+    if configured:
+        assert len(rows) == 1 and rows[0]['status'] == 'not_checked' and not rows[0]['eligible']
+    else:
+        assert rows == []

@@ -77,7 +77,7 @@ class ManagedUpdates:
                              'detail': 'Updated by its service owner or external package manager.'})
         from .managed_runner_updates import update_sources
         runner_rows = update_sources(self.service)
-        selected = {row['installationId'] for row in runner_rows}
+        selected = {row['installationId'] for row in runner_rows if row.get('installationId')}
         # The runner has a separate source policy. Never mutate a user's MCP
         # connection or infer its pin from this runner's installed commit.
         rows = [row for row in rows if row.get('installationId') not in selected

@@ -392,7 +392,7 @@ def main():
                 raise ValueError('The registered adapter requires Python 3.13 or later for bounded archive handling.')
             config = configuration()
             interpreter = config['interpreter']
-            os.execv(interpreter, [interpreter, '-I', str(Path(__file__).resolve()), '--qualified-runtime'])
+            os.execv(interpreter, [interpreter, '-I', '-B', str(Path(__file__).resolve()), '--qualified-runtime'])
         encoded = sys.stdin.buffer.read(MAX_CONTROL + 1)
         if len(encoded) > MAX_CONTROL:
             raise ValueError('The controller request exceeds its bound.')
