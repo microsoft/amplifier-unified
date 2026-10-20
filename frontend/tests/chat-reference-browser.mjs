@@ -159,6 +159,23 @@ try{
   const record={name,sourceSessionId:source,messageId:message,status:'pending'};
   captures.push(record);
   await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(source);
+  // The real loading banner can disappear after several stable geometry samples.
+  // Join current host and rendered Work readiness before certifying a capture.
+  await expect.poll(async()=>{
+   const state=await authoritative(page);
+   const projection=state.sessions.find(row=>row.id===source)?.workProjection;
+   if(state.selectedSessionId!==source||projection?.current!==true||projection.status!=='ready')return false;
+   return page.evaluate(({source,generation})=>{
+    const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===source);
+    const pane=document.querySelector(`[data-part="messages"][data-session-id="${CSS.escape(source)}"]`);
+    let rendered;
+    try{rendered=JSON.parse(pane?.getAttribute('data-work-projection')??'null')}catch{return false}
+    return state.selectedSessionId===source&&session?.historyLoading===false&&
+     session.workProjection?.current===true&&session.workProjection.status==='ready'&&
+     session.workProjection.receipt?.generation===generation&&
+     rendered?.current===true&&rendered.status==='ready'&&rendered.receipt?.generation===generation;
+   },{source,generation:projection.receipt?.generation});
+  },{timeout:15000}).toBe(true);
   await expect(sourceArticle).toBeVisible();await expect(card()).toBeVisible();
   await card().scrollIntoViewIfNeeded();
   let previous,stable=0;

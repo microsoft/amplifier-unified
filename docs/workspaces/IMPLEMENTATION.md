@@ -1398,3 +1398,29 @@ outcome unknown and retains its reservation; it does not infer that a provider
 was never invoked or free capacity. Unknown IDs, another worker's frames, and
 late cancellation after reply consumption cannot change another call. Unrelated
 mutation bridges retain their existing completion behavior.
+
+
+#### Retained terminal evidence for older failed members
+
+Some older workers saved a generic unknown failure without its generation ID.
+Guarded peer recovery may retain separate terminal evidence instead of changing
+that failure: the latest root event must be a failed generation, its input IDs
+must exactly match the host-observed delivered inputs, and every input must have
+its accepted peer receipt for that member. The generic failure must follow that
+terminal. A fresh owner human request and native stopped-owner proof are still
+required. Later input, terminal, Stop or configuration changes invalidate the
+prepared recovery. A retained explicit safety terminal blocks recovery even if
+an older projection hid it. This admits one new reconciliation request; no old
+input, operation or provider call is replayed and no failure cause is inferred.
+
+## Explicit responsibility for existing chats
+
+[Existing-chat adoption](assignment-adoption.md) adds a settled, independent root
+through a revision-bound preview and explicit manager/human instruction. The
+canonical assignment retains a distinct adoption receipt, not a fabricated
+creation operation. Native ownership, unresolved configuration, task state and
+concurrent Stop/input changes are checked before committing membership. Existing
+manager continuation and placement controls then use that responsibility. Earlier
+history and usage stay attributed as before; adding itself never starts a turn.
+The workspace/canvas assignment controls expose the same operation. Independent
+chats in a shared folder remain independent unless explicitly added.

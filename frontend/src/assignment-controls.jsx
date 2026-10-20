@@ -1,5 +1,6 @@
 import React,{useCallback,useRef,useState} from 'react';
 import {AssignmentTaskList} from './assignment-task-list.jsx';
+import {AssignmentAdoption} from './assignment-adoption.jsx';
 
 export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
  const [expanded,setExpanded]=useState(false);
@@ -35,13 +36,19 @@ export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
   const pending=draft?.pending||{action,args,id:identity||crypto.randomUUID()};
   save({...draft,pending});
   try{
-   await dispatch(pending.action,pending.args,{id:pending.id,feedback:false});
+   const response=await dispatch(pending.action,pending.args,{id:pending.id,feedback:false});
+   if(response?.accepted!==true)throw Error('The change has no confirmed response. Check the same change before trying another.');
    save(null);await read();
-  }catch(error){setError(error.message)}finally{setBusy(false)}
+  }catch(error){
+   // Adoption rejects before committing, or rolls back the whole membership.
+   // A confirmed refusal needs a fresh review, not an "unknown" retry loop.
+   if(pending.action==='assignment.adopt'&&[400,403,409].includes(error.status)){save(null);await read()}
+   setError(error.message);
+  }finally{setBusy(false)}
  };
  return <details data-review-target="assignment" className="a-assignment" onToggle={event=>{if(event.target!==event.currentTarget)return;invalidate();setExpanded(event.currentTarget.open);if(event.currentTarget.open&&!value)read()}}>
   <summary>Shared tasks and assignment</summary>
-  <p>Manage this chat and its commissioned helpers together. Existing independent chats keep their own controls.</p>
+  <p>Manage this chat and its helpers together. Existing chats stay independent until you explicitly add them.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" disabled={busy} onClick={read}>Refresh assignment</button>
   {draft?.pending&&<p role="status">A change has no confirmed response. <button className="a-link" disabled={busy} onClick={()=>run()}>Check the same change</button></p>}
@@ -53,6 +60,7 @@ export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
    {!!value.independentWork?.requests.length&&<p role="status">{value.independentWork.detail}</p>}
    {assignment.status==='stopped'&&<><p>This assignment is stopped. Resuming keeps its chats, shared tasks and budgets, and allows new requests. Previous queued work stays stopped; nothing is sent automatically. Separately paused chat tasks and recorded budget pauses stay paused. Review those in chat controls.</p>{assignment.ownerSessionId===sessionId?<button className="a-primary" disabled={busy||!!draft?.pending} onClick={()=>run('assignment.resume',{sessionId,expectedRevision:assignment.revision})}>Resume assignment</button>:<p>Resume this assignment from its commissioning chat: {label(assignment.ownerSessionId)}.</p>}</>}
    {assignment.ownerSessionId===sessionId&&assignment.status==='active'&&<>
+    <AssignmentAdoption key={sessionId} dispatch={dispatch} sessionId={sessionId} assignment={assignment} busy={busy||!!draft?.pending} onAdopt={args=>run('assignment.adopt',args)}/>
     <button className="a-soft" disabled={busy||!!draft?.pending} onClick={()=>run('assignment.stop',{sessionId,expectedRevision:assignment.revision})}>Stop assignment</button>
     <details><summary>Integration responsibility</summary><p>Name the member responsible when combining this assignment’s work. Independent chats keep their own authority. This does not start execution.</p><label htmlFor={"integration-owner-"+sessionId}>Responsible conversation</label><select id={"integration-owner-"+sessionId} value={integrationOwner??assignment.integration?.responsibleSessionId??''} disabled={busy||!!draft?.pending} onChange={event=>setIntegrationOwner(event.target.value)}><option value="">Not assigned</option>{Object.entries(assignment.members).filter(([,member])=>member.status==='bound').map(([id])=><option key={id} value={id}>{label(id)}</option>)}</select><button className="a-soft" disabled={busy||!!draft?.pending} data-action="assignment.integration" onClick={()=>run('assignment.integration',{sessionId,expectedRevision:assignment.revision,responsibleSessionId:(integrationOwner??assignment.integration?.responsibleSessionId)||null})}>Save integration responsibility</button></details>
     <details><summary>Assignment limits</summary><p>Busy model calls wait automatically. Spending limits pause future supported calls. Reservations are allowances per call; actual usage and already running effects can exceed them. Saving does not restart work.</p>

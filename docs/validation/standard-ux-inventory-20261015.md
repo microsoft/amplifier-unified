@@ -865,3 +865,42 @@ checks; it adds no broad publication gate.
 `frontend/tests/model-capacity-settings-browser.mjs` owns the global Advanced settings journey using the production built UI and AppService with a synthetic runtime. It proves finite and unlimited waiting, two-client stale-save refusal, retained private edits, exact command retry after a lost acknowledgement and reopen, no extra saved mutation, unchanged worker starts/stops, saved cold reopen, and desktop/narrow layouts. No paid provider or live-host policy change is involved.
 
 This additive owner gives this isolated branch 100 registered scenarios and 143 distinct readiness/extended browser scripts (142 excluding the attachment script). The original 65-scenario identity is unchanged. This focused qualification does not add a broad browser census as a release gate.
+
+
+### Global test capacity (October 20)
+
+**TEST-CAPACITY** adds `testing-settings` to Extended browser checks and the
+additive inventory delta. Its built-client settings fixture owns global defaults
+without a runner, zero limits, saved-value readback after a lost acknowledgement,
+stale-writer refusal with retained drafts, narrow dirty-close controls and cold
+reopen. `test_test_capacity_settings.py` owns global authority, queue wake without
+cancellation, fresh admission policy and exact retained cleanup identity.
+
+This uses synthetic state and controlled backends; it does not claim live runner
+or physical-device qualification. The original frozen inventory and 65 baseline
+scenarios are preserved. The new owner runs as an affected-flow smoke and in the
+post-release browser schedule, without an unrelated census gate.
+
+Global testing settings adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
+
+### Existing-chat adoption (October 20)
+
+`assignment-adoption` owns the new existing-chat assignment flow in Extended
+browser checks and focused affected-flow qualification. It covers stale target
+review, lost acknowledgement with the same request identity, one committed
+member, retained drafts and history, no input or Stop replay, cold reopen,
+and desktop/phone layout. The fixture uses the production service and built
+client with a synthetic runtime. Live provider execution and production adoption
+remain separate evidence. The frozen baseline inventory is unchanged.
+
+Existing-chat adoption adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
+
+The integrated branch containing both testing settings and existing-chat adoption has 101 registered scenarios, 144 distinct readiness/extended scripts, and 143 excluding attachment consumption. Both additive owners preserve the original 65-scenario identity.
+
+Integrated model-capacity, testing settings and existing-chat adoption coverage totals 102 registered scenarios and 145 distinct readiness/extended scripts (144 excluding attachment consumption), preserving the frozen 65-scenario baseline.

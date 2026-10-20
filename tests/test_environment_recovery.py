@@ -257,7 +257,8 @@ async def test_queue_cleanup_survives_backend_change_without_replaying_check(app
     await drive(queue)
     assert record(queue, app)['job']['status'] == 'passed'
     assert [action for action, _ in seen] == ['prepare', 'start', 'execute', 'stop', 'remove']
-    assert all(config == old for _, config in seen)
+    assert all(config == (owner.capacity_settings.apply(app, old) if action == 'start' else old)
+               for action, config in seen)
 
 
 async def test_queue_restart_uses_retained_backend_and_preserves_saved_check(app, queue, backend, monkeypatch):

@@ -30,9 +30,11 @@ def definitions(schema, string):
     return {
         **task_definitions(schema, string),
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
-        'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Existing chats are never enrolled.', schema(target, ['sessionId'])),
+        'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Adding an existing chat requires explicit adoption.', schema(target, ['sessionId'])),
+        'assignment.adoption': ('Review adding one settled existing workspace chat to this manager’s assignment. Does not start work or change membership.', schema({**target, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId'])),
+        'assignment.adopt': ('Explicitly add a reviewed existing chat to this owner’s active assignment. Agents require the current human instruction; do not infer permission from a shared workspace. Preserves history and previous usage, sends no input, and does not clear Stop. Use ordinary guarded resume separately when authorized.', schema({**revision, 'targetSessionId': string(200), 'expectedTargetRevision': string(200), 'sourceMessageId': string(200)}, ['sessionId', 'targetSessionId', 'expectedRevision', 'expectedTargetRevision'])),
         'assignment.set': ('Owner sets revision-bound aggregate limits. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
-        'assignment.integration': ('Owner explicitly assigns integration responsibility to a current commissioned member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
+        'assignment.integration': ('Owner explicitly assigns integration responsibility to a current member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
         'assignment.stop': ('Owner closes assignment admission before requesting interruption of still-bound roots and native children. Does not stop independent peers or remove resources.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.resume': ('User reopens a settled stopped assignment for new requests, preserving members, shared tasks and cumulative usage. Does not send input, resume paused tasks or replay queued work.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.detach': ('User detaches this idle conversation after assignment work settles, retaining attributed usage. Does not resume or send input.', schema(revision, ['sessionId', 'expectedRevision'])),
@@ -82,14 +84,14 @@ class Assignments:
             'accepted': True, 'commandAction': 'assignment.record', 'result': value})
 
     @asynccontextmanager
-    async def mutation(self, source, identity):
+    async def mutation(self, source, identity, *, additional=()):
         """Restore only touched metadata if durable commit fails before effects."""
         # The service lock excludes another operation. Its preceding retained
         # receipts must not become part of this operation's rollback group.
         if self.service.db.in_transaction:
             self.service.db.commit()
         assignment = self.current(source)
-        members = set((assignment or {}).get('members', {})) | {source['id']}
+        members = set((assignment or {}).get('members', {})) | {source['id'], *additional}
         keys = ('assignmentId', 'interruptionRevision', 'lastInterruption', 'status')
         rows = {}
         for sid in members:
@@ -315,6 +317,9 @@ class Assignments:
                     self.service._task(self.interrupt(identity, stops))
 
     async def _dispatch(self, action, args, origin, command_id, caller):
+        if action in {'assignment.adoption', 'assignment.adopt'}:
+            from .assignment_adoption import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller)
         collaboration = self.service.collaboration
         source = collaboration.source({'sessionId': args['sessionId']}, origin, caller)
         if source['id'] != args['sessionId']:
