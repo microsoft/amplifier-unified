@@ -858,3 +858,18 @@ Status switch, independent Home/sidebar state and paging, visibility-scoped
 catalog demand, retained drafts, header toggle and mobile focus/navigation.
 It runs as an affected-flow smoke in the owned DTU and in Extended browser
 checks; it adds no broad publication gate.
+
+
+### Global test capacity (October 20)
+
+**TEST-CAPACITY** adds `testing-settings` to Extended browser checks and the
+additive inventory delta. Its built-client settings fixture owns global defaults
+without a runner, zero limits, saved-value readback after a lost acknowledgement,
+stale-writer refusal with retained drafts, narrow dirty-close controls and cold
+reopen. `test_test_capacity_settings.py` owns global authority, queue wake without
+cancellation, fresh admission policy and exact retained cleanup identity.
+
+This uses synthetic state and controlled backends; it does not claim live runner
+or physical-device qualification. The original frozen inventory and 65 baseline
+scenarios are preserved. The new owner runs as an affected-flow smoke and in the
+post-release browser schedule, without an unrelated census gate.
