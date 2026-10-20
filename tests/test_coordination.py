@@ -67,6 +67,7 @@ async def test_list_exposes_revision_without_unbounded_wait_signal(app):
         app.questions.store.put({
             'id': f'question-{i}', 'sessionId': peer['id'], 'createdAt': i,
             'status': 'pending', 'prompt': f'Question {i}', 'revision': 1,
+            'required': True,
         })
     app._publish()
     page = app.coordination.list({'sessionId': peer['id']}, caller['id'])
