@@ -18,6 +18,24 @@ import re
 
 def returned_export_limit(row, original):
     """Return an exact continuation binding, or None for every unqualified case."""
+    if row.get('guestRemoved') or row.get('status') == 'retired':
+        return None
+    return _export_limit_binding(row, original)
+
+
+def completed_export_limit(row, original, removal):
+    """Revalidate the saved exception for dependency-only cleanup.
+
+    The caller must first verify the committed guest removal. This never
+    qualifies a new guest effect or manufactures the original qualification.
+    """
+    if row.get('guestRemoved') is not True:
+        return None
+    proof = _export_limit_binding(row, original)
+    return proof if proof and removal.get('legacyCleanupQualification') == proof else None
+
+
+def _export_limit_binding(row, original):
     if (not isinstance(original, dict)
             or original.get('action') != 'workspace.environments.remove'
             or original.get('state') != 'outcome_unknown'
@@ -26,8 +44,7 @@ def returned_export_limit(row, original):
             or not isinstance(original.get('requestId'), str) or not original['requestId']
             or row.get('backendType') != 'docker'
             or row.get('backendAdmitted') is not True
-            or row.get('backendConfigRetained') is not True
-            or row.get('guestRemoved') or row.get('status') == 'retired'):
+            or row.get('backendConfigRetained') is not True):
         return None
     identity = row.get('backendIdentity')
     if (not isinstance(identity, dict) or set(identity) != {'backend', 'daemon'}

@@ -236,8 +236,8 @@ async def test_public_preparation_recovery_rechecks_owner_before_dependency_clea
     before = app.operations.requests.list(row['sessionId'])
     entered, release = threading.Event(), threading.Event()
     require_resolved = owner.require_resolved_removal
-    def waiting(current_app, current_row, exclude_request_id=None):
-        require_resolved(current_app, current_row, exclude_request_id)
+    def waiting(current_app, current_row, exclude_request_id=None, legacy=None):
+        require_resolved(current_app, current_row, exclude_request_id, legacy)
         assert exclude_request_id == 'remove'
         entered.set()
         assert release.wait(5)

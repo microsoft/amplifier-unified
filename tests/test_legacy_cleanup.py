@@ -270,3 +270,88 @@ async def test_unknown_after_qualified_invocation_keeps_every_new_identity_held(
         await act(app, 'finishCleanup', current, 'after-unknown', previousRequestId=original['requestId'])
     assert calls == ['finishCleanup']
     assert app.operations.requests.read(row['sessionId'], original['requestId']) == original
+
+
+async def pending_legacy_preparation(app, monkeypatch):
+    public, original = await legacy_failure(app, monkeypatch)
+    row = owner.get(app.data_dir, public['sessionId'], public['id'])
+    row = owner.save(app.data_dir, row, preparationPending=True)
+    calls = []
+    def removed(config, home, current, action, args):
+        assert action == 'finishCleanup'
+        calls.append(action)
+        return {'ok': True, 'status': 'removed', 'universeId': current['universeId'],
+                'retention': {'verified': True}}
+    monkeypatch.setattr(owner, 'invoke', removed)
+    monkeypatch.setattr(owner.dependencies, 'cleanup',
+                        lambda *a: {'complete': False, 'status': 'unknown'})
+    result = await act(app, 'finishCleanup', owner.public(app.data_dir, row),
+                       'qualified-guest-removal', previousRequestId=original['requestId'])
+    saved = owner.get(app.data_dir, row['sessionId'], row['id'])
+    assert saved['guestRemoved'] and saved['preparationPending']
+    assert result['request']['state'] == 'outcome_unknown'
+    assert calls == ['finishCleanup']
+    assert returned_export_limit(saved, original) is None
+    return result, original, calls
+
+
+@pytest.mark.parametrize('restart', [False, True])
+async def test_legacy_preparation_continuation_preserves_exact_proof(app, backend, monkeypatch, restart):
+    pending, original, calls = await pending_legacy_preparation(app, monkeypatch)
+    public = pending['resource']
+    if restart:
+        app.operations.requests = OperationRequests(app.operations.requests.journal)
+    cleanup_calls = []
+    def cleanup(*args):
+        cleanup_calls.append('cleanup')
+        return {'complete': True, 'status': 'removed'}
+    monkeypatch.setattr(owner.dependencies, 'cleanup', cleanup)
+    recovered = await act(app, 'finishCleanup', public, 'dependency-only',
+                          previousRequestId=pending['request']['requestId'])
+    assert recovered['preparationRecovery'] is True
+    assert recovered['resource']['status'] == 'removed'
+    assert recovered['request']['requestId'] == pending['request']['requestId']
+    assert recovered['request']['state'] == 'completed'
+    assert recovered['request']['legacyCleanupQualification'] == pending['request']['legacyCleanupQualification']
+    assert app.operations.requests.read(public['sessionId'], original['requestId']) == original
+    assert calls == ['finishCleanup'] and cleanup_calls == ['cleanup']
+    with pytest.raises(ValueError, match='not found'):
+        app.operations.requests.read(public['sessionId'], 'dependency-only')
+
+
+@pytest.mark.parametrize('change', [
+    'original', 'qualification', 'missing-qualification', 'resource-binding',
+    'removal-binding', 'competing', 'wrong-previous',
+])
+async def test_legacy_preparation_continuation_rejects_changed_evidence(app, backend, monkeypatch, change):
+    pending, original, calls = await pending_legacy_preparation(app, monkeypatch)
+    public, removal = pending['resource'], pending['request']
+    sid = public['sessionId']
+    previous = removal['requestId']
+    if change == 'original':
+        app.operations.requests.finish(original, 'outcome_unknown',
+            result={**original['result'], 'code': 'export-timeout'})
+    elif change in {'qualification', 'missing-qualification'}:
+        proof = ({**removal['legacyCleanupQualification'], 'originalSha256': 'e' * 64}
+                 if change == 'qualification' else None)
+        app.operations.requests.finish(removal, 'outcome_unknown', legacyCleanupQualification=proof)
+    elif change == 'resource-binding':
+        row = owner.get(app.data_dir, sid, public['id'])
+        row = owner.save(app.data_dir, row, source='/synthetic/changed-source')
+        public = owner.public(app.data_dir, row)
+    elif change == 'removal-binding':
+        app.operations.requests.finish(removal, 'outcome_unknown',
+            guestRemovalBinding={**removal['guestRemovalBinding'], 'launchOperationId': 'other-launch'})
+    elif change == 'competing':
+        other, _ = app.operations.requests.begin(sid, 'workspace.environments.remove',
+                                                {'requestId': 'other-unknown'}, {})
+        app.operations.requests.finish(other, 'outcome_unknown', resourceId=public['id'])
+    elif change == 'wrong-previous':
+        previous = original['requestId']
+    cleanup_calls = []
+    monkeypatch.setattr(owner.dependencies, 'cleanup', lambda *args: cleanup_calls.append(args))
+    with pytest.raises(AppError):
+        await act(app, 'finishCleanup', public, 'must-not-clean', previousRequestId=previous)
+    assert calls == ['finishCleanup'] and not cleanup_calls
+    with pytest.raises(ValueError, match='not found'):
+        app.operations.requests.read(sid, 'must-not-clean')

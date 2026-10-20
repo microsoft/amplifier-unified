@@ -334,9 +334,14 @@ def require_resolved_removal(app, row, exclude_request_id=None, legacy=None):
     """
     qualified = None
     if legacy is not None:
-        from .test_environment_legacy import returned_export_limit
+        from .test_environment_legacy import returned_export_limit, completed_export_limit
         prior = app.operations.requests.read(row['sessionId'], legacy['originalRequestId'])
-        if returned_export_limit(row, prior) != legacy:
+        if row.get('guestRemoved'):
+            removal, _ = confirmed_guest_removal(app, row)
+            verified = completed_export_limit(row, prior, removal)
+        else:
+            verified = returned_export_limit(row, prior)
+        if verified != legacy:
             raise ValueError('The retained legacy preservation result changed.')
         qualified = legacy['originalRequestId']
     journal = app.operations.requests.journal
@@ -461,7 +466,7 @@ def resume_preparation_removal(app, row, config, *, expected_revision=None, admi
         request, result = confirmed_guest_removal(app, row)
         if previous_request_id is not None and previous_request_id != request['requestId']:
             raise ValueError('Choose the exact confirmed guest removal request.')
-        require_resolved_removal(app, row, request['requestId'])
+        require_resolved_removal(app, row, request['requestId'], request.get('legacyCleanupQualification'))
         if admit:
             admit()
         # A successful cleanup save may precede a failed journal/projection
