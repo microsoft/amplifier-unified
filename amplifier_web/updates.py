@@ -505,7 +505,7 @@ class UpdateManager:
         async with self.service.lock:
             self.service.state['updates'].update(values)
             state = self.service.state['updates']
-            state['blockers'] = self.blockers() if any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools')) else []
+            state['blockers'] = self.blockers() if self.requires_idle(state) else []
             from .update_restart import target
             state['forceRestartTarget'] = target(self)
             self.service._publish_changes(globals={'updates','settings'})
@@ -518,6 +518,11 @@ class UpdateManager:
             # Work finishing is an event too. Do not add another timer wait
             # after the user has already waited for the idle safety gate.
             self.wakeup.set()
+
+    @staticmethod
+    def requires_idle(state):
+        return bool(state.get('pendingApp') or state.get('pendingRelease') or any(
+            not item.get('runnerSource') for item in state.get('pendingSmartTools', [])))
 
     def blockers(self):
         from .update_blockers import blockers
@@ -650,9 +655,14 @@ class UpdateManager:
             # tick(), rather than installing in parallel with another update.
             self.wakeup.set()
 
+    @staticmethod
+    def runners_only(state):
+        pending = state.get('pendingSmartTools') or []
+        return bool(pending) and all(row.get('runnerSource') for row in pending)
+
     async def check(self, *, tier='application', install=False, fresh=True):
         state = self.service.state['updates']
-        if (self.closed or self.awaiting_restart() or state.get('pendingRelease') or state.get('pendingSmartTools')
+        if (self.closed or self.awaiting_restart() or state.get('pendingRelease') or (state.get('pendingSmartTools') and not self.runners_only(state))
                 or (state.get('pendingApp') or {}).get('featureSelection')):
             return  # A timing measurement must not change a pending handoff.
         if self.check_task and not self.check_task.done():
@@ -680,10 +690,15 @@ class UpdateManager:
         return await asyncio.shield(self.check_task)
 
     async def _check(self, *, tier='application', install=False):
-        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingRelease') or self.service.state['updates'].get('pendingSmartTools'): return
+        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingRelease') or (self.service.state['updates'].get('pendingSmartTools') and not self.runners_only(self.service.state['updates'])): return
         from .update_sequence import summary
         async with self.lock:
             state = self.service.state['updates']
+            if self.runners_only(state):
+                # Availability stays observable while a runner waits. This
+                # never stages/activates an app or changes its retained attempt.
+                install = False
+                await self.publish(runnerAvailabilityCheck=True)
             if state.get('pendingApp'):
                 if not state['pendingApp'].get('featureSelection'):
                     from .app_updates import check_staged
@@ -724,6 +739,8 @@ class UpdateManager:
                             detail='App update available. Included components will be checked after the new app restarts.' if app_available else 'Component checks are waiting for the application check.')
                         return
                     tier = 'included'
+                from .managed_runner_updates import retire as retire_runner_code
+                await retire_runner_code(self.service)
                 started = time.monotonic()
                 rows = await self.inventory_sources(indexed=True)
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
@@ -732,6 +749,15 @@ class UpdateManager:
                 async def remote(url, ref):
                     return await git_revision(url, ref, process)
                 async def check_row(row):
+                    if row.get('runnerKind'):
+                        from .managed_runner_backend import backend
+                        inspector = getattr(backend(row['runnerKind']), 'check_source', None)
+                        if inspector is not None:
+                            try:
+                                await inspector(self.service, row)
+                            except (ValueError, RuntimeError, TimeoutError):
+                                row.update(status='check_failed', eligible=False)
+                                return
                     if not row.get('eligible') or row.get('kind') == 'runtime environment': return
                     if row.get('registryManaged'):
                         from .runtime_registry_updates import check as check_registry
@@ -1225,6 +1251,13 @@ class UpdateManager:
             pending = list(state.get('pendingSmartTools', []))
             if any(state.get(key) for key in ('pendingApp', 'pendingRelease')) or any(not item.get('failure') for item in pending):
                 raise ValueError('Finish or inspect the pending update before restoring a tool.')
+            from .managed_runner_updates import rollback as runner_rollback
+            if await asyncio.to_thread(runner_rollback, self.service, identity):
+                async with self.service.lock:
+                    self.service.state['settings']['updates']['autoInstall'] = False
+                await self.publish(phase='installed', error=None, detail='The previous test runner is selected for future checks. Existing checks keep their exact runner.')
+                self.inventory = []
+                return
             row = next((item for item in self.service.smart_tools.state['installations'] if item['id'] == identity), {})
             previous = row.get('previousInstallationId')
             if not previous: raise ValueError('No previous Smart Tool revision is available.')
@@ -1248,11 +1281,17 @@ class UpdateManager:
                 if not self.cleanup_task or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
             await self.publish(adoption=adoption)
-        blockers = self.blockers() if any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools')) else []
+        blockers = self.blockers() if self.requires_idle(state) else []
         if state.get('blockers', []) != blockers:
             await self.publish(blockers=blockers)
         if state.get('pendingSmartTools'):
-            if state.get('phase') not in {'error', 'interrupted'}: await self.activateSmartTools()
+            if (state.get('phase') not in {'error', 'interrupted'} or any(
+                    row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):
+                await self.activateSmartTools()
+            if (self.runners_only(state) and settings.get('autoCheck', True)
+                    and time.time() - max(state.get('lastCheck') or 0, state.get('lastAttempt') or 0)
+                    >= settings.get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600):
+                await self.check(fresh=False)
             return
         if state.get('pendingApp'):
             if state.get('phase') in {'error', 'interrupted'}:return

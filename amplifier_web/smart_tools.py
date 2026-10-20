@@ -595,7 +595,10 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
                 info = self._inspect_checkout(checkout, repository, commit, args)
                 if not info["pythonSupported"]:
                     raise ValueError("Automatic installation currently supports Python projects with pyproject.toml. Follow this tool's install instructions, then register its MCP server command.")
-                identity = hashlib.sha256(json.dumps([repository, commit, info["path"], sorted(extras)]).encode()).hexdigest()[:24]
+                identity_parts = [repository, commit, info["path"], sorted(extras)]
+                if args.get('_runner_qualification') is True:
+                    identity_parts.append('managed-runner-qualification-v1')
+                identity = hashlib.sha256(json.dumps(identity_parts).encode()).hexdigest()[:24]
                 install_dir = self.root / "installs" / identity
                 previous = next((row for row in self.state["installations"] if row["id"] == identity), None)
                 if previous and (install_dir / "venv" / "bin" / "python").exists():
@@ -611,10 +614,14 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
                 if not uv:
                     raise ValueError("uv is required to install Smart Tools.")
                 environment = _install_environment()
+                if args.get('_runner_qualification') is True:
+                    environment['UV_LINK_MODE'] = 'copy'
                 await self._run([uv, "venv", str(install_dir / "venv")], timeout=120, env=environment)
                 package = str(_inside(source, info["path"])) + ("[" + ",".join(extras) + "]" if extras else "")
                 await self._run([uv, "pip", "install", "--python", str(python), package], timeout=600, env=environment)
                 row = {**info, "id": identity, "status": "installed", "extras": extras, "installedAt": time.time(), "binDir": str(python.parent), "python": str(python), "sourceDir": str(_inside(source, info["path"])), "nextStep": "Register the tool's documented MCP executable from this bin folder. Installation does not start a server or configure model credentials."}
+                if args.get('_runner_qualification') is True:
+                    row['runnerCandidate'] = True
                 if args.get('_update_from'): row['stagedFrom'] = args['_update_from']
                 await self._change(lambda state: state.update(installations=[item for item in state["installations"] if item["id"] != identity] + [row]))
                 return row
