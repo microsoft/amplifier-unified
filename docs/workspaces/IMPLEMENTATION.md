@@ -1373,3 +1373,15 @@ Explicit provider/tool safety failures block peer resumption even after ordinary
 Unknown assignment Stop receipts retain their original outcomes. A later durable recovery receipt can settle only its explicitly listed session/Stop pairs, using the native ownership proof held through that recovery commit. Further recovery consumes this historical evidence instead of reacquiring a detached former member's new independent writer. Current bound members must still settle, and any new or unproved unknown Stop still needs native ownership proof.
 
 Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. The input must be newer than the cached denial and belong to the observed active generation. Peer input additionally needs its actual admitted human-resume receipt; a caller-supplied flag or message text is insufficient. Only successful durable host admission clears the worker's old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a no-op settings edit in every worker, including workers with enabled local budgets. A still-exhausted or uncertain local allowance remains blocked by its current policy.
+
+## Explicit responsibility for existing chats
+
+[Existing-chat adoption](assignment-adoption.md) adds a settled, independent root
+through a revision-bound preview and explicit manager/human instruction. The
+canonical assignment retains a distinct adoption receipt, not a fabricated
+creation operation. Native ownership, unresolved configuration, task state and
+concurrent Stop/input changes are checked before committing membership. Existing
+manager continuation and placement controls then use that responsibility. Earlier
+history and usage stay attributed as before; adding itself never starts a turn.
+The workspace/canvas assignment controls expose the same operation. Independent
+chats in a shared folder remain independent unless explicitly added.

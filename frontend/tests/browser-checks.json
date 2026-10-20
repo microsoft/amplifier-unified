@@ -100,6 +100,7 @@
     {"id": "coordination", "command": ["node", "tests/coordination-browser.mjs"]},
     {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]},
     {"id": "test-environments", "command": ["node", "tests/test-environments-browser.mjs"], "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python", "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/test-environments"}},
+    {"id": "assignment-adoption", "command": ["node", "tests/assignment-adoption-browser.mjs"]},
     {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}}
   ]
 }
