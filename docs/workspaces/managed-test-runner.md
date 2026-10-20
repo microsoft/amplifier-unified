@@ -111,3 +111,12 @@ owned resource cleanup. Linux qualification does not imply native macOS,
 Windows, WSL or a hosted-runner path is supported. Interactive access to an app
 inside the test environment requires a separately qualified preview route;
 headless browser tests inside the environment do not establish that capability.
+
+Executable bytecode is part of a dynamic runtime's exact identity, including
+cached and sourceless Python modules. Managed helper and snapshot exports disable
+bytecode writes so normal use does not alter the qualified generation. The
+registered controller runs only the source bytes in its retained verified
+manifest; adjacent bytecode cannot substitute for those sources, including when
+an older controller bootstraps into its qualified interpreter. These checks bind
+application-owned execution evidence; they are not an OS security boundary.
+

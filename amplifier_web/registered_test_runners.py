@@ -132,7 +132,7 @@ def bundle():
     return {'files': files, 'digest': digest(files)}
 
 
-VERIFY = 'import base64,hashlib,json,pathlib,runpy,sys; p=pathlib.Path(sys.argv[1]); names=json.loads(sys.argv[3]); actual={"amplifier_web/"+n:base64.b64encode((p.parent/n).read_bytes()).decode() for n in names}; assert hashlib.sha256(json.dumps(actual,sort_keys=True).encode()).hexdigest()==sys.argv[2],"Controller bytes changed"; runpy.run_path(str(p),run_name="__main__")'
+VERIFY = Path(__file__).with_name('test_runner_bootstrap.py').read_text()
 
 
 def call(runner, payload, timeout=60):
