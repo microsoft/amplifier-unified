@@ -18,7 +18,7 @@ import subprocess
 import tarfile
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -211,14 +211,14 @@ def memory_available(config, folder, profile_id):
     This is not a global reservation over processes outside the managed runner.
     Both actual host availability and daemon usage are considered on small hosts.
     """
-    if not Path('/proc/meminfo').exists():
-        return True
-    memory = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
-    available = int(memory['MemAvailable'].split()[0]) * 1024
     required = profiles.get(profile_id)['memoryMiB'] * 1024 * 1024
     env = _environment(folder, config)
     log = folder / 'capacity.log'
     if config.get('backend', 'docker') == 'docker':
+        if not Path('/proc/meminfo').exists():
+            return True  # Desktop VM authority is not established by host memory.
+        memory = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
+        available = int(memory['MemAvailable'].split()[0]) * 1024
         command = ['docker', '--host', config['dockerHost']]
         info = json.loads(run([*command, 'info', '--format', '{{json .}}'], env, log, timeout=30, require_complete=True))
         total = int(info['MemTotal'])
@@ -237,7 +237,7 @@ def memory_available(config, folder, profile_id):
         settings = config['incus']
         memory = json.loads(run(_incus_query(settings, '/1.0/resources'), env, log, timeout=30, require_complete=True))['memory']
         total = int(memory['total'])
-        available = min(available, total - int(memory['used']))
+        available = total - int(memory['used'])
     return available >= required + max(1024 ** 3, min(2 * 1024 ** 3, total // 10))
 
 
@@ -280,7 +280,7 @@ def preparation_slot(config, folder, profile_id):
         os.close(descriptor)
 
 
-def prepare(config, root, snapshot, profile_id, request_id):
+def prepare(config, root, snapshot, profile_id, request_id, *, resource_request=None, host_reservation=None):
     root = Path(root)
     folder = root / 'preparation'
     if any(path.is_symlink() for path in (folder, *folder.parents)):
@@ -289,6 +289,9 @@ def prepare(config, root, snapshot, profile_id, request_id):
     env = _environment(folder, config)
     expected = plan(root / 'source.tar', snapshot, profile_id)
     expected.update(backend=config.get('backend', 'docker'), requestId=request_id)
+    if resource_request is not None:
+        profiles.resources(profile_id, resource_request)
+        expected['resourceRequest'] = resource_request
     expected['baseImage'] = config.get('image') if expected['backend'] == 'docker' else config['incus']['image']
     expected['resourceName'] = 'au-prepare-' + hashlib.sha256((str(root) + request_id).encode()).hexdigest()[:24]
     expected['backendIdentity'] = backend_identity(config, folder, env)
@@ -323,7 +326,7 @@ def prepare(config, root, snapshot, profile_id, request_id):
         shutil.copyfile(Path(__file__).with_name(source), context / target)
     write(context / 'plan.json', expected)
     try:
-        with preparation_slot(config, folder, profile_id):
+        with (nullcontext() if (host_reservation or {}).get('admitted') else preparation_slot(config, folder, profile_id)):
             image, inventory = (_docker(config, folder, expected, env) if expected['backend'] == 'docker'
                                 else _incus(config, folder, expected, env))
         if cancelled(folder):
@@ -389,7 +392,7 @@ def _docker(config, folder, expected, env):
     if not re.fullmatch(r'[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('Preparation requires an immutable qualified base image.')
     name = expected['resourceName']
-    budget = profiles.get(expected['profileId'])
+    budget = profiles.resources(expected['profileId'], expected.get('resourceRequest'))
     log = folder / 'build.log'
     def call(*args, timeout=PREPARATION_SECONDS):
         return run([*docker, *args], env, log, timeout=timeout)
@@ -458,7 +461,7 @@ def _incus(config, folder, expected, env):
             raise ValueError('Project dependency preparation needs the supported host setup with its owned build network and storage.')
     incus = [settings['incusExecutable'], '--project', settings['project']]
     name = expected['resourceName']
-    budget = profiles.get(expected['profileId'])
+    budget = profiles.resources(expected['profileId'], expected.get('resourceRequest'))
     log = folder / 'build.log'
     def call(*args, timeout=PREPARATION_SECONDS):
         return run([*incus, *args], env, log, timeout=timeout)

@@ -28,6 +28,7 @@ from . import task_resources as storage
 from . import test_environment_configs as backend_configs
 from . import test_environment_preparation as dependencies
 from . import test_environment_profiles as profiles
+from . import test_host_resources as host_resources
 from . import test_environment_recovery as recovery
 from . import test_environment_setup as setup
 from . import test_capacity_settings as capacity_settings
@@ -142,6 +143,8 @@ def public(home, row):
     return {key: value for key, value in {
         'id': row['id'], 'sessionId': row['sessionId'], 'workspaceId': row['workspaceId'],
         'revision': row['revision'], 'profileId': row['profileId'],
+        'resourceRequest': row.get('resourceRequest'),
+        'machineResources': {key: value for key, value in row.get('hostReservation', {}).items() if key not in {'binding', 'version', 'phase'}},
         'status': row.get('environmentState', 'unknown'), 'universeId': row.get('universeId'),
         'source': row['source'], 'snapshot': row.get('snapshot'), 'sourceReady': row.get('sourceReady'), 'services': row.get('services', []),
         'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
@@ -190,8 +193,9 @@ def remove_installation(home, identity, folder, *, ignore_errors=False):
         shutil.rmtree(folder, ignore_errors=ignore_errors)
 
 
-def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None, backend_config=None, profile_id=PROFILE):
-    profiles.get(profile_id)
+def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None, backend_config=None, profile_id=PROFILE, resource_request=None):
+    profile = profiles.resources(profile_id, resource_request)
+    resource_request = resource_request or profiles.freeze(profile_id)
     with installation_lock(home, installation) if installation else nullcontext(), closing(storage.connect(home)) as db, db:
         if backend_config is not None and backend_configs.retain(home, backend_config) != backend_key:
             raise ValueError('The approved backend configuration identity changed before allocation.')
@@ -211,6 +215,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
             raise ValueError('The resource owner capacity has been reached.')
         row = {'id': str(uuid.uuid4()), 'kind': KIND, 'workspaceId': workspace, 'sessionId': sid,
                'owner': actor, 'source': source, 'profileId': profile_id, 'backendKey': backend_key,
+               'resourceRequest': resource_request, 'preparationRequired': profile['preparationRequired'],
                'backendInstallation': installation,
                'backendConfigRetained': backend_config is not None,
                **({'retentionMode': backend_config.get('retentionMode', 'files'),
@@ -242,7 +247,7 @@ def invoke(config, home, row, action, args):
                'admissionRevision': args.get('expectedRevision'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
                'jobId': args.get('jobId', args.get('requestId')),
-               'profileId': row.get('profileId', PROFILE),
+               'profileId': row.get('profileId', PROFILE), 'resourceRequest': row.get('resourceRequest'),
                'timeoutSeconds': args.get('timeoutSeconds', 60),
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
     helper = Path(__file__).with_name('test_environment_worker.py')
@@ -386,7 +391,13 @@ def project_result(home, row, request):
         environment_state = 'running'
     changes.update(pendingRequest=request['requestId'] if request['state'] == 'running' else None,
                    environmentState=environment_state, lastOperation=request, reason=result.get('message'))
-    return save(home, row, **changes)
+    updated = save(home, row, **changes)
+    if ((result.get('ok') and environment_state in {'stopped', 'removed'}
+         and (not updated.get('preparationPending') or updated.get('preparedDependencies')))
+            or (action == 'start' and (result.get('admissionDenied') or result.get('effectAdmitted') is False)
+                and not updated.get('preparationPending'))):
+        host_resources.settle(updated, release=True)
+    return updated
 
 
 def cleanup_preparation(home, row, config):
@@ -503,6 +514,9 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
         if action != 'start':
             row = recovery.bind_configuration(app, row, config)
         if action == 'start':
+            if not row.get('resourceRequest'):
+                row = save(home, row, resourceRequest=profiles.freeze(row['profileId']),
+                           preparationRequired=profiles.get(row['profileId'])['preparationRequired'])
             row = storage.allocate(home, row, admit)
         elif not (action in {'remove', 'finishCleanup'} and not row.get('backendAdmitted')) and storage.observe(home, row)['observation'] != 'present':
             raise ValueError('The retained environment directory changed; no external action was attempted.')
@@ -542,21 +556,33 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                 if identity['backend'] != config.get('backend', 'docker'):
                     raise ValueError('The prepared environment belongs to a different backend.')
                 row = save(home, row, universeId=prepared['universeId'], snapshot=prepared['snapshot'], backendIdentity=identity)
-                if profiles.get(row['profileId'])['preparationRequired']:
-                    # Persist ownership before the networked builder can exist.
-                    row = save(home, row, preparationPending=True)
-                    prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
-                        row['snapshot'], row['profileId'], request['requestId'])
-                    row = save(home, row, preparedDependencies=prepared_dependencies)
-                if policy_admit:
-                    launch_config = policy_admit()
+                admit()
+                profiles.resources(row['profileId'], row.get('resourceRequest'))
+                reservation = host_resources.reserve(row, prepared.get('hostTarget'))
+                row = save(home, row, hostReservation=reservation)
+                if reservation.get('supported') and not reservation.get('admitted'):
+                    result = {'ok': False, 'admissionDenied': True, 'status': 'not-started',
+                              'machineResources': reservation, 'message': 'Waiting for room on the test machine. No test or dependency build started.'}
                 else:
-                    admit()
-                    launch_config = config
-                # Identity and exact source provenance precede any Docker effect.
-                row = save(home, row, backendAdmitted=True, environmentState='starting')
-                admitted = True
-                result = invoke(launch_config, home, row, 'start', args)
+                    if profiles.resources(row['profileId'], row.get('resourceRequest'))['preparationRequired']:
+                        # Persist ownership before the networked builder can exist.
+                        row = save(home, row, preparationPending=True)
+                        prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
+                            row['snapshot'], row['profileId'], request['requestId'],
+                            resource_request=row.get('resourceRequest'), host_reservation=reservation)
+                        row = save(home, row, preparedDependencies=prepared_dependencies)
+                        host_resources.settle(row, phase='launching')
+                    if policy_admit:
+                        launch_config = policy_admit()
+                    else:
+                        admit()
+                        launch_config = config
+                    # Identity and exact source provenance precede any Docker effect.
+                    row = save(home, row, backendAdmitted=True, environmentState='starting')
+                    admitted = True
+                    result = invoke(launch_config, home, row, 'start', args)
+                    if result.get('ok'):
+                        host_resources.settle(row)
         elif action in {'remove', 'finishCleanup'} and (not row.get('backendAdmitted') or row.get('guestRemoved')):
             result = row.get('guestRemoval') or {'ok': True, 'status': 'removed', 'universeId': row.get('universeId'),
                 'message': 'The test guest is absent. All local source and evidence files were retained.'}
@@ -662,6 +688,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                 else:
                     row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
                                lastOperation=request, reason=request['message'])
+                if action == 'start' and not admitted and not row.get('preparationPending'):
+                    host_resources.settle(row, release=True)
             except (OSError, ValueError, sqlite3.Error):
                 pass
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
