@@ -858,3 +858,40 @@ Status switch, independent Home/sidebar state and paging, visibility-scoped
 catalog demand, retained drafts, header toggle and mobile focus/navigation.
 It runs as an affected-flow smoke in the owned DTU and in Extended browser
 checks; it adds no broad publication gate.
+
+
+### Global test capacity (October 20)
+
+**TEST-CAPACITY** adds `testing-settings` to Extended browser checks and the
+additive inventory delta. Its built-client settings fixture owns global defaults
+without a runner, zero limits, saved-value readback after a lost acknowledgement,
+stale-writer refusal with retained drafts, narrow dirty-close controls and cold
+reopen. `test_test_capacity_settings.py` owns global authority, queue wake without
+cancellation, fresh admission policy and exact retained cleanup identity.
+
+This uses synthetic state and controlled backends; it does not claim live runner
+or physical-device qualification. The original frozen inventory and 65 baseline
+scenarios are preserved. The new owner runs as an affected-flow smoke and in the
+post-release browser schedule, without an unrelated census gate.
+
+Global testing settings adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
+
+### Existing-chat adoption (October 20)
+
+`assignment-adoption` owns the new existing-chat assignment flow in Extended
+browser checks and focused affected-flow qualification. It covers stale target
+review, lost acknowledgement with the same request identity, one committed
+member, retained drafts and history, no input or Stop replay, cold reopen,
+and desktop/phone layout. The fixture uses the production service and built
+client with a synthetic runtime. Live provider execution and production adoption
+remain separate evidence. The frozen baseline inventory is unchanged.
+
+Existing-chat adoption adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
+
+The integrated branch containing both testing settings and existing-chat adoption has 101 registered scenarios, 144 distinct readiness/extended scripts, and 143 excluding attachment consumption. Both additive owners preserve the original 65-scenario identity.

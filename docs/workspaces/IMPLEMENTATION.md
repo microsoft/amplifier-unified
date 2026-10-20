@@ -1387,3 +1387,15 @@ required. Later input, terminal, Stop or configuration changes invalidate the
 prepared recovery. A retained explicit safety terminal blocks recovery even if
 an older projection hid it. This admits one new reconciliation request; no old
 input, operation or provider call is replayed and no failure cause is inferred.
+
+## Explicit responsibility for existing chats
+
+[Existing-chat adoption](assignment-adoption.md) adds a settled, independent root
+through a revision-bound preview and explicit manager/human instruction. The
+canonical assignment retains a distinct adoption receipt, not a fabricated
+creation operation. Native ownership, unresolved configuration, task state and
+concurrent Stop/input changes are checked before committing membership. Existing
+manager continuation and placement controls then use that responsibility. Earlier
+history and usage stay attributed as before; adding itself never starts a turn.
+The workspace/canvas assignment controls expose the same operation. Independent
+chats in a shared folder remain independent unless explicitly added.
