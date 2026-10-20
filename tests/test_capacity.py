@@ -400,3 +400,34 @@ async def test_disabled_budget_admission_retains_receipts_without_building_usage
     finally:
         await worker.close()
         await app.close()
+
+
+async def test_fresh_human_recovery_rechecks_current_host_budget_without_reset(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    worker = controls("budget-recovery")
+    policy = copy.deepcopy(worker.capacity.policy)
+    state = {"allowed": False}
+    async def admit(row):
+        return {"allowed": state["allowed"], "budgetRevision": policy["revision"],
+                "assignmentRevision": 2 if state["allowed"] else 1,
+                "reasons": [] if state["allowed"] else ["assignment limit reached"]}
+    worker.capacity.admit = admit
+    with pytest.raises(ValueError, match="budget paused"):
+        await worker.capacity.guard({"id": "denied"})
+    denial = copy.deepcopy(worker.capacity.last_denial)
+    assert not await worker.tasks.continuation_allowed()
+    assert await worker.tasks.continuation_allowed(resume=True)
+    assert worker.capacity.last_denial == denial
+    # Admitting the human message cannot make a denied model call execute.
+    with pytest.raises(ValueError, match="budget paused"):
+        await worker.capacity.guard({"id": "still-denied"})
+    state["allowed"] = True  # Host now confirms changed assignment capacity.
+    await worker.capacity.guard({"id": "admitted"})
+    assert worker.capacity.policy == policy
+    assert worker.capacity.last_denial is None
+    restored = controls("budget-recovery")
+    await restored.restore()
+    assert restored.capacity.last_denial is None
+    assert await restored.tasks.continuation_allowed()
+    await restored.close()
+    await worker.close()

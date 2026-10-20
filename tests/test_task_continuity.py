@@ -38,7 +38,10 @@ async def test_explicit_resume_input_does_not_rewrite_task_or_clear_capacity_den
     assert not await control.tasks.continuation_allowed()
     assert control.tasks.snapshot() == before
     control.capacity.last_denial = {"budgetRevision": control.capacity.policy["revision"]}
-    assert not await control.tasks.continuation_allowed(resume=True)
+    assert await control.tasks.continuation_allowed(resume=True)
+    assert not await control.tasks.continuation_allowed()
+    assert control.capacity.last_denial
+    assert control.tasks.snapshot() == before
 
 
 async def test_cas_receipts_pause_restart_and_explicit_completion(tmp_path, monkeypatch):
