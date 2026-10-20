@@ -25,6 +25,7 @@ from urllib.parse import quote
 # Preserve previously qualified owners and configuration identity during upgrades.
 # Launcher bytes vary with installation path; package pairs are exact.
 QUALIFIED_PACKAGES = {
+    '0.4.2': '0911d18ec7256913253b53ce66520fac2f6cc78d19696a3f7b724a646dd909b8',
     '0.4.0': '5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39',
     '0.4.1': 'b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06',
 }
@@ -404,7 +405,10 @@ def host_target(config, env):
     try:
         current = checked(run([config['incusExecutable'], 'remote', 'get-default'], env, output_bytes=CONTROL_BYTES))['stdout'].strip()
         remotes = json.loads(checked(run([config['incusExecutable'], 'remote', 'list', '--format', 'json'], env, output_bytes=CONTROL_BYTES))['stdout'])
-        address = remotes[current].get('Addr', remotes[current].get('addr'))
+        remote = remotes[current]
+        address = remote.get('Addr', remote.get('addr'))
+        if address is None and isinstance(remote.get('Addrs'), list) and len(remote['Addrs']) == 1:
+            address = remote['Addrs'][0]
         return common.host_resources.local_target(address, {'incusd'})
     except (KeyError, TypeError, ValueError, BackendFailure):
         return {'supported': False, 'reason': 'The Incus execution target has no verified local machine authority. Backend limits still apply.'}

@@ -32,6 +32,7 @@ from . import test_host_resources as host_resources
 from . import test_environment_recovery as recovery
 from . import test_environment_setup as setup
 from . import test_capacity_settings as capacity_settings
+from . import registered_test_runners as registered_runners
 
 REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe'
 DTU_COMMIT = '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04'
@@ -142,6 +143,7 @@ def resolve_configuration(app, row, active):
 def public(home, row):
     return {key: value for key, value in {
         'id': row['id'], 'sessionId': row['sessionId'], 'workspaceId': row['workspaceId'],
+        'testMachine': row.get('testMachine'),
         'revision': row['revision'], 'profileId': row['profileId'],
         'resourceRequest': row.get('resourceRequest'),
         'machineResources': {key: value for key, value in row.get('hostReservation', {}).items() if key not in {'binding', 'version', 'phase'}},
@@ -218,6 +220,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
                'resourceRequest': resource_request, 'preparationRequired': profile['preparationRequired'],
                'backendInstallation': installation,
                'backendConfigRetained': backend_config is not None,
+               'testMachine': ({key: backend_config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if backend_config and backend_config.get('remoteRunner') else None),
                **({'retentionMode': backend_config.get('retentionMode', 'files'),
                    'backendType': backend_config.get('backend', 'docker')} if backend_config is not None else {}),
                'status': 'prepared', 'environmentState': 'preparing', 'revision': 1,
@@ -250,6 +253,8 @@ def invoke(config, home, row, action, args):
                'profileId': row.get('profileId', PROFILE), 'resourceRequest': row.get('resourceRequest'),
                'timeoutSeconds': args.get('timeoutSeconds', 60),
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
+    if config.get('remoteRunner'):
+        return registered_runners.invoke(config, folder, payload)
     helper = Path(__file__).with_name('test_environment_worker.py')
     if config.get('backend') == 'incus':
         helper = Path(__file__).with_name('incus_environment_worker.py')
@@ -309,7 +314,19 @@ def invoke(config, home, row, action, args):
 def capacity(app, config):
     try:
         result = invoke(capacity_settings.apply(app, config), app.data_dir, {}, 'capacity', {})
-        return result['capacity'] if result.get('ok') else {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
+        if not result.get('ok'):
+            return {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
+        observed = result['capacity']
+        if result.get('machineResources'):
+            observed = {**observed, 'machineResources': result['machineResources']}
+        elif config.get('backend') == 'incus':
+            from . import incus_environment_worker as incus_worker
+            target = incus_worker.host_target(config['incus'], incus_worker.environment(config['incus'], app.data_dir))
+            if target.get('supported'):
+                observed = {**observed, 'machineResources': host_resources.snapshot()}
+        elif host_resources.local_target(config.get('dockerHost'), {'dockerd'}).get('supported'):
+            observed = {**observed, 'machineResources': host_resources.snapshot()}
+        return observed
     except (OSError, ValueError, TimeoutError):
         return {'available': False, 'blockers': [{'code': 'capacity_unknown'}]}
 
@@ -402,7 +419,10 @@ def project_result(home, row, request):
 
 def cleanup_preparation(home, row, config):
     try:
-        result = dependencies.cleanup(config, storage.directory(home, row))
+        if config.get('remoteRunner'):
+            result = invoke(config, home, row, 'cleanupDependencies', {'requestId': str(row.get('pendingRequest') or row['launchOperationId']) + ':dependencies'})
+        else:
+            result = dependencies.cleanup(config, storage.directory(home, row))
     except (OSError, ValueError, KeyError, TypeError, TimeoutError):
         result = {'complete': False, 'status': 'unknown', 'reason': 'The owned preparation cleanup could not be verified.'}
     row = save(home, row, preparationCleanup=result, preparationPending=not result['complete'])
@@ -567,9 +587,15 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                     if profiles.resources(row['profileId'], row.get('resourceRequest'))['preparationRequired']:
                         # Persist ownership before the networked builder can exist.
                         row = save(home, row, preparationPending=True)
-                        prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
-                            row['snapshot'], row['profileId'], request['requestId'],
-                            resource_request=row.get('resourceRequest'), host_reservation=reservation)
+                        if config.get('remoteRunner'):
+                            prepared_result = invoke(config, home, row, 'prepareDependencies', args)
+                            if not prepared_result.get('ok'):
+                                raise ValueError(prepared_result.get('message', 'The target preparation is unconfirmed.'))
+                            prepared_dependencies = prepared_result['preparedDependencies']
+                        else:
+                            prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
+                                row['snapshot'], row['profileId'], request['requestId'],
+                                resource_request=row.get('resourceRequest'), host_reservation=reservation)
                         row = save(home, row, preparedDependencies=prepared_dependencies)
                         host_resources.settle(row, phase='launching')
                     if policy_admit:

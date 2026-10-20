@@ -1,0 +1,310 @@
+"""Fixed stdio controller for registered native Linux Incus test targets.
+
+The origin owns the canonical job. This controller owns the actual backend
+operation and its durable dispatch receipt. A missing reply never admits the
+same effect again, and no caller supplies an executable or an absolute path.
+"""
+from __future__ import annotations
+
+import base64
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+# This entry point is shipped in a hash-qualified, private immutable directory.
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from amplifier_web import incus_environment_worker as worker
+from amplifier_web import test_environment_preparation as preparation
+from amplifier_web import test_environment_profiles as profiles
+from amplifier_web import test_host_resources as machine
+
+MAX_SOURCE = 512 * 1024**2
+CHUNK = 512 * 1024
+MAX_CONTROL = 1024 * 1024
+MUTATIONS = {'start', 'execute', 'job_start', 'job_cancel', 'stop', 'remove', 'finishCleanup', 'exportArtifacts', 'prepareDependencies', 'cleanupDependencies'}
+ACTIONS = MUTATIONS | {'prepare', 'capacity', 'read', 'job_read', 'reconcile', 'source', 'artifact', 'describe', 'machine.read', 'machine.save'}
+PAYLOAD = {'action', 'source', 'backendKey', 'expectedBackendIdentity', 'retentionMode', 'snapshot', 'operationId', 'universeId', 'rootOwner', 'resourceId', 'resourceRevision', 'admissionRevision', 'requestId', 'command', 'jobId', 'profileId', 'resourceRequest', 'timeoutSeconds', 'limits', 'offset', 'content', 'archiveIndex', 'exportRequestId', 'expectedRevision'}
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def home():
+    import pwd
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def state():
+    path = home() / '.local/state/amplifier-test-runners'
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        raise ValueError('Runner storage cannot traverse links.')
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    worker.private_directory(path)
+    return path
+
+
+def read(path, default=None):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return default
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > MAX_CONTROL:
+            raise ValueError('A runner receipt is not a private bounded file.')
+        return json.load(stream)
+
+
+def write(path, value):
+    preparation.write(path, value)
+
+
+@contextmanager
+def locked(root):
+    fd = os.open(root / '.controller.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
+            raise ValueError('The runner owner lock changed.')
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(fd)
+
+
+def configuration():
+    # Registration is operator setup. Routine calls only use this retained exact
+    # configuration, never a caller-selected file or changed active app config.
+    path = Path(__file__).resolve().parent.parent / 'backend.json'
+    value = read(path)
+    if digest(value) != path.parent.name:
+        raise ValueError('The registered backend configuration changed.')
+    return worker.validate_configuration(value)
+
+
+def backend(config, root):
+    env = worker.environment(config, root)
+    data = worker.checked(worker.incus(config, env, ['query', '/1.0']))
+    value = json.loads(data['stdout'])['environment']
+    identity = {'backend': 'incus', 'daemon': value['certificate_fingerprint'], 'project': value['project']}
+    if identity['project'] != config['project'] or config.get('daemonFingerprint') not in (None, identity['daemon']):
+        raise ValueError('The registered backend identity changed.')
+    target = worker.host_target(config, env)
+    if not target.get('supported') or target.get('machineId') != machine.identity():
+        raise ValueError('A registered controller requires its native local Incus daemon.')
+    return identity, target
+
+
+def owner(payload):
+    for key in ('rootOwner', 'resourceId', 'operationId', 'backendKey'):
+        if not isinstance(payload.get(key), str) or not 1 <= len(payload[key]) <= 200:
+            raise ValueError('An exact original owner is required.')
+    return {key: payload[key] for key in ('rootOwner', 'resourceId', 'operationId', 'backendKey')}
+
+
+def row_for(payload):
+    return {'id': payload['resourceId'], 'sessionId': payload['rootOwner'], 'launchOperationId': payload['operationId'],
+            'backendKey': payload['backendKey'], 'resourceRequest': payload['resourceRequest'],
+            'preparationRequired': profiles.get(payload['profileId'])['preparationRequired']}
+
+
+def source_chunk(root, payload):
+    snapshot = payload.get('snapshot')
+    if not isinstance(snapshot, dict) or not re.fullmatch(r'[a-f0-9]{64}', str(snapshot.get('archive_sha256', ''))):
+        raise ValueError('An exact source archive hash is required.')
+    data = base64.b64decode(payload.get('content', ''), validate=True)
+    offset = payload.get('offset')
+    if type(offset) is not int or offset < 0 or len(data) > CHUNK or offset + len(data) > MAX_SOURCE:
+        raise ValueError('The source chunk exceeds its bound.')
+    expected = read(root / 'source-binding.json')
+    if expected is None:
+        write(root / 'source-binding.json', snapshot)
+    elif expected != snapshot:
+        raise ValueError('This owner already has a different source snapshot.')
+    path = root / 'source.tar'
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'r+b') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
+            raise ValueError('The source archive changed.')
+        size = info.st_size
+        if offset < size:
+            stream.seek(offset)
+            if stream.read(len(data)) != data:
+                raise ValueError('The source chunk conflicts with retained bytes.')
+        elif offset == size:
+            stream.seek(offset)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        else:
+            raise ValueError('The source chunk is out of order.')
+        return {'ok': True, 'offset': max(size, offset + len(data))}
+
+
+def prepare(root, payload, config, target):
+    snapshot = read(root / 'source-binding.json')
+    if snapshot != payload.get('snapshot') or worker.file_digest(root / 'source.tar', MAX_SOURCE)[0] != snapshot['archive_sha256']:
+        raise ValueError('The complete frozen source has not arrived.')
+    name = worker.identity(payload)
+    identity, _ = backend(config, root)
+    worker.common.verify_binding({**payload, 'root': str(root)}, name, identity, prepare=True)
+    immutable = {'owner': owner(payload), 'snapshot': snapshot, 'profileId': payload['profileId'], 'resourceRequest': payload['resourceRequest']}
+    saved = read(root / 'owner.json')
+    if saved is not None and saved != immutable:
+        raise ValueError('The immutable target owner changed.')
+    if saved is None:
+        write(root / 'owner.json', immutable)
+    # Preparation allocates only controller-owned files. Reservation is at actual
+    # build/start admission, after the origin has committed its original target.
+    return {'ok': True, 'universeId': name, 'snapshot': snapshot, 'backendIdentity': identity,
+            'hostTarget': {'supported': False, 'reason': 'The registered target controller owns machine admission.'},
+            'targetMachine': target['machineId']}
+
+
+def artifact(root, payload):
+    record = read(root / ('effect-' + digest([payload.get('exportRequestId'), 'remove']) + '.json'))
+    if record is None:
+        record = read(root / ('effect-' + digest([payload.get('exportRequestId'), 'exportArtifacts']) + '.json'))
+    if record is None:
+        record = read(root / ('effect-' + digest([payload.get('exportRequestId'), 'finishCleanup']) + '.json'))
+    if not record or record.get('state') != 'completed':
+        raise ValueError('The exact retained export is unavailable.')
+    index, offset = payload.get('archiveIndex'), payload.get('offset')
+    archives = record.get('result', {}).get('archives', [])
+    if type(index) is not int or not 0 <= index < len(archives) or type(offset) is not int or offset < 0:
+        raise ValueError('Choose a bounded retained archive page.')
+    path = Path(archives[index]['destination'])
+    if not path.is_relative_to(root) or any(p.is_symlink() for p in (path, *path.parents)):
+        raise ValueError('The retained archive no longer belongs to this owner.')
+    with path.open('rb') as stream:
+        stream.seek(offset)
+        content = stream.read(CHUNK)
+    return {'ok': True, 'content': base64.b64encode(content).decode(), 'offset': offset + len(content),
+            'bytes': archives[index]['bytes'], 'sha256': archives[index]['sha256']}
+
+
+def dispatch(request):
+    if not isinstance(request, dict) or set(request) != {'version', 'machineId', 'backendIdentity', 'payload'} or request['version'] != 1:
+        raise ValueError('Unsupported registered runner protocol.')
+    payload = request['payload']
+    if not isinstance(payload, dict) or set(payload) - PAYLOAD or payload.get('action') not in ACTIONS:
+        raise ValueError('Unsupported registered runner operation.')
+    config = configuration()
+    base = state()
+    identity, target = backend(config, base)
+    action = payload['action']
+    if action != 'describe' and (request['machineId'] != machine.identity() or request['backendIdentity'] != identity):
+        raise ValueError('The registered machine or backend changed.')
+    if action == 'describe':
+        return {'ok': True, 'version': 1, 'machineId': machine.identity(), 'backendIdentity': identity,
+                'accountId': hashlib.sha256(str(os.getuid()).encode()).hexdigest(),
+                'profiles': [p['id'] for p in profiles.catalog()], 'incus': config,
+                'machineResources': machine.snapshot()}
+    if action == 'machine.read':
+        return {'ok': True, 'machineResources': machine.snapshot()}
+    if action == 'machine.save':
+        return {'ok': True, 'machineResources': machine.save(payload['expectedRevision'], payload['limits'])}
+    if action == 'capacity':
+        result = worker.execute_call({'action': 'capacity', 'root': str(base), 'incus': config})
+        result['machineResources'] = machine.snapshot()
+        return result
+    original = owner(payload)
+    root = base / ('owner-' + digest(original))
+    root.mkdir(mode=0o700, exist_ok=True)
+    worker.private_directory(root)
+    with locked(root):
+        if action == 'source':
+            return source_chunk(root, payload)
+        if action == 'prepare':
+            profiles.resources(payload.get('profileId'), payload.get('resourceRequest'))
+            return prepare(root, payload, config, target)
+        saved = read(root / 'owner.json')
+        if not saved or saved['owner'] != original or saved['snapshot'] != payload.get('snapshot') or saved['resourceRequest'] != payload.get('resourceRequest') or saved['profileId'] != payload.get('profileId'):
+            raise ValueError('The original source and target owner are required.')
+        if action == 'artifact':
+            return artifact(root, payload)
+        row = row_for(payload)
+        reservation = read(root / 'reservation.json')
+        if reservation:
+            row['hostReservation'] = reservation
+        intent = {k: v for k, v in payload.items() if k not in {'resourceRevision', 'admissionRevision', 'limits'}}
+        record_path = root / ('effect-' + digest([payload.get('requestId'), action]) + '.json')
+        if action in MUTATIONS:
+            if not isinstance(payload.get('requestId'), str) or not payload['requestId']:
+                raise ValueError('A stable effect request is required.')
+            previous = read(record_path)
+            if previous:
+                if previous['intent'] != intent:
+                    raise ValueError('The original effect arguments changed.')
+                return previous.get('result', {'ok': False, 'status': 'unknown', 'message': 'The original target operation has no confirmed result. It was not repeated.'})
+            # This is the target-side dispatch fence. Persist before *any* build,
+            # create, test, stop or export effect; keep it after lost replies.
+        if action in {'start', 'prepareDependencies'}:
+            reservation = machine.reserve(row, target)
+            if not reservation.get('admitted'):
+                return {'ok': False, 'status': 'not-started', 'effectAdmitted': False, 'admissionDenied': True,
+                        'machineResources': reservation, 'message': 'Waiting for room on the registered test machine.'}
+            write(root / 'reservation.json', reservation)
+            row['hostReservation'] = reservation
+        if action in MUTATIONS:
+            write(record_path, {'state': 'admitted', 'intent': intent})
+        runtime_payload = {k: v for k, v in payload.items() if k in PAYLOAD and k not in {'content', 'offset', 'limits'}}
+        runtime_payload.update(root=str(root), incus=config)
+        if action == 'prepareDependencies':
+            receipt = preparation.prepare({'backend': 'incus', 'incus': config}, root, saved['snapshot'], saved['profileId'], payload['requestId'], resource_request=saved['resourceRequest'], host_reservation=reservation)
+            write(root / 'prepared.json', receipt)
+            machine.settle(row, phase='launching')
+            result = {'ok': True, 'preparedDependencies': receipt}
+        elif action == 'cleanupDependencies':
+            result = {'ok': True, **preparation.cleanup({'backend': 'incus', 'incus': config}, root)}
+            if result.get('complete') and not read(root / 'launch-dispatched.json'):
+                machine.settle(row, release=True)
+        else:
+            prepared = read(root / 'prepared.json')
+            if prepared:
+                preparation.validate_receipt(prepared, saved['snapshot'], saved['profileId'])
+                runtime_payload['incus'] = {**config, 'image': prepared['image']}
+            if action == 'start':
+                write(root / 'launch-dispatched.json', {'requestId': payload['requestId']})
+            result = worker.execute_call(runtime_payload)
+            if action == 'start' and result.get('ok'):
+                machine.settle(row)
+            # Unknown creation retains capacity even after absent inventory.
+            # Release only after our completed launch followed by exact stopped
+            # or removed owner evidence; no TTL and no origin assertions.
+            launch = read(root / 'launch-dispatched.json')
+            completed_launch = read(root / ('effect-' + digest([launch['requestId'], 'start']) + '.json')) if launch else None
+            if (action in {'stop', 'remove', 'finishCleanup'} and result.get('ok') and result.get('status') in {'stopped', 'removed'}
+                    and completed_launch and completed_launch.get('state') == 'completed' and completed_launch.get('result', {}).get('ok')):
+                machine.settle(row, release=True)
+            if action == 'start' and result.get('effectAdmitted') is False and not prepared:
+                machine.settle(row, release=True)
+        if action in MUTATIONS:
+            write(record_path, {'state': 'completed', 'intent': intent, 'result': result})
+        return result
+
+
+def main():
+    try:
+        encoded = sys.stdin.buffer.read(MAX_CONTROL + 1)
+        if len(encoded) > MAX_CONTROL:
+            raise ValueError('The controller request exceeds its bound.')
+        result = dispatch(json.loads(encoded))
+    except BlockingIOError:
+        result = {'ok': False, 'status': 'unknown', 'code': 'owner_busy', 'message': 'The original target operation is still active. No new operation started.'}
+    except Exception:
+        result = {'ok': False, 'status': 'unknown', 'code': 'target_unconfirmed', 'message': 'The registered target did not confirm this operation. Keep its original owner; do not replay or move it.'}
+    sys.stdout.write(json.dumps(result))
+
+
+if __name__ == '__main__':
+    main()

@@ -16,6 +16,7 @@ import uuid
 from . import task_environments as environments
 from . import test_environment_profiles as profiles
 from . import test_capacity_settings as capacity_settings
+from . import registered_test_runners as registered_runners
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -107,7 +108,7 @@ class TestQueue:
     def public(self, receipt):
         job = receipt['job']
         value = {key: copy.deepcopy(job[key]) for key in ('id', 'status', 'createdAt', 'updatedAt', 'expiresAt',
-            'resourceId', 'capacity', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'guestJob') if key in job}
+            'resourceId', 'capacity', 'testMachine', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'guestJob') if key in job}
         # Full output lives in the existing exact operation receipt. Queue lists
         # cannot multiply a 32 KiB command result by the page size.
         for phase in ('launch', 'check', 'cleanup', 'removal'):
@@ -133,7 +134,9 @@ class TestQueue:
             raise ValueError('The assignment stopped; its queued check will not start.')
         self.app.configuration_authority.check(job.get('authority'))
         config, _, _ = environments.configuration(self.app)
-        if not config or environments.config_key(config) != job['backendKey']:
+        if job.get('runnerCandidates') and job.get('targetBound'):
+            config = registered_runners.resolve_job(self.app, job, config)
+        elif not config or environments.config_key(config) != job['backendKey']:
             raise ValueError('The approved test backend changed; this request will not start on another backend.')
         capacity_settings.load(self.app)
         return config
@@ -260,6 +263,7 @@ class TestQueue:
                     'timeoutSeconds': seconds, 'profileId': args['profileId'], 'resourceRequest': profiles.freeze(args['profileId']), 'durableVersion': 1,
                     'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
+            receipt['job']['runnerCandidates'] = registered_runners.retain_candidates(self.app, config, args['profileId'])
             owner.require_causal_depth(receipt['causalDepth'])
             owner.insert(identity, digest, receipt)
             self.app.db.commit()
@@ -339,6 +343,19 @@ class TestQueue:
                 continue
             if self.admission.locked():
                 continue
+            if receipt['job'].get('runnerCandidates') and not receipt['job'].get('targetBound'):
+                selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config)
+                receipt = self.get(identity)
+                if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
+                    continue
+                if selected is None:
+                    receipt['job']['detail'] = 'Waiting for room on an approved test machine.'
+                    self.save(receipt)
+                    continue
+                config = selected
+                receipt['job'].update(backendKey=environments.config_key(config), targetBound=True,
+                    testMachine=({key: config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if config.get('remoteRunner') else None))
+                self.save(receipt)  # Bind before source transfer or any target effect.
             key = receipt['job']['backendKey']
             if key not in capacities:
                 retry, delay = self.backoff.get(key, (0, 5))

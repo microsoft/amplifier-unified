@@ -15,6 +15,7 @@ import platform
 import socket
 import stat
 import struct
+import subprocess
 import uuid
 
 FIELDS = ('maxReservedCpu', 'maxReservedMemoryMiB', 'minAvailableMemoryMiB',
@@ -48,6 +49,35 @@ def directory():
     return Path(pwd.getpwuid(os.getuid()).pw_dir) / '.local/state/amplifier-test-resources' / host
 
 
+def activated_daemon(path, daemon_names):
+    """Verify root systemd's fixed socket-to-service binding, never a proxy."""
+    units = {'incusd': 'incus', 'dockerd': 'docker'}
+    for name in daemon_names:
+        unit = units.get(name)
+        if unit is None:
+            continue
+        def property_value(suffix, field):
+            result = subprocess.run(['/usr/bin/systemctl', 'show', unit + suffix,
+                '--property=' + field, '--value'], capture_output=True, timeout=3,
+                env={'PATH': os.defpath, 'LANG': 'C'})
+            if result.returncode or len(result.stdout) > 4096:
+                raise ValueError('The activated daemon could not be verified.')
+            return result.stdout.decode().strip()
+        listens = property_value('.socket', 'Listen').splitlines()
+        if not any(value.endswith(' (Stream)') and Path(value[:-9]).resolve() == Path(path).resolve() for value in listens):
+            continue
+        if property_value('.socket', 'Triggers') != unit + '.service':
+            continue
+        pid = property_value('.service', 'MainPID')
+        if not pid.isdigit() or int(pid) <= 1:
+            continue
+        if Path('/proc/' + pid + '/comm').read_text().strip() != name:
+            continue
+        if property_value('.service', 'MainPID') == pid:
+            return True
+    return False
+
+
 def local_target(endpoint, daemon_names):
     """Prove a local kernel peer; socket aliases resolve to the same host budget.
 
@@ -59,15 +89,17 @@ def local_target(endpoint, daemon_names):
         return unavailable
     try:
         path = endpoint[7:]
+        if not path and daemon_names == {'incusd'}:
+            path = '/var/lib/incus/unix.socket'
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(2)
             client.connect(path)
-            pid, _, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            pid, uid, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         name = Path(f'/proc/{pid}/comm').read_text().strip()
-        if name not in daemon_names:
+        if name not in daemon_names and not (pid == 1 and uid == 0 and name == 'systemd' and activated_daemon(path, daemon_names)):
             return unavailable
         return {'supported': True, 'machineId': identity(), 'scope': 'native_linux_host_account'}
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
         return unavailable
 
 
