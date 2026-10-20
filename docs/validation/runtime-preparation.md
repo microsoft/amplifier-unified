@@ -102,9 +102,24 @@ revision agree. A full commit written by the resolver may then retain the
 prepared declaration's original ref. An explicit installed tag, other branch,
 fork, different directory, or changed revision cannot be relabeled this way.
 
+Recovery needs explicit branch authority even when the resolver retains a named
+`rev` rather than normalizing it into an exact SHA. Authored tags (including non-version names such as `stable`)
+and ambiguous `rev`/PEP 508 names retain the exact installed commit. A matching
+repository and commit do not prove that a name is a branch. Branch/tag conflicts
+remain protected, even when their names are identical.
+
+Only unconditional selected requirements and explicitly selected default groups
+can authorize recovery. Marker alternatives, unused extras/groups, constraints,
+and unknown source selection can block conflicting recovery but cannot authorize
+it alone. The app's managed default group remains supported
+through its actual checked stage receipt; an unchecked group URI is not branch
+proof. Resolving ambiguous refs later requires selected-source reconciliation with
+exact repository ref evidence, not a guess from names such as `main`.
+
 `runtime-sources.json` records `policyOrigin` beside each newly captured policy:
 its basis, original ref, exact source identity, and (for prepared declarations)
-the manifest digest. Checked policies carry that origin through subsequent
+the manifest digest. Ambiguous names use `unresolved-reference` and `originalRef`;
+explicit tags use `tag-reference`. Both remain fixed until separate policy proof. Checked policies carry that origin through subsequent
 staging and freeze. Exact source drift still fails qualification. Installed
 owned clean cache modules retain their declared policy; unrelated or newer
 adjacent caches do not explain a Git distribution's old pin.
@@ -121,3 +136,17 @@ requirements, policy origin across stage/freeze/next check, exact identity drift
 explicit pins/branches/tags/forks, ambiguous declarations, clean owned cache
 boundaries, and retention of an unknown legacy pin. They establish source-policy
 behavior, not deployment or fresh-worker adoption on a user's installation.
+Real local Git/uv tests also exercise normalized installs through production freeze,
+recorded verification, and next inventory: explicit selected branches and checked
+managed groups remain eligible; tags, ambiguous names, inactive markers and unused
+extras remain pinned.
+
+Actual authored-manifest resolver tests separately cover a repository with only a
+`stable` tag, same-name branch/tag, and a real branch. Both `rev="stable"` and
+PEP 508 `@stable` remain protected without branch-kind proof. The original-ref
+evidence survives unrelated stage/freeze/inventory cycles.
+
+Scope boundary: Foundation cache/shared-binding metadata can also contain an
+untyped non-version ref. Its existing ownership checks establish source identity,
+not branch-versus-tag intent. That adjacent path is tracked separately for exact
+ref proof; this correction does not claim to resolve all cache policy ambiguity.

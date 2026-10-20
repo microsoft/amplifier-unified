@@ -30,29 +30,39 @@ def carried_origin(policy, previous=None):
     valid = (isinstance(old, dict) and old.get('kind') and
              all(old.get(key, '') == policy.get(key, '') for key in ('url', 'ref', 'subdirectory')))
     return origin(policy, old['kind'] if valid else 'checked-source',
-                  **({key: old[key] for key in ('manifestSha256',) if key in old} if valid else {}))
+                  **({key: old[key] for key in ('manifestSha256', 'originalRef') if key in old} if valid else {}))
 
 
 def declarations(content):
-    """Read explicit prepared requirements, including dynamically added groups."""
+    """Recover only unconditional, selected policy; keep all conflicts visible.
+
+    A universal lock contains unselected extras/groups and marker alternatives.
+    Their presence or matching installed bytes cannot prove they selected a ref.
+    """
     from .runtime_environment import package_name
     data = tomllib.loads(content.decode())
-    found = {}
+    found, eligible, selected_names = {}, set(), set()
+    uv = data.get('tool', {}).get('uv', {})
 
-    def add(name, source):
+    def add(name, source, selected):
         name = package_name(name)
         if name in found and found[name] != source:
-            found[name] = None  # Conflicting declarations are not policy evidence.
+            found[name] = None  # Includes same-spelling branch/tag conflicts.
         else:
             found[name] = source
+        if selected:
+            eligible.add(name)
 
-    def requirement(value):
+    def requirement(value, selected=False):
         if not isinstance(value, str):
             return
         try:
             parsed_requirement = Requirement(value)
         except InvalidRequirement:
             return
+        selected = selected and parsed_requirement.marker is None
+        if selected:
+            selected_names.add(package_name(parsed_requirement.name))
         if not parsed_requirement.url or not parsed_requirement.url.startswith('git+'):
             return
         parsed = urlsplit(parsed_requirement.url[4:])
@@ -61,35 +71,42 @@ def declarations(content):
         if not separator or not ref or len(fragments.get('subdirectory', [''])) != 1:
             return
         add(parsed_requirement.name, {'url': urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, '')),
-                       'ref': ref, 'subdirectory': fragments.get('subdirectory', [''])[0]})
+                       'ref': ref, 'refKind': 'rev',
+                       'subdirectory': fragments.get('subdirectory', [''])[0]}, selected)
 
     for value in data.get('project', {}).get('dependencies', []):
-        requirement(value)
+        requirement(value, selected=True)
     for group in data.get('project', {}).get('optional-dependencies', {}).values():
         for value in group:
             requirement(value)
-    for group in data.get('dependency-groups', {}).values():
+    # The app's sync path uses defaults, without --all-groups/--extra. Explicit
+    # default groups prove selection; no marker environment or extras are guessed.
+    defaults = uv.get('default-groups', [])
+    defaults = set(defaults) if isinstance(defaults, list) and all(isinstance(name, str) for name in defaults) else set()
+    for name, group in data.get('dependency-groups', {}).items():
         for value in group:
-            requirement(value)
-    uv = data.get('tool', {}).get('uv', {})
+            requirement(value, selected=name in defaults)
     for collection in ('override-dependencies', 'constraint-dependencies', 'build-constraint-dependencies', 'dev-dependencies'):
         for value in uv.get(collection, []):
-            requirement(value)
+            requirement(value)  # Overrides constrain resolution; they do not select a package.
     for name, source in uv.get('sources', {}).items():
-        # uv permits marker-specific source arrays. Every declared alternative
-        # participates: selecting one by guessing its marker would hide a pin.
+        # Every alternative can disqualify a ref, even when its selection is
+        # unknown. Neither an inactive marker nor an unused extra authorizes it.
         entries = source if isinstance(source, list) else [source]
         if not entries:
             found[package_name(name)] = None
         for entry in entries:
-            refs = ([entry[key] for key in ('branch', 'rev', 'tag') if entry.get(key)]
+            refs = ([(key, entry[key]) for key in ('branch', 'rev', 'tag') if entry.get(key)]
                     if isinstance(entry, dict) else [])
-            if not isinstance(entry, dict) or not entry.get('git') or len(refs) != 1:
-                found[package_name(name)] = None  # Local/unknown overrides are not a branch declaration.
+            if (not isinstance(entry, dict) or not entry.get('git') or len(refs) != 1
+                    or not isinstance(refs[0][1], str)):
+                found[package_name(name)] = None
                 continue
-            add(name, {'url': entry['git'], 'ref': refs[0],
-                       'subdirectory': entry.get('subdirectory', '')})
-    return {name: value for name, value in found.items() if value is not None}
+            selected = (package_name(name) in selected_names
+                        and not any(key in entry for key in ('marker', 'extra', 'group')))
+            add(name, {'url': entry['git'], 'ref': refs[0][1], 'refKind': refs[0][0],
+                       'subdirectory': entry.get('subdirectory', '')}, selected)
+    return {name: value for name, value in found.items() if value is not None and name in eligible}
 
 
 def owned_cache_path(home, cache_root, installed, subdirectory):
@@ -145,9 +162,13 @@ def freeze_policies(home, generation, project, graph):
         vcs = direct.get('vcs_info') or {}
         if vcs.get('vcs') != 'git':
             continue
-        policy = {'url': direct['url'], 'ref': vcs.get('requested_revision') or vcs['commit_id'],
+        requested = vcs.get('requested_revision') or vcs['commit_id']
+        policy = {'url': direct['url'], 'ref': vcs['commit_id'],
                   'revision': vcs['commit_id'], 'subdirectory': direct.get('subdirectory', '')}
-        kind = 'installed-reference'
+        # PEP 610's requested_revision has no ref kind. Even a familiar name can
+        # be a tag; installed bytes alone never authorize following a branch.
+        kind = 'installed-reference' if re.fullmatch('[a-f0-9]{40}', requested) else 'unresolved-reference'
+        evidence = {'originalRef': requested} if kind == 'unresolved-reference' else {}
         resolved = locked.get(name)
         declaration = declared.get(name)
         if resolved is not None:
@@ -156,20 +177,29 @@ def freeze_policies(home, generation, project, graph):
             exact = (urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', '')) == policy['url']
                      and resolved.fragment == policy['revision']
                      and query.get('subdirectory', ['']) == [policy['subdirectory']] and len(refs) == 1
-                     and (policy['ref'] == refs[0] or
-                          (policy['ref'] == policy['revision'] and re.fullmatch('[a-f0-9]{40}', policy['revision']))))
+                     and (requested == refs[0] or
+                          (requested == policy['revision'] and re.fullmatch('[a-f0-9]{40}', policy['revision']))))
             if exact:
-                policy['ref'] = refs[0]
-                kind = 'resolution-reference'
-                # Only a full normalized commit at this exact installed identity
-                # is interchangeable with the prepared declaration's original ref.
+                kind, evidence = 'resolution-reference', {}
+                if query.get('tag'):
+                    kind, evidence = 'tag-reference', {'originalRef': refs[0]}
+                elif query.get('branch'):
+                    policy['ref'] = refs[0]
+                elif not re.fullmatch('[a-f0-9]{40}', refs[0]):
+                    kind, evidence = 'unresolved-reference', {'originalRef': refs[0]}
                 normalized = (query.get('rev') == [policy['revision']]
                               and re.fullmatch('[a-f0-9]{40}', policy['revision']))
                 if (declaration and declaration['url'] == policy['url']
                         and declaration['subdirectory'] == policy['subdirectory']
                         and (refs[0] == declaration['ref'] or normalized)):
-                    policy['ref'] = declaration['ref']
-                    kind = 'prepared-manifest'
-        policies[name] = with_origin(policy, kind,
-                                    **({'manifestSha256': digest} if kind == 'prepared-manifest' else {}))
+                    if declaration['refKind'] == 'tag':
+                        policy['ref'] = policy['revision']
+                        kind, evidence = 'tag-reference', {'originalRef': declaration['ref']}
+                    elif declaration['refKind'] == 'branch' and not query.get('tag'):
+                        policy['ref'] = declaration['ref']
+                        kind, evidence = 'prepared-manifest', {'manifestSha256': digest}
+                    elif declaration['refKind'] == 'rev' and not query.get('branch') and not query.get('tag'):
+                        if not re.fullmatch('[a-f0-9]{40}', declaration['ref']):
+                            kind, evidence = 'unresolved-reference', {'originalRef': declaration['ref']}
+        policies[name] = with_origin(policy, kind, **evidence)
     return policies
