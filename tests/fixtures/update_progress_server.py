@@ -68,6 +68,12 @@ async def main(home):
         elif stage=='failed':
             diagnostics.record('ecosystem-prepare','failed',errorType='BundleNotFoundError')
             await manager.publish(phase='error',error='Synthetic activation failure; active generation preserved.')
+        elif stage=='source-mismatch':
+            from amplifier_web.update_diagnostics import failure_guidance
+            failure=diagnostics.record('ecosystem-validation','failed',errorType='ValueError',
+                reason='runtime-installed-source-mismatch',package='amplifier-foundation',
+                resolutionMismatches=['revision'])
+            await manager.publish(phase='error',error=failure_guidance(failure))
         elif stage=='compatibility':
             await manager.publish(probeProgress={'attemptId':attempt,'phase':'compatibility','completed':12,'total':37,'startedAt':time.time()})
         else:raise web.HTTPBadRequest()
