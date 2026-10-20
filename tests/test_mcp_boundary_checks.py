@@ -97,10 +97,12 @@ def test_mcp_plan_generation_preserves_source_and_fixed_rows(tmp_path, monkeypat
     env = {**os.environ, 'MCP_RECOVERY_SCREENSHOT': str(negative_dir / 'overlay-before-cleanup.png'),
            'MCP_NEGATIVE_PROOF': str(negative_dir / 'boundary.json'),
            'MCP_NEGATIVE_CLEANUP': str(negative_dir / 'cleanup.json')}
-    stub = r"""
+    stub = "import {finishFixture} from " + json.dumps((ROOT / 'frontend/tests/fixture-lifecycle.mjs').as_uri()) + ";\n" + r"""
 import assert from 'node:assert/strict';
 import {writeFile as save} from 'node:fs/promises';
 const events=[],boundary='initial client',directory='synthetic-directory';
+let cleanupComplete=false;
+const originalError=undefined;
 const failure=new Error('expect(locator).toHaveCount(expected)\nExpected: 0\nReceived: 1');
 const writeFile=async(path,body)=>{events.push(path===process.env.MCP_NEGATIVE_CLEANUP?'cleanup-proof':'witness');await save(path,body)};
 const setup={isVisible:async()=>true,count:async()=>1};
