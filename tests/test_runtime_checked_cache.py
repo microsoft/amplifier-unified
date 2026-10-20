@@ -299,3 +299,17 @@ async def test_git_worktree_cannot_redirect_staging_into_another_owner(candidate
     with pytest.raises(ValueError, match='owned Git checkout'):
         await alignment.align_checked_sources(c.manager, c.stage)
     assert git(root, 'rev-parse', 'HEAD') == c.old and not c.fetches
+
+
+@pytest.mark.parametrize('location', ['shared-config/cache', 'custom'])
+async def test_legacy_shared_and_explicit_local_paths_are_not_alignment_targets(candidate, location):
+    c = candidate
+    root = c.copy()
+    other = (c.stage / location if location == 'shared-config/cache' else c.home.parent / location) / 'fixture'
+    other.parent.mkdir(parents=True, exist_ok=True)
+    root.rename(other)
+    before = (other / '.amplifier_cache_meta.json').read_bytes()
+    await alignment.align_checked_sources(c.manager, c.stage)
+    assert git(other, 'rev-parse', 'HEAD') == c.old and not c.fetches
+    assert (other / '.amplifier_cache_meta.json').read_bytes() == before
+
