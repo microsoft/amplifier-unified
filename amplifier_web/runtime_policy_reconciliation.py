@@ -14,6 +14,7 @@ import re
 import tomllib
 
 VERSION = 1
+SELECTION_VERSION = 2
 RECEIPT = 'runtime-policy-reconciliation.json'
 
 
@@ -56,7 +57,8 @@ def pending(home, generation, rows, *, honor_receipt=True):
     key = configuration(config)
     try:
         saved = json.loads((receipt_directory(home, generation) / RECEIPT).read_text())
-        if (honor_receipt and saved.get('version') == VERSION and saved.get('configuration') == key
+        if (honor_receipt and saved.get('version') == VERSION
+                and saved.get('selectionVersion') == SELECTION_VERSION and saved.get('configuration') == key
                 and all(saved.get('remaining', {}).get(name) == row for name, row in candidates.items())):
             return None
     except (OSError, ValueError, TypeError):
@@ -70,7 +72,8 @@ def annotate_retained(home, generation, rows):
     from .host.config import read_config
     try:
         saved = json.loads((receipt_directory(home, generation) / RECEIPT).read_text())
-        if (saved.get('version') != VERSION or saved.get('configuration') !=
+        if (saved.get('version') != VERSION or saved.get('selectionVersion') != SELECTION_VERSION
+                or saved.get('configuration') !=
                 configuration(read_config(home, home=home, global_only=True))):
             return
         offered = saved.get('offeredPackages')
@@ -145,7 +148,7 @@ class Collector:
             owned_path(path, stage)
             data = json.loads(path.read_text())
             bindings.setdefault((data['git_url'], data['commit']), set()).add(data['ref'])
-        inspected, packages, constraints = {}, {}, {}
+        inspected, packages, constraints, manifests = {}, {}, {}, {}
         for name, source in sorted(batch.names.items()):
             name, source = package_name(name), Path(source)
             package = {'status': 'unresolved'}
@@ -210,6 +213,7 @@ class Collector:
             package.update(status='selected', url=data['git_url'], ref=ref,
                            subdirectory=('' if source == root else source.relative_to(root).as_posix()),
                            revision=data['commit'], manifestSha256=hashlib.sha256(content).hexdigest())
+            manifests[name] = content
         for name, package in packages.items():
             if package.get('status') != 'selected' or name not in constraints:
                 continue
@@ -218,6 +222,11 @@ class Collector:
                                      for field in ('url', 'ref', 'subdirectory')):
                 package.clear()
                 package['status'] = 'authored-constraint'
+        from .selected_runtime_dependencies import selected
+        dependencies = selected({name: content for name, content in manifests.items()
+                                 if packages[name].get('status') == 'selected'})
+        for name, package in dependencies.items():
+            packages.setdefault(name, package)
         return {'version': VERSION, 'configuration': configuration(config), 'packages': packages}
 
 
@@ -282,6 +291,12 @@ def selected_policies(candidates, report):
                 status = 'different-source'
             else:
                 result[name] = {key: current[key] for key in ('url', 'ref', 'subdirectory', 'revision', 'manifestSha256')}
+                if current.get('sourceKind') == 'dependency':
+                    if old['current'] != current['revision']:
+                        decisions[name] = 'different-installed-revision'
+                        result.pop(name)
+                        continue
+                    result[name].update(sourceKind='dependency', previousRevision=old['current'])
                 status = 'selected'
         decisions[name] = status
     return result, decisions
@@ -337,8 +352,12 @@ async def reconcile(manager, stage, project, collect):
     if selected:
         write_private(checked_path, json.dumps(checked, indent=2) + '\n')
         await align_checked_sources(manager, stage)
+        from .selected_runtime_dependencies import refresh
+        await refresh(manager, stage, project, selected)
         second = await collect()
-        verified, _ = selected_policies(request['candidates'], second)
+        verified, _ = selected_policies({name: {**old, 'current': selected[name]['revision']}
+                                        if name in selected else old
+                                        for name, old in request['candidates'].items()}, second)
         if second.get('configuration') != first['configuration'] or any(
                 name not in verified or any(verified[name][field] != source[field]
                     for field in ('url', 'ref', 'subdirectory', 'revision')) for name, source in selected.items()):
@@ -350,7 +369,7 @@ async def reconcile(manager, stage, project, collect):
         write_private(checked_path, json.dumps(checked, indent=2) + '\n')
     if active_release(home).get('current') != old_generation:
         raise ValueError('The active generation changed during policy reconciliation.')
-    result = {'version': VERSION, 'configuration': request['configuration'],
+    result = {'version': VERSION, 'selectionVersion': SELECTION_VERSION, 'configuration': request['configuration'],
               'decisions': {name: ('migrated' if name in selected else status) for name, status in decisions.items()},
               'remaining': {name: old for name, old in request['candidates'].items() if name not in selected},
               'offeredPackages': sorted(first.get('packages', {})),

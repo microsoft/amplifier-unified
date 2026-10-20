@@ -187,3 +187,27 @@ prompts for the same configuration. If another component already prompts a
 fresh candidate, remaining legacy decisions are reconsidered against that
 candidate's selected declarations. Existing generations and rollback evidence
 are unchanged; this is not a live-worker dependency rewrite.
+
+
+Selected static root manifests also seed a dependency closure. The collection
+pass follows applicable installed Requires-Dist edges using the candidate's
+marker environment and explicitly requested extras. An installed distribution
+outside that closure cannot authorize recovery. Dependency-only Git choices
+must match the current installed package, repository, subdirectory and commit;
+conditional Git declarations, conflicting pins and local choices stay protected.
+
+For a proven moving dependency that is not a direct prepared source, the fresh
+candidate replaces only its exact generated old-SHA manifest entry with the
+checked commit. It refreshes and verifies that resolver lock, installs it into
+the candidate, then recollects selection and runs the ordinary freeze checks.
+The serving generation and its old receipts remain unchanged. Reconciliation
+receipts include a selection-version marker so earlier direct-only no-op results
+receive one recheck rather than permanently concealing reachable dependencies.
+
+Qualification covers real local Git and uv installs where a dependency-only
+@main advances from an old generated SHA, freezes exactly and remains eligible
+on the next inventory. Tag-only and same-name branch/tag cases retain the old
+commit. Additional tests cover markers, requested extras, fixed version edges,
+unused packages, explicit pins/forks/local sources, and changed generated
+manifest entries. Dynamic or unverifiable dependency metadata remains
+unresolved; these tests are not production adoption evidence.
