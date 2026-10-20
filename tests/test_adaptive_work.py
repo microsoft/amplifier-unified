@@ -1,6 +1,6 @@
 from copy import deepcopy
 import pytest
-from amplifier_web.adaptive_work import work_home
+from amplifier_web.adaptive_work import work_home, work_status
 from amplifier_web.chat_navigation import view_patch
 from amplifier_web.shell_resource_diagnostics import rebuild_reasons
 from test_shell_modules import service
@@ -15,6 +15,58 @@ def test_home_query_rejects_invalid_inputs():
             view_patch(patch)
     view_patch({'workSurface': 'home', 'workHomeView': 'studio', 'workHomeScope': 'all',
                 'workHomePages': {'working': 2}})
+
+
+def test_sidebar_choices_validate_without_changing_home_contract():
+    for patch in ({'navMode': 'inbox'}, {'navStatusPages': {'idle': True}},
+                  {'navStatusPages': {'done': 1}}, {'navStatusCollapsed': 'idle'},
+                  {'navStatusExpanded': ['unknown']}):
+        with pytest.raises(ValueError):
+            view_patch(patch)
+    view_patch({'navMode': 'status', 'navStatusPages': {'idle': 2},
+                'navStatusCollapsed': ['working'], 'navStatusExpanded': ['idle']})
+
+
+async def test_status_sidebar_is_independent_bounded_and_uses_same_catalog(service, monkeypatch):
+    monkeypatch.setattr(service, '_session', lambda *a, **k: pytest.fail('Browsing hydrated a session'))
+    initial = work_home(service, service.state)['groups']['idle']
+    sidebar = work_status(service, service.state, 'idle')
+    assert sidebar['items'] is initial['items'], 'An identical Home query reuses its cached page'
+    changed = {**service.state, 'view': {'workHomeScope': 'two', 'workHomeQuery': 'no-match',
+                                       'workHomePages': {'idle': 50}, 'navFilter': 'ignored'}}
+    assert work_status(service, changed, 'idle')['items'] == initial['items']
+    assert {row['id'] for row in work_status(service, changed, 'idle', pinned_workspace_id='two')['items']} == {'beta'}
+    missing = work_status(service, changed, 'idle', pinned_workspace_id='missing')
+    assert missing['unavailable'] and not missing['items']
+
+
+async def test_status_sidebar_pages_do_not_mutate_the_catalog(service):
+    base = service.state['sessions'][0]
+    service.state['sessions'] = [{**deepcopy(base), 'id': f'status-{i}', 'recentActivityAt': i+1} for i in range(125)]
+    before = deepcopy(service.state)
+    first = work_status(service, service.state, 'idle')
+    second = work_status(service, {**service.state, 'view': {'navStatusPages': {'idle': 1}}}, 'idle')
+    assert first['total'] == second['total'] == 125 and len(first['items']) <= 50
+    assert not {row['id'] for row in first['items']} & {row['id'] for row in second['items']}
+    assert service.state == before
+
+
+async def test_status_resource_identity_ignores_home_but_tracks_own_page_and_pin(service):
+    shell = service.shell
+    client = shell.client('status-reader')
+    instance = {'id': 'chats', 'package': 'builtin.chats', 'slot': 'navigation'}
+    def key():
+        return shell.resources._page_key('workStatusIdle', shell.scoped_state(client, instance),
+            instance, ((1, 2), 3), client, 7, (1, 2, 3, 4, 5, 6))
+    initial = key()
+    service.state['view'].update(workHomeScope='two', workHomeQuery='changed', workHomePages={'idle': 3},
+                                 navStatusPages={'attention': 4})
+    assert key() == initial
+    service.state['view']['navStatusPages']['idle'] = 1
+    assert key() != initial
+    paged = key()
+    instance['scope'] = {'mode': 'pinned', 'workspaceId': 'two'}
+    assert key() != paged
 
 
 async def test_scope_search_and_unavailable_project_never_widen(service, monkeypatch):
@@ -121,7 +173,9 @@ async def test_new_web_arrival_and_resume_preserve_chat_and_private_draft(servic
 async def test_home_choices_survive_navigation_and_client_resume_without_leaking(service):
     choices = {'workHomeView': 'studio', 'workHomeFilter': 'idle',
                'workHomeScope': 'two', 'workHomeQuery': 'beta',
-               'workHomePages': {'idle': 2, 'unread': 1}, 'navPinned': True}
+               'workHomePages': {'idle': 2, 'unread': 1}, 'navPinned': True,
+               'navMode': 'status', 'navStatusPages': {'idle': 1},
+               'navStatusExpanded': ['idle'], 'navStatusCollapsed': ['working']}
     service.clients.attach('home-continuity', kind='web')
     with service.clients.bind('home-continuity'):
         await service.dispatch('view.update', {'patch': choices})

@@ -131,3 +131,45 @@ async def test_unknown_resume_is_not_replayed_after_restart(app):
             "SELECT fingerprint FROM commands WHERE id='resume-member'").fetchone()[0])['duplicate']
     finally:
         await other.close()
+
+
+async def test_manager_can_build_resume_from_the_public_list_response(app):
+    source, target, human = await paused_member(app)
+    found = await agent_action(app, source, 'coordination.list',
+        {'sessionId': target['id'], 'limit': 1}, 'discover-resume')
+    item = found['result']['items'][0]
+    context = await agent_action(app, source, 'coordination.context', {'sessionId': source['id']}, 'discover-human')
+    current = context['result']['humanInput']
+    assert current['sourceMessageId'] == human['id']
+    assert item['status'] == 'stopped'
+    await agent_action(app, source, 'coordination.send', {
+        'sessionId': item['target']['sessionId'], 'text': 'Continue the existing task.',
+        'mode': 'queue', 'resume': {'sourceMessageId': current['sourceMessageId'],
+            'expectedInterruptionRevision': item['signal']['interruptionRevision']},
+    }, 'public-list-resume')
+    await settled(app, 'public-list-resume', 'accepted')
+    assert len(app.runtime.inputs) == 1
+
+
+@pytest.mark.parametrize('invalid', ['peer', 'old_input', 'question', 'schedule', 'terminal', 'child'])
+async def test_context_does_not_offer_ineligible_human_input(app, invalid):
+    source, target, human = await paused_member(app)
+    if invalid == 'peer': human['inputOrigin'] = 'peer'
+    elif invalid == 'old_input': await generation(app, source, 'new-generation', ['unrelated'])
+    elif invalid == 'question': human['questionId'] = 'question'
+    elif invalid == 'schedule': human['scheduledRunId'] = 'schedule'
+    elif invalid == 'terminal': source['collaborationGeneration']['terminal'] = True
+    if invalid == 'child':
+        with pytest.raises(AppError, match="child cannot borrow"):
+            await app.app_bridge('dispatch', {
+                'action': 'coordination.context', 'args': {'sessionId': source['id']},
+                '_runtimeSessionId': 'native-child',
+                '_generationId': source['collaborationGeneration']['id'],
+                '_inputBindings': [{'inputId': 'human-resume'}],
+            }, source['id'])
+        assert not app.runtime.inputs
+        return
+    else:
+        result = await agent_action(app, source, 'coordination.context', {'sessionId': source['id']}, 'inspect-human')
+    assert result['result']['humanInput'] is None
+    assert not app.runtime.inputs

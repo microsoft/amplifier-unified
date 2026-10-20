@@ -6,7 +6,7 @@ app-owned Foundation lifecycle and standalone Amplifier configuration.
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 import json
 import os
 from pathlib import Path
@@ -1125,6 +1125,39 @@ class RuntimeManager:
         if row['process'].returncode is not None:
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
         return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel)
+
+    @contextmanager
+    def stopped_boundary(self, session):
+        """Hold existing native ownership while proving a stopped root is absent.
+
+        Called under the service mutation lock. This non-awaiting inspection
+        neither starts nor stops workers, and never requests another owner yield.
+        The lease remains held through the caller's durable recovery commit.
+        """
+        from amplifier_foundation.session import SharedSessionStore
+        sid = session['id']
+        self._check_execution(sid, session)
+        row = self.workers.get(sid)
+        lock = self._locks.get(sid)
+        if (self._closed or sid in self._preparations or lock and lock.locked()
+                or row and (row['process'].returncode is None or not row.get('executionEnded')
+                            or any(not task.done() for task in row.get('bridge_tasks', ()))
+                            or row.get('stop_task') and not row['stop_task'].done())):
+            raise RuntimeError('Wait for this chat and its workers to settle before continuing.')
+        store = SharedSessionStore(session['workspace'],
+            session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+        held = store.acquire(app='amplifier-unified-stop-recovery')
+        try:
+            from .host_identity import local_host_identity
+            yield {'sessionId': sid, 'nativeSessionId': store.session_id,
+                   'executionHost': local_host_identity(),
+                   'executionRevision': session.get('executionRevision', 0),
+                   'interruptionRevision': session.get('interruptionRevision', 0),
+                   'observedAt': time.time(), 'workerAbsent': True,
+                   'ownershipAcquisitionId': held.owner['acquisition_id'],
+                   'effectsRolledBack': False, 'inputsReplayed': False}
+        finally:
+            held.release()
 
     async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
         """Save and release a known local writer before moving execution cwd."""

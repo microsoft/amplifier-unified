@@ -355,6 +355,7 @@ class ShellModules:
         view.update(client['views'].get(instance['id'], {}).get('view', {}))
         from .adaptive_work import WORK_QUERY_FIELDS
         view.update({key: state.get('view', {}).get(key) for key in WORK_QUERY_FIELDS})
+        view['navStatusPages'] = state.get('view', {}).get('navStatusPages', {})
         view.setdefault('navWorkspaceMode', 'recent')
         scope = instance.get('scope', {})
         workspace_id = scope.get('workspaceId') if scope.get('mode') == 'pinned' else state.get('selectedWorkspaceId')
@@ -419,8 +420,14 @@ class ShellModules:
         search = projections.chats({**scoped, 'view': recent_view}, section='search') if wants('sidebarSearch') else None
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace') if wants('sidebarWorkspace') else None
         recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts') if wants('recentNavigation') else None
-        from .adaptive_work import work_home, work_home_context
+        from .adaptive_work import work_home, work_home_context, work_status, STATUS_RESOURCES
         work = work_home(self.service, scoped, pinned_workspace_id=workspace_id if pinned_scope else None) if wants('workHome') and instance['package'] in BUILTINS else None
+        # Bundled Status pages are explicit demand, not additions to third-party
+        # full snapshots. Identical Home queries reuse the projection cache.
+        status_pages = {name: work_status(self.service, scoped, status,
+                                         pinned_workspace_id=workspace_id if pinned_scope else None)
+                        for name, status in STATUS_RESOURCES.items()
+                        if requested is not None and wants(name)}
         if recent_navigation is not None:
             # Identity is not part of the shared projection cache. Copy its scope,
             # so one client's fence cannot contaminate another's cached rows.
@@ -430,6 +437,7 @@ class ShellModules:
         visible_ids = {row['id'] for page in (chat_page, home, pins, recent, search, workspace_chats, work)
                        if page is not None for row in page['items']} | {row['id'] for row in (recent_navigation['items'] if recent_navigation is not None else [])}
         visible_ids.update(item['row']['id'] for item in (pinned_navigation['items'] if pinned_navigation is not None else []) if item['kind'] == 'session')
+        visible_ids.update(row['id'] for page in status_pages.values() for row in page['items'])
         # A context-only refresh observes the rows in retained active pages,
         # without rebuilding those pages just to recover their identities.
         if context_visible_ids is not None:
@@ -481,7 +489,7 @@ class ShellModules:
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
                 'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
 
-        pages = {'chatNavigation': chat_page, 'homeNavigation': home, 'workHome': work,
+        pages = {**status_pages, 'chatNavigation': chat_page, 'homeNavigation': home, 'workHome': work,
                  'pinnedNavigation': pinned_navigation, 'workspaceOverview': overview}
         result.update({key: value for key, value in pages.items() if value is not None})
         sidebar = {'recentView': {key: recent_view[key] for key in recent_view if key in SIDEBAR_FILTER_KEYS}}

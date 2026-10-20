@@ -22,7 +22,7 @@ const scope={mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section
 const page={items:[{id:'b-chat',title:'Research ideas',workspace:'/research',workspaceId:'b'}],scope,total:1,pages:1,index:0,start:0,end:1};
 const snapshot={navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts','workspaceExplorer','sidebarSearch','sidebarRecent','sidebarPinned'],view:{},selectedSessionId:'a',selectedWorkspaceId:'b',workspaces:[workspace],library:{bounded:true,workspaceCount:1},workspaceShortcuts:[row],recentShortcuts:page.items,recentNavigation:{...page,remaining:0,limit:20,scope:{...scope,section:'shortcuts',showAgentCreated:false,limit:20,viewRevision:0}},workspaceExplorer:{rows:[row],mode:'recent'},sidebarNavigation:{pinned:{items:[],total:0,pages:1},recent:page,search:{...page,scope:{...scope,section:'search'}},recentView:{}},sharedHistory:{}};
 const host={instanceId:'chats',getSnapshot:()=>snapshot,subscribe:()=>()=>{},dispatch:async()=>({accepted:true})};
-const navigation={browse(){},create(){},newChat(){}};
+const navigation={browse(){},create(){},newChat(){},sidebarView:{},updateSidebar(){}};
 const render=child=>React.createElement(WorkNavigationContext.Provider,{value:navigation},child);
 for(const surface of ['chat','chats'])test(`managed delete obtains one confirmation token on the ${surface} surface`,async()=>{
  const calls=[],current={...snapshot,view:{workSurface:surface,workspaceDraft:{mode:'chat-delete',id:'managed',name:'Reviewed chat'}}};
@@ -44,7 +44,7 @@ for(const surface of ['chat','chats'])test(`managed delete obtains one confirmat
 });
 test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host})));
- assert.match(html,/Search chats/);assert.match(html,/All projects/);
+ assert.match(html,/All projects/);
  assert.doesNotMatch(html,/All chats|Review chats|View all chats|of 1 recent chats|a-recent-controls/);
  assert.doesNotMatch(html,/Filter conversations|Filter workspaces|Browse folders/);
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};

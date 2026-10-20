@@ -202,6 +202,12 @@ class CapacityController:
         if result['allowed']:
             row['budgetRevision'] = result['budgetRevision']
             row['admittedAt'] = result.get('admittedAt')
+            if self.last_denial:
+                # An assignment allowance may change without changing the
+                # local conversation policy revision. Clear stale denial only
+                # after authoritative admission, preserving limits and usage.
+                self.last_denial = None
+                self.controls.persist(task_only=True)
         if not result['allowed']:
             self.last_denial = {**result, 'at': time.time(), 'callId': row['id']}
             self.controls.persist(task_only=True)

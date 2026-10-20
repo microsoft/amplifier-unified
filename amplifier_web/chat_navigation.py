@@ -213,6 +213,20 @@ def initialize(state):
 
 
 def view_patch(patch):
+    if 'navMode' in patch and patch['navMode'] not in ('browse', 'status'):
+        raise ValueError('Choose Browse or Status.')
+    for key in ('navStatusCollapsed', 'navStatusExpanded'):
+        if key in patch:
+            value = patch[key]
+            if not isinstance(value, list) or len(value) > 4 or any(
+                    item not in ('attention', 'unread', 'working', 'idle') for item in value):
+                raise ValueError('Choose valid sidebar status groups.')
+    if 'navStatusPages' in patch:
+        value = patch['navStatusPages']
+        if not isinstance(value, dict) or any(
+                key not in ('attention', 'unread', 'working', 'idle')
+                or type(index) is not int or not 0 <= index <= 1_000_000 for key, index in value.items()):
+            raise ValueError('Choose valid sidebar page indexes.')
     # Browsing is client presentation, never a change to the active chat/folder.
     if 'workSurface' in patch and patch['workSurface'] not in ('chat', 'workspace', 'workspaces', 'chats', 'home'):
         raise ValueError('Choose home, chat, workspace, workspaces or chats.')

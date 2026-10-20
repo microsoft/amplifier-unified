@@ -60,7 +60,7 @@ try{
  await page.getByLabel('Search your work',{exact:true}).fill('');
  await expect.poll(async()=>(await state()).view.workHomeQuery).toBe('');await ready();
  await page.getByLabel('Search your work',{exact:true}).fill('launch');
- await page.getByRole('button',{name:'New chat',exact:true}).click();await expect(composer).toBeVisible();
+ await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();await expect(composer).toBeVisible();
  await expect.poll(async()=>(await state()).view.workHomeQuery).toBe('launch');
  assert.equal((await state()).view.newSessionDraft.workspace,projects[0].path);
  assert.equal(draftRequests.at(-1).workspaceId,projects[0].id);
@@ -86,8 +86,8 @@ try{
    assert.equal(snapshot.workHome,undefined,'Changed-query rows are not current coverage');
    assert.equal(snapshot.workHomeContext.workspace.id,projects[0].id);
    assert.equal(await projectButton.evaluate(node=>node.isConnected),true,'Project button stays mounted');
-   await expect(page.getByRole('button',{name:'New chat',exact:true})).toBeEnabled();
-   await page.getByRole('button',{name:destination,exact:true}).click();
+   await expect(page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true})).toBeEnabled();
+   await page.locator('.a-adaptive-home').getByRole('button',{name:destination,exact:true}).click();
    if(destination==='New chat'){
     await expect(composer).toBeVisible();assert.equal(draftRequests.at(-1).workspaceId,projects[0].id);
     assert.equal((await state()).view.newSessionDraft.workspace,projects[0].path);
@@ -113,7 +113,7 @@ try{
  const before=await state(),beforeRuntime=await (await page.request.get(url+'/fixture')).json();
  try{
   const refusal=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/actions'&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='session.draft');
-  await page.getByRole('button',{name:'New chat',exact:true}).click();await seen;
+  await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();await seen;
   assert.deepEqual(draftRequests.at(-1),{workspaceId:projects[0].id,workspace:projects[0].path,location:{kind:'workspace'}});
   await moveProject(replacement);releaseCommand();
   const response=await refusal;assert.equal(response.status(),409);assert.match(await response.text(),/unavailable/);
@@ -155,13 +155,13 @@ try{
  await expect(page.locator('.a-work-card h3')).toHaveText('Other project chat');
  await act('view.update',{patch:{workHomeScope:'managed'}});await ready();
  await expect(page.locator('.a-work-card h3')).toHaveText('Other project chat');
- await page.getByRole('button',{name:'New chat',exact:true}).click();await expect(composer).toBeVisible();
+ await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();await expect(composer).toBeVisible();
  assert.equal((await state()).view.newSessionDraft.workspace,projects[1].path);await home();
  await pin(projects[0].id);await ready();await expect(page.locator('.a-work-card h3')).toHaveText('Home launch notes');
  await pin('home-missing-project');
  await expect(page.getByRole('alert')).toContainText('This project is unavailable.');
  await expect(page.getByRole('button',{name:'Show all work',exact:true})).toHaveCount(0);
- await expect(page.getByRole('button',{name:'New chat',exact:true})).toBeDisabled();
+ await expect(page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true})).toBeDisabled();
  await expect(page.locator('.a-adaptive-home')).not.toContainText('Loading your work…');
  check('Pinned project scopes settle, constrain creation, switch safely, and never widen when unavailable');
  await pin(null);await page.getByLabel('Work scope',{exact:true}).selectOption('all');await ready();
