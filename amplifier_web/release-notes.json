@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.188",
+      "title": "Browse work by status and recover coordinated chats",
+      "changes": [
+        "Switch the sidebar between Browse and Status independently of Home. New chat and Search remain available in both modes, with the sidebar toggle always in the header.",
+        "Read attention, ready and working chats in clearer Brief and Studio layouts while preserving project scope, Focus position, drafts and Canvas.",
+        "Connect computer-use approval choices to the current human conversation, preserving guidance and child-chat context.",
+        "Resume an assignment after an uncertain Stop only when native ownership proves its workers have settled. A fresh human request can recover a settled failed member without replaying old inputs or resetting limits and usage.",
+        "Apply increased assignment allowances to fresh authorized recovery inputs while continuing to enforce conversation and assignment limits."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.187",
       "title": "Move through Focus and keep Home in context",
       "changes": [
