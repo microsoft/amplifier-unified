@@ -130,7 +130,7 @@ try{
  await execution.getByLabel('Small Python check: Memory (MiB)',{exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/execution-profile-browser.png',fullPage:true});
  // Mounted remote-target setup is a bounded protocol fixture, not a host install.
- let targets={revision:'r1',runners:[],scope:'Approved machines, shared per account.'},targetWrites=0,refreshes=0;
+ let targets={revision:'r1',runners:[],scope:'Approved machines, shared per account.'},targetWrites=0,refreshes=0,policyWrites=0,losePolicyReply=false;
  const backendDefaults={maxRunning:15,maxInstances:256,minFreeBytes:10*1024**3};
  let targetPolicy={revision:'p1',limits:{},defaults:backendDefaults,effective:backendDefaults,scope:'This target account and Incus project.',behavior:'Lowering limits keeps active checks running.'};
  await page.route('**/api/actions',async route=>{
@@ -146,7 +146,13 @@ try{
   else if(action==='testing.runners.enable'){targets={...targets,revision:'r3',runners:targets.runners.map(item=>({...item,enabled:args.enabled}))};result=targets}
   else if(action==='testing.runners.machine.read')result={supported:false,reason:'Machine observation fixture'};
   else if(action==='testing.runners.capacity.read')result=targetPolicy;
-  else if(action==='testing.runners.capacity.save'){targetPolicy={...targetPolicy,revision:'p2',limits:args.limits,effective:{...backendDefaults,...args.limits}};result=targetPolicy}
+  else if(action==='testing.runners.capacity.save'){
+   policyWrites++;
+   if(args.expectedRevision!==targetPolicy.revision){await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:false,error:'Test environment limits changed. Refresh before saving.'})});return}
+   targetPolicy={...targetPolicy,revision:'p'+(Number(targetPolicy.revision.slice(1))+1),limits:args.limits,effective:{...backendDefaults,...args.limits}};
+   if(losePolicyReply){losePolicyReply=false;await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:false,error:'Save acknowledgement unavailable'})});return}
+   result=targetPolicy;
+  }
   else throw Error('Unexpected target action '+action);
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:true,result})});
  });
@@ -164,14 +170,37 @@ try{
  await targetsRegion.getByText('Office testing machine · Available for new checks',{exact:true}).click();
  const targetLimits=targetsRegion.getByRole('region',{name:'Office testing machine environment limits'});
  await targetLimits.getByText('Advanced environment limits',{exact:true}).click();
+ await targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true}).fill('13');
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();
+ await expect(page.getByRole('alertdialog')).toContainText('Office testing machine environment limits');
+ await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await expect(targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true})).toHaveValue('13');
+ losePolicyReply=true;
+ await targetLimits.getByRole('button',{name:'Save environment limits',exact:true}).click();
+ await expect(targetLimits.getByRole('status')).toContainText('save was not repeated');
+ assert.equal(policyWrites,1);assert.equal(targetPolicy.limits.maxRunning,13);
+ await targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true}).fill('17');
+ targetPolicy={...targetPolicy,revision:'p3',limits:{maxRunning:15},effective:{...backendDefaults,maxRunning:15}};
+ await targetLimits.getByRole('button',{name:'Save environment limits',exact:true}).click();
+ await expect(targetLimits.getByRole('alert')).toContainText('Your edits are kept');
+ await expect(targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true})).toHaveValue('17');
+ assert.equal(targetPolicy.limits.maxRunning,15);
+ await targetLimits.getByRole('button',{name:'Discard environment edits and refresh',exact:true}).click();
+ await expect(targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true})).toHaveValue('15');
  await targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true}).fill('0');
  await targetLimits.getByRole('button',{name:'Save environment limits',exact:true}).click();
  await expect(targetLimits.getByRole('status')).toContainText('Environment limits saved');
  assert.equal(targetPolicy.effective.maxRunning,0);
- await targetsRegion.getByRole('button',{name:'Refresh test controller',exact:true}).click();
- await expect(targetsRegion.getByRole('status').first()).toContainText('refreshed for future checks');assert.equal(refreshes,1);
  await targetsRegion.getByRole('button',{name:'Pause new checks',exact:true}).click();
  await expect(targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true})).toBeVisible();
+ await targetsRegion.getByRole('button',{name:'Refresh test controller',exact:true}).click();
+ await expect(targetsRegion.getByRole('status').first()).toContainText('refreshed for future checks');assert.equal(refreshes,1);
+ assert.equal(targets.runners[0].enabled,false);
+ await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'testing');
+ await expect(targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true})).toBeVisible();
+ await targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true}).click();
+ await targetLimits.getByText('Advanced environment limits',{exact:true}).click();
+ await expect(targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true})).toHaveValue('0');
  await targetsRegion.scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/registered-test-machines-browser.png',fullPage:true});
 
