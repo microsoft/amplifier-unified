@@ -117,12 +117,22 @@ the release; this documentation review does not claim to rerun them.
 | Labels, hierarchy, and project terminology are clear to the designer using familiar work | Can't check | The planned human review has not occurred. Interaction tests cannot settle comprehension or taste. |
 | Full assistive-technology usability and target-device comfort | Can't check | Keyboard, narrow-layout, and forced-color fixtures cover only part of this. Record actual device and assistive-technology review separately. |
 
-The October 20 deployed-use feedback reports three remaining defects: an unread
-chat still offers Mark unread; routine refresh text shifts Home/sidebar content;
-Status rows ignore the display preferences used in Browse. These are **Broken**
-against the accepted promises until the corrected build is qualified. Preserve
-the earlier synthetic results as bounded observations rather than calling the
-whole experience conformant.
+The October 20 deployed-use feedback identified three **Broken** promises in the
+reported build. The correction is **Kept for the synthetic cases below**; repeat
+the designer's journeys on the adopted build before concluding that it works
+well with familiar live work.
+
+| Correction | Qualification and limit |
+| --- | --- |
+| Unread chats offer Mark read; read chats offer Mark unread in both sidebar views. Home also acknowledges manual unread marks. | [Read-state browser checks](../../frontend/tests/reviewed-error-browser.mjs) exercise both directions and preserve approvals, saved errors, messages, and runtime inactivity. [Receipt checks](../../tests/test_shell_modules.py) cover later Status pages, scope rejection, and a newer response surviving an older acknowledgement. |
+| Background refresh keeps useful content silent and stable. | [Delayed-query browser checks](../../frontend/tests/scoped-navigation-browser.mjs) hold a real query and compare row geometry, then verify failure and Retry. [Presentation checks](../../frontend/tests/navigation-resource-status.test.mjs) retain initial loading and errors. Routine model-list and chat-reference refresh text is also removed; actions and failures keep their feedback. |
+| Browse and Status use the same chat rows and display preferences. | [Home/sidebar browser checks](../../frontend/tests/home-sidebar-browser.mjs) compare row height, status, location text, and the folder-path preference, alongside narrow-screen navigation. Everything detail reveals context consistently; pinning retains its existing reorder controls. |
+
+These checks use an isolated owned development instance, synthetic histories and
+the built web client. They introduce no model calls or new session lifecycle.
+They are not native-device, live-provider, assistive-technology, or human taste
+acceptance. The earlier release observations remain evidence for their original
+builds, rather than a declaration that the whole experience conforms.
 
 A failed source check, unperformed journey, or subjective disagreement must keep
 its own result. “Can't check” is not a pass. “Pinned open” is appropriate only

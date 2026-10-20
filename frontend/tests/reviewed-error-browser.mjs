@@ -28,7 +28,11 @@ try{
  const query=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
  const recent=page.locator('[data-sidebar-section=recent]'),details=page.locator('.a-navigation-flyout');
  const row=id=>recent.locator('.a-nav-chat[data-session-id="'+id+'"]');
- await page.goto(`http://127.0.0.1:${port}`);await recent.locator('.a-nav-chat').first().waitFor();
+ await page.goto(`http://127.0.0.1:${port}`);
+ await page.locator('.a-home-filters').waitFor();
+ const openNavigation=page.getByRole('button',{name:'Open navigation',exact:true});
+ if(await openNavigation.isVisible())await openNavigation.click();
+ await recent.locator('.a-nav-chat').first().waitFor();
  const before=await info(),failed=before.state.sessions.find(row=>row.nativeIdentity==='alpha-197');
  const workspace=state=>state.workspaceExplorer.rows.find(row=>row.path===failed.workspace);
  assert.equal(workspace(before.state).activityCounts.attention,2);
@@ -64,8 +68,35 @@ try{
  assert.deepEqual(afterUnread.state.attention.items.filter(item=>item.sessionId!==completed.id),beforeUnread.state.attention.items.filter(item=>item.sessionId!==completed.id),'Mark unread changes only the intended conversation attention');
  assert.equal(afterUnread.state.selectedSessionId,beforeUnread.state.selectedSessionId);
  assert.deepEqual(afterUnread.state.sessions.find(row=>row.id===completed.id).messages,completed.messages);
+ // The same flyout now offers the inverse action for the actual unread state.
+ await row(completed.id).hover();await row(completed.id).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+ await expect(details.getByRole('button',{name:'Mark unread',exact:true})).toHaveCount(0);
+ await details.getByRole('button',{name:'Mark read',exact:true}).click();
+ await expect.poll(async()=>(await info()).state.attention.items.filter(item=>item.sessionId===completed.id).every(item=>item.read)).toBe(true);
+ await row(completed.id).hover();await row(completed.id).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+ await expect(details.getByRole('button',{name:'Mark unread',exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');
+ await page.getByRole('group',{name:'Sidebar view'}).getByRole('button',{name:'Status',exact:true}).click();
+ const moreSaved=page.getByRole('button',{name:'Show more pick up again chats',exact:true});
+ await moreSaved.click();
+ const statusRow=page.locator('.a-status-sidebar .a-nav-chat[data-session-id="'+completed.id+'"]');
+ await statusRow.hover();await statusRow.getByRole('button',{name:/Details and actions/}).click();
+ await details.getByRole('button',{name:'Mark unread',exact:true}).click();
+ const unreadRow=page.locator('[data-status-group=unread] .a-nav-chat[data-session-id="'+completed.id+'"]');
+ await expect(unreadRow).toBeVisible();
+ await expect(unreadRow.locator('.a-navigation-status')).toHaveAttribute('data-kind','unread');
+ await unreadRow.hover();await unreadRow.getByRole('button',{name:/Details and actions/}).click();
+ await expect(details.getByRole('button',{name:'Mark read',exact:true})).toBeVisible();
+ await expect(details.getByRole('button',{name:'Mark unread',exact:true})).toHaveCount(0);
+ await page.keyboard.press('Escape');
+ // Home uses the same receipts, including explicit manual unread marks.
+ await page.getByRole('group',{name:'Work view'}).getByRole('button',{name:'Brief',exact:true}).click();
+ const card=page.locator('.a-work-card[data-session-id="'+completed.id+'"]');
+ await card.getByRole('button',{name:/Mark response reviewed/}).click();
+ await expect.poll(async()=>(await info()).state.attention.items.filter(item=>item.sessionId===completed.id).every(item=>item.read)).toBe(true);
+ assert.deepEqual((await info()).state.sessions.find(row=>row.id===completed.id).messages,completed.messages);
  const final=await info();assert.deepEqual(final.runtimeStarts,[]);assert.deepEqual(final.runtimeSends,[]);assert.deepEqual(errors,[]);
- console.log('PASS: exact review clears chat/workspace markers, survives reload, retains errors and approvals, and starts no work.');
+ console.log('PASS: exact review clears chat/workspace markers, survives reload, retains errors/approvals; Browse and Status offer the current read action; Home clears manual unread; no work starts.');
 }finally{
  await browser?.close();
  if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}

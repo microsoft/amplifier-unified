@@ -444,10 +444,10 @@ class ShellModules:
             visible_ids.update(context_visible_ids)
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
-        error_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
+        read_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
                           for item in scoped.get('attention', {}).get('items', ()) if not _page_only
                           if item.get('sessionId') in visible_ids
-                          and item['id'] == 'session:' + item['sessionId']]
+                          and item['id'] in {prefix + item['sessionId'] for prefix in ('session:', 'completion:', 'unread:')}]
         activity_by_id = {}
         if not _page_only and visible_ids:
             from .attention import reviewed_session_errors
@@ -482,10 +482,7 @@ class ShellModules:
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error', 'issues', 'issueCount']},
                 'attention': {'sessions': {sid: scoped['attention'].get('sessions', {}).get(sid, 0) for sid in visible_ids},
-                              'items': error_receipts},
-                'workHomeAttention': [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
-                    for item in scoped.get('attention', {}).get('items', ())
-                    if item.get('sessionId') in visible_ids and item['id'] == 'completion:' + item['sessionId']],
+                              'items': read_receipts},
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
                 'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
 
@@ -667,12 +664,20 @@ class ShellModules:
         if args['action'] == 'attention.read':
             observed = args['args']
             ids, fingerprints = observed.get('ids'), observed.get('fingerprints')
-            visible = {item['id'] for item in self.navigation(client, instance)['attention']['items']}
+            identity = args['clientId']
+            if self.resources.registered(identity):
+                # Use the current bounded pages, including later Status pages.
+                # Rebuilding a full navigation snapshot can miss those rows.
+                envelope = self.resources.snapshot(identity) or {}
+                context = envelope.get('instances', {}).get(instance['id'], {}).get('resources', {}).get('context', {}).get('value', {})
+            else:
+                context = self.navigation(client, instance, identity=identity)
+            visible = {item['id'] for item in context.get('attention', {}).get('items', ())}
             if (set(observed) != {'ids', 'fingerprints'} or not isinstance(ids, list) or not ids
                     or any(not isinstance(sid, str) or sid not in visible for sid in ids)
                     or not isinstance(fingerprints, dict)
                     or any(not isinstance(fingerprints.get(sid), str) or not fingerprints[sid] for sid in ids)):
-                fail('Only observed conversation errors in this module can be reviewed.', 403)
+                fail('Only observed conversation notices in this module can be reviewed.', 403)
 
     def command_view(self, client, instance, args, identity):
         if args['action'] in {'workspace.select', 'workspace.create', 'workspace.add'} and instance['package'] == 'builtin.workspaces':

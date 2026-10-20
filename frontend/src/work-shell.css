@@ -15,8 +15,6 @@
 #amp-one.a-approachable-shell .a-sidebar-section-heading>button{font-size:var(--a-text-xs,12px);justify-content:flex-start;font-weight:550}
 #amp-one.a-approachable-shell .a-nav-chat{min-height:40px;margin:1px 0;border-radius:9px}
 #amp-one.a-approachable-shell .a-nav-chat-select{min-height:40px;padding:8px 7px;gap:9px}
-#amp-one.a-approachable-shell .a-status-sidebar .a-nav-chat:not(.a-nav-chat-rename){height:56px;min-height:56px;max-height:none}
-#amp-one.a-approachable-shell .a-status-sidebar .a-nav-chat-label>small{display:block;font-size:var(--a-text-xs,12px);line-height:1.4;color:var(--a-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #amp-one.a-approachable-shell .a-status-sidebar .a-nav-pagination{padding:5px 10px}
 #amp-one.a-approachable-shell .a-status-sidebar .a-sidebar-section-heading small{font-variant-numeric:tabular-nums}
 #amp-one.a-approachable-shell .a-quiet-sidebar .a-nav-chat-label>small,#amp-one.a-approachable-shell .a-quiet-sidebar .a-activity-time{display:none}
@@ -24,7 +22,7 @@
 #amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true] .a-workspace-select{padding:9px 8px;min-height:40px;gap:10px}
 #amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true] .a-workspace-result-path,#amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true] .a-workspace-count{display:none}
 #amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true] .a-workspace-label{font-size:14px}
-#amp-one.a-approachable-shell[data-interface-detail=full] .a-workspace-explorer[data-compact=true] .a-workspace-result-path{display:block}
+#amp-one.a-approachable-shell[data-interface-detail=detailed] .a-workspace-explorer[data-compact=true] .a-workspace-result-path{display:block}
 #amp-one.a-approachable-shell .a-sidebar-all{font-size:13px;margin:7px 9px;padding:4px 0;color:var(--a-muted)}
 #amp-one.a-approachable-shell .a-recent-controls{display:flex;flex-direction:column;align-items:flex-start;padding:0 3px}
 #amp-one.a-approachable-shell .a-recent-controls>small{font-size:12px;color:var(--a-muted);margin:4px 9px}
@@ -33,7 +31,7 @@
 @media(pointer:coarse){#amp-one.a-approachable-shell .a-recent-control{min-height:44px;min-width:44px}}
 #amp-one.a-approachable-shell .a-nav-empty{font-size:13px;line-height:1.6;margin:8px}
 #amp-one.a-approachable-shell .a-shell-recovery{margin:16px 7px 0;font-size:12px}
-#amp-one.a-approachable-shell:not([data-interface-detail=full]):not([data-interface-detail=detailed]) .a-shell-recovery{display:none}
+#amp-one.a-approachable-shell:not([data-interface-detail=detailed]):not([data-interface-detail=detailed]) .a-shell-recovery{display:none}
 #amp-one.a-approachable-shell .a-work-footer{margin-top:auto;border-top:1px solid var(--a-line);display:flex;align-items:center;gap:9px;min-height:48px;flex-shrink:0;padding:0 5px;font-size:12px;color:var(--a-muted)}
 #amp-one.a-approachable-shell .a-work-footer>.a-work-menu{margin-left:auto}
 #amp-one.a-approachable-shell .a-conversation{position:relative;justify-content:flex-start;box-shadow:none}
@@ -147,7 +145,7 @@
 #amp-one.a-approachable-shell .a-pinned-chats .a-nav-chat-select,
 #amp-one.a-approachable-shell .a-pinned-drag .a-nav-chat-select{height:100%;min-height:0;padding:7px 8px}
 #amp-one.a-approachable-shell .a-nav-slot .a-workspace-row[data-qualified=true],
-#amp-one.a-approachable-shell[data-interface-detail=full] .a-nav-slot .a-workspace-row{height:54px;min-height:54px;max-height:54px}
+#amp-one.a-approachable-shell[data-interface-detail=detailed] .a-nav-slot .a-workspace-row{height:54px;min-height:54px;max-height:54px}
 #amp-one.a-approachable-shell[data-density=compact]{--a-work-row-height:36px}
 #amp-one.a-approachable-shell .a-nav-rail .a-nav-empty{font-size:12px;line-height:1.55;margin:7px 9px 10px;max-width:230px}
 #amp-one.a-approachable-shell .a-work-browser .a-nav-empty{padding:28px 0;margin:0;color:var(--a-muted)}
@@ -209,8 +207,6 @@
 #amp-one.a-approachable-shell .a-work-live-controls .a-call-strip{flex-wrap:wrap}
 #amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true][data-show-paths=true] .a-workspace-result-path{display:block;font-size:11px}
 #amp-one.a-approachable-shell .a-nav-slot .a-workspace-explorer[data-show-paths=true] .a-workspace-row{height:54px;min-height:54px;max-height:54px}
-#amp-one.a-approachable-shell .a-nav-slot .a-status-sidebar .a-nav-chat:not(.a-nav-chat-rename){height:56px;min-height:56px;max-height:none}
-#amp-one.a-approachable-shell .a-quiet-sidebar.a-status-sidebar .a-nav-chat-label>small{display:block}
 
 /* The disclosure must override themes that truncate the compact location line. */
 #amp-one.a-approachable-shell details.a-canvas-file-path{white-space:normal;overflow:visible;border:0;padding:4px 0}
@@ -277,3 +273,12 @@
  #amp-one.a-chat-shell .a-compose-bottom>.a-dictation>button{width:36px;min-width:36px;height:40px}
  #amp-one.a-chat-shell .a-compose-bottom>.a-send{width:40px;height:40px;flex-shrink:0}
 }
+
+/* Both sidebar modes and pin drag previews honor the same metadata preference. */
+#amp-one.a-approachable-shell .a-nav-chat[data-show-paths=true] .a-nav-chat-label>small,
+#amp-one.a-approachable-shell .a-workspace-row[data-show-paths=true] .a-workspace-result-path,
+#amp-one.a-approachable-shell[data-interface-detail=detailed] .a-quiet-sidebar .a-nav-chat-label>small,
+#amp-one.a-approachable-shell[data-interface-detail=detailed] :is(.a-pinned-chats,.a-pinned-drag) .a-nav-chat-label>small{display:block}
+#amp-one.a-approachable-shell :is(.a-nav-slot,.a-pinned-chats,.a-pinned-drag) .a-nav-chat[data-show-paths=true],
+#amp-one.a-approachable-shell :is(.a-nav-slot,.a-pinned-chats,.a-pinned-drag) .a-workspace-row[data-show-paths=true],
+#amp-one.a-approachable-shell[data-interface-detail=detailed] :is(.a-nav-slot,.a-pinned-chats,.a-pinned-drag) .a-nav-chat{height:54px;min-height:54px;max-height:54px}

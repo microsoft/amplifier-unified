@@ -5,7 +5,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 import {chatPage} from '../src/chat-navigation.js';
 const vite=await createServer({cacheDir:'.vite-navigation-query-failure',server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {ChatList,ChatSearch}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
+const {ChatList,ChatSearch,ChatDetails}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {NavigationResourceStatus}=await vite.ssrLoadModule('/src/shell/navigation-resource-status.jsx');
 test.after(()=>vite.close());
 const fixture=(section,status)=>({library:{bounded:true},view:{navChatScope:'all'},selectedSessionId:'selected',
@@ -40,4 +40,16 @@ test('a different resource failure cannot mark the current query unavailable',()
  const state=fixture('workspace','retry');
  assert.equal(chatPage(state,undefined,{section:'search'}).pending,true);
  assert.equal(chatPage(state,undefined,{section:'search'}).unavailable,undefined);
+});
+test('retained rows never offer the inverse read action while fresh receipts are unavailable',()=>{
+ for(const kind of ['unread','idle']){
+  const state={library:{bounded:true},attention:{sessions:{},items:[]}};
+  const html=renderToStaticMarkup(React.createElement(ChatDetails,{
+   chat:{id:'retained',title:'Retained chat',activity:{kind,label:kind==='unread'?'New response':'Idle'}},
+   model:{state,draft:{},act:()=>{},choose:()=>{},setDraft:()=>{}},now:0,close:()=>{}
+  }));
+  const action=kind==='unread'?'attention.read':'session.markUnread';
+  assert.match(html,new RegExp(`disabled="" data-action="${action}"[^>]*>Mark ${kind==='unread'?'read':'unread'}</button>`));
+  if(kind==='unread')assert.doesNotMatch(html,/>Mark unread</);
+ }
 });

@@ -28,6 +28,9 @@ export function AttentionReview({state,act,page,items:provided,showItems=false})
 }
 
 export const readItems=(act,items)=>act('attention.read',{ids:items.map(i=>i.id),fingerprints:Object.fromEntries(items.map(i=>[i.id,i.fingerprint]))});
+// Read state is separate from errors, approvals and unanswered questions.
+export const unreadChatItems=(state,id)=>(state.attention?.items||[]).filter(item=>
+ item.sessionId===id&&!item.read&&(item.id==='completion:'+id||item.id==='unread:'+id));
 // Capture only the items the user saw; arrivals during a bulk review stay unread.
 export async function reviewItems(act,items){
  for(let offset=0;offset<items.length;offset+=500)await readItems(act,items.slice(offset,offset+500));

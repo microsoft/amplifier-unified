@@ -6,7 +6,7 @@ import {NavigationResourceStatus} from './shell/navigation-resource-status';
 import {hasNavigationResource} from './shell/navigation-demand';
 import {useChatTitle} from './use-chat-title';
 import {useActivityClock} from './navigation-details';
-import {readItems} from './attention';
+import {readItems,unreadChatItems} from './attention';
 import {relativeActivity,activityFor} from './navigation-presentation';
 import {startingWorkView,currentWorkPage,currentWorkContext,workViews,workReadingKey,rememberHomeScroll,readFocusCursor,saveFocusCursor,focusPosition,stepFocus} from './adaptive-work.js';
 import './adaptive-work.css';
@@ -21,14 +21,14 @@ export function WorkViewSwitcher({value,onChange,quiet=false}){
 function WorkCard({chat,kind,state,act,hero=false,compact=false}){
  const title=useChatTitle(chat).title,activity=activityFor(chat,state),now=useActivityClock();
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
- const receipt=(state.attention?.items||[]).find(item=>item.sessionId===chat.id&&!item.read&&item.id==='completion:'+chat.id);
+ const receipts=unreadChatItems(state,chat.id);
  const at=chat.recentActivityAt||chat.navigationActivityAt||chat.createdAt,time=relativeActivity(at,now);
  const verb=workAction(kind,activity);
- async function review(){if(!receipt||busy)return;setBusy(true);setError('');try{await readItems(act,[receipt])}catch(error){setError(error.message)}finally{setBusy(false)}}
+ async function review(){if(!receipts.length||busy)return;setBusy(true);setError('');try{await readItems(act,receipts)}catch(error){setError(error.message)}finally{setBusy(false)}}
  return <article className={'a-work-card'+(hero?' is-hero':'')+(compact?' is-compact':'')} data-session-id={chat.id} data-kind={kind}>
   <div className="a-work-card-meta"><span>{chat.location?.kind==='managed'?'On its own':chat.workspaceName||'Project'}</span>{at>0&&<time dateTime={new Date(at*1000).toISOString()} title={'Last activity: '+time.long}>Updated {time.short==='now'?'just now':time.short+' ago'}</time>}</div>
   <button className="a-work-card-open" type="button" onClick={()=>act('session.select',{id:chat.id})} data-action="session.select"><h3>{title}</h3>{chat.description&&<p>{chat.description}</p>}<span className={'a-work-card-cta'+(hero?' a-primary':'')}>{verb}<ArrowRight size={16}/></span></button>
-  <div className="a-work-card-foot"><span className="a-work-status" data-kind={activity.kind}><i/>{activity.kind==='idle'?'Saved conversation':activity.label}</span>{receipt&&<button type="button" disabled={busy} aria-label={'Mark response reviewed: '+title} onClick={review}>{busy?'Saving…':'Mark read'}<CheckCircle2 size={14}/></button>}</div>
+  <div className="a-work-card-foot"><span className="a-work-status" data-kind={activity.kind}><i/>{activity.kind==='idle'?'Saved conversation':activity.label}</span>{receipts.length>0&&<button type="button" disabled={busy} aria-label={'Mark response reviewed: '+title} onClick={review}>{busy?'Saving…':'Mark read'}<CheckCircle2 size={14}/></button>}</div>
   {error&&<p role="alert">{error}</p>}
  </article>;
 }
@@ -52,7 +52,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  const changeSearch=value=>{setSearch(value);pendingSearch.current=value;clearTimeout(timer.current);timer.current=setTimeout(flushSearch,220)};
  const closeSettings=()=>{setSettingsOpen(false);settingsButton.current?.focus()};
  const pages=ready?value.groups:{},total=Object.values(pages).reduce((sum,page)=>sum+page.total,0);
- const stateForCards={...model.state,attention:{...model.state.attention,items:model.state.workHomeAttention||[]}};
+ const stateForCards=model.state;
  const projects=[...new Map([...(model.state.workspaceShortcuts||[]).map(row=>({...row,id:row.workspaceId||row.id,name:row.customName||row.name})),...(workspace?[workspace]:[])].filter(row=>row.id&&row.name).map(row=>[row.id,row])).values()];
  const setFilter=key=>patch({workHomeFilter:key});
  // Search/page loading must not disable a click as the search field blurs.
