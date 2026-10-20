@@ -1164,8 +1164,9 @@ class RuntimeManager:
             finally:
                 await asyncio.to_thread(held.release)
 
-    async def approval(self, session_id, approval_id, decision):
-        return await self._request(session_id, "approval", approval_id=approval_id, decision=decision)
+    async def approval(self, session_id, approval_id, decision, comment=None):
+        return await self._request(session_id, "approval", approval_id=approval_id, decision=decision,
+                                   **({"comment": comment} if comment else {}))
 
     async def scheduled_input(self, session_id, arguments, guard):
         """Internal authorized schedule handoff using ordinary worker admission."""

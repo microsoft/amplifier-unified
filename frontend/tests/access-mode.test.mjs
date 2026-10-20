@@ -36,3 +36,15 @@ test('late previous-chat preview cannot replace current-chat mode',async()=>{
  assert.equal(root.root.findByType('strong').children[0],'Full access');
  await renderAct(async()=>root.unmount());
 });
+test('global settings works with no chat and saves app scope explicitly',async()=>{
+ const calls=[];let root;
+ const act=async(action,args)=>{calls.push([action,args]);return {accepted:true,result:{mode:action==='access.set'?'full':'ask',source:'app',revision:'global-rev',overrides:{app:{mode:action==='access.set'?'full':'inherit'}}}}};
+ await renderAct(async()=>{root=create(React.createElement(AccessMode,{globalOnly:true,act}))});
+ assert.deepEqual(calls[0],['access.get',{scope:'app'}]);
+ assert.equal(root.root.findAllByProps({'aria-label':'Access scope'}).length,0);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Access mode'}).props.onChange({target:{value:'full'}}));
+ await renderAct(async()=>button(root,'Save access preference').props.onClick());
+ assert.deepEqual(calls[1],['access.set',{scope:'app',mode:'full',expectedRevision:'global-rev'}]);
+ assert.equal(root.root.findByType('strong').children[0],'Full access');
+ await renderAct(async()=>root.unmount());
+});

@@ -37,11 +37,14 @@ same job, and cleanup waits for a confirmed terminal result. The manual execute
 action retains its bounded synchronous semantics. See the
 [managed runner contract](managed-test-runner.md) and [queued checks](../QUEUED-TESTS.md).
 
-Agents need an explicit, session-scoped `test_environments` capability grant,
-their current root execution binding, and an unblocked task assignment. A peer
-cannot borrow that authority. A direct user action authorizes that action through
-the same host adapter. Approval can be revoked while an operation waits; the
-adapter rechecks before the external effect begins.
+Routine testing in an already configured managed runner is authorized workspace
+work. Snapshot, locked preparation, execution, evidence export and owned cleanup
+do not require a separate `test_environments` approval, including in Ask when
+needed mode. Agents still need their current root execution binding and an
+unblocked task assignment. The adapter rechecks Stop, placement, owner and backend
+identity before effects. Host setup remains a separate `test_host_setup` grant.
+Old test-only capability requests no longer create approval cards; stale cards
+are retired without running their operations.
 
 The action interface and durable ownership are independent of the DTU library.
 The initial backend boundary is a host-owned `prepare/start/read/execute/stop/remove`

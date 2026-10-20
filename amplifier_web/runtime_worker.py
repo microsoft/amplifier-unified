@@ -37,6 +37,7 @@ class Worker:
     def __init__(self):
         self.session = self.runtime = self.execution = None
         self.approvals = {}
+        self.approval_contexts = {}
         self.operation_ids = set()
         self.operation_controls = 0
         self.stop_revision = 0
@@ -83,6 +84,9 @@ class Worker:
         future = asyncio.get_running_loop().create_future()
         options = options or ["allow", "deny"]
         self.approvals[identity] = (future, options)
+        from amplifier_web.host.approvals import REQUEST_CONTEXT
+        if REQUEST_CONTEXT.get() is not None:
+            self.approval_contexts[identity] = REQUEST_CONTEXT.get()
         publish({"type": "approval.requested", "id": identity, "prompt": prompt, "options": options})
         try:
             decision = await future
@@ -93,6 +97,7 @@ class Worker:
             raise
         finally:
             self.approvals.pop(identity, None)
+            self.approval_contexts.pop(identity, None)
 
     async def bridge(self, operation, args):
         timeout = 60
@@ -979,8 +984,24 @@ class Worker:
                 future, options = self.approvals[data["approval_id"]]
                 if future.done() or data["decision"] not in options:
                     raise ValueError("Approval expired or decision is not offered")
-                future.set_result(data["decision"])
-                result = {"accepted": True}
+                comment = data.get('comment', '')
+                if not isinstance(comment, str) or len(comment) > 4000:
+                    raise ValueError('Permission guidance must be at most 4000 characters.')
+                comment = comment.strip()
+                if comment:
+                    # Deliver the user's instruction before releasing the exact
+                    # paused tool. No new execution or permission is created.
+                    context = self.approval_contexts.get(data['approval_id'])
+                    if context is None and self.session:
+                        context = self.session.coordinator.get('context')
+                    if context is None:
+                        raise ValueError('Permission guidance could not reach the active conversation.')
+                    await context.add_message({'role':'user',
+                        'content':f'Permission {data["decision"]}:\n\n{comment}',
+                        'metadata':{'approval_id':data['approval_id'], 'source':'approval_feedback'}})
+                from amplifier_web.host.approvals import ApprovalDecision
+                future.set_result(ApprovalDecision(data["decision"], comment or None))
+                result = {"accepted": True, 'commentDelivered': bool(comment)}
             elif op == "coordination.approval":
                 prompt = data.get("prompt")
                 decision = None

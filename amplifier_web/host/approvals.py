@@ -2,13 +2,33 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
+
+REQUEST_CONTEXT = contextvars.ContextVar('approval_feedback_context', default=None)
+
+
+class ApprovalDecision(str):
+    """Keep string-returning approval consumers compatible while carrying a note."""
+    def __new__(cls, decision, comment=None):
+        value = super().__new__(cls, decision)
+        value.comment = comment
+        return value
 
 
 class Approvals:
     def __init__(self, runtime, ask):
         self.runtime = runtime
         self.ask = ask
+
+    def for_context(self, get_context):
+        async def ask(prompt, options):
+            token = REQUEST_CONTEXT.set(get_context())
+            try:
+                return await self.ask(prompt, options)
+            finally:
+                REQUEST_CONTEXT.reset(token)
+        return Approvals(self.runtime, ask)
 
     async def request_approval(self, prompt, options=None, timeout=None, default="deny"):
         provider_request = not isinstance(prompt, str)
@@ -38,5 +58,5 @@ class Approvals:
             raise ValueError("The approval response is not one of the offered choices")
         if provider_request:
             from amplifier_core import ApprovalResponse
-            return ApprovalResponse(approved=decision in {"allow", "approve"}, remember=False)
+            return ApprovalResponse(approved=decision in {"allow", "approve"}, reason=getattr(decision, "comment", None), remember=False)
         return decision
