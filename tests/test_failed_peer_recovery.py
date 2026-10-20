@@ -44,7 +44,7 @@ async def test_failed_member_gets_one_fresh_input_without_replaying_failure(app,
     assert len(app.runtime.inputs) == 1
 
 
-@pytest.mark.parametrize('block', ['native_owner', 'live_process', 'child', 'unterminated', 'missing_failure', 'safety_stop'])
+@pytest.mark.parametrize('block', ['native_owner', 'live_process', 'child', 'unterminated', 'missing_failure', 'safety_stop', 'computer_capture_stop'])
 async def test_failed_resume_requires_settlement_and_never_clears_safety_stop(app, block):
     source, target, human, runtime = await failed_member(app)
     held = None
@@ -55,7 +55,7 @@ async def test_failed_resume_requires_settlement_and_never_clears_safety_stop(ap
     elif block == 'child': target['workers'] = [{'status': 'running'}]
     elif block == 'unterminated': target['collaborationGeneration']['terminal'] = False
     elif block == 'missing_failure': target.pop('failure')
-    else: target['failure']['category'] = 'content_filter'
+    else: target['failure']['category'] = 'computer_capture_stop' if block == 'computer_capture_stop' else 'content_filter'
     try:
         with pytest.raises(AppError):
             await submit(app, source, target, human)

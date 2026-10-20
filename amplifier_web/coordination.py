@@ -177,6 +177,9 @@ class Coordination:
                         modes.append("steer")
                     item.update(canFollowup=permitted, canInterrupt=False,
                                 peerActions=[{"modes": modes}] if permitted else [])
+                # Discovery needs the interruption revision, not the full
+                # wait fingerprint's unbounded pending approval/question lists.
+                item["signal"] = {"interruptionRevision": item["signal"]["interruptionRevision"]}
                 items.append({key: value for key, value in item.items() if key not in {"results", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):
                     return {"items": items, "truncated": more if not include_workers else True,

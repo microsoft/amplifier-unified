@@ -59,6 +59,20 @@ async def worker(app, sid, wid="child-a", **patch):
     await app.on_runtime_event("worker.updated", {"sessionId": sid, "id": wid, "kind": "session", "parentSessionId": "native-parent", "runId": "run-1", "persistent": True, "status": "running", **patch})
 
 
+async def test_list_exposes_revision_without_unbounded_wait_signal(app):
+    caller, peer = app.state['sessions']
+    peer.update(interruptionRevision=7,
+                approvals=[{'id': f'approval-{i}', 'status': 'pending'} for i in range(100)],
+                questions=[{'id': f'question-{i}', 'status': 'pending'} for i in range(100)])
+    app._publish()
+    page = app.coordination.list({'sessionId': peer['id']}, caller['id'])
+    item = page['items'][0]
+    assert item['signal'] == {'interruptionRevision': 7}
+    assert item['approvalIds'] == [f'approval-{i}' for i in range(64)]
+    assert item['questionIds'] == [f'question-{i}' for i in range(64)]
+    assert not app.runtime.sent and not app.runtime.messages
+
+
 async def test_list_pages_dormant_peers_without_admission_or_body_reads(app, monkeypatch):
     caller, peer = app.state['sessions']
     peer_id = peer['id']
