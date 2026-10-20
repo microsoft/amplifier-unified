@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.184",
+      "title": "Keep waiting app updates current",
+      "changes": [
+        "Keep checking for newer app releases while an update waits for active work. Prepare and validate the newest known release before the ordinary idle restart.",
+        "Check for newer releases from Updates without replacing the prepared update. Offline checks keep that update available; failed preparation of a newer release requires an explicit retry.",
+        "Force restart confirmation names the exact prepared version and warns when a newer release is available."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.183",
       "title": "Resume stopped assignments and improve phone navigation",
       "changes": [

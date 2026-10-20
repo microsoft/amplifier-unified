@@ -6,6 +6,31 @@ Automatic update checks default to every **4 hours**. Under **Update preferences
 
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 
+A prepared app update that is waiting for active work continues checking the
+published release channel at the configured automatic-check interval. **Check
+for newer release** refreshes availability without installing or replacing the
+qualified candidate. The existing installation request then prepares a strictly
+newer published version in isolation; only successful validation replaces the
+waiting candidate. Before an ordinary idle restart, the updater refreshes again
+unless it has checked within the last minute. This final check belongs to the
+already requested installation, even if periodic checks are disabled.
+
+An unavailable release channel leaves the prepared update usable and shows a
+nonfatal warning. A newer candidate that fails validation retains the earlier
+receipt but stops automatic adoption until an explicit retry. Older metadata,
+a moved tag at the same version, or a changed commit without a newer version
+cannot replace a qualified candidate or discard a newer known target. The final
+activation lock also rejects an obsolete candidate if a concurrent check found
+a newer release while activation waited. These checks cannot guarantee knowledge
+of a release published after the last lookup. An already started replacement or
+restart, an explicit optional-feature selection, and a confirmed force restart
+retain their exact target; none is silently retargeted.
+
+Superseded app staging directories and their qualification receipts remain on
+disk. The existing automatic retention owner covers ecosystem generations, not
+app-installation generations; this path does not infer that an older app directory
+is safe to delete.
+
 When a qualified application update is waiting, expand **View active work** to
 find **Force restart…**. Its confirmation explains that running chats, workers,
 tools and calls will be interrupted, saved history and drafts are retained, and

@@ -185,6 +185,34 @@ async def test_late_old_metadata_does_not_discard_known_newer_target(waiting):
     assert w.state['pendingApp']['revision'] == 'b'*40
 
 
+async def test_newer_check_while_waiting_for_runtime_lock_prevents_old_activation(waiting):
+    w = waiting
+    w.service._session()['status'] = 'idle'
+    # The real lifecycle owner can be occupied independently of the update
+    # owner. A successful newer check in that interval must win before adoption.
+    async with w.service.runtime_lifecycle():
+        activation = asyncio.create_task(app_updates.activate(w.manager))
+        await asyncio.sleep(0)
+        await w.manager.check()
+        assert w.state['application']['revision'] == 'b'*40
+    await activation
+    assert not w.promotions and not w.restarts
+    assert w.state['pendingApp'] == w.original
+    await w.manager.tick()
+    assert w.promotions == ['b'*40] and len(w.restarts) == 1
+
+
+async def test_confirmed_force_restart_keeps_exact_reviewed_candidate(waiting):
+    from amplifier_web.update_restart import target
+    w = waiting
+    await w.manager.check()
+    confirmed = {**target(w.manager), 'confirm': True}
+    await w.manager.command('forceRestart', confirmed, 'force-reviewed')
+    assert w.promotions == ['a'*40]
+    assert w.restarts[0]['forceRestart']['revision'] == 'a'*40
+    assert len(w.installs) == 1
+
+
 @pytest.mark.parametrize('boundary', ['featureSelection', 'pendingRestart', 'pendingReplacement'])
 async def test_selected_features_and_started_handoffs_are_not_retargeted(waiting, boundary):
     w = waiting

@@ -339,7 +339,15 @@ async def _activate_serialized(manager, *, force=None):
             raise RestartRejected('An update operation is already running. Review it before confirming again.')
     if manager.lock.locked() or manager.closed:return
     async with manager.lock:
-        selected = (manager.service.state['updates'].get('pendingApp') or {}).get('featureSelection')
+        state = manager.service.state['updates']
+        pending = state.get('pendingApp') or {}
+        if force is None and supersedes_staged(state.get('application', {}), pending):
+            # A check may finish while activation waits for the runtime owner.
+            # Let the existing install intent qualify that newer target first.
+            # Explicit force confirmation remains bound to its exact candidate.
+            manager.wakeup.set()
+            return
+        selected = pending.get('featureSelection')
         try:await _activate(manager, force=force)
         except Exception as error:
             from .update_restart import RestartRejected

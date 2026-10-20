@@ -63,3 +63,25 @@ test('only matching asynchronous rejection unlocks a fresh explicit confirmation
  assert.equal(calls.length,1);
  await act(async()=>root.unmount());
 });
+
+test('newer availability does not relabel the exact prepared restart confirmation',async()=>{
+ let root;const calls=[];const dispatch=async(...args)=>{calls.push(args);return{accepted:true,requestId:'reviewed'}};
+ const newer={...updates,application:{latest:'v99.0.1'}};
+ await act(async()=>{root=create(React.createElement(UpdateRestart,{updates:newer,act:dispatch}))});
+ await act(async()=>button(root,'Force restart…').props.onClick());
+ assert.match(JSON.stringify(root.toJSON()),/prepared Amplifier 99\.0\.0/);
+ assert.match(JSON.stringify(root.toJSON()),/99\.0\.1/);
+ assert.match(JSON.stringify(root.toJSON()),/Cancel and let the newer release finish preparing/);
+ await act(async()=>button(root,'Interrupt work and restart').props.onClick());
+ assert.deepEqual(calls,[['updates.forceRestart',{...target,confirm:true}]]);
+ await act(async()=>root.unmount());
+
+ await act(async()=>{root=create(React.createElement(UpdateRestart,{updates:newer,act:dispatch}))});
+ await act(async()=>button(root,'Force restart…').props.onClick());
+ await act(async()=>root.update(React.createElement(UpdateRestart,{updates:{...newer,pendingApp:{...newer.pendingApp,latest:'v99.0.1'},forceRestartTarget:{...target,generation:'c'.repeat(32)}},act:dispatch})));
+ assert.match(JSON.stringify(root.toJSON()),/prepared Amplifier 99\.0\.0/);
+ assert.equal(button(root,'Interrupt work and restart').props.disabled,true);
+ await act(async()=>button(root,'Interrupt work and restart').props.onClick());
+ assert.equal(calls.length,1);
+ await act(async()=>root.unmount());
+});
