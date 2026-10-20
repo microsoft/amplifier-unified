@@ -317,7 +317,7 @@ def test_package_digest_changes_and_rejects_symlink(tmp_path):
         worker.package_digest(package)
 
 
-@pytest.mark.parametrize('version', ['0.4.0', '0.4.1', '0.4.2'])
+@pytest.mark.parametrize('version', ['0.4.0', '0.4.1', '0.4.2', '0.4.3'])
 @pytest.mark.parametrize('wrapper', [False, True])
 def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, monkeypatch, version, wrapper):
     package = tmp_path / 'installed'
@@ -449,6 +449,11 @@ def test_reconcile_query_failure_never_proves_absence(tmp_path, backend, monkeyp
 
 
 @pytest.mark.parametrize('version,state,request_matches,owner_matches,exists,settled', [
+    ('0.4.3', 'failed', True, True, False, True),
+    ('0.4.3', 'unknown', True, True, False, False),
+    ('0.4.3', 'failed', False, True, False, False),
+    ('0.4.3', 'failed', True, False, False, False),
+    ('0.4.3', 'failed', True, True, True, False),
     ('0.4.2', 'failed', True, True, False, True),
     ('0.4.2', 'unknown', True, True, False, False),
     ('0.4.2', 'failed', False, True, False, False),
@@ -481,9 +486,10 @@ def test_reconcile_terminal_creation_failure_requires_exact_generation_and_absen
     assert not any(args[0] in {'launch', 'stop', 'destroy'} for _, args in backend[0])
 
 
-def test_terminal_failed_creation_preserves_owned_instance_for_cleanup(tmp_path, backend):
+@pytest.mark.parametrize('version', ['0.4.2', '0.4.3'])
+def test_terminal_failed_creation_preserves_owned_instance_for_cleanup(tmp_path, backend, version):
     value = payload(tmp_path, 'remove')
-    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES['0.4.2']
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES[version]
     backend[1].update(launch='failed', instance='Stopped')
     result = worker.execute_call(value)
     assert result['ok'] and result['status'] == 'removed'
@@ -491,9 +497,10 @@ def test_terminal_failed_creation_preserves_owned_instance_for_cleanup(tmp_path,
     assert not any(args[0] == 'launch' for _, args in backend[0])
 
 
-def test_failed_creation_cannot_claim_peer_instance_for_cleanup(tmp_path, backend):
+@pytest.mark.parametrize('version', ['0.4.2', '0.4.3'])
+def test_failed_creation_cannot_claim_peer_instance_for_cleanup(tmp_path, backend, version):
     value = payload(tmp_path, 'remove')
-    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES['0.4.2']
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES[version]
     backend[1].update(launch='failed', instance='Stopped', owner='peer-root')
     result = worker.execute_call(value)
     assert not result['ok']
