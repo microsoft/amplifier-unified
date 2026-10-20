@@ -873,3 +873,8 @@ This uses synthetic state and controlled backends; it does not claim live runner
 or physical-device qualification. The original frozen inventory and 65 baseline
 scenarios are preserved. The new owner runs as an affected-flow smoke and in the
 post-release browser schedule, without an unrelated census gate.
+
+Global testing settings adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.

@@ -407,8 +407,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     attachment = 'tests/attachment-consumption-browser.mjs'
     assert attachment in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', attachment] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment}) == 141
-    assert len(readiness_scripts | extended_scripts) == 142
+    assert len((readiness_scripts | extended_scripts) - {attachment}) == 142
+    assert len(readiness_scripts | extended_scripts) == 143
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
