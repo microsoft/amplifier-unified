@@ -688,8 +688,7 @@ class Collaboration:
                     target.get("status") == "stopped" and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
-            if task.get("status") == "completed" or (
-                    task.get("status") in {"paused", "blocked"} and not resuming):
+            if task.get("status") in {"paused", "blocked", "completed"} and not resuming:
                 return "The recipient task is not active."
             task_binding = receipt
             if for_reply and 'replyTaskContinuationEpoch' in receipt:
@@ -1498,7 +1497,8 @@ class Collaboration:
                         'sourceMessageId': resume['sourceMessageId'],
                         'instruction': 'The host verified a fresh human resume request in the commissioning owner. '
                             'Reconcile completed effects first. You may resume your own paused task if its blocker '
-                            'is resolved; this does not answer questions, grant permissions or reset budgets.'}
+                            'is resolved. Keep completed objectives completed; only establish follow-on work '
+                            'within the human request. This does not answer questions, grant permissions or reset budgets.'}
                 if args.get('scheduleRepair'):
                     if origin != 'agent' or mode == 'notify':
                         self.error('Schedule repair requires a current human-rooted agent handoff using queue or steer.')

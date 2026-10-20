@@ -42,7 +42,7 @@ class Member(ScriptedProvider):
         return self.final('Previous results reconciled; saved unresolved questions remain unresolved.')
 
 
-@pytest.mark.parametrize("task_state", ["paused", "blocked"])
+@pytest.mark.parametrize("task_state", ["paused", "blocked", "completed"])
 async def test_human_instruction_in_manager_reaches_paused_member_native_input(tmp_path, monkeypatch, task_state):
     host = DirectNativeHost()
     monkeypatch.setattr(runtime_worker, 'publish', host.publish)
@@ -65,8 +65,11 @@ async def test_human_instruction_in_manager_reaches_paused_member_native_input(t
             member = await host.mount(target, child, paths)
             await member.controls.perform('task.create', {
                 'commandId': 'task', 'expectedRevision': 0, 'objective': 'Preserve the prior results', 'maxTurns': 3})
-            task = (await member.controls.perform('task.pause' if task_state == 'paused' else 'task.block', {
-                'commandId': 'pause', 'expectedRevision': 1, 'reason': 'Awaiting resume and reconciliation'}))['task']
+            operation = {'paused': 'task.pause', 'blocked': 'task.block', 'completed': 'task.complete'}[task_state]
+            task = (await member.controls.perform(operation, {
+                'commandId': 'previous-boundary', 'expectedRevision': 1,
+                **({'condition': 'Preserve the prior results', 'evidence': ['Saved result']}
+                   if task_state == 'completed' else {'reason': 'Awaiting resume and reconciliation'})}))['task']
             target.update(task=copy.deepcopy(task), status='stopped', interruptionRevision=1,
                           lastInterruption={'at': time.time()-1, 'origin': 'agent'})
             # Host stopped state and native saved goal are independently checked.

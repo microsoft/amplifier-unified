@@ -32,10 +32,11 @@ async def submit(app, source, target, human, identity='resume-member', **changes
                               {**arguments(target, human), **changes}, identity)
 
 
-async def test_resume_is_one_attributed_input_and_preserves_state(app):
+@pytest.mark.parametrize('task_status', ['blocked', 'paused', 'completed'])
+async def test_resume_is_one_attributed_input_and_preserves_state(app, task_status):
     source, target, human = await paused_member(app)
     # A blocked goal is not silently rewritten by delivery.
-    target['task'] = {'id': 'saved-task', 'revision': 7, 'status': 'blocked',
+    target['task'] = {'id': 'saved-task', 'revision': 7, 'status': task_status,
                       'maxTurns': 8, 'goalState': {'turns_used': 3},
                       'operationIds': ['unknown-effect']}
     before = copy.deepcopy(target['task'])
@@ -56,7 +57,7 @@ async def test_resume_is_one_attributed_input_and_preserves_state(app):
 
 
 @pytest.mark.parametrize('invalid', ['peer', 'old_input', 'wrong_revision', 'older_than_stop',
-    'question', 'schedule', 'nonowner', 'independent', 'detached', 'completed', 'error',
+    'question', 'schedule', 'nonowner', 'independent', 'detached', 'error',
     'stopping', 'notify', 'steer'])
 async def test_resume_requires_exact_human_and_commissioned_scope(app, invalid):
     source, target, human = await paused_member(app)
@@ -73,7 +74,6 @@ async def test_resume_requires_exact_human_and_commissioned_scope(app, invalid):
         elif invalid == 'independent': target['collaboration'].pop('assignmentId')
         else: value['members'][target['id']]['status'] = 'detached'
         app.assignments.save(value)
-    elif invalid == 'completed': target['task'] = {'id': 'done', 'revision': 3, 'status': 'completed'}
     elif invalid in {'error', 'stopping'}: target['status'] = invalid
     else: args['mode'] = invalid
     with pytest.raises(AppError):

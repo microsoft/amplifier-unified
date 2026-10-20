@@ -20,9 +20,6 @@ def prepare(app, source, target, value, lineage):
         raise ValueError('Stop changed or occurred after the human request; use a fresh human resume instruction.')
     if target.get('status') in {'error', 'interrupted', 'stopping'}:
         raise ValueError('Inspect the failed or unsettled recipient before requesting resume.')
-    task = target.get('task') or app.coordination.task(target['id'])
-    if task.get('status') == 'completed':
-        raise ValueError('A completed task cannot be resumed.')
     key = fingerprint([source['id'], human['id'], target['id'], target.get('interruptionRevision', 0)])
     previous = app.db.execute("""SELECT id FROM commands
         WHERE json_extract(receipt,'$.humanResume.authorizationKey')=?""", (key,)).fetchone()

@@ -350,7 +350,9 @@ The one-input exception permits a stopped recipient and a paused/blocked task to
 receive the reconciliation request. It does not rewrite the task or reset its
 saved goal progress. The recipient deliberately resumes its own task after
 checking its blockers. Capacity policy and saved turn budgets still apply.
-Independent chats, completed tasks and failed/unsettled runtimes are ineligible.
+Completed objectives stay completed: an explicit reconciliation/follow-on input
+can reach their chat without reactivating the old goal. Independent chats and
+failed/unsettled runtimes are ineligible.
 The retained receipt consumes this human/member/Stop authorization once, including
 unknown admission outcomes; old suppressed or uncertain requests are not replayed.
 Assignment admission itself still uses the existing explicit `assignment.resume`.

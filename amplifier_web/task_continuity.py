@@ -80,7 +80,9 @@ class TaskController:
         capacity = getattr(self.controls, "capacity", None)
         if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
             return False
-        allowed = {"active", "paused", "blocked"} if resume else {"active"}
+        # Explicit human-backed input can discuss a completed task too. This
+        # never reactivates that objective or enables its automatic continuation.
+        allowed = {"active", "paused", "blocked", "completed"} if resume else {"active"}
         return task is None or (task["status"] in allowed and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
     async def yield_to_peer(self, event, data):
