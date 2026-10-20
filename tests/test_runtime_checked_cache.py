@@ -139,12 +139,13 @@ async def test_shared_binding_moves_to_exact_checked_object_and_retains_old(cand
     await store.ensure(URL, c.new, existing=c.repo)
     shutil.rmtree(old)
     registry = c.stage / 'foundation/registry.json'
-    registry.write_text(json.dumps({'fixture': str(original)}))
+    registry.write_text(json.dumps({'bundles': {'fixture': {
+        'uri': 'git+' + URL + '@main', 'local_path': str(original)}}}))
     await alignment.align_checked_sources(c.manager, c.stage)
     rows = list((c.stage / 'foundation/cache/.source-bindings').glob('*.json'))
     assert len(rows) == 1
     assert json.loads(rows[0].read_text())['commit'] == c.new
-    assert json.loads(registry.read_text())['fixture'] == str(store.checkout(URL, c.new))
+    assert json.loads(registry.read_text())['bundles']['fixture']['local_path'] == str(store.checkout(URL, c.new))
     assert store.verify(URL, c.old) == original and (original / 'bundle.md').read_text() == 'old'
 
 
@@ -313,3 +314,153 @@ async def test_legacy_shared_and_explicit_local_paths_are_not_alignment_targets(
     assert git(other, 'rev-parse', 'HEAD') == c.old and not c.fetches
     assert (other / '.amplifier_cache_meta.json').read_bytes() == before
 
+
+
+async def test_review_registry_keeps_other_owners(candidate):
+    from amplifier_foundation.sources.shared import SharedSourceStore
+    c = candidate
+    root = c.copy(); store = SharedSourceStore(c.home / 'source-store')
+    original = await store.bind(c.stage / 'foundation/cache', URL, 'main', c.old, existing=root)
+    await store.bind(c.stage / 'foundation/cache', URL, c.old, c.old, existing=root)
+    await store.ensure(URL, c.new, existing=c.repo)
+    shutil.rmtree(root)
+    data = {'version': 1, 'bundles': {
+        'moving': {'uri': 'git+' + URL + '@main', 'local_path': str(original)},
+        'pinned': {'uri': 'git+' + URL + '@' + c.old, 'local_path': str(original)},
+        'local': {'uri': str(original / 'bundle.md'), 'local_path': str(original)},
+    }}
+    registry = c.stage / 'foundation/registry.json'; registry.write_text(json.dumps(data))
+    await alignment.align_checked_sources(c.manager, c.stage)
+    actual = json.loads(registry.read_text())
+    assert actual['bundles']['local'] == data['bundles']['local']
+    assert actual['bundles']['pinned'] == data['bundles']['pinned']
+    assert actual['bundles']['moving']['local_path'] == str(store.checkout(URL, c.new))
+
+
+async def test_review_external_git_worktree_is_preserved(candidate, tmp_path):
+    c = candidate; root = c.copy()
+    external = tmp_path / 'external'; external.mkdir()
+    (external / 'bundle.md').write_text('old')
+    git(root, 'config', 'core.worktree', str(external))
+    try:
+        await alignment.align_checked_sources(c.manager, c.stage)
+    except ValueError:
+        pass
+    assert (external / 'bundle.md').read_text() == 'old'
+    assert git(root, 'rev-parse', 'HEAD') == c.old
+
+
+@pytest.mark.parametrize('route', ['align', 'binding', 'adopt'])
+async def test_registry_retargeting_uses_authored_git_identity(candidate, route):
+    from amplifier_foundation.sources.shared import SharedSourceStore
+    from amplifier_web.update_sources import adopt_clean_sources, stage_binding
+    c = candidate; root = c.copy(); store = SharedSourceStore(c.home / 'source-store')
+    original = root
+    if route != 'adopt':
+        original = await store.bind(c.stage / 'foundation/cache', URL, 'main', c.old, existing=root)
+        await store.ensure(URL, c.new, existing=c.repo)
+        shutil.rmtree(root)
+    data = {'version': 1, 'bundles': {
+        'moving': {'uri': 'git+' + URL + '.git@refs/heads/main#subdirectory=sub',
+                   'local_path': str(original / 'sub'), 'note': str(original)},
+        'pinned': {'uri': 'git+' + URL + '@' + c.old, 'local_path': str(original)},
+        'local': {'uri': (original / 'bundle.md').as_uri(), 'local_path': str(original)},
+        'other-ref': {'uri': 'git+' + URL + '@release', 'local_path': str(original)},
+        'other-repo': {'uri': 'git+' + URL + '-other@main', 'local_path': str(original)},
+        'sibling-prefix': {'uri': 'git+' + URL + '@main', 'local_path': str(original) + '-other'},
+        'malformed': {'uri': 'git+https://[bad', 'local_path': str(original)},
+        'unknown': str(original),
+    }}
+    registry = c.stage / 'foundation/registry.json'; registry.write_text(json.dumps(data))
+    if route == 'align':
+        await alignment.align_checked_sources(c.manager, c.stage)
+    elif route == 'binding':
+        binding = next((c.stage / 'foundation/cache/.source-bindings').glob('*.json'))
+        await stage_binding(c.manager, c.stage, {'path': str(binding.relative_to(c.stage / 'foundation')),
+                                               'url': URL, 'ref': 'main', 'current': c.old, 'latest': c.new})
+    else:
+        await adopt_clean_sources(c.manager, c.stage)
+    actual = json.loads(registry.read_text())
+    for key, row in data['bundles'].items():
+        if key != 'moving':
+            assert actual['bundles'][key] == row
+    expected = dict(data['bundles']['moving'])
+    expected['local_path'] = str(store.checkout(URL, c.old if route == 'adopt' else c.new) / 'sub')
+    assert actual['bundles']['moving'] == expected
+    assert (original / 'bundle.md').read_text() == 'old'
+
+
+@pytest.mark.parametrize('route', ['align', 'direct', 'adopt'])
+@pytest.mark.parametrize('redirect', ['worktree', 'include', 'commondir', 'objects', 'refs', 'index', 'alternates', 'env-worktree', 'env-index', 'env-gitdir', 'env-common', 'env-objects'])
+async def test_git_indirection_cannot_modify_external_owners(candidate, tmp_path, monkeypatch, route, redirect):
+    from amplifier_web.update_sources import adopt_clean_sources
+    c = candidate; root = c.copy()
+    external = tmp_path / 'external'
+    shutil.copytree(root, external)
+    if redirect == 'worktree':
+        git(root, 'config', 'core.worktree', str(external))
+    elif redirect == 'include':
+        config = tmp_path / 'redirect.gitconfig'
+        config.write_text('[core]\nworktree = ' + str(external) + '\n')
+        git(root, 'config', 'include.path', str(config))
+    elif redirect == 'commondir':
+        (root / '.git/commondir').write_text(str(external / '.git'))
+    elif redirect == 'alternates':
+        (root / '.git/objects/info/alternates').write_text(str(external / '.git/objects'))
+    elif redirect.startswith('env-'):
+        variable, value = {
+            'env-worktree': ('GIT_WORK_TREE', external),
+            'env-index': ('GIT_INDEX_FILE', external / '.git/index'),
+            'env-gitdir': ('GIT_DIR', external / '.git'),
+            'env-common': ('GIT_COMMON_DIR', external / '.git'),
+            'env-objects': ('GIT_OBJECT_DIRECTORY', external / '.git/objects'),
+        }[redirect]
+        monkeypatch.setenv(variable, str(value))
+    else:
+        path = root / '.git' / redirect
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        path.symlink_to(external / '.git' / redirect)
+    before = {str(p.relative_to(external)): p.read_bytes() for p in external.rglob('*') if p.is_file()}
+    original_head = (root / '.git/HEAD').read_bytes()
+    row = {'path': str(root.relative_to(c.stage / 'foundation')), 'url': URL,
+           'ref': 'main', 'current': c.old, 'latest': c.new, 'label': 'fixture'}
+    if route == 'adopt':
+        await adopt_clean_sources(c.manager, c.stage)
+        assert root.exists()
+        assert not list((c.stage / 'foundation/cache/.source-bindings').glob('*.json'))
+    else:
+        with pytest.raises(ValueError):
+            if route == 'align':
+                await alignment.align_checked_sources(c.manager, c.stage)
+            else:
+                await c.manager.stage_cache_sources(c.stage, [row])
+    assert before == {str(p.relative_to(external)): p.read_bytes() for p in external.rglob('*') if p.is_file()}
+    assert (root / '.git/HEAD').read_bytes() == original_head
+    assert not c.fetches
+
+
+@pytest.mark.parametrize('boundary', ['publish', 'fetch'])
+async def test_git_ownership_is_rechecked_before_each_mutation(candidate, tmp_path, monkeypatch, boundary):
+    c = candidate; root = c.copy()
+    external = tmp_path / 'external'; external.mkdir()
+    (external / 'bundle.md').write_text('old')
+    if boundary == 'publish':
+        async def publish(**kwargs):
+            git(root, 'config', 'core.worktree', str(external))
+        c.manager.publish = publish
+    else:
+        original = updates.process
+        async def process(*args, **kwargs):
+            result = await original(*args, **kwargs)
+            if 'fetch' in args:
+                git(root, 'config', 'core.worktree', str(external))
+            return result
+        monkeypatch.setattr(updates, 'process', process)
+    with pytest.raises(ValueError):
+        await alignment.align_checked_sources(c.manager, c.stage)
+    assert (external / 'bundle.md').read_text() == 'old'
+    assert git(root, 'rev-parse', 'HEAD') == c.old
+    assert len(c.fetches) == (1 if boundary == 'fetch' else 0)
