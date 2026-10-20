@@ -89,6 +89,10 @@ def definitions(schema, string):
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
         "coordination.send": ("Commit attributed same-workspace task input and return its receipt promptly. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input. To resume a commissioned member after an explicit human instruction, use queue with resume={sourceMessageId, expectedInterruptionRevision}; the host binds the current human input and exact Stop/task/assignment boundaries. This admits one fresh input without resetting budgets, permissions or replaying old work. For explicit human repair of existing schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
+        "coordination.place": ("Move an idle directly commissioned member to one of that member's already-associated checkouts. This changes placement only: it sends no input, grants no file access, and never wakes or replays the member. The first result is a durable pending handoff receipt; reuse the same command ID and identical arguments to read its latest state before separately resuming work.", schema({
+            **sid, "id": string(200),
+            "expectedExecutionRevision": {"type": "integer", "minimum": 0},
+        }, ["sessionId", "id", "expectedExecutionRevision"])),
         "coordination.create": ("Commission an authorized durable task chat inheriting the caller's configuration, workspace and actual execution placement, with a saved return notification before its brief can run. This does not create an independent user chat in a different folder. Inspect this operation's requestId for its initial result. Returns before preparation and does not select the peer. Set returnNotification:false only when no automatic return is wanted.", schema({
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
@@ -1330,6 +1334,18 @@ class Collaboration:
                 # inventory in per-session persistent guidance.
                 result['resources'] = {**resources['result'], 'workspaceId': workspace['id']}
             return {"accepted": True, "result": result}
+        if action == "coordination.place":
+            if origin != "agent":
+                self.error("Commissioned placement requires the manager's current authenticated agent generation.")
+            target = self.authorize(source, args)
+            lineage = self.lineage(source, origin)
+            identity = command_id or str(uuid.uuid4())
+            try:
+                result = await self.service.worktrees.place_commissioned(
+                    source, target, args, origin, identity, lineage)
+            except (ValueError, OSError) as exc:
+                self.error(str(exc), 409)
+            return {"accepted": True, "commandAction": action, "result": result}
         if action == "coordination.result":
             receipt = self.receipt(args["requestId"])
             if receipt.get("commandAction") not in {"coordination.send", "coordination.create"}:

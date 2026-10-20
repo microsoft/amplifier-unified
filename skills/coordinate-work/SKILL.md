@@ -72,6 +72,13 @@ compare those exact links, not equal message text.
    permissions, change budgets, restart completed tasks or enroll independent
    chats. Inspect the receipt after a lost acknowledgement; even a different
    request ID cannot reuse the same human/member/Stop authorization.
+   If a commissioned member must move after creation, first associate the
+   checkout with that member. When the member is idle, its direct manager may
+   use `coordination.place` with the observed execution revision. Placement
+   sends no input, grants no file access, and does not resume work; inspect the
+   durable handoff receipt before separately sending a resume instruction.
+   Read progress by retrying the same command ID with identical arguments;
+   never use a new ID to poll or replay uncertain placement.
    Steer admits only to
    the recipient's exact current generation when its runtime supports request-boundary
    steering. Accepted is not applied; held/unknown never becomes a later turn.

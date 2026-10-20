@@ -283,6 +283,48 @@ class Worktrees:
             binding.update(checkoutId=checkout['id'], checkoutOwnerId=checkout['sessionId'], repository=checkout['repository'])
         return binding
 
+    def commissioner_binding(self, source, target, controller, *, admission=False, require_idle=False):
+        """Prove direct commissioning from durable creation and assignment records."""
+        metadata = target.get('collaboration') or {}
+        request_id = metadata.get('requestId')
+        if not request_id or metadata.get('creatorSessionId') != source['id']:
+            raise ValueError('Only the direct commissioning manager can place this member')
+        request = self.app.collaboration.receipt(request_id)
+        if (request.get('commandAction') != 'coordination.create' or not request.get('accepted')
+                or request.get('creationVersion') != 1 or request.get('protocol') != 2
+                or request.get('senderSessionId') != source['id']
+                or request.get('sessionId') != target['id']
+                or request.get('workspace') != source['workspace']
+                or request.get('result') != metadata):
+            raise ValueError('The commissioned member has no matching durable creation receipt')
+        source_assignment = self.app.assignments.current(source)
+        target_assignment = self.app.assignments.current(target)
+        member = (source_assignment or {}).get('members', {}).get(target['id'], {})
+        if (not source_assignment or source_assignment.get('status') != 'active'
+                or not target_assignment or target_assignment.get('id') != source_assignment['id']
+                or member.get('status') != 'bound' or member.get('role') != 'commissioned'
+                or member.get('creatorSessionId') != source['id']
+                or member.get('creationOperationId') != request_id):
+            raise ValueError('The direct commissioned assignment relationship changed')
+        active = source.get('collaborationGeneration') or {}
+        if (source.get('interruptionRevision', 0) != controller['sourceInterruptionRevision']
+                or source.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}
+                or active.get('id') != controller['sourceGenerationId']
+                or not set(controller['sourceInputIds']).issubset(active.get('inputIds', []))
+                or active.get('inputIds', []) != controller['sourceGenerationInputIds']
+                or admission and active.get('terminal')):
+            raise ValueError('The manager generation or Stop boundary changed before placement')
+        if require_idle:
+            if target.get('status') != 'idle':
+                raise ValueError('Commissioned placement requires an idle member')
+            target_active = target.get('collaborationGeneration') or {}
+            if target_active.get('id') and not target_active.get('terminal'):
+                raise ValueError('Commissioned placement requires the member generation to finish')
+            if target['id'] in getattr(self.app.runtime, '_preparations', {}):
+                raise ValueError('Commissioned placement cannot race member preparation')
+        return {'managerSessionId': source['id'], 'creationRequestId': request_id,
+                'assignmentId': source_assignment['id'], **copy.deepcopy(controller)}
+
     def placement_binding(self, session, path, checkout_id=None, *, inherited=False):
         """Bind an exact home or associated checkout, never an arbitrary folder."""
         if checkout_id is None and path == session['workspace']:
@@ -507,9 +549,29 @@ class Worktrees:
         async with self.app.lock: self.changed()
         return result
 
-    async def handoff(self, action, args, origin, command_id):
+    async def place_commissioned(self, source, target, args, origin, command_id, lineage):
+        """Move a direct commissioned member without granting arbitrary peer control."""
+        controller = {'sourceSessionId': source['id'],
+                      'sourceGenerationId': lineage['sourceGenerationId'],
+                      'sourceInputIds': copy.deepcopy(lineage['sourceInputIds']),
+                      'sourceGenerationInputIds': copy.deepcopy(
+                          (source.get('collaborationGeneration') or {}).get('inputIds', [])),
+                      'sourceInterruptionRevision': lineage['sourceInterruptionRevision']}
+        async with self.mutations:
+            try:
+                return await self.handoff('coordination.place', {
+                    'sessionId': target['id'], 'id': args['id'],
+                    'expectedExecutionRevision': args['expectedExecutionRevision'],
+                }, origin, command_id, controller=controller)
+            except BaseException:
+                async with self.app.lock:
+                    self.changed()
+                raise
+
+    async def handoff(self, action, args, origin, command_id, controller=None):
         sid = args['sessionId']; session = self.app._session(sid)
-        signature = digest([action, args, origin])
+        signature = (digest([action, args, origin]) if controller is None else
+                     digest([action, args, origin, 'commissioner', controller['sourceSessionId']]))
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + command_id))
         path = self.receipt_dir / (identity + '.json')
         async with self.app.lock:
@@ -518,6 +580,14 @@ class Worktrees:
                 record = self.read(sid, identity)
                 if record['signature'] != signature: raise ValueError('This handoff command already has different contents')
                 return {**record, 'duplicate': True}
+            controller_binding = None
+            if controller is not None:
+                source = self.app._session(controller['sourceSessionId'])
+                if source['workspace'] != session['workspace']:
+                    raise ValueError('The commissioned member moved outside the manager workspace')
+                self.check_host(source)
+                controller_binding = self.commissioner_binding(
+                    source, session, controller, admission=True, require_idle=True)
             if any(row['phase'] == 'pending' for row in self.receipts(sid)):
                 raise ValueError('A handoff is already pending; inspect its receipt before another request')
             previous = None
@@ -537,6 +607,8 @@ class Worktrees:
                 target = self.record(sid, args['id'])['path'] if args.get('id') else session['workspace']
                 target_binding = self.placement_binding(session, target, args.get('id'))
             record = {'id': identity, 'sessionId': sid, 'signature': signature, 'revision': 1, 'phase': 'pending', 'executionHost': local_host_identity(), 'source': session.get('workingDirectory') or session['workspace'], 'target': target, 'historyHome': session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'createdAt': time.time(), 'inputsReplayed': False, 'origin': origin, 'detail': 'Saving and releasing the old runtime before changing its execution folder.', 'preserved': {'messageIds': [m['id'] for m in session['messages']], 'taskId': session.get('task', {}).get('id') if session.get('task') else None}, 'reconciles': previous['id'] if previous else None, 'evidence': args.get('evidence')}
+            if controller_binding is not None:
+                record['controller'] = controller_binding
             record['sourceBinding'] = self.placement_binding(session, record['source'], inherited=True)
             record['targetBinding'] = target_binding
             record['step'] = 'preflight'
@@ -651,6 +723,10 @@ class Worktrees:
             # The pending receipt is durable independently of bridge delivery.
             # Quiescence never waits on a model-held command lock.
             await asyncio.sleep(0)
+            if record.get('controller'):
+                source = self.app._session(record['controller']['managerSessionId'])
+                self.commissioner_binding(
+                    source, current, record['controller'], require_idle=not released)
             self.check_host(record)
             self.check_binding(record, session)
             await asyncio.to_thread(self.preflight, record, session)
@@ -686,6 +762,10 @@ class Worktrees:
                         or current['workspace'] != record['historyHome']
                         or (current.get('workingDirectory') or current['workspace']) != record['source']):
                     raise ValueError('The execution folder changed during handoff')
+                if record.get('controller'):
+                    source = self.app._session(record['controller']['managerSessionId'])
+                    self.commissioner_binding(
+                        source, current, record['controller'], require_idle=not released)
                 reason = self.authority_changed(record)
                 if reason: raise HandoffSuperseded(reason)
                 if not released:
@@ -703,6 +783,9 @@ class Worktrees:
                 current = self.app._session(record['sessionId'])
                 self.check_binding(record, current)
                 if current.get('executionRevision', 0) != record['executionRevision']: raise ValueError('The execution folder changed during handoff')
+                if record.get('controller'):
+                    source = self.app._session(record['controller']['managerSessionId'])
+                    self.commissioner_binding(source, current, record['controller'])
                 reason = self.authority_changed(record)
                 if reason: raise HandoffSuperseded(reason)
                 placement_attempted = True

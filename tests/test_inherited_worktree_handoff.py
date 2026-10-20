@@ -1,11 +1,13 @@
 """Commissioned roots may leave and recover their exact borrowed placement."""
+import asyncio
+import copy
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 from amplifier_web.service import AppError, AppService
-from test_collaborative_workspaces import app, Runtime, generation
+from test_collaborative_workspaces import agent_action, app, Runtime, generation
 from test_multi_repository_worktrees import create, move
 from test_peer_creation_operation import commission, initial_accepted, plan
 from test_worktrees import repository, settle
@@ -131,3 +133,115 @@ async def test_reconcile_inherited_source_rejects_swapped_repository_before_rele
         assert app.worktrees.read(peer['id'], unknown['id'])['phase'] == 'unknown'
     finally:
         marker.write_bytes(original)
+
+
+async def test_direct_manager_places_idle_commissioned_member_without_waking_it(inherited):
+    app, creator, peer, borrowed = inherited
+    destination = await create(app, peer['id'], borrowed['path'], 'manager-member-copy')
+    peer['status'] = 'idle'
+    if peer.get('collaborationGeneration'):
+        peer['collaborationGeneration']['terminal'] = True
+    before_inputs = list(app.runtime.inputs)
+    before_creator = creator.get('workingDirectory')
+    result = await agent_action(app, creator, 'coordination.place', {
+        'sessionId': peer['id'], 'id': destination['id'],
+        'expectedExecutionRevision': peer.get('executionRevision', 0),
+    }, 'manager-place-member')
+    pending = result['result']
+    assert pending['phase'] == 'pending'
+    assert pending['controller']['managerSessionId'] == creator['id']
+    assert pending['controller']['creationRequestId'] == peer['collaboration']['requestId']
+    assert not pending['resumeRequested']
+    await settle(app)
+    receipt = app.worktrees.read(peer['id'], pending['id'])
+    assert receipt['phase'] == 'applied', receipt
+    assert peer['workingDirectory'] == destination['path']
+    assert creator.get('workingDirectory') == before_creator
+    assert app.runtime.inputs == before_inputs
+
+
+async def test_noncommissioner_cannot_place_idle_member(inherited):
+    app, _, peer, borrowed = inherited
+    unrelated = next(row for row in app.state['sessions']
+                     if row['id'] != peer['id'] and row['title'] == 'UI')
+    await generation(app, unrelated, 'unrelated-generation', ['unrelated-input'])
+    destination = await create(app, peer['id'], borrowed['path'], 'unrelated-member-copy')
+    peer['status'] = 'idle'
+    if peer.get('collaborationGeneration'):
+        peer['collaborationGeneration']['terminal'] = True
+    calls = app.runtime.quiesce_for_handoff.await_count
+    with pytest.raises(AppError, match='direct commissioning manager'):
+        await agent_action(app, unrelated, 'coordination.place', {
+            'sessionId': peer['id'], 'id': destination['id'],
+            'expectedExecutionRevision': peer.get('executionRevision', 0),
+        }, 'unrelated-place-member')
+    assert app.runtime.quiesce_for_handoff.await_count == calls
+
+
+async def test_manager_stop_before_release_rejects_commissioned_placement(inherited):
+    app, creator, peer, borrowed = inherited
+    destination = await create(app, peer['id'], borrowed['path'], 'stopped-manager-copy')
+    peer['status'] = 'idle'
+    if peer.get('collaborationGeneration'):
+        peer['collaborationGeneration']['terminal'] = True
+    launched = []
+    release_calls = app.runtime.quiesce_for_handoff.await_count
+    app.worktrees.launch = lambda record, session: launched.append((copy.deepcopy(record), session))
+    pending = (await agent_action(app, creator, 'coordination.place', {
+        'sessionId': peer['id'], 'id': destination['id'],
+        'expectedExecutionRevision': peer.get('executionRevision', 0),
+    }, 'stopped-manager-place'))['result']
+    creator['interruptionRevision'] = creator.get('interruptionRevision', 0) + 1
+    await app.worktrees.finish(*launched[0])
+    receipt = app.worktrees.read(peer['id'], pending['id'])
+    assert receipt['phase'] == 'rejected'
+    assert 'Stop boundary changed' in receipt['detail']
+    assert peer['workingDirectory'] == borrowed['path']
+    assert app.runtime.quiesce_for_handoff.await_count == release_calls
+
+
+async def test_released_commissioned_placement_recovers_after_member_stops(inherited):
+    app, creator, peer, borrowed = inherited
+    destination = await create(app, peer['id'], borrowed['path'], 'released-member-copy')
+    peer['status'] = 'idle'
+    if peer.get('collaborationGeneration'):
+        peer['collaborationGeneration']['terminal'] = True
+    launched = []
+    before_inputs = list(app.runtime.inputs)
+    app.worktrees.launch = lambda record, session: launched.append((copy.deepcopy(record), session))
+    pending = (await agent_action(app, creator, 'coordination.place', {
+        'sessionId': peer['id'], 'id': destination['id'],
+        'expectedExecutionRevision': peer.get('executionRevision', 0),
+    }, 'released-manager-place'))['result']
+    record, session = launched[0]
+    record.update(step='released', release={'quiesced': True, 'inputsReplayed': False})
+    app.worktrees.save(record)
+    peer['status'] = 'stopped'
+    await app.worktrees.finish(record, session)
+    receipt = app.worktrees.read(peer['id'], pending['id'])
+    assert receipt['phase'] == 'applied', receipt
+    assert peer['workingDirectory'] == destination['path']
+    assert not receipt['resumeRequested']
+    assert app.runtime.inputs == before_inputs
+
+
+async def test_commissioned_placement_uses_worktree_mutation_serialization(inherited):
+    app, creator, peer, borrowed = inherited
+    destination = await create(app, peer['id'], borrowed['path'], 'serialized-member-copy')
+    peer['status'] = 'idle'
+    if peer.get('collaborationGeneration'):
+        peer['collaborationGeneration']['terminal'] = True
+    await app.worktrees.mutations.acquire()
+    try:
+        placement = asyncio.create_task(agent_action(app, creator, 'coordination.place', {
+            'sessionId': peer['id'], 'id': destination['id'],
+            'expectedExecutionRevision': peer.get('executionRevision', 0),
+        }, 'serialized-manager-place'))
+        await asyncio.sleep(0)
+        assert not placement.done()
+        assert not app.worktrees.receipts(peer['id'])
+    finally:
+        app.worktrees.mutations.release()
+    pending = (await placement)['result']
+    await settle(app)
+    assert app.worktrees.read(peer['id'], pending['id'])['phase'] == 'applied'
