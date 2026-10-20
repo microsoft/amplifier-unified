@@ -4356,6 +4356,18 @@ class AppService:
                     if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'):
                         session['failure'] = {**failure, 'recordedAt': event['at'],
                             'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
+                    elif isinstance(existing, dict):
+                        active = session.get('collaborationGeneration') or {}
+                        # A classified provider cause precedes the terminal
+                        # event. Bind it only to its observed admitted input
+                        # and generation, never to an unrelated later failure.
+                        if (active.get('id') == payload.get('generation_id') and not active.get('terminal')
+                                and existing.get('generationId') in {None, active.get('id')}
+                                and existing.get('inputId')
+                                and existing['inputId'] in active.get('inputIds', [])
+                                and existing['inputId'] in payload.get('input_ids', [])):
+                            session['failure'] = {**existing, 'generationId': active['id'],
+                                'inputIds': payload['input_ids']}
                 if root_generation and payload.get("event") == "generation.finished":
                     if not scheduled_generation:
                         from .attention import completed
