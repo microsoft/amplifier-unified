@@ -34,6 +34,7 @@ The first development controller exposed the system interpreter's older archive 
 
 ## Remaining work
 
+- The existing one-pending-check and one-owned-test-environment limits per chat remain. Allowing more queued checks requires an adjustable per-chat limit plus deliberate same-chat scheduling; this route increases capacity across chats and approved machines.
 - Standalone remote-origin setup for Windows, macOS and Linux without a preconfigured local testing route, including portable existing receipt storage and independent snapshot runtime setup.
 - Approved target provisioning for people without an existing SSH/Incus setup; target registration currently assumes that setup already exists.
 - Shared authority across different OS users, older clients, Docker Desktop/VM hosts and additional remote backends.
