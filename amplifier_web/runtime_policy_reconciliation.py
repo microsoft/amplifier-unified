@@ -98,6 +98,7 @@ class Collector:
     def __init__(self):
         self.references = set()
         self.local_sources = set()
+        self.local_manifests = set()
 
     def observe(self, reference, config, registry=None, *, explicit_local=False):
         if not isinstance(reference, str):
@@ -132,7 +133,11 @@ class Collector:
                             path = Path(config.workspace) / path
                         if parsed.subpath:
                             path = path / parsed.subpath
-                        self.local_sources.add(path.resolve())
+                        path = path.resolve()
+                        if path.is_file() and path.suffix.lower() in {'.yaml', '.yml', '.md'}:
+                            self.local_manifests.add(path)
+                        else:
+                            self.local_sources.add(path)
                 return
             reference = config.resolve_source(registered) or registered
 
@@ -165,6 +170,12 @@ class Collector:
             while root != allowed and not (root / '.git').exists():
                 root = root.parent
             if root == allowed:
+                continue
+            # A local bundle file inside this source repository protects that
+            # source choice. Do not widen it to the file's arbitrary parent,
+            # which could also contain unrelated downloaded source caches.
+            if any(path.is_relative_to(root) for path in self.local_manifests):
+                package['status'] = 'local'
                 continue
             if root not in inspected:
                 await owned_git_checkout(root, allowed)
