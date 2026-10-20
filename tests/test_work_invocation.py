@@ -13,7 +13,7 @@ import sqlite3
 import pytest
 
 from amplifier_web.service import AppError, AppService
-from test_collaborative_workspaces import app, Runtime, agent_action, generation, until
+from test_collaborative_workspaces import app, Runtime, agent_action, generation, settled, until
 from test_peer_creation_operation import commission, initial_accepted, plan
 from test_workspace_work import create, change_work, read, revise, source, workspace_id
 
@@ -59,6 +59,36 @@ async def commissioned(app, owner, item, identity='bound-commission'):
     return created, child
 
 
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def retained_bytes(app):
+    """Observe durable receipts, not an inferred in-memory success label."""
+    return dict(app.db.execute('SELECT id, receipt FROM commands').fetchall())
+
+
+def retained_source_event(app, work_id, message):
+    events = [json.loads(raw) for raw in retained_bytes(app).values()]
+    matches = [event for event in events
+               if event.get('commandAction') == 'workspace.work.event'
+               and event.get('workItemId') == work_id
+               and event.get('source', {}).get('messageId') == message['messageId']
+               and event.get('source', {}).get('sessionId') == message['sessionId']]
+    assert len(matches) == 1
+    return matches[0]
+
+
+async def assert_available_commission(app, owner, item, identity):
+    created, child = await commissioned(app, owner, item, identity)
+    required = (await current_work(app, child))['required']
+    assert required['status'] == 'available' and required['workCount'] == 1
+    assert required['inputIds'] == [created['initialInputId']]
+    assert required['associationRequestIds'] == [created['requestId']]
+    assert required['version'] and required['effectAuthorized'] is False
+    return created, child
+
+
 async def test_commission_seals_work_association_before_native_admission(app):
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'bound')
@@ -98,10 +128,31 @@ async def test_commission_seals_work_association_before_native_admission(app):
     app.runtime.collaboration_input = inspect_transaction
     created, child = await commissioned(app, owner, item)
     assert observed == [created['requestId']]
+    before = retained_bytes(app)
+    association_before = canonical(json.loads(before[created['requestId']])['workAssociation'])
+    work_before = json.loads(before[item['id']])['result']
+    link_events_before = {identity: raw for identity, raw in before.items()
+                          if (value := json.loads(raw)).get('commandAction') == 'workspace.work.event'
+                          and value.get('workItemId') == item['id'] and value.get('kind') == 'link'}
+    inputs_before = copy.deepcopy(app.runtime.inputs)
     repeated = await commission(app, owner, identity='bound-commission',
                                 workReferences=[reference(item)], returnNotification=False)
     assert repeated['duplicate']
-    assert len(app.runtime.inputs) == 1 and len(observed) == 1
+    after = retained_bytes(app)
+    assert after == before  # Work revision, immutable event IDs and all receipt bytes.
+    assert canonical(json.loads(after[created['requestId']])['workAssociation']) == association_before
+    assert json.loads(after[item['id']])['result']['revision'] == work_before['revision']
+    assert {identity: after[identity] for identity in link_events_before} == link_events_before
+    assert app.runtime.inputs == inputs_before and len(observed) == 1
+    # Only the references differ under the SAME command ID. Dedup must reject
+    # before interpreting current revisions or retaining any new relation/input.
+    with pytest.raises(AppError, match='This command ID was already used with different contents') as conflict:
+        await commission(app, owner, identity='bound-commission',
+                         workReferences=[reference(item, role='reviewer')], returnNotification=False)
+    assert conflict.value.status == 409
+    assert 'Unknown action' not in str(conflict.value)
+    assert retained_bytes(app) == before
+    assert app.runtime.inputs == inputs_before and len(observed) == 1
     assert not (await current_work(app, child))['required']['effectAuthorized']
 
 
@@ -133,20 +184,52 @@ async def test_required_set_is_delivered_association_not_all_owned_work(app, mon
 
 @pytest.mark.parametrize('patch', [
     {'expectedRevision': 999}, {'promiseRevision': 999}, {'candidate': 'c' * 40},
-    {'workId': 'work:missing'}, {'role': 'administrator'}, {'hostObserved': True},
-])
+    {'workId': 'work:missing'},
+], ids=['patch0', 'patch1', 'patch2', 'patch3'])
 async def test_commission_rejects_unresolved_or_caller_forged_work_reference(app, patch):
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'guarded')
     plan(app, owner)
     before = await read(app, owner, item['id'])
     count = len(app.state['sessions'])
-    with pytest.raises(AppError):
+    status, reason = {
+        'expectedRevision': (409, '(?i)work.*revision'),
+        'promiseRevision': (409, '(?i)promise.*revision'),
+        'candidate': (409, '(?i)candidate'),
+        'workId': (404, '(?i)work.*(unavailable|not found)'),
+    }[next(iter(patch))]
+    receipts_before = retained_bytes(app)
+    with pytest.raises(AppError, match=reason) as rejected:
         await commission(app, owner, identity='invalid-work-commission',
                          workReferences=[reference(item, **patch)])
+    assert rejected.value.status == status
+    assert 'Unknown action' not in str(rejected.value)
     assert len(app.state['sessions']) == count and not app.runtime.inputs
     assert await read(app, owner, item['id']) == before
-    assert not app.db.execute("SELECT 1 FROM commands WHERE id='invalid-work-commission'").fetchone()
+    assert retained_bytes(app) == receipts_before
+    # Only the malformed reference field and command identity differ. The same
+    # actor, item, candidate and otherwise identical commission must succeed.
+    await assert_available_commission(app, owner, item, 'valid-work-commission')
+
+
+@pytest.mark.parametrize('patch,reason', [
+    ({'role': 'administrator'}, "(?i)administrator.*not one of"),
+    ({'hostObserved': True}, '(?i)additional properties.*hostObserved'),
+], ids=['patch4', 'patch5'])
+async def test_commission_rejects_malformed_work_reference_schema(app, patch, reason):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'schema-guarded')
+    plan(app, owner)
+    receipts_before = retained_bytes(app)
+    count = len(app.state['sessions'])
+    with pytest.raises(AppError, match=reason) as rejected:
+        await commission(app, owner, identity='invalid-work-schema',
+                         workReferences=[reference(item, **patch)])
+    assert rejected.value.status == 400
+    assert 'Unknown action' not in str(rejected.value)
+    assert len(app.state['sessions']) == count and not app.runtime.inputs
+    assert retained_bytes(app) == receipts_before
+    await assert_available_commission(app, owner, item, 'valid-work-schema')
 
 
 async def test_linked_nonowner_cannot_commission_as_work_owner(app):
@@ -157,40 +240,86 @@ async def test_linked_nonowner_cannot_commission_as_work_owner(app):
     await generation(app, peer, 'peer-generation', ['peer-input'])
     plan(app, peer)
     before = await read(app, owner, item['id'])
-    with pytest.raises(AppError, match='owner'):
+    receipts_before = retained_bytes(app)
+    with pytest.raises(AppError, match='owner') as rejected:
         await commission(app, peer, identity='not-owner-commission', workReferences=[reference(item)])
+    assert rejected.value.status == 403
     assert await read(app, owner, item['id']) == before and not app.runtime.inputs
+    assert retained_bytes(app) == receipts_before
+    await assert_available_commission(app, owner, item, 'actual-owner-commission')
 
 
-@pytest.mark.parametrize('change', ['promise', 'source_stop'])
+@pytest.mark.parametrize('change', ['promise', 'source_stop', 'unchanged'])
 async def test_creation_revalidates_work_after_await_before_initial_input(app, monkeypatch, change):
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'changing-before-input')
     plan(app, owner)
     entered, release = asyncio.Event(), asyncio.Event()
-    original = app.collaboration._finish_create
-    async def delayed(*args, **kwargs):
-        entered.set()
-        await release.wait()
-        return await original(*args, **kwargs)
-    monkeypatch.setattr(app.collaboration, '_finish_create', delayed)
-    created = await commission(app, owner, identity='delayed-work-commission',
-                               workReferences=[reference(item)], returnNotification=False)
+    identity = 'delayed-work-commission'
+    dispatch, finish_create = app.dispatch, app.collaboration.finish_create
+    tasks = []
+
+    async def track_finish(request_id):
+        if request_id == identity:
+            tasks.append(asyncio.current_task())
+        return await finish_create(request_id)
+
+    async def hold_created_root(action, *args, **kwargs):
+        result = await dispatch(action, *args, **kwargs)
+        command = kwargs.get('command_id', args[2] if len(args) > 2 else None)
+        if action == 'session.create' and command == identity + ':create':
+            # Hold the RETURN from the actual awaited root creation. The root
+            # and its receipt already exist; association/send must not exist yet.
+            with sqlite3.connect(app.db.execute('PRAGMA database_list').fetchone()[2]) as db:
+                root = json.loads(db.execute('SELECT receipt FROM commands WHERE id=?',
+                                            (command,)).fetchone()[0])
+                creation = json.loads(db.execute('SELECT receipt FROM commands WHERE id=?',
+                                                (identity,)).fetchone()[0])
+                assert root['accepted'] and root['sessionId'] == result['sessionId']
+                assert creation['phase'] == 'creating_root'
+                assert not creation.get('workAssociation')
+                assert not db.execute('SELECT 1 FROM commands WHERE id=?',
+                                      (creation['initialInputId'],)).fetchone()
+            entered.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(app.collaboration, 'finish_create', track_finish)
+    monkeypatch.setattr(app, 'dispatch', hold_created_root)
     try:
+        created = await commission(app, owner, identity=identity,
+                                   workReferences=[reference(item)], returnNotification=False)
         await asyncio.wait_for(entered.wait(), 2)
+        assert len(tasks) == 1 and not tasks[0].done() and not app.runtime.inputs
         if change == 'source_stop':
             await app.dispatch('conversation.stop', {'sessionId': owner['id']},
                                command_id='stop-during-work-creation')
-        else:
+        elif change == 'promise':
             await revise(app, owner, item, 'scope-before-initial-input',
                          source=source(app, owner, 'The promise changed before admission.'),
                          constraints=['New current condition.'])
     finally:
+        # Always release and join this exact creation task, even when an oracle
+        # fails. A timeout cancels/joins only our fixture task, never peer tasks.
         release.set()
+        for task in tasks:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), 5)
+            except TimeoutError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise
+    if change == 'unchanged':
+        await initial_accepted(app, created['initialInputId'])
+        retained = app.collaboration.receipt(created['requestId'])
+        assert retained['workAssociation']['initialInputId'] == created['initialInputId']
+        assert len(app.runtime.inputs) == 1
+        return
     await until(lambda: app.collaboration.receipt(created['requestId'])['delivery']
                 in {'suppressed', 'unknown'})
     retained = app.collaboration.receipt(created['requestId'])
     assert retained['delivery'] == 'suppressed'
+    assert not retained.get('workAssociation')
     assert not app.runtime.inputs
     initial = app.db.execute('SELECT receipt FROM commands WHERE id=?',
                              (created['initialInputId'],)).fetchone()
@@ -204,24 +333,33 @@ async def test_duplicate_work_references_do_not_create_duplicate_association(app
     item = await prepared_work(app, owner, 'duplicate')
     plan(app, owner)
     before = await read(app, owner, item['id'])
-    with pytest.raises(AppError, match='distinct|duplicate'):
+    with pytest.raises(AppError, match='distinct|duplicate') as rejected:
         await commission(app, owner, identity='duplicate-work-references',
                          workReferences=[reference(item), reference(item)])
+    assert rejected.value.status == 400
     assert await read(app, owner, item['id']) == before
     assert not app.runtime.inputs
+    await assert_available_commission(app, owner, item, 'single-work-reference')
 
 
-@pytest.mark.parametrize('binding', [
-    {'principal': 'synthetic-child'}, {'generation_id': 'old-generation'},
-])
-async def test_invocation_read_rejects_borrowed_or_stale_root_binding(app, binding):
+@pytest.mark.parametrize('binding,status,reason', [
+    ({'principal': 'synthetic-child'}, 403, '(?i)child|principal|root'),
+    ({'generation_id': 'old-generation'}, 409, '(?i)generation'),
+], ids=['binding0', 'binding1'])
+async def test_invocation_read_rejects_borrowed_or_stale_root_binding(app, binding, status, reason):
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'bound')
     _, child = await commissioned(app, owner, item)
     inputs = copy.deepcopy(app.runtime.inputs)
-    with pytest.raises(AppError):
-        await app.app_bridge('dispatch', {'action': 'workspace.work.invocation',
-            'args': {'sessionId': child['id']}, **transport(child, **binding)}, child['id'])
+    request = {'action': 'workspace.work.invocation', 'args': {'sessionId': child['id']}}
+    valid = await app.app_bridge('dispatch', {**request, **transport(child)}, child['id'])
+    assert valid['result']['status'] == 'available' and valid['result']['workCount'] == 1
+    with pytest.raises(AppError, match=reason) as rejected:
+        await app.app_bridge('dispatch', {**request, **transport(child, **binding)}, child['id'])
+    assert rejected.value.status == status
+    assert 'Unknown action' not in str(rejected.value)
+    again = await app.app_bridge('dispatch', {**request, **transport(child)}, child['id'])
+    assert again['result']['version'] == valid['result']['version']
     assert app.runtime.inputs == inputs
 
 
@@ -229,58 +367,128 @@ async def test_transport_input_not_observed_delivered_cannot_select_relevant_wor
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'bound')
     _, child = await commissioned(app, owner, item)
+    assert (await current_work(app, child))['required']['status'] == 'available'
     required = (await current_work(app, child, inputs=['not-delivered']))['required']
     assert required['status'] == 'unavailable'
     assert required['reason'] and required['version'] is None
     assert required['effectAuthorized'] is False
 
 
+async def test_mixed_delivered_inputs_cannot_hide_unsupported_lineage(app):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'mixed')
+    created, child = await assert_available_commission(app, owner, item, 'mixed-bound-commission')
+    unsupported = 'ordinary-followup-without-work-association'
+    await agent_action(app, owner, 'coordination.send', {
+        'sessionId': child['id'], 'text': 'An ordinary untyped follow-up.', 'mode': 'queue'}, unsupported)
+    await settled(app, unsupported, 'accepted')
+    # Both inputs are truly host-observed as delivered. A forged transport-only
+    # input or an undelivered queue entry would miss the subset-dropping defect.
+    await generation(app, child, 'mixed-delivered-generation',
+                     [created['initialInputId'], unsupported])
+    active_inputs = child['collaborationGeneration']['inputIds']
+    assert {created['initialInputId'], unsupported} <= set(active_inputs)
+    inputs_before = copy.deepcopy(app.runtime.inputs)
+    required = (await current_work(app, child))['required']
+    assert required['status'] == 'unavailable' and required['version'] is None
+    assert required['reason'] and required['effectAuthorized'] is False
+    assert set(required['inputIds']) == {created['initialInputId'], unsupported}
+    assert required['coverage']['complete'] is False
+    assert required['coverage']['supportedInputIds'] == [created['initialInputId']]
+    assert required['coverage']['unsupportedInputs'] == [
+        {'inputId': unsupported, 'reason': 'untyped_followup'}]
+    assert app.runtime.inputs == inputs_before
+
+
 async def test_large_promise_read_is_exact_paged_unicode_and_stale_read_refuses(app):
     owner = app.state['sessions'][0]
     constraints = ['Current condition ' + str(i) + ': ' + '\u03bb' * 900 for i in range(30)]
-    item = await prepared_work(app, owner, 'large', constraints=constraints)
+    interpretation = 'Retain the complete agreed scope: caf\u00e9, e\u0301 and \U0001d11e.\nNo omitted fields.'
+    criteria = [{'id': 'retained', 'text': 'Retain every Unicode code point: \u03bb \U0001d11e.'},
+                {'id': 'exact', 'text': 'Keep criteria order, quotes "like this", and\nline breaks.'}]
+    original = source(app, owner, 'Original large-scope request: \u03bb \U0001d11e e\u0301.')
+    item = await prepared_work(app, owner, 'large', original=original)
+    event = retained_source_event(app, item['id'], original)
+    assert event['kind'] == 'create' and event['promiseRevision'] == 1
+    correction = source(app, owner, 'Use this complete expanded scope: \u03bb \U0001d11e e\u0301.')
+    item = (await revise(app, owner, item, 'expanded-large-scope', source=correction,
+                        interpretation=interpretation, criteria=criteria,
+                        constraints=constraints, commitment='accepted'))['result']['item']
+    promise_event = retained_source_event(app, item['id'], correction)
+    assert promise_event['kind'] == 'revise' and promise_event['promiseRevision'] == 2
+    assert event['id'] != promise_event['id']
+    expected = {'interpretation': interpretation, 'criteria': criteria, 'constraints': constraints,
+                'commitment': 'accepted', 'promiseRevision': 2,
+                'originalSourceRef': event['id'], 'promiseEventRef': promise_event['id']}
+    expected_text = canonical(expected)
+    expected_hash = hashlib.sha256(expected_text.encode('utf-8')).hexdigest()
     _, child = await commissioned(app, owner, item)
     current = (await read(app, owner, item['id']))['item']
     args = {'workspaceId': workspace_id(app, owner), 'id': item['id'],
             'expectedRevision': current['revision'], 'expectedPromiseRevision': current['promiseRevision'],
             'limit': 1000}
-    parts, offset, digest = [], 0, None
+    parts, offset = [], 0
     for _ in range(100):
         page = (await agent_action(app, child, 'workspace.work.promise',
                                   {**args, 'offset': offset}, 'promise-page'))['result']
         assert page['offset'] == offset
         assert len(json.dumps(page, ensure_ascii=False).encode()) <= 12 * 1024
-        digest = digest or page['sha256']
-        assert page['sha256'] == digest and page['revision'] == current['revision']
+        assert page['sha256'] == expected_hash
+        assert page['total'] == len(expected_text)
+        assert page['revision'] == current['revision'] and page['promiseRevision'] == 2
+        assert page['workspaceId'] == args['workspaceId'] and page['id'] == item['id']
+        assert page['originalSourceRef'] == event['id'] and page['promiseEventRef'] == promise_event['id']
+        assert page['text'] == expected_text[offset:offset + args['limit']]
         parts.append(page['text'])
-        if page['nextOffset'] is None:
+        end = offset + len(page['text'])
+        assert page['truncated'] is (end < len(expected_text))
+        assert page['nextOffset'] == (end if end < len(expected_text) else None)
+        if end == len(expected_text):
             break
-        assert page['nextOffset'] > offset
+        assert end > offset
         offset = page['nextOffset']
     else:
         pytest.fail('Promise pagination made no bounded completion')
     text = ''.join(parts)
-    assert len(parts) > 1 and hashlib.sha256(text.encode()).hexdigest() == digest
-    assert json.loads(text)['constraints'] == constraints
+    assert len(parts) > 1 and text == expected_text
+    assert hashlib.sha256(text.encode('utf-8')).hexdigest() == expected_hash
+    assert json.loads(text) == expected  # Entire independently seeded scope, not a substring.
     await revise(app, owner, current, 'change-current-condition',
                  source=source(app, owner, 'A corrected current condition.'), constraints=['Corrected scope.'])
-    with pytest.raises(AppError, match='changed|revision'):
+    with pytest.raises(AppError, match='changed|revision') as rejected:
         await agent_action(app, child, 'workspace.work.promise', args, 'stale-promise-page')
+    assert rejected.value.status == 409
+    revised = (await read(app, owner, item['id']))['item']
+    fresh = (await agent_action(app, child, 'workspace.work.promise', {
+        **args, 'expectedRevision': revised['revision'],
+        'expectedPromiseRevision': revised['promiseRevision']}, 'fresh-promise-page'))['result']
+    assert fresh['promiseRevision'] == 3 and fresh['revision'] == revised['revision']
 
 
 async def test_required_source_manifest_keeps_original_and_earlier_corrections(app):
     owner = app.state['sessions'][0]
-    item = await prepared_work(app, owner, 'corrected')
+    original_text = 'Exact original request\n' + 'caf\u00e9|\U0001d11e|e\u0301|\u03bb\n' * 1000
+    assert len(original_text) > 8000  # Greater than the existing source reader's default page.
+    original = source(app, owner, original_text)
+    item = await prepared_work(app, owner, 'corrected', original=original)
+    expected_bodies = {retained_source_event(app, item['id'], original)['id']: original_text}
     for n in range(4):
+        correction = 'Exact correction ' + str(n) + ': \u03bb \U0001d11e e\u0301\nKeep prior conditions.'
+        message = source(app, owner, correction)
         item = (await revise(app, owner, item, 'correction-' + str(n),
-            source=source(app, owner, 'Exact correction ' + str(n)),
+            source=message,
             constraints=['Current condition ' + str(n)]))['result']['item']
+        expected_bodies[retained_source_event(app, item['id'], message)['id']] = correction
     created, child = await commissioned(app, owner, item)
     header = (await current_work(app, child))['required']
     args = {'sessionId': child['id'], 'expectedVersion': header['version'], 'limit': 2}
     requirements = []
     for _ in range(10):
         page = (await agent_action(app, child, 'workspace.work.invocation', args, 'requirements'))['result']
+        assert page['status'] == 'available' and page['version'] == header['version']
+        assert page['workCount'] == 1 and page['requirementCount'] == 6
+        assert len(page['items']) <= 2
+        assert page['truncated'] is bool(page['nextAfter'])
         requirements.extend(page['items'])
         if not page['nextAfter']:
             break
@@ -288,12 +496,40 @@ async def test_required_source_manifest_keeps_original_and_earlier_corrections(a
     else:
         pytest.fail('Requirement manifest did not terminate')
     sources = [row for row in requirements if row['kind'] == 'source']
-    assert len(sources) == 5
-    assert len({row['readRef']['args']['sourceId'] for row in sources}) == 5
-    bodies = [(await agent_action(app, child, row['readRef']['action'], row['readRef']['args'],
-                                 'required-source'))['result']['source']['text'] for row in sources]
-    assert 'Keep this request after the worker stops.' in bodies
-    assert all('Exact correction ' + str(n) in bodies for n in range(4))
+    assert len(requirements) == 6 and len(sources) == 5
+    assert len([row for row in requirements if row['kind'] == 'promise']) == 1
+    assert {row['readRef']['args']['sourceId'] for row in sources} == set(expected_bodies)
+    observed_bodies, page_counts = {}, {}
+    for row in sources:
+        handle = row['readRef']
+        assert handle['action'] == 'workspace.work.source'
+        identity = handle['args']['sourceId']
+        expected = expected_bodies[identity]
+        digest = hashlib.sha256(expected.encode('utf-8')).hexdigest()
+        assert row['contentSha256'] == digest
+        parts, offset = [], 0
+        for _ in range(100):
+            page = (await agent_action(app, child, handle['action'],
+                {**handle['args'], 'offset': offset, 'limit': 1000},
+                'required-source'))['result']['source']
+            assert page['offset'] == offset and page['total'] == len(expected)
+            assert page['sha256'] == digest
+            assert page['text'] == expected[offset:offset + 1000]
+            parts.append(page['text'])
+            end = offset + len(page['text'])
+            assert page['truncated'] is (end < len(expected))
+            assert page['nextOffset'] == (end if end < len(expected) else None)
+            if end == len(expected):
+                break
+            assert end > offset
+            offset = page['nextOffset']
+        else:
+            pytest.fail('Required source pagination did not terminate')
+        observed_bodies[identity] = ''.join(parts)
+        page_counts[identity] = len(parts)
+        assert hashlib.sha256(observed_bodies[identity].encode('utf-8')).hexdigest() == digest
+    assert observed_bodies == expected_bodies
+    assert max(page_counts.values()) > 1
     assert header['inputIds'] == [created['initialInputId']]
 
 

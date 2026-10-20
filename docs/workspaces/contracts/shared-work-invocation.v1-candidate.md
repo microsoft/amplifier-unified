@@ -46,11 +46,18 @@ workspace, actual root/principal, Work owner, open accepted commitment, exact
 record/promise/candidate and current task/Stop/assignment guards. The current Work
 candidate must already be recorded; this field cannot silently choose or change it.
 A root merely linked to somebody else's Work cannot commission on the owner's behalf.
+Malformed reference schema refuses with status 400; missing Work with 404;
+borrowed root/principal or nonowner authority with 403; changed record, promise,
+candidate or generation with 409. Each refusal names its actual cause. A missing
+action or unsupported schema is not evidence that a semantic guard worked.
 
 The existing creation owner derives the child identity and `initialInputId`. It
 retains the proposed references in its canonical creation receipt, covered by the
 same command fingerprint. Changed retries refuse. The normal root-creation receipt,
 not a directory/title, proves that the child exists.
+An exact retry preserves the Work revision, link-event identities, association
+bytes and input count. Changed references under that same request ID refuse with
+409 before any new record, link or input is retained.
 
 Immediately before committing the initial `coordination.send`, revalidate the
 references and the saved creation authority after awaits. The host atomically:
@@ -59,6 +66,10 @@ references and the saved creation authority after awaits. The host atomically:
 2. Records the explicit child Work links and immutable link events.
 3. Seals `workAssociation` on the existing creation receipt and adds only its exact
    reference to the initial-input receipt.
+
+This includes the awaited `session.create` return after its root receipt commits.
+A promise correction or Stop while that return is held must suppress initial
+association/send; an otherwise identical unchanged control must still proceed.
 
 The source root remains the Work owner. Commissioning is the explicit execution
 operation already requested; a subsequent Work read never creates a child, claims a
@@ -93,6 +104,7 @@ work:
     workCount
     requirementCount
     requirementsRef: workspace.work.invocation exact read handle
+    coverage: {complete, supportedInputIds, unsupportedInputs:[{inputId,reason}]}
     effectAuthorized: false
 ```
 
@@ -109,6 +121,10 @@ input lineage returns unavailable with coverage; it is not a manufactured empty 
 or permission to execute. This proposal does not silently block or exempt all ordinary
 unrelated work: the existing policy remains authoritative, and no claim of Work-aware
 effect qualification is made outside the supported producer.
+For mixed host-observed delivered input, retain every input ID, identify supported
+IDs and each unsupported cause (`untyped_followup` for an ordinary untyped queued
+follow-up), and set `complete:false`, `status:unavailable`, `version:null`.
+Never drop the unsupported subset and qualify the remaining association alone.
 
 The fingerprint binds the actual root/generation/input association, current Work
 record and promise revisions, source identities/digests, owner/link/Stop revisions,
@@ -161,7 +177,10 @@ rows name their original immutable event in `readRef.args.sourceId`. `total` and
 offsets count Unicode code points, while `sha256` covers the complete UTF-8 value.
 The promise JSON has `interpretation`, `criteria`, `constraints`, `commitment`,
 `promiseRevision`, `originalSourceRef` and `promiseEventRef`; it excludes mutable
-report/history bodies. Neither read accepts an assertion that it was consumed.
+report/history bodies. Serialize exactly those keys as compact JSON with sorted
+object keys, preserved array order and Unicode characters (Python
+`json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))`).
+Neither read accepts an assertion that it was consumed.
 An unavailable invocation has `version:null`, an explicit reason/coverage and no
 claimed complete relevant set. It must not serialize a false zero-obligation verdict.
 
