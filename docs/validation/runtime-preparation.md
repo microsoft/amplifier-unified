@@ -150,3 +150,8 @@ Scope boundary: Foundation cache/shared-binding metadata can also contain an
 untyped non-version ref. Its existing ownership checks establish source identity,
 not branch-versus-tag intent. That adjacent path is tracked separately for exact
 ref proof; this correction does not claim to resolve all cache policy ambiguity.
+
+A universal lock's `branch` entry is not selected-intent proof: uv can collapse a
+selected marker-specific SHA and an inactive branch at the same commit into that
+one entry. Such conflicts stay exact unless an independent matching checked
+policy already exists. Actual resolver regressions cover both marker selections.

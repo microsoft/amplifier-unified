@@ -134,6 +134,7 @@ async def test_real_normalized_install_freezes_only_selected_moving_policy(tmp_p
     ('tag', 'tag-only'), ('rev', 'tag-only'), ('uri', 'tag-only'),
     ('rev', 'same-name'), ('uri', 'same-name'), ('branch', 'same-name'),
     ('sha', 'tag-only'), ('rev', 'branch-only'),
+    ('marker-pin', 'branch-only'), ('marker-branch', 'branch-only'),
 ])
 async def test_real_named_ref_resolution_preserves_tag_and_ambiguity(tmp_path, monkeypatch, kind, topology):
     """Resolve the actual authored manifest; no normalized-install substitution."""
@@ -152,7 +153,14 @@ async def test_real_named_ref_resolution_preserves_tag_and_ambiguity(tmp_path, m
         git(repo, 'tag', 'stable')
     url = repo.as_uri()
     data = {'project': {'name': 'worker', 'version': '1'}}
-    if kind == 'uri':
+    if kind.startswith('marker-'):
+        data['project']['dependencies'] = ['fixture-component']
+        active = 'sys_platform == ' + repr(sys.platform)
+        inactive = 'sys_platform != ' + repr(sys.platform)
+        data['tool'] = {'uv': {'sources': {'fixture-component': [
+            {'git': url, 'rev': revision, 'marker': active if kind == 'marker-pin' else inactive},
+            {'git': url, 'branch': 'stable', 'marker': inactive if kind == 'marker-pin' else active}]}}}
+    elif kind == 'uri':
         data['project']['dependencies'] = ['fixture-component @ git+' + url + '@stable']
     else:
         data['project']['dependencies'] = ['fixture-component']
@@ -171,7 +179,12 @@ async def test_real_named_ref_resolution_preserves_tag_and_ambiguity(tmp_path, m
     project = environments.prepare_project(home, generation)
     await updates.process(uv, 'sync', '--project', str(project), '--python', sys.executable, timeout=90)
     query = parse_qs(environments.locked_sources(project)['fixture-component'].query)
-    assert query == {kind if kind in {'branch', 'tag'} else 'rev': [revision if kind == 'sha' else 'stable']}
+    if kind.startswith('marker-'):
+        # A universal resolver can collapse active SHA + inactive branch when
+        # they resolve to the same commit. The lock is not selected intent.
+        assert query == {'branch': ['stable']}
+    else:
+        assert query == {kind if kind in {'branch', 'tag'} else 'rev': [revision if kind == 'sha' else 'stable']}
     final = await qualification.freeze(SimpleNamespace(home=home, diagnostics=Diagnostics()), generation, project)
     receipt = environments.receipt_directory(home, generation)
     qualification.verify_recorded(final, receipt)

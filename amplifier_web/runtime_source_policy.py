@@ -183,10 +183,11 @@ def freeze_policies(home, generation, project, graph):
                 kind, evidence = 'resolution-reference', {}
                 if query.get('tag'):
                     kind, evidence = 'tag-reference', {'originalRef': refs[0]}
-                elif query.get('branch'):
-                    policy['ref'] = refs[0]
                 elif not re.fullmatch('[a-f0-9]{40}', refs[0]):
                     kind, evidence = 'unresolved-reference', {'originalRef': refs[0]}
+                # A universal lock can collapse a selected pin and inactive
+                # branch to one branch entry. Only selected authored intent
+                # (or the caller's exact checked receipt) grants moving policy.
                 normalized = (query.get('rev') == [policy['revision']]
                               and re.fullmatch('[a-f0-9]{40}', policy['revision']))
                 if (declaration and declaration['url'] == policy['url']
