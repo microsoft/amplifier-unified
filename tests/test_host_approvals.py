@@ -70,6 +70,43 @@ async def test_typed_request_keeps_note_and_never_remembers():
     assert not result.approved and result.reason == 'Use a temporary copy.' and not result.remember
 
 
+async def test_typed_allow_and_timeout_never_remember():
+    request = SimpleNamespace(tool_name='computer', action='type', details={}, timeout=.01)
+    allowed = await Approvals(None, AsyncMock(return_value=ApprovalDecision('allow', 'Reviewed.'))).request_approval(request)
+    assert allowed.approved and allowed.reason == 'Reviewed.' and not allowed.remember
+    async def unanswered(*args):
+        await asyncio.Event().wait()
+    denied = await Approvals(None, unanswered).request_approval(request)
+    assert not denied.approved and not denied.remember and 'timed out' in denied.reason
+
+
+async def test_concurrent_alias_note_and_timeout_keep_separate_child_contexts(monkeypatch):
+    from amplifier_web import runtime_worker
+    events = []
+    monkeypatch.setattr(runtime_worker, 'publish', events.append)
+    worker = Worker()
+    contexts = [SimpleNamespace(add_message=AsyncMock()) for _ in range(2)]
+    approvals = Approvals(None, worker.ask)
+    first = asyncio.create_task(approvals.for_context(lambda: contexts[0]).request_approval('first', ['Allow', 'Deny']))
+    second = asyncio.create_task(approvals.for_context(lambda: contexts[1]).request_approval('second', ['approve', 'reject'], timeout=.01))
+    try:
+        await asyncio.sleep(0)
+        requests = [e for e in events if e.get('type') == 'approval.requested']
+        request = next(e for e in requests if e['prompt'] == 'first')
+        await worker.command({'op': 'approval', 'id': 'first-reply', 'approval_id': request['id'],
+                              'decision': 'allow', 'comment': 'For first child only.'})
+        allowed, denied = await asyncio.gather(first, second)
+        assert allowed == 'Allow' and allowed.comment == 'For first child only.'
+        assert denied == 'reject'
+        contexts[0].add_message.assert_awaited_once()
+        contexts[1].add_message.assert_not_awaited()
+        assert not worker.approvals and not worker.approval_contexts
+    finally:
+        for task in (first, second):
+            task.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+
 @pytest.mark.parametrize('connected', [False, True])
 async def test_common_child_install_advertises_transport_without_permission(monkeypatch, tmp_path, connected):
     from amplifier_web.host.children import Children
