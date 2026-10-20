@@ -538,8 +538,11 @@ class Children:
                     if routing_callback:
                         await routing_callback(session)
                 initialization["before_initialize"] = initialize_with_isolation
+            from .approvals import Approvals
+            approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None)
+                         if isinstance(self.approvals, Approvals) else self.approvals)
             child = await child_prepared.create_session(session_id=identity, parent_id=parent.session_id,
-                approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
+                approval_system=approvals, display_system=getattr(parent.coordinator, "display_system", None),
                 session_cwd=cwd, is_resumed=resumed, **initialization)
             coordinator = child.coordinator
             from ..read_policy import validate_mounted_read_policy

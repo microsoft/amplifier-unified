@@ -81,7 +81,7 @@ async def test_enabling_settles_existing_capability_and_permission_but_not_quest
         replies.append((sid, identity, decision))
     app.runtime.approval = respond
     receipt = await agent(app, source, 'capability.request', {'sessionId': source['id'],
-        'effects': ['test_environments'], 'scopes': ['session'], 'reason': 'Check'}, 'pending',
+        'effects': ['file_access'], 'scopes': ['session'], 'reason': 'Check'}, 'pending',
         _configurationWait=True)
     grant = receipt['result']
     assert grant['status'] == 'pending'
@@ -257,3 +257,44 @@ async def test_native_file_mount_uses_saved_mode_and_restores_restriction(app, t
     assert not (await write('after.txt')).success
     assert not (external/'before.txt').exists() and not (external/'after.txt').exists()
     assert (external/'full.txt').read_text() == 'full.txt'
+
+
+async def test_app_defaults_can_be_changed_without_any_chat_and_survive_new_workspaces(app):
+    app.state['sessions'].clear()
+    app.state['selectedSessionId'] = None
+    current = (await app.dispatch('access.get', {'scope': 'app'}))['result']
+    args = {'scope': 'app', 'mode': 'full', 'expectedRevision': current['revision']}
+    result = await app.dispatch('access.set', args, command_id='global-without-chat')
+    assert result['result']['mode'] == 'full'
+    assert app.state['sessions'] == [] and not app.runtime.calls
+    assert (await app.dispatch('access.set', args, command_id='global-without-chat'))['duplicate']
+    for folder in ('first-workspace', 'second-workspace'):
+        (app.data_dir / folder).mkdir()
+        session = app._new_session({'workspace': str(app.data_dir / folder)})
+        assert app.access_mode.full(session)
+        assert read_mode(app.data_dir, session['workspace'], session['id']) == 'full'
+    with pytest.raises(AppError, match='Access settings changed'):
+        await app.dispatch('access.set', {**args, 'mode': 'ask'}, command_id='stale-global')
+
+
+async def test_agent_cannot_write_global_mode_without_a_session(app):
+    source = app.state['sessions'][0]
+    current = (await app.dispatch('access.get', {'scope': 'app'}))['result']
+    with pytest.raises(AppError, match='Only the user'):
+        await agent(app, source, 'access.set', {'scope': 'app', 'mode': 'full',
+            'expectedRevision': current['revision']}, 'agent-global')
+    assert not app.access_mode.full(source)
+
+
+async def test_capability_card_remains_pending_until_worker_acknowledges_full_access(app):
+    source = app.state['sessions'][0]
+    async def fail(*args, **kwargs):
+        raise RuntimeError('Lost acknowledgement')
+    app.runtime.approval = fail
+    grant = (await agent(app, source, 'capability.request', {'sessionId':source['id'],
+        'effects':['file_access'], 'scopes':['local'], 'reason':'Check'}, 'capability-wait',
+        _configurationWait=True))['result']
+    await save(app)
+    await app.access_mode.settle(source['id'])
+    card = next(row for row in source['approvals'] if row['id'] == grant['id'])
+    assert card['status'] == 'pending' and card.get('deliveryError')

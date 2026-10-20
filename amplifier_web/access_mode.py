@@ -31,9 +31,11 @@ def keys(workspace, session_id):
         ('session', ['session', workspace, session_id]), ('workspace', ['workspace', workspace]), ('app', ['app']))}
 
 
-def policy(db, workspace, session_id):
+def policy(db, workspace, session_id, *, global_only=False):
     records = {}
     for scope, identity in keys(workspace, session_id).items():
+        if global_only and scope != 'app':
+            continue
         row = db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
         records[scope] = json.loads(row[0])['result'] if row else {'mode': 'inherit', 'revision': 0}
     scope = next((key for key, row in records.items() if row['mode'] != 'inherit'), None)
@@ -101,11 +103,11 @@ def full_file_policy(bundle):
 def definitions(schema, string):
     sid = {'sessionId': string(200)}
     return {
-        'access.get': ('Read this chat’s saved access mode and inherited defaults. Passive.', schema(sid, ['sessionId'])),
+        'access.get': ('Read this chat’s saved access mode and inherited defaults. Passive.', schema({**sid, 'scope': {'enum': ['app']}}, [])),
         'access.set': ('User-only: save Ask when needed or Full access for this chat, workspace, or app. Full access preauthorizes tool and configuration approvals; it never starts or replays work.',
             schema({**sid, 'scope': {'enum': ['session', 'workspace', 'app']},
                     'mode': {'enum': ['ask', 'full', 'inherit']}, 'expectedRevision': string(100)},
-                   ['sessionId', 'scope', 'mode', 'expectedRevision'])),
+                   ['scope', 'mode', 'expectedRevision'])),
     }
 
 
@@ -128,11 +130,18 @@ class AccessMode:
         from .service import AppError
         if action == 'access.set' and origin not in {'ui', 'user'}:
             raise AppError('Only the user can change access mode.', 403)
-        session = self.service.configuration_authority.source(args, origin, caller)
+        global_only = args.get('scope') == 'app' and not args.get('sessionId')
+        if global_only and origin not in {'ui', 'user'}:
+            raise AppError('Only the user can manage app-wide access defaults.', 403)
+        if not global_only and not args.get('sessionId'):
+            raise AppError('Choose a chat or the app-wide access settings.', 400)
+        session = None if global_only else self.service.configuration_authority.source(args, origin, caller)
+        def snapshot():
+            return policy(self.service.db, '/', '', global_only=True) if global_only else self.snapshot(session)
         if action == 'access.get':
-            return {'accepted': True, 'result': self.snapshot(session)}
+            return {'accepted': True, 'result': snapshot()}
         identity = command_id or str(uuid.uuid4())
-        fingerprint = digest([action, args, session['id']])
+        fingerprint = digest([action, args, session['id'] if session else None])
         async with self.service.lock:
             previous = self.service.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
             if previous:
@@ -143,11 +152,12 @@ class AccessMode:
                 admission_check()
             if expected_revision is not None and expected_revision != self.service.state['revision']:
                 raise AppError('The app changed. Refresh its state and retry.', 409)
-            session = self.service._session(args['sessionId'])
-            current = self.snapshot(session)
+            if not global_only:
+                session = self.service._session(args['sessionId'])
+            current = snapshot()
             if current['revision'] != args['expectedRevision']:
                 raise AppError('Access settings changed. Reload them before saving.', 409)
-            key = keys(session['workspace'], execution_id(session))[args['scope']]
+            key = keys('/', '')['app'] if global_only else keys(session['workspace'], execution_id(session))[args['scope']]
             affected = {row['id']: self.snapshot(row) for row in self.service.state['sessions']}
             record = {'mode': args['mode'], 'revision': current['overrides'][args['scope']]['revision'] + 1,
                       'updatedAt': time.time(), 'approvedBy': 'user', 'commandId': identity}
@@ -168,9 +178,9 @@ class AccessMode:
                                 configurationPendingRevision=row.get('configurationPendingRevision', 0) + 1)
                         if after['mode'] == 'full':
                             self.service._task(self.settle(row['id']))
-                receipt = {'accepted': True, 'commandAction': action, 'result': self.snapshot(session)}
+                receipt = {'accepted': True, 'commandAction': action, 'result': snapshot()}
                 self.service.db.execute('INSERT INTO commands VALUES(?,?,?)', (identity, fingerprint, json.dumps(receipt)))
-                self.service._publish_changes(sessions=changed or {session['id']})
+                self.service._publish_changes(sessions=changed or ({session['id']} if session else set()))
             except BaseException:
                 self.service.db.rollback()
                 if not self.service.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():

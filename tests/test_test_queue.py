@@ -109,12 +109,11 @@ async def test_expiry_while_waiting_admission_does_not_start(app, queue, backend
     assert record(queue, app)['job']['status'] not in PENDING and not backend
 
 
-async def test_revoked_authority_does_not_kill_queue(app, queue, backend):
+async def test_stop_cancels_owned_check_without_killing_queue(app, queue, backend):
     source = app.state['sessions'][0]
-    authority = await grant(app, ['test_environments'], ['session'])
     args = {**scope(app), 'requestId': 'check', 'profileId': environments.PROFILE, 'command': 'true', 'notify': False}
     await agent(app, source, 'workspace.tests.submit', args, 'agent-submit')
-    await revoke(app, authority)
+    await app.dispatch('conversation.stop', {'sessionId': source['id']})
     await drive(queue)
     assert record(queue, app)['job']['status'] == 'cancelled' and not backend
     await submit(app, 'user-check')
