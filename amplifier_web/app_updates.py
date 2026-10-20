@@ -114,6 +114,48 @@ def version_tuple(value):
     match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)',value or '')
     return tuple(map(int,match.groups())) if match else None
 
+
+def supersedes_staged(release, pending):
+    """Only a newer published app may supersede an unactivated app candidate."""
+    latest = version_tuple(release.get('latest'))
+    staged = version_tuple(pending.get('latest'))
+    return bool(not pending.get('featureSelection') and release.get('status') == 'update'
+                and release.get('canInstall') is not False and latest and staged and latest > staged
+                and re.fullmatch('[a-f0-9]{40}', str(release.get('revision', '')))
+                and release['revision'] != pending.get('revision'))
+
+
+async def check_staged(manager):
+    """Refresh availability under the update lock without changing its receipt.
+
+    Check remains read-only. The existing install intent stages any newer target
+    separately, and only a successful probe replaces pendingApp. A failed lookup
+    leaves the previously qualified target usable, including while offline.
+    """
+    state = manager.service.state['updates']
+    pending = state['pendingApp']
+    await manager.publish(applicationCheckPending=True, lastAttempt=time.time())
+    try:
+        release = await check()
+        previous = state.get('application', {})
+        if release.get('status') == 'check_failed':
+            await manager.publish(applicationCheckWarning='Could not check for a newer release. The prepared update is still available.')
+            return
+        # A stale mirror/older channel result must not discard a newer known
+        # target, downgrade a candidate, or relabel a moved tag as validated.
+        known = previous if supersedes_staged(previous, pending) else pending
+        if (supersedes_staged(release, known)
+                or (release.get('revision') == known.get('revision')
+                    and version_tuple(release.get('latest')) == version_tuple(known.get('latest')))):
+            release['runningRevision'] = manager.running_identity['revision']
+            items = [release if row.get('id') == 'application' else row for row in state.get('items', [])]
+            if not any(row.get('id') == 'application' for row in items):
+                items.append(release)
+            await manager.publish(application=release, items=items, appAvailable=True)
+        await manager.publish(lastCheck=time.time(), applicationCheckWarning=None)
+    finally:
+        await manager.publish(applicationCheckPending=False, pendingAppCheckAt=time.time())
+
 def git_environment():
     from .reset import repository_environment
     return repository_environment()
