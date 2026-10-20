@@ -34,6 +34,7 @@ def definitions(schema, string):
         'assignment.set': ('Owner sets revision-bound aggregate limits. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
         'assignment.integration': ('Owner explicitly assigns integration responsibility to a current commissioned member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
         'assignment.stop': ('Owner closes assignment admission before requesting interruption of still-bound roots and native children. Does not stop independent peers or remove resources.', schema(revision, ['sessionId', 'expectedRevision'])),
+        'assignment.resume': ('User reopens a settled stopped assignment for new requests, preserving members, shared tasks and cumulative usage. Does not send input, resume paused tasks or replay queued work.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.detach': ('User detaches this idle conversation after assignment work settles, retaining attributed usage. Does not resume or send input.', schema(revision, ['sessionId', 'expectedRevision'])),
     }
 
@@ -130,6 +131,28 @@ class Assignments:
     def blocked(self, session=None, identity=None):
         value = self.load(identity) if identity else self.current(session)
         return 'This assignment was stopped; automatic work is suppressed.' if value and value['status'] != 'active' else None
+
+    def require_settled(self, value):
+        """Resume cannot race outstanding Stop or revive unobserved runtime work."""
+        for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='assignment.stop'
+                AND json_extract(receipt,'$.assignmentId')=?""", (value['id'],)):
+            receipt = json.loads(encoded)
+            if (identity in self.interrupting or receipt.get('interruptionsPending') or
+                    any(status != 'returned' for status in receipt.get('interruptions', {}).values())):
+                self.service.collaboration.error('The assignment stop has not settled. Inspect its interruption results before resuming.', 409)
+        for sid, member in value['members'].items():
+            if member['status'] != 'bound':
+                continue
+            session = self.service._session(sid)
+            if (self.current(session) or {}).get('id') != value['id']:
+                continue
+            if (session.get('status') in LIVE | {'working', 'busy', 'stopping'}
+                    or ((session.get('collaborationGeneration') or {}).get('id') and not session['collaborationGeneration'].get('terminal'))
+                    or any(row.get('phase') in LIVE and not row.get('endedAt') for row in usage_snapshot(session)['receipts'])
+                    or any(row.get('status') in {'queued', 'starting', 'running', 'working', 'idle', 'stopping'} for row in session.get('workers', []))
+                    or sid in getattr(self.service.runtime, '_preparations', {})):
+                self.service.collaboration.error('Wait for assignment chats and their workers to settle before resuming.', 409)
 
     def require_request(self, source, target, mode):
         value = self.current(source)
@@ -290,7 +313,14 @@ class Assignments:
                     collaboration.error('The assignment revision changed; inspect it before editing.', 409)
                 if action != 'assignment.detach' and source['id'] != value['ownerSessionId']:
                     collaboration.error('Only the commissioning owner can control this assignment.')
-                if action == 'assignment.integration':
+                if action == 'assignment.resume':
+                    if origin not in {'ui', 'user'}:
+                        collaboration.error('Only the user can resume a stopped assignment.')
+                    if value['status'] != 'stopped':
+                        collaboration.error('Only a stopped assignment can resume.', 409)
+                    self.require_settled(value)
+                    value.update(status='active', resumedAt=time.time(), resumedBy=origin)
+                elif action == 'assignment.integration':
                     responsible = args['responsibleSessionId']
                     if value['status'] != 'active':
                         collaboration.error('A stopped assignment cannot assign integration work.', 409)

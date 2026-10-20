@@ -771,3 +771,19 @@ alone is not qualification, and the negative runner receipt must remain failed.
 
 The original 0.20.182 post-release run remains failed. Focused repair qualification
 is separate from the complete post-release suite and from physical-device checks.
+
+
+### Stopped assignment recovery (October 19)
+
+**ASSIGNMENT-RESUME** extends the existing `ordinary-workspace-work` browser owner.
+From a project’s Workspace work disclosure, stop the commissioning assignment,
+then use Resume assignment. Require the same membership, limits and cumulative
+accounting; Stop makes its one interruption request, while Resume adds no runtime
+call and preserves the private composer draft. Member controls cannot reopen the
+assignment. The focused Python owner `test_assignment_recovery.py` additionally
+covers rejected sends before history changes, new input after recovery, human/owner
+and revision boundaries, duplicate receipts across restart, unsettled Stop/runtime
+refusal, transactional failure, and suppression of pre-stop outbound requests and
+late saved waits. Frontend tests retain exact retry identity after uncertainty.
+These checks use synthetic runtime evidence; they do not claim live-provider or
+external-effect rollback. No extra browser lane or frozen inventory count is added.
