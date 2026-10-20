@@ -213,3 +213,17 @@ version="1"
 fixture=[{git="https://example.invalid/fixture",rev="main",marker="python_version >= '3.13'"}]
 '''
     assert policy.declarations(content)['fixture']['ref'] == 'main'
+
+@pytest.mark.parametrize('kind', ['explicit-pin', 'local-source', 'symlink', 'empty'])
+def test_separate_uv_configuration_withholds_manifest_branch_recovery(prepared, kind):
+    home, generation, project, graph = prepared
+    config = project / 'uv.toml'
+    if kind == 'symlink':
+        config.symlink_to(project / 'missing-config')
+    else:
+        config.write_text({'explicit-pin': '[sources]\nfixture-component={git="' + ROW['url'] + '",rev="' + REVISION + '"}\n',
+                           'local-source': '[sources]\nfixture-component={path="../local"}\n',
+                           'empty': ''}[kind])
+    saved = policy.freeze_policies(*prepared)['fixture-component']
+    assert saved['ref'] == REVISION
+    assert saved['policyOrigin']['kind'] == 'resolution-reference'
