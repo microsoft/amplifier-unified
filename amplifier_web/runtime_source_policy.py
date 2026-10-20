@@ -12,6 +12,8 @@ import re
 import tomllib
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
+from packaging.requirements import InvalidRequirement, Requirement
+
 
 def origin(policy, kind, **evidence):
     return {'kind': kind, **{key: policy.get(key, '') for key in
@@ -47,25 +49,32 @@ def declarations(content):
     def requirement(value):
         if not isinstance(value, str):
             return
-        match = re.fullmatch(r'([\w.-]+)(?:\[[^]]+\])?\s*@\s*(git\+[^\s;]+)\s*', value)
-        if not match:
+        try:
+            parsed_requirement = Requirement(value)
+        except InvalidRequirement:
             return
-        parsed = urlsplit(match[2][4:])
+        if not parsed_requirement.url or not parsed_requirement.url.startswith('git+'):
+            return
+        parsed = urlsplit(parsed_requirement.url[4:])
         path, separator, ref = parsed.path.rpartition('@')
         fragments = parse_qs(parsed.fragment)
         if not separator or not ref or len(fragments.get('subdirectory', [''])) != 1:
             return
-        add(match[1], {'url': urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, '')),
+        add(parsed_requirement.name, {'url': urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, '')),
                        'ref': ref, 'subdirectory': fragments.get('subdirectory', [''])[0]})
 
     for value in data.get('project', {}).get('dependencies', []):
         requirement(value)
+    for group in data.get('project', {}).get('optional-dependencies', {}).values():
+        for value in group:
+            requirement(value)
     for group in data.get('dependency-groups', {}).values():
         for value in group:
             requirement(value)
     uv = data.get('tool', {}).get('uv', {})
-    for value in uv.get('override-dependencies', []):
-        requirement(value)
+    for collection in ('override-dependencies', 'constraint-dependencies', 'build-constraint-dependencies', 'dev-dependencies'):
+        for value in uv.get(collection, []):
+            requirement(value)
     for name, source in uv.get('sources', {}).items():
         if not isinstance(source, dict) or not source.get('git'):
             continue
@@ -74,6 +83,28 @@ def declarations(content):
             add(name, {'url': source['git'], 'ref': refs[0],
                        'subdirectory': source.get('subdirectory', '')})
     return {name: value for name, value in found.items() if value is not None}
+
+
+def owned_cache_path(home, cache_root, installed, subdirectory):
+    """Require lexical ownership and reject links below the app data owner."""
+    home = Path(home).absolute()
+    installed = Path(installed).absolute()
+    relative = Path(subdirectory)
+    if relative.is_absolute() or '..' in relative.parts or not installed.is_relative_to(home):
+        return False
+    root = installed
+    for _ in relative.parts:
+        root = root.parent
+    if root.parent != cache_root.absolute():
+        return False
+    # resolve() alone would bless an external cache reached through a linked
+    # foundation/cache (or linked generation), including profile freeze paths.
+    current = installed
+    while current != home.parent:
+        if current.is_symlink():
+            return False
+        current = current.parent
+    return True
 
 
 def freeze_policies(home, generation, project, graph):
@@ -90,15 +121,12 @@ def freeze_policies(home, generation, project, graph):
     locked = environments.locked_sources(project)
     policies = {name: with_origin(policy, 'owned-shared-binding') for name, policy in
                 environments.shared_build_policies(home, generation, graph).items()}
-    cache_root = (environments.receipt_directory(home, generation) / 'foundation/cache').resolve()
+    cache_root = environments.receipt_directory(home, generation) / 'foundation/cache'
     for row in graph:
         name = row['name']
         cached = row.get('cacheSource') or {}
         if cached and not cached.get('dirty') and row.get('path') and name not in policies:
-            directory = Path(row['path'])
-            for _ in Path(cached['subdirectory']).parts:
-                directory = directory.parent
-            if not directory.is_symlink() and directory.resolve().parent == cache_root:
+            if owned_cache_path(home, cache_root, row['path'], cached['subdirectory']):
                 policy = {'url': cached['url'], 'ref': cached['ref'], 'revision': cached['revision'],
                           'subdirectory': '' if cached['subdirectory'] == '.' else cached['subdirectory']}
                 policies[name] = with_origin(policy, 'owned-cache-declaration')

@@ -149,3 +149,46 @@ def test_only_installed_owned_clean_cache_can_record_a_declaration(prepared, cas
         assert result['fixture-component']['policyOrigin']['kind'] == 'owned-cache-declaration'
     else:
         assert 'fixture-component' not in result
+
+
+@pytest.mark.parametrize('ancestor', ['cache', 'foundation', 'generation', 'home', 'module'])
+def test_linked_cache_or_owner_ancestor_cannot_establish_policy(prepared, ancestor):
+    home, generation, project, graph = prepared
+    receipt = environments.receipt_directory(home, generation)
+    root = receipt / 'foundation/cache/fixture'
+    installed = root / 'module'
+    installed.mkdir(parents=True)
+    target = {'cache': root.parent, 'foundation': root.parent.parent,
+              'generation': receipt, 'home': home, 'module': installed}[ancestor]
+    external = home.parent / ('external-' + ancestor)
+    target.rename(external)
+    target.symlink_to(external, target_is_directory=True)
+    graph[:] = [{'name': 'fixture-component', 'version': '1', 'path': str(installed),
+                 'directUrl': {'url': installed.as_uri(), 'dir_info': {}},
+                 'cacheSource': {'url': ROW['url'], 'ref': 'main', 'revision': REVISION,
+                                 'subdirectory': 'module', 'dirty': False}}]
+    assert 'fixture-component' not in policy.freeze_policies(*prepared)
+    # installed_graph resolves directory links before producing path evidence.
+    graph[0]['path'] = str(installed.resolve())
+    assert 'fixture-component' not in policy.freeze_policies(*prepared)
+
+
+@pytest.mark.parametrize('section', ['[project.optional-dependencies]\ncustom=',
+                                    '[tool.uv]\ndev-dependencies=',
+                                    '[tool.uv]\nconstraint-dependencies=',
+                                    '[tool.uv]\nbuild-constraint-dependencies='])
+def test_pin_in_other_authored_requirement_collections_is_not_converted(section):
+    branch = 'fixture @ git+https://example.invalid/fixture@main'
+    pin = 'fixture @ git+https://example.invalid/fixture@' + REVISION
+    content = ('[project]\nname="worker"\nversion="1"\ndependencies=[' + json.dumps(branch) + ']\n'
+               + section + '[' + json.dumps(pin) + ']\n').encode()
+    assert 'fixture' not in policy.declarations(content)
+
+
+def test_marked_requirement_participates_in_conflict_detection():
+    branch = 'fixture @ git+https://example.invalid/fixture@main'
+    pin = 'fixture @ git+https://example.invalid/fixture@' + REVISION + ' ; python_version >= "3.13"'
+    content = ('[project]\nname="worker"\nversion="1"\ndependencies=' + json.dumps([branch, pin])).encode()
+    assert 'fixture' not in policy.declarations(content)
+    content = ('[project]\nname="worker"\nversion="1"\ndependencies=' + json.dumps([branch + ' ; python_version >= "3.13"'])).encode()
+    assert policy.declarations(content)['fixture']['ref'] == 'main'
