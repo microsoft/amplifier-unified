@@ -134,6 +134,18 @@ class Assignments:
 
     def require_settled(self, value):
         """Resume cannot race outstanding Stop or revive unobserved runtime work."""
+        # A durable recovery proved these exact historical Stop outcomes while
+        # holding native ownership. Do not reacquire a former member's writer
+        # after detachment: it may now be doing unrelated independent work.
+        settled = set()
+        for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='assignment.resume'
+                AND json_extract(receipt,'$.assignmentId')=?""", (value['id'],)):
+            receipt = json.loads(encoded)
+            for proof in receipt.get('result', {}).get('stopRecovery', {}).get('members', []):
+                if (receipt.get('accepted') is True and proof.get('workerAbsent') is True
+                        and proof.get('inputsReplayed') is False and proof.get('ownershipAcquisitionId')):
+                    settled.update((proof.get('sessionId'), stop) for stop in proof.get('stopRequestIds', []))
         unknown = {}
         for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='assignment.stop'
@@ -143,7 +155,7 @@ class Assignments:
                     any(status not in {'returned', 'unknown'} for status in receipt.get('interruptions', {}).values())):
                 self.service.collaboration.error('The assignment stop has not settled. Try continuing after it finishes.', 409)
             for sid, status in receipt.get('interruptions', {}).items():
-                if status == 'unknown':
+                if status == 'unknown' and (sid, identity) not in settled:
                     unknown.setdefault(sid, []).append(identity)
         for sid, member in value['members'].items():
             if member['status'] != 'bound':
