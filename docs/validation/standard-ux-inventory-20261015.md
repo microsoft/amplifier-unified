@@ -735,3 +735,14 @@ hydration, cache/request identity, pin changes, starting preferences and client
 state isolation. The new smoke is a regression owner, not a requirement to rerun
 the unrelated browser census before release. Frozen inventory counts remain
 unchanged; current results must name the actual source/build and cleanup outcome.
+
+### Home breadcrumb on narrow chat headers (October 19)
+
+The existing `mobile-navigation` owner also requires a visible Home control with
+at least a 44×44px target and more than 100px for the current chat title at 320px.
+The decorative separator may collapse on phones; Home, navigation, Chat and
+Canvas controls remain available. Preserve the existing draft, reading-anchor,
+viewer and drawer-focus assertions across all eight maintained viewport sizes.
+The 0.20.182 failure measured an 84px title; the compact separator measured 108px
+in the owned Linux Chromium instance. This is browser geometry acceptance, not
+physical-device or enlarged-system-text qualification.
