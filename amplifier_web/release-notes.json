@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.196",
+      "title": "Reliable updates for selected components",
+      "changes": [
+        "Preserve selected component branch choices across preparation and later updates while protecting fixed versions, tags, local sources and custom indexes.",
+        "Offer Refresh included components to recover older generated pins in a fresh candidate, including verified dependencies of selected components. Existing workers and rollback versions remain unchanged.",
+        "Check the difference between Git branches and tags before offering cached or installed component updates, and keep ambiguous or unverifiable sources protected.",
+        "Update HTTP, package-management and Markdown parsing dependencies, including refreshed certificate trust data for package management and the Work-profile test environment."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.195",
       "title": "Reliable component preparation and Core updates",
       "changes": [
