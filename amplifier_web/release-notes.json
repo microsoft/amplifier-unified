@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.194",
+      "title": "Approved test machines and ordered chat checks",
+      "changes": [
+        "Connect approved Linux test machines through saved SSH connections and route supported checks to available capacity. Each check retains its chosen machine and ownership through interruptions and recovery.",
+        "Configure how many checks a chat may queue. Checks run in order, with the next waiting until the previous test environment has finished and its cleanup is confirmed.",
+        "Manage remote machine limits and per-chat queue limits in Settings, with saved edits protected against lost acknowledgements and competing changes.",
+        "Improve browser verification by waiting for confirmed Canvas state and retaining bounded process-cleanup diagnostics."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.193",
       "title": "Wait for model capacity and control test resources",
       "changes": [
