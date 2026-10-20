@@ -62,8 +62,12 @@ async def worker(app, sid, wid="child-a", **patch):
 async def test_list_exposes_revision_without_unbounded_wait_signal(app):
     caller, peer = app.state['sessions']
     peer.update(interruptionRevision=7,
-                approvals=[{'id': f'approval-{i}', 'status': 'pending'} for i in range(100)],
-                questions=[{'id': f'question-{i}', 'status': 'pending'} for i in range(100)])
+                approvals=[{'id': f'approval-{i}', 'status': 'pending'} for i in range(100)])
+    for i in range(100):
+        app.questions.store.put({
+            'id': f'question-{i}', 'sessionId': peer['id'], 'createdAt': i,
+            'status': 'pending', 'prompt': f'Question {i}', 'revision': 1,
+        })
     app._publish()
     page = app.coordination.list({'sessionId': peer['id']}, caller['id'])
     item = page['items'][0]
