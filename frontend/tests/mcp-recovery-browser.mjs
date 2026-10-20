@@ -257,11 +257,11 @@ try{
  assert.deepEqual(errors,[]);
  console.log('MCP recovery browser passed: actual MCP SDK, disconnect and host restart, same artifact/source hash, historical launch receipt, explicit unchanged-contract rebind without frame/input replacement, single SDK recovery notification and safe read, explicit history/Latest selection, no replayed mutations, changed schema denied until exact review, current-HTML adoption with no launch replay, new tools ungranted, second-client saved iframe/input preserved and read-only, composer preserved.');
 }catch(error){originalError=error;throw error}finally{
- let cleanupFailed=false;
- const record=operation=>async()=>{try{await operation()}catch(error){cleanupFailed=true;throw error}};
- await finishFixture({label:'MCP recovery fixture',originalError,close:[
-  ['second browser',record(async()=>{await secondBrowser?.close()})],
-  ['browser',record(async()=>{await browser?.close()})],
- ],stop:record(async()=>{await stop();await rm(directory,{recursive:true,force:true})})});
- cleanupComplete=!cleanupFailed;
+ try{
+  await finishFixture({label:'MCP recovery fixture',close:[
+   ['second browser',async()=>{await secondBrowser?.close()}],
+   ['browser',async()=>{await browser?.close()}],
+  ],stop:async()=>{await stop();await rm(directory,{recursive:true,force:true})}});
+  cleanupComplete=true;
+ }catch(error){if(originalError)console.error(error);else throw error}
 }

@@ -140,6 +140,36 @@ try{
     assert receipt.read_bytes() == before
 
 
+@pytest.mark.parametrize('has_original', [False, True])
+def test_mcp_cleanup_failure_cannot_certify_complete(tmp_path, has_original):
+    # Exercise the canonical finally body when the lifecycle owner reports a
+    # timeout/failure. The original assertion survives and completion stays false.
+    source = (ROOT / 'frontend/tests/mcp-recovery-browser.mjs').read_text()
+    cleanup = source.rsplit('}finally{', 1)[1].rsplit('}', 1)[0]
+    program = r"""
+import assert from 'node:assert/strict';
+const initial=new Error('original assertion'),failed=new Error('browser close timed out');
+let cleanupComplete=false;
+const originalError=HAS_ORIGINAL?initial:undefined;
+const reports=[];console.error=error=>reports.push(error);
+const finishFixture=async()=>{throw failed};
+const secondBrowser=undefined,browser=undefined,directory='synthetic';
+const stop=async()=>{},rm=async()=>{};
+let thrown;
+try{
+ try{if(originalError)throw originalError}finally{
+""".replace('HAS_ORIGINAL', json.dumps(has_original)) + cleanup + r"""
+ }
+}catch(error){thrown=error}
+assert.equal(cleanupComplete,false,'Failed cleanup must never certify completion');
+assert.equal(thrown,originalError||failed);
+assert.deepEqual(reports,originalError?[failed]:[]);
+"""
+    result = subprocess.run(['node', '--input-type=module', '-e', program],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
