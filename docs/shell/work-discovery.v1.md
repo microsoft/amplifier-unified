@@ -1,6 +1,6 @@
-# Home and sidebar contract — v1 (RATIFIED 2026-10-20)
+# Work landing pages and sidebar contract — v1 (RATIFIED 2026-10-20)
 
-These promises govern the standard web client's Home and chat sidebar.
+These promises govern the standard web client's Home, All chats, All workspaces, individual workspace landing pages, and chat sidebar.
 
 ## Who builds against this
 
@@ -17,8 +17,8 @@ familiar work or inspect its status while keeping their current context.
 
 ```text
 Home: Focus / Brief / Studio + current search and scope
-Sidebar: Browse / Status + New chat and Search chats
-Browse: Pinned / Projects / Recent
+Sidebar: Home icon + Browse / Status in one row; New chat and Search chats
+Browse: Pinned / Workspaces / Recent
 Status: Needs you / Ready for you / Working / Pick up again
 Choose a chat -> existing conversation and its existing action controls
 Return Home -> remembered view, search, scope, reading position and Focus pass
@@ -41,13 +41,13 @@ Return Home -> remembered view, search, scope, reading position and Focus pass
 4. **Keep navigation consistently available.** Browse/Status shares one row;
    the header owns its toggle; sidebar Search and New chat remain available on Home.
    Both sidebar views reuse chat controls and honor the same display preferences.
-   Home is a breadcrumb elsewhere, with no stale chat highlight on Home.
+   Home is a recognizable header destination elsewhere and an icon in the sidebar’s first row. The current Home header has no redundant Home text or stale chat highlight.
    Broken: a view ignores workspace-label settings or loses common actions.
 5. **Browse a pass without dismissal.** Focus offers previous/next, position,
    and restart across bounded pages of its group. Its cursor follows chat identity.
    Stepping never answers, approves, marks read, archives, or starts work.
    Broken: skipping an item disposes of something the person meant to revisit.
-6. **Make scope a truthful filter.** Project scope uses registered workspace
+6. **Make scope a truthful filter.** Workspace scope uses registered workspace
    identity and existing creation rules; filtering never moves work or changes access.
    A pinned or unavailable scope cannot silently widen or create elsewhere.
    Broken: the person acts on another project after a delayed or failed query.
@@ -60,6 +60,32 @@ Return Home -> remembered view, search, scope, reading position and Focus pass
    identical queries share its projection and hidden/closed Status groups release demand.
    Browsing reads no transcripts and starts no dormant worker or added model/summary job.
    Broken: merely opening this UI adds execution or work proportional to all history.
+
+## Shared landing presentation
+
+Home, All chats, All workspaces and an individual workspace reuse layout selection,
+display preferences, filters, focus navigation and presentation primitives. Their
+catalogs and action owners remain authoritative. Each destination remembers its
+layout and reading position independently. Focus steps through bounded results
+without changing their read state; Brief provides summaries and Studio exposes a
+denser collection. All layouts retain meaningful empty, unavailable and error states.
+
+Keep search, sorting, archive/restore, pinning, rename/remove, folder browsing,
+workspace creation/attachment, chat plans, Files, Details and Workspace work where
+applicable. Reuse existing controls rather than recreating their mutation logic.
+An active status filter stays visible beside the results; clearing it preserves
+the search and workspace scope. Layout selection stays recognizable across
+Appearance detail levels; screen width may change its arrangement.
+
+Use **Workspace** for the registered folder-backed entity and **No workspace** for
+a standalone chat. “Project” remains ordinary language for someone’s undertaking,
+not an alternate UI name or a new membership model.
+
+A new web view without saved client state already starts on Home. Restoring an
+existing view, refreshing or reconnecting retains its place; explicit chat links
+keep their target. Validate these existing boundaries before changing startup.
+Related-work exploration reuses explicit Workspace work inspection; no inferred
+dependencies or new summary processing is authorized by this presentation change.
 
 ## Not in v1
 
@@ -92,10 +118,11 @@ Return Home -> remembered view, search, scope, reading position and Focus pass
 
 - Which labels best distinguish unread responses from work ready for acceptance?
 - How much surrounding context helps each view with a person's real work?
-- Does “Projects” communicate the existing scope without suggesting regrouping?
+- How should related work be presented using already recorded relationships?
 
 ## Changelog
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-20 | Extend shared landing presentation, add sidebar Home, restore Workspace terminology, and clarify layout/filter controls. | [Follow-up direction](../ux/decisions/20261020-landing-pages.md). |
 | 2026-10-20 | Adopt the Home/sidebar promises, with plain names and quiet refresh/shared-row corrections. | [Product-owner decision](../ux/decisions/20261020.md); implementation evidence remains separate. |

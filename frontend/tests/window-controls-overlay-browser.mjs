@@ -110,10 +110,10 @@ try{
   const manifest=await page.evaluate(()=>fetch('/manifest.webmanifest').then(r=>r.json()));
   assert.deepEqual(manifest.display_override,['window-controls-overlay','standalone']);
   // WorkDialog is a real portal into the app, not a hand-authored fixture.
-  await page.getByRole('button',{name:'Choose project',exact:true}).click();
-  await expect(page.getByRole('dialog',{name:'Choose a project'})).toBeVisible();
+  await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Choose a workspace'})).toBeVisible();
   assert.ok((await page.locator('.a-work-dialog-backdrop').boundingBox()).y>=48);
-  await page.getByRole('button',{name:'Close Choose a project',exact:true}).click();
+  await page.getByRole('button',{name:'Close Choose a workspace',exact:true}).click();
   await action('session.create');
   await action('canvas.show',{kind:'html',title:'WCO retained viewer',content:'<h1>Retained viewer</h1><input aria-label="Retained note" value="Initial">'});
   const frame=page.frameLocator('.a-canvas-html');await frame.getByRole('textbox',{name:'Retained note'}).fill('Do not remount');

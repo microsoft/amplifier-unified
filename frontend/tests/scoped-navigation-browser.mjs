@@ -216,7 +216,7 @@ try{
  await body.getByRole('searchbox',{name:'Search chats',exact:true}).fill('');
  await waitCoverage(['sidebarSearch']);
  checks.push({coldFailureIsUnavailableNotLoadingOrEmpty:true});
- await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'Your projects',exact:true})).toBeVisible();
+ await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'All workspaces',exact:true})).toBeVisible();
  await act('session.select',{id:chats[0]});await waitCoverage([]);await expect(composer).toHaveDraft('Keep this unsent scoped-navigation draft');
  assert.equal(await page.evaluate(()=>window.scopedDocument===document.querySelector('#amp-one')&&window.scopedFrame===document.querySelector('.a-canvas-html')),true);
  await expect(page.frameLocator('.a-canvas-html').getByRole('textbox')).toHaveValue('preserved canvas input');

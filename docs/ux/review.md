@@ -34,7 +34,7 @@ older sidebar promise. The [accepted amendments](decisions/20261020.md) close th
 | Return navigation lost useful context; the owner explicitly requested remembered Home state. | Make continuity observable in the return-context promise, including leaving while a search is pending. |
 | Live review found no way to pass an item temporarily, a redundant Home label, and a stale chat selection. | Navigation and temporary-pass promises preserve location truth and a temporary pass without disposition effects. |
 | The owner requested Browse/Status in one row, a stable header toggle, and Search/New chat on Home's sidebar. | Amend the old sidebar promise and retain deliberate access from both scrolled regions. |
-| The owner limited this iteration to Home/sidebar and existing processing. | The bounded-discovery promise and the exclusions prevent design polish from silently expanding session or inference scope. |
+| The initial iteration was limited to Home/sidebar and existing processing. The accepted follow-up extends presentation to the existing workspace and chat browsers. | The bounded-discovery promise and the exclusions prevent design polish from silently expanding session or inference scope. |
 
 The shipped changes are traceable through
 [#860](https://github.com/microsoft/amplifier-unified/pull/860),
@@ -68,6 +68,15 @@ well as action counts. Do not turn a small design review into a claim about all 
 6. **Understand a quiet or uncertain state.** Compare a quiet Home with pending,
    unavailable, and failed data in a synthetic preview. Check that old saved chats
    feel available rather than overdue, and that uncertainty does not look empty.
+
+7. **Carry the presentation into browsing.** Open All chats, All workspaces, and
+   a workspace. Try all three layouts; find search, sorting, archives, and row
+   actions. In the workspace, find Files, Details, plans, and Workspace work.
+   Open a chat from a later Focus page and return to the same place. Record whether
+   layout choices and active status filters remain understandable.
+8. **Find Home without coaching.** Find both the header Home destination and the
+   sidebar icon beside Browse/Status. Try a fresh web window, a refresh, and a
+   direct chat link; record what destination you expected and received.
 
 Observe real work without answering approvals, sending messages, dismissing
 attention, or changing project membership solely to complete a design exercise.
@@ -114,7 +123,7 @@ the release; this documentation review does not claim to rerun them.
 | Bounded status pages and releasing hidden/closed sidebar demand | Kept for the recorded cases | Sidebar checks and [query ownership tests](../../tests/test_shell_query_owner.py). This is not a whole-host performance benchmark. |
 | The workspace navigation agreement accommodates Status | Kept | The [accepted amendment](../workspaces/contracts/experience.v1.md) identifies the three sections as Browse and delegates the alternative's presentation. |
 | A short, agreed UX contract connected to the shared-client vision | Kept | The [product-owner decision](decisions/20261020.md) accepts the direction and the [Home/sidebar promises](../shell/work-discovery.v1.md). This establishes agreement, not implementation quality. |
-| Labels, hierarchy, and project terminology are clear to the designer using familiar work | Can't check | The planned human review has not occurred. Interaction tests cannot settle comprehension or taste. |
+| Labels, hierarchy, and workspace terminology are clear to the designer using familiar work | Can't check | The planned human review has not occurred. Interaction tests cannot settle comprehension or taste. |
 | Full assistive-technology usability and target-device comfort | Can't check | Keyboard, narrow-layout, and forced-color fixtures cover only part of this. Record actual device and assistive-technology review separately. |
 
 The October 20 deployed-use feedback identified three **Broken** promises in the

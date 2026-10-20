@@ -69,7 +69,7 @@ try{
  await recent.locator('summary').click();
 
  // The full workspace browser retains duplicate path labels and drills into chats.
- await workspaces.getByRole('button',{name:'All projects',exact:true}).click();
+ await workspaces.getByRole('button',{name:'All workspaces',exact:true}).click();
  const workspaceBrowser=page.locator('.a-work-browser'),search=workspaceBrowser.getByRole('searchbox',{name:'Filter workspaces',exact:true});
  await search.fill('*/playground');await expect(workspaceBrowser.locator('.a-workspace-row')).toHaveCount(2);
  assert.equal(new Set(await workspaceBrowser.locator('.a-workspace-result-path').allTextContents()).size,2);
@@ -85,7 +85,7 @@ try{
  await expect(workspaceChats.locator('.a-nav-chat')).toHaveCount(1);
  await page.getByRole('button',{name:'Search chats',exact:true}).click();
  await expect(recent.getByRole('status')).toHaveText('206 chats');
- await workspaces.getByRole('button',{name:'All projects',exact:true}).click();await search.waitFor();
+ await workspaces.getByRole('button',{name:'All workspaces',exact:true}).click();await search.waitFor();
  await search.fill('');await workspaceBrowser.getByRole('button',{name:'Browse folders',exact:true}).click();
  await workspaceBrowser.locator('.a-workspace-location').waitFor();const browsed=(await info()).state.selectedSessionId;
  await page.getByRole('button',{name:'Go to parent workspace folder',exact:true}).click();

@@ -62,9 +62,9 @@ try{
  await composer.fill('Start fresh');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(page.getByText('Workspace folder does not exist: /missing',{exact:true})).toBeVisible();
  await expect(page.getByRole('banner')).toContainText('New chat');
- await page.getByRole('button',{name:'Choose project',exact:true}).click();
+ await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Existing · /existing',exact:true}).click();
- await expect(page.getByRole('dialog',{name:'Choose a project',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('dialog',{name:'Choose a workspace',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Retry',exact:true}).click();
  await expect(page.getByText('Start fresh',{exact:true})).toHaveCount(1);
  await expect(page.getByRole('banner')).toContainText('Created conversation');
@@ -95,7 +95,7 @@ try{
  await expect(worker).toHaveValue('A newer shared worker draft');await expect(page.getByRole('dialog')).toBeVisible();
  assert.equal(state.view.workerDraft,'A newer shared worker draft');
  await action('view.update',{patch:{panel:null}});await page.getByRole('button',{name:'New chat',exact:true}).click();
- await page.getByRole('button',{name:'Choose project',exact:true}).click();
+ await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
  await page.getByRole('form',{name:'Use existing folder',exact:true}).getByRole('button',{name:'Browse',exact:true}).click();
  await page.getByRole('button',{name:'New folder',exact:true}).click();

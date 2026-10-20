@@ -38,8 +38,8 @@ try{
  await page.goto(url);await ready();
  await expect(page.locator('.a-work-heading')).toHaveCount(0);
  await expect(page).toHaveTitle('Amplifier');
- await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toHaveCount(0);
- check('Fresh clients arrive at Home with app identity, no redundant header label and no sidebar entry');
+ await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toHaveCount(1);
+ check('Fresh clients arrive at Home with app identity, no redundant header label and a sidebar Home icon');
 
  const fixtureHome=dirname((await state()).workspaceDefaults.root),projects=[],chats=[];
  for(const [name,title] of [['Launch','Home launch notes'],['Offsite','Other project chat']]){
@@ -53,10 +53,10 @@ try{
  await page.getByLabel('Work scope',{exact:true}).selectOption(projects[0].id);await ready();
   await expect(page.locator('.a-work-card h3')).toHaveText('Home launch notes');
  await page.getByLabel('Search your work',{exact:true}).fill('launch');
- await page.getByRole('button',{name:'Open project',exact:true}).click();
+ await page.getByRole('button',{name:'Open workspace',exact:true}).click();
  await expect(page.getByRole('group',{name:'Workspace view',exact:true})).toBeVisible();
  await home();await expect(page.getByLabel('Search your work',{exact:true})).toHaveValue('launch');
- check('Immediate search blur keeps Open project usable and preserves the pending search on return');
+ check('Immediate search blur keeps Open workspace usable and preserves the pending search on return');
  await page.getByLabel('Search your work',{exact:true}).fill('');
  await expect.poll(async()=>(await state()).view.workHomeQuery).toBe('');await ready();
  await page.getByLabel('Search your work',{exact:true}).fill('launch');
@@ -75,10 +75,10 @@ try{
   const response=await page.request.post(url+'/fixture/scoped-query',{data:{mode,resource:'workHome',clientId:(await state()).client.id}});
   assert.equal(response.status(),200);return response.json();
  };
- for(const destination of ['Open project','New chat']){
+ for(const destination of ['Open workspace','New chat']){
   await queryControl('hold');
   try{
-   const projectButton=await page.getByRole('button',{name:'Open project',exact:true}).elementHandle();
+   const projectButton=await page.getByRole('button',{name:'Open workspace',exact:true}).elementHandle();
    await page.getByLabel('Search your work',{exact:true}).fill('held '+destination);
    await page.getByLabel('Search your work',{exact:true}).press('Tab');
    await page.waitForFunction(()=>window.amplifier.getShellState()?.snapshots?.chats?.navigationResourcePending?.workHome);
@@ -159,7 +159,7 @@ try{
  assert.equal((await state()).view.newSessionDraft.workspace,projects[1].path);await home();
  await pin(projects[0].id);await ready();await expect(page.locator('.a-work-card h3')).toHaveText('Home launch notes');
  await pin('home-missing-project');
- await expect(page.getByRole('alert')).toContainText('This project is unavailable.');
+ await expect(page.getByRole('alert')).toContainText('This workspace is unavailable.');
  await expect(page.getByRole('button',{name:'Show all work',exact:true})).toHaveCount(0);
  await expect(page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true})).toBeDisabled();
  await expect(page.locator('.a-adaptive-home')).not.toContainText('Loading your work…');
