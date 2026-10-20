@@ -187,13 +187,16 @@ def inventory(home, *, installed=None, graph=None):
         observed[name] = {'url': urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', '')),
                           'ref': policy.get('ref') or next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '') or source.get('branch') or source.get('rev') or '',
                           'current': resolved.fragment, 'subdirectory': next(iter(query.get('subdirectory', [''])), ''),
-                          'provenance': 'worker resolution lock'}
+                          'provenance': 'worker resolution lock',
+                          **({'policyOrigin': policy['policyOrigin']} if policy.get('policyOrigin') else {})}
     for name, source in (installed_sources(project, graph=graph, tracked=locked) if installed is None else installed).items():
         resolved = locked.get(name)
         policy = effective_policies.get(name)
         if (policy and source.get('current') == (policy.get('revision') or (resolved.fragment if resolved else None))
                 and source.get('url') == policy.get('url') and source.get('subdirectory', '') == policy.get('subdirectory', '')):
             source['ref'] = policy['ref']
+            if policy.get('policyOrigin'):
+                source['policyOrigin'] = policy['policyOrigin']
         observed[name] = source
     rows = []
     base = receipt_directory(home, generation) / 'runtime-base.toml'
@@ -209,12 +212,20 @@ def inventory(home, *, installed=None, graph=None):
         override = source.get('override', False)
         registry_migration = core_registry_migration(name, source, baseline)
         eligible = bool(not override and not registry_migration and ref and not pinned(ref) and source.get('current'))
+        policy_evidence = []
+        if ref and pinned(ref) and not source.get('policyOrigin'):
+            # Legacy install receipts cannot tell an authored pin from uv's
+            # normalized commit. Preserve it and surface the missing provenance.
+            from .runtime_source_policy import origin
+            source['policyOrigin'] = origin({**source, 'revision': source.get('current', '')}, 'unrecorded')
+        if (source.get('policyOrigin') or {}).get('kind') == 'unrecorded':
+            policy_evidence.append('Version pin origin is not recorded; source policy needs confirmation')
         rows.append({'id': 'runtime:' + name, 'package': name, 'kind': 'runtime dependency',
                      'label': safe_label(source['url']) if source.get('url') else name,
                      **source, 'ref': ref, 'status': 'not_checked' if eligible or registry_migration else 'local' if override else 'pinned',
                      **({'registryMigration': True} if registry_migration else {}),
                      'eligible': eligible, 'usage': 'configured',
-                     'usageEvidence': ['Conversation worker environment', source['provenance']]})
+                     'usageEvidence': ['Conversation worker environment', source['provenance'], *policy_evidence]})
     return rows
 
 
@@ -399,8 +410,11 @@ def verify_resolution(resolved, row):
             **({'observedRevision': resolved.fragment} if resolved is not None else {}),
         }
         raise error
-    return {'url': row['url'], 'ref': row['ref'], 'subdirectory': row.get('subdirectory', ''),
-            'revision': row['latest']}
+    policy = {'url': row['url'], 'ref': row['ref'], 'subdirectory': row.get('subdirectory', ''),
+              'revision': row['latest']}
+    from .runtime_source_policy import carried_origin
+    policy['policyOrigin'] = carried_origin(policy, row.get('policyOrigin'))
+    return policy
 
 
 async def stage(manager, generation, candidates, *, finalize=True):
