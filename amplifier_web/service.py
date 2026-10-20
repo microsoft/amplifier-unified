@@ -359,6 +359,8 @@ from .workspace_resources import definitions as resource_reservation_definitions
 ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
 ACTION_DEFINITIONS.update(environment_definitions(schema, string))
+from .test_capacity_settings import definitions as test_capacity_definitions
+ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
 ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
@@ -435,6 +437,7 @@ for _access, _actions in {
         *resource_reservation_definitions(schema, string),
         *environment_definitions(schema, string),
         *test_queue_definitions(schema, string),
+        *test_capacity_definitions(schema, string),
         *assignment_definitions(schema, string),
         *handoff_definitions(schema, string),
     },
@@ -1931,6 +1934,9 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in test_capacity_definitions(schema, string):
+            from .test_capacity_settings import dispatch as test_capacity_dispatch
+            return await test_capacity_dispatch(self, action, args, configuration_authority)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
         if action in environment_definitions(schema, string):
@@ -4353,9 +4359,33 @@ class AppService:
                     from .session_health import generation_failure
                     failure = generation_failure(payload)
                     existing = session.get('failure')
-                    if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'):
+                    safety_categories = {'content_filter', 'computer_capture_stop'}
+                    explicit_change = (failure and failure.get('category') != 'unknown'
+                        and isinstance(existing, dict) and failure['category'] != existing.get('category'))
+                    # A terminal's explicit cause supersedes an earlier transient
+                    # provider error. Never turn a terminal safety stop into a
+                    # resumable rate-limit failure by binding the earlier cause.
+                    # Conversely, a later non-safety wrapper cannot erase an
+                    # already observed safety halt; retain its separate cause.
+                    if explicit_change and existing.get('category') in safety_categories and failure['category'] not in safety_categories:
+                        existing['terminalFailure'] = copy.deepcopy(failure)
+                    if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'
+                            or explicit_change and (existing.get('category') not in safety_categories
+                                                    or failure['category'] in safety_categories)):
                         session['failure'] = {**failure, 'recordedAt': event['at'],
                             'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
+                    elif isinstance(existing, dict):
+                        active = session.get('collaborationGeneration') or {}
+                        # A classified provider cause precedes the terminal
+                        # event. Bind it only to its observed admitted input
+                        # and generation, never to an unrelated later failure.
+                        if (active.get('id') == payload.get('generation_id') and not active.get('terminal')
+                                and existing.get('generationId') in {None, active.get('id')}
+                                and existing.get('inputId')
+                                and existing['inputId'] in active.get('inputIds', [])
+                                and existing['inputId'] in payload.get('input_ids', [])):
+                            session['failure'] = {**existing, 'generationId': active['id'],
+                                'inputIds': payload['input_ids']}
                 if root_generation and payload.get("event") == "generation.finished":
                     if not scheduled_generation:
                         from .attention import completed

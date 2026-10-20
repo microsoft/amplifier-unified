@@ -263,8 +263,8 @@
           "title": "Archive with truthful progress, guarded navigation, and Undo",
           "scope": "standard-path",
           "entryPath": [
-            "Chat → Archive",
-            "Row Details → Archive"
+            "Chat \u2192 Archive",
+            "Row Details \u2192 Archive"
           ],
           "prerequisites": [
             "Synthetic isolated archive fixture; no real user files or runtime execution"
@@ -284,7 +284,7 @@
             "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
             "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
             "Undo is available after archive confirmation even while the following navigation is stalled.",
-            "A newer navigation intention, including A→B→A, prevents the old archive from redirecting.",
+            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
             "Archiving a different row or invoking the raw public action does not navigate the current view.",
             "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
             "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
@@ -1427,6 +1427,63 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#adaptive-home-october-19"
+    },
+    {
+      "id": "delta.907",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/907",
+      "reason": "Global test capacity adds one Settings route and an additive scheduled browser owner; preserve the frozen inventory and original scenarios.",
+      "workflowsAdded": [
+        {
+          "id": "settings.testing-capacity",
+          "family": "settings",
+          "title": "Adjust global isolated-test limits without cancelling waiting work",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources"
+          ],
+          "prerequisites": [
+            "Built client and isolated settings fixture with synthetic state; no production runner or account",
+            "Private browser context and owned fixture process"
+          ],
+          "steps": [
+            "Open Testing & resources without an enabled runner",
+            "Edit global limits including zero and save",
+            "Lose a successful save acknowledgement and reconcile through readback",
+            "Race a second settings writer and retain rejected edits",
+            "Use dirty-close controls at narrow width and cold reopen"
+          ],
+          "expectedResults": [
+            "Global defaults remain available without a runner and persist on reopen.",
+            "Zero is preserved as an explicit disabled ceiling.",
+            "An unknown save response is reconciled without replaying the mutation.",
+            "A stale writer cannot overwrite newer settings or lose its draft.",
+            "Narrow controls remain usable and dirty-close preserves edits."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Registered Extended browser checks owner; affected-flow local smoke"
+            },
+            {
+              "path": "tests/test_test_capacity_settings.py",
+              "relation": "Global authority, queue wake, mutable policy and immutable cleanup identity"
+            }
+          ],
+          "limits": [
+            "Synthetic browser/backend evidence does not establish native runner or production acceptance.",
+            "The original frozen inventory is unchanged; no unrelated full census is a merge gate."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#global-test-capacity-october-20"
     },
     {
       "id": "delta.908",

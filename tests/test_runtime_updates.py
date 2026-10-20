@@ -139,6 +139,55 @@ async def test_branch_movement_after_check_does_not_activate(environment):
     assert not (environments.receipt_directory(manager.home, generation) / 'runtime.lock').exists()
 
 
+async def test_uv_commit_override_does_not_pin_the_next_update(environment, monkeypatch):
+    """Exercise real uv normalization, locked installation and frozen replay."""
+    import tomllib
+    from urllib.parse import parse_qs
+    from amplifier_web.runtime_qualification import freeze, verify_recorded
+    from amplifier_web.updates import process
+
+    manager, current, row, old, new, repo = environment
+    baseline = (current / 'uv.lock').read_bytes()
+    original = environments.update_manifest
+
+    async def exact_candidate(home):
+        observed, content = await original(home)
+        data = tomllib.loads(content.decode())
+        data['tool']['uv']['sources'].pop('fixture-runtime')
+        data['tool']['uv']['override-dependencies'] = [
+            'fixture-runtime @ git+' + repo.as_uri() + '@' + new]
+        return observed, ('\n'.join(json.dumps(key) + ' = ' + environments.toml_value(value)
+                                    for key, value in data.items()) + '\n').encode()
+
+    monkeypatch.setattr(environments, 'update_manifest', exact_candidate)
+    generation = '9' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    prepared = await environments.stage(manager, generation, [row], finalize=False)
+    resolved = environments.locked_sources(prepared)['fixture-runtime']
+    assert parse_qs(resolved.query)['rev'] == [new] and resolved.fragment == new
+    await process(shutil.which('uv'), 'sync', '--locked', '--project', str(prepared), timeout=90)
+    final = await freeze(manager, generation, prepared)
+    verify_recorded(final, receipt)
+    assert (current / 'uv.lock').read_bytes() == baseline
+    (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    installed = next(item for item in environments.inventory(manager.home)
+                     if item.get('package') == row['package'])
+    assert installed['ref'] == 'main' and installed['eligible'] and installed['current'] == new
+    frozen = (receipt / 'runtime.lock').read_bytes()
+
+    monkeypatch.setattr(environments, 'update_manifest', original)
+    (repo / 'marker.txt').write_text('next branch update')
+    git(repo, 'commit', '-am', 'next')
+    latest = git(repo, 'rev-parse', 'HEAD')
+    next_generation = '8' * 32
+    environments.receipt_directory(manager.home, next_generation).mkdir(parents=True)
+    next_project = await environments.stage(manager, next_generation, [{**installed, 'latest': latest}])
+    assert environments.locked_sources(next_project)[row['package']].fragment == latest
+    assert (receipt / 'runtime.lock').read_bytes() == frozen
+    verify_recorded(final, receipt)
+
+
 def test_cold_inventory_does_not_prepare_worker(tmp_path):
     assert environments.inventory(tmp_path) == []
     assert not (tmp_path / 'runtime').exists()

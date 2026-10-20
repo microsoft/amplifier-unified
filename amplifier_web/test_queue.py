@@ -15,6 +15,7 @@ import uuid
 
 from . import task_environments as environments
 from . import test_environment_profiles as profiles
+from . import test_capacity_settings as capacity_settings
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -134,6 +135,7 @@ class TestQueue:
         config, _, _ = environments.configuration(self.app)
         if not config or environments.config_key(config) != job['backendKey']:
             raise ValueError('The approved test backend changed; this request will not start on another backend.')
+        capacity_settings.load(self.app)
         return config
 
     def continuation_guard(self, receipt):
@@ -386,13 +388,15 @@ class TestQueue:
         if not fresh:
             return request
         loop = asyncio.get_running_loop()
-        async def checked():
+        async def checked(capacity=False):
             async with app.lock:
                 # Cleanup is part of the original admitted check, even when its
                 # waiting authority is revoked. It only stops that exact owner;
                 # it never starts work, changes settings or removes evidence.
                 if not cleanup:
-                    self.guard(self.get(receipt['requestId']))
+                    current_config = self.guard(self.get(receipt['requestId']))
+                    if capacity:
+                        return capacity_settings.apply(app, current_config)
                 else:
                     active, _, _ = environments.configuration(app)
                     current = environments.get(app.data_dir, receipt['senderSessionId'], row['id'])
@@ -400,7 +404,9 @@ class TestQueue:
                         raise ValueError('The retained cleanup backend changed.')
         def admit():
             asyncio.run_coroutine_threadsafe(checked(), loop).result(timeout=10)
-        result = await app.worktrees.finish_thread(environments.effect, app, row, action, args, config, request, admit)
+        def policy_admit():
+            return asyncio.run_coroutine_threadsafe(checked(capacity=True), loop).result(timeout=10)
+        result = await app.worktrees.finish_thread(environments.effect, app, row, action, args, config, request, admit, policy_admit)
         return result['request']
 
     async def run(self, identity, config):

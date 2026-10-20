@@ -44,6 +44,7 @@
     {"id": "memory-personalization", "command": ["node", "tests/memory-personalization-browser.mjs"]},
     {"id": "publishing", "command": ["node", "tests/publishing-browser.mjs"]},
     {"id": "portability", "command": ["node", "tests/portability-browser.mjs"]},
+    {"id": "testing-settings", "command": ["node", "tests/testing-settings-browser.mjs"]},
     {"id": "settings", "command": ["node", "tests/settings-browser.mjs"]},
     {"id": "configuration-recovery-components", "command": ["node", "--test", "tests/configuration-recovery.test.mjs"]},
     {"id": "configuration-recovery", "command": ["node", "tests/configuration-recovery-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/configuration-recovery"}},
