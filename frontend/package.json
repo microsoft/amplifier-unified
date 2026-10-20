@@ -105,6 +105,7 @@
     "test:draft-discovery-recovery-browser": "node tests/draft-discovery-recovery-browser.mjs",
     "test:inline-media-transition-browser": "node tests/inline-media-transition-browser.mjs",
     "test:adaptive-work-browser": "node tests/adaptive-work-browser.mjs",
+    "test:home-sidebar-browser": "node tests/home-sidebar-browser.mjs",
     "test:focus-navigation-browser": "node tests/focus-navigation-browser.mjs"
   },
   "dependencies": {

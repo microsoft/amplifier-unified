@@ -2,6 +2,8 @@ import React,{createContext,useEffect,useLayoutEffect,useRef,useState} from 'rea
 
 export const NavigationOpen=createContext(true);
 const inertOwners=new WeakMap();
+export const navigationExpanded=(view={},narrow=false)=>(!narrow&&!!view.navPinned||!!view.navExpanded)
+ &&(!narrow||!view.canvasFocused&&!view.panel&&!view.toolbarMenuOpen);
 
 export function useNarrowScreen(query='(max-width: 760px)'){
  const [matches,setMatches]=useState(()=>typeof matchMedia==='function'&&matchMedia(query).matches);
@@ -10,32 +12,38 @@ export function useNarrowScreen(query='(max-width: 760px)'){
 }
 // Modal sheets and drawers retain their place in the app's DOM. Inert siblings
 // prevent both keyboard and assistive-technology navigation into the background.
-export function useModalFocus(ref,enabled,onClose){
+export function useModalFocus(ref,enabled,onClose,includeSelector=null){
  const close=useRef(onClose);close.current=onClose;
  // Release the old modal during the commit, before newly revealed siblings get
  // their declarative inert state. A passive cleanup can re-inert an open Canvas.
  useLayoutEffect(()=>{
   const panel=ref.current;if(!enabled||!panel)return;
   const previous=document.activeElement,hidden=[];
+  const included=includeSelector?[...document.querySelectorAll(includeSelector)]:[];
+  const hide=sibling=>{
+   if(included.includes(sibling))return;
+   if(included.some(node=>sibling.contains(node))){for(const child of sibling.children)hide(child);return}
+   const held=inertOwners.get(sibling)||{count:0,original:sibling.inert};held.count++;inertOwners.set(sibling,held);hidden.push(sibling);sibling.inert=true;
+  };
   let branch=panel;
   while(branch?.parentElement&&branch.id!=='amp-one'){
-   for(const sibling of branch.parentElement.children){if(sibling===branch||sibling.tagName==='STYLE'||sibling.matches('.a-navigation-scrim,.a-details-scrim,.a-toolbar-scrim'))continue;const held=inertOwners.get(sibling)||{count:0,original:sibling.inert};held.count++;inertOwners.set(sibling,held);hidden.push(sibling);sibling.inert=true}
+   for(const sibling of branch.parentElement.children){if(sibling===branch||sibling.tagName==='STYLE'||sibling.matches('.a-navigation-scrim,.a-details-scrim,.a-toolbar-scrim'))continue;hide(sibling)}
    branch=branch.parentElement;
   }
-  const candidates=()=>[...panel.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],[tabindex="0"]')].filter(el=>el.getClientRects().length&&!el.closest('[inert]'));
-  candidates()[0]?.focus({preventScroll:true});
+  const candidates=()=>[...included,...panel.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],[tabindex="0"]')].filter(el=>el.getClientRects().length&&!el.closest('[inert]'));
+  candidates().find(node=>panel.contains(node))?.focus({preventScroll:true});
   const key=event=>{
    if(event.defaultPrevented)return;
    if(event.key==='Escape'){event.preventDefault();close.current();return}
    if(event.key!=='Tab')return;
    const list=candidates(),first=list[0],last=list.at(-1);
    if(!first){event.preventDefault();return}
-   if(event.shiftKey&&(document.activeElement===first||!panel.contains(document.activeElement))){event.preventDefault();last.focus()}
-   else if(!event.shiftKey&&(document.activeElement===last||!panel.contains(document.activeElement))){event.preventDefault();first.focus()}
+   if(event.shiftKey&&(document.activeElement===first||!list.includes(document.activeElement))){event.preventDefault();last.focus()}
+   else if(!event.shiftKey&&(document.activeElement===last||!list.includes(document.activeElement))){event.preventDefault();first.focus()}
   };
   document.addEventListener('keydown',key);
   return()=>{document.removeEventListener('keydown',key);for(const el of hidden){const held=inertOwners.get(el);if(held&&!--held.count){el.inert=held.original;inertOwners.delete(el)}}if(previous?.isConnected&&!previous.closest('[inert]'))previous.focus?.({preventScroll:true})};
- },[enabled,ref]);
+ },[enabled,ref,includeSelector]);
 }
 export function MobileChatTitle({state,session}){
  const workspace=state.workspaces?.find(row=>row.id===state.selectedWorkspaceId);

@@ -69,9 +69,9 @@ The user approved a refinement after reviewing their Focus screenshot. The
 observed problem was duplicate navigation and a first decision halfway down the
 screen. Keep the warm typography and independent Appearance/view choices.
 
-- Home owns status filtering, scope and search. The sidebar owns pinned
-  chats, projects and recent chats; its separate search and creation entries are omitted on Home. The single Home
-  creation control uses its current project scope, or starts standalone under All
+- Home owns its status filtering, scope and search. The sidebar has independent
+  Browse and Status organizations (see the 2026-10-20 refinement below).
+  The Home creation control uses its current project scope, or starts standalone under All
   work / On its own. Unavailable scopes cannot silently create somewhere else.
 - Focus uses one reading column. The decision comes before the single status
   filter row, with a prominent action that opens the original conversation.
@@ -152,3 +152,36 @@ the Home label while already on Home, and correction of a retained chat highligh
 and runtime state while stepping, chat/draft continuity, error-banner ownership,
 scope/search resets, restart, and narrow/forced-color layouts. The live review
 is qualitative product evidence, not a measured usability or accessibility study.
+
+## Browse / Status and calmer Home — 2026-10-20
+
+The user approved the sidebar mockup and explicitly wants Search chats and New
+chat accessible from both independently scrolled surfaces, including on Home.
+
+- The sidebar's first line switches Browse / Status. Browse retains pinned chats,
+  projects and recent chats. Status groups the same chats under Needs you, Ready
+  for you, Working and Pick up again. Blocked work stays in Needs you.
+- The visibility toggle always stays in the app header. Phone navigation fills
+  the space below it; the toggle participates in the drawer's keyboard focus
+  loop. Escape closes navigation, and choosing a chat restores the main surface.
+- Sidebar mode, group expansion and bounded page choices belong to this client.
+  They survive navigation and reload independently of Home's view, filters,
+  search, Focus pass, and the retained chat/draft/Canvas.
+- Each open Status group requests one existing catalog page. Closed groups and
+  hidden navigation request no Status rows. Identical Home/sidebar queries reuse
+  the canonical projection cache. A pinned Chats component remains fenced to its
+  project, including when that project becomes unavailable.
+- Brief pairs Needs you and Ready for you with one prominent card each and
+  compact additional rows, followed by running work and recent chats. Studio
+  gives Needs you, Ready for you and Working separate columns, with recent chats
+  below. Narrow layouts stack these sections in that order. When Brief has no
+  attention or unread responses, one quiet confirmation replaces the empty
+  pair; its running strip appears only when something is running.
+- Cards use existing saved titles/descriptions and activity labels. Action labels
+  distinguish an existing question, approval or blocked chat and open that chat;
+  they do not answer, approve, acknowledge, classify, or create a new work entity.
+  Large saved-history totals are available in browsing instead of presented as
+  an obligation on the overview.
+
+No extra model calls, summary jobs, history reprocessing or session lifecycle
+changes are introduced. Existing summary input/output is unchanged.
