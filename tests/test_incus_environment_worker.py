@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -520,3 +521,65 @@ def test_cleanup_owner_change_after_export_is_not_preservation_failure(tmp_path,
     assert result['status'] == 'unknown' and result['effectAdmitted'] is False
     assert result['phase'] == 'rechecking' and result['code'] == 'ownership_conflict'
     assert not any(args[0] == 'destroy' for _, args in backend[0])
+
+
+@pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test'])
+def test_manual_execution_selects_fixed_profile_and_preserves_transport(tmp_path, backend, monkeypatch, profile_id):
+    value = {**payload(tmp_path, 'execute'), 'profileId': profile_id,
+             'command': "printf '%s' 'literal ; $HOME \"'; exit 7", 'timeoutSeconds': 23,
+             'jobEnvironment': {'HOME': '/root'}, 'environment': {'PATH': '/caller'}, 'user': 'root'}
+    name = worker.identity(value)
+    worker.common.retain_source_ready(tmp_path, name, value['snapshot'])
+    original = worker.incus
+    executions = []
+    expected = {'exit_code': 7, 'stdout': 'partial', 'stderr': 'error', 'truncated': True}
+    def incus(config, env, args, timeout=30, **kwargs):
+        if args[0] == 'exec':
+            executions.append((args, timeout, kwargs))
+            return expected
+        return original(config, env, args, timeout, **kwargs)
+    monkeypatch.setattr(worker, 'incus', incus)
+    result = worker.execute_call(value)
+    assert result == {'ok': True, 'universeId': name, 'result': expected}
+    assert len(executions) == 1
+    args, timeout, kwargs = executions[0]
+    assert args[:8] == ['exec', name, '--cwd', '/workspace', '--', 'python3', '-I', '-c']
+    assert args[9] == 'execute'
+    assert json.loads(args[10]) == {
+        'command': value['command'],
+        'environment': worker.common.selected_profile(value)['environment']}
+    assert timeout == 23 and kwargs == {}
+    assert not any(args[0] in {'launch', 'file', 'stop', 'destroy', 'export'} for _, args in backend[0])
+
+
+@pytest.mark.parametrize('fault', ['owner', 'snapshot', 'stopped', 'backend'])
+def test_manual_currentness_refusals_dispatch_nothing(tmp_path, backend, fault):
+    value = payload(tmp_path, 'execute')
+    worker.common.retain_source_ready(tmp_path, worker.identity(value), value['snapshot'])
+    if fault == 'owner':
+        backend[1]['owner'] = 'another-root'
+    elif fault == 'snapshot':
+        value['snapshot']['archive_sha256'] = 'changed'
+    elif fault == 'stopped':
+        backend[1].update(instance='Stopped', launch='stopped')
+    else:
+        value['expectedBackendIdentity']['daemon'] = 'changed'
+    result = worker.execute_call(value)
+    assert not result['ok']
+    assert not any(args[0] in {'exec', 'launch', 'file', 'stop', 'destroy', 'export'} for _, args in backend[0])
+
+
+def test_manual_timeout_keeps_unknown_without_redispatch(tmp_path, backend, monkeypatch):
+    value = payload(tmp_path, 'execute')
+    worker.common.retain_source_ready(tmp_path, worker.identity(value), value['snapshot'])
+    original = worker.incus
+    executions = []
+    def incus(config, env, args, timeout=30, **kwargs):
+        if args[0] == 'exec':
+            executions.append(args)
+            raise worker.BackendFailure('timeout', 'The operation may still be running.')
+        return original(config, env, args, timeout, **kwargs)
+    monkeypatch.setattr(worker, 'incus', incus)
+    result = worker.execute_call(value)
+    assert not result['ok'] and result['status'] == 'unknown' and result['effectAdmitted']
+    assert result['code'] == 'timeout' and len(executions) == 1
