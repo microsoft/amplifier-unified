@@ -400,7 +400,13 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # and the approval reading-column regression now have owners too. The two
     # recovery additions retain distinct component and full-journey commands;
     # the existing-chat card, adaptive Home and temporary Focus passes each add a journey.
-    assert len(readiness_scripts | extended_scripts) == 140
+    # Attachment consumption is one additional source-only owner, not a
+    # duplicate readiness invocation or a replacement of any existing script.
+    attachment = 'tests/attachment-consumption-browser.mjs'
+    assert attachment in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', attachment] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment}) == 140
+    assert len(readiness_scripts | extended_scripts) == 141
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
@@ -435,6 +441,57 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
                and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
                for step in coordination['jobs']['contracts']['steps'])
+
+
+def test_attachment_focus_selects_exact_existing_owner_without_changing_plan():
+    import copy
+    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+    before = copy.deepcopy(plan)
+    focused = runner.attachment_consumption_plan(plan)
+    assert plan == before
+    assert focused == {'schemaVersion': 1, 'scenarios': [{
+        'id': 'attachment-consumption',
+        'command': ['node', 'tests/attachment-consumption-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
+    }]}
+    for mutation in ('missing', 'duplicate', 'command', 'environment'):
+        broken = copy.deepcopy(focused)
+        if mutation == 'missing':
+            broken['scenarios'] = []
+        elif mutation == 'duplicate':
+            broken['scenarios'] *= 2
+        elif mutation == 'command':
+            broken['scenarios'][0]['command'] = ['node', 'tests/other.mjs']
+        else:
+            broken['scenarios'][0]['env'] = {}
+        with pytest.raises(ValueError):
+            runner.attachment_consumption_plan(broken)
+
+
+def test_attachment_focus_workflow_retains_failures_and_default_coverage():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
+    assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
+    job = workflow['jobs']['browser']
+    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    assert len(runs) == 2
+    flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
+    assert all(flag in step['run'] for step in runs)
+    assert '--budget-seconds 1500' in runs[1]['run']
+    host = next(step for step in job['steps'] if step.get('id') == 'attachment-contracts')
+    assert host['if'] == '${{ inputs.attachment_consumption }}' and host['continue-on-error'] == 'true'
+    targets = re.findall(r'tests/test_[\w]+\.py', host['run'])
+    assert targets == ['tests/test_attachments.py', 'tests/test_message_delivery.py',
+                       'tests/test_live_clients.py', 'tests/test_chat_references.py',
+                       'tests/test_browser_check_runner.py', 'tests/test_release_qualification.py']
+    assert '--junitxml=output/browser-checks/attachment-contracts.xml' in host['run']
+    final = next(step for step in job['steps'] if step.get('name') == 'Preserve failed attachment contracts')
+    assert final['run'] == 'exit 1'
+    assert "always()" in final['if'] and "steps.attachment-contracts.outcome != 'success'" in final['if']
+    assert "steps.attachment-client-contracts.outcome != 'success'" in final['if']
+    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
+               for step in job['steps'])
 
 
 def test_reload_failure_diagnostics_have_retained_scenario_owners():

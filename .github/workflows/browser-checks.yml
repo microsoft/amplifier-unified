@@ -11,6 +11,10 @@ on:
         description: Append fixed chat-card units and the deliberate reload control
         type: boolean
         default: false
+      attachment_consumption:
+        description: Only attachment consumption, adjacent host contracts and the production build
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -30,17 +34,44 @@ jobs:
       - name: Record the checked-out build source
         id: build-source
         run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Reject mixed attachment selections
+        if: ${{ inputs.attachment_consumption && inputs.app004_qualification }}
+        run: exit 1
       - name: Record intended coverage before dependency setup
         run: >-
           python scripts/browser_check_runner.py
           --plan frontend/tests/browser-checks.json
           --output output/browser-checks --initialize
           ${{ inputs.app004_qualification && '--app004-qualification' || '' }}
+          ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --group dev --group artifacts
+      - name: Resolve the declared attachment-test runtime
+        if: ${{ inputs.attachment_consumption }}
+        id: attachment-runtime
+        run: |
+          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: ${{ inputs.attachment_consumption }}
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.attachment-runtime.outputs.revision }}
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - name: Install existing host-test prerequisites
+        if: ${{ inputs.attachment_consumption }}
+        run: >-
+          uv pip install --python .venv/bin/python
+          .ci/loop-live
+          'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main'
+          'amplifier-module-loop-streaming @ git+https://github.com/microsoft/amplifier-module-loop-streaming@main'
+          'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
+          'amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@main'
+          'amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@main#subdirectory=modules/tool-apply-patch'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -65,6 +96,20 @@ jobs:
         run: |
           set -o pipefail
           uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml 2>&1 | tee output/browser-checks/app004-contracts.log
+      - name: Verify fixed attachment host contracts
+        if: ${{ inputs.attachment_consumption }}
+        id: attachment-contracts
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest -v --tb=short tests/test_attachments.py tests/test_message_delivery.py tests/test_live_clients.py tests/test_chat_references.py tests/test_browser_check_runner.py tests/test_release_qualification.py --junitxml=output/browser-checks/attachment-contracts.xml 2>&1 | tee output/browser-checks/attachment-contracts.log
+      - name: Verify attachment-adjacent client contracts
+        if: ${{ inputs.attachment_consumption }}
+        id: attachment-client-contracts
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test frontend/tests/message-outbox.test.mjs frontend/tests/connection-notice.test.mjs 2>&1 | tee output/browser-checks/attachment-client.tap
       - name: Run all extended browser scenarios serially
         run: >-
           uv run --no-sync python scripts/browser_check_runner.py
@@ -72,6 +117,10 @@ jobs:
           --output output/browser-checks
           --budget-seconds 1500
           ${{ inputs.app004_qualification && '--app004-qualification' || '' }}
+          ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
+      - name: Preserve failed attachment contracts
+        if: ${{ always() && inputs.attachment_consumption && (steps.attachment-contracts.outcome != 'success' || steps.attachment-client-contracts.outcome != 'success') }}
+        run: exit 1
       - name: Retain scenario coverage and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -98,6 +147,9 @@ jobs:
         run: |
           echo 'MCP boundary and APP004 qualification are separate selections; neither proof was run.'
           exit 1
+      - name: Reject mixed MCP and attachment selection
+        if: ${{ inputs.attachment_consumption }}
+        run: exit 1
       - name: Record the fixed proof before setup
         run: |
           mkdir -p output/browser-checks/mcp-boundary

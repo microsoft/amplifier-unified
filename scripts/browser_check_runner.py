@@ -380,6 +380,17 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
             signal.signal(sig, handler)
 
 
+def attachment_consumption_plan(plan):
+    """One fixed diagnostic; retain the ordinary plan and process owner."""
+    expected = {'id': 'attachment-consumption',
+                'command': ['node', 'tests/attachment-consumption-browser.mjs'],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'}}
+    rows = [row for row in validate_plan(plan) if row['id'] == expected['id']]
+    if rows != [expected]:
+        raise ValueError('Attachment consumption requires its exact registered owner')
+    return {'schemaVersion': 1, 'scenarios': rows}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plan', type=Path, required=True)
@@ -388,7 +399,11 @@ def main():
     parser.add_argument('--initialize', action='store_true', help='Record unrun coverage before dependency setup')
     parser.add_argument('--app004-qualification', action='store_true',
                         help='Append fixed APP004 units and reload control, without reducing normal coverage')
+    parser.add_argument('--attachment-consumption', action='store_true',
+                        help='Run only the fixed registered attachment consumption diagnostic')
     args = parser.parse_args()
+    if args.attachment_consumption and args.app004_qualification:
+        parser.error('Attachment consumption and APP004 are separate selections')
     root = Path(__file__).resolve().parents[1]
     git = lambda *parts: subprocess.check_output(['git', *parts], cwd=root).strip()
     provenance = {'revision': git('rev-parse', 'HEAD').decode(),
@@ -399,6 +414,9 @@ def main():
     build = root / 'amplifier_web/static/build.json'
     provenance['buildMetadataSha256'] = digest(build) if build.is_file() else None
     plan = json.loads(args.plan.read_text())
+    if args.attachment_consumption:
+        plan = attachment_consumption_plan(plan)
+        provenance['selection'] = 'attachment-consumption-only'
     if args.initialize:
         args.output.mkdir(parents=True, exist_ok=True)
         save(args.output, initial_report(plan, provenance))

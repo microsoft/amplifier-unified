@@ -86,6 +86,11 @@ async function setupPage(){
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  await context.route('**/*',route=>new URL(route.request().url()).origin===base?route.continue():route.abort('blockedbyclient'));
  await context.addInitScript(installAttachmentObserver);
+ await context.addInitScript(()=>{
+  const Native=window.WebSocket;
+  window.attachmentSockets=[];
+  window.WebSocket=class extends Native{constructor(...args){super(...args);window.attachmentSockets.push(this)}};
+ });
  const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
  page.on('pageerror',error=>{report.errors.push(error.message);rememberFailure(error,'pageerror');});
  try{
@@ -201,11 +206,25 @@ async function twoCycles(page,owner,other){
  await call(page,'session.select',{id:owner});await expect(composer).toHaveDraft('Keep draft C after B');
  await cleanTrace(page,'Chat switch preserves consumed and new identities');
  try{
+  const connected=page.locator('.a-footer-status');
+  await expect(connected).toContainText('Connected');
+  const open=await page.evaluate(()=>window.attachmentSockets.filter(socket=>socket.readyState===WebSocket.OPEN).length);
+  assert.ok(open>0,'Observe a real open transport before disconnecting');
   await bounded(page.context().setOffline(true),5000,'Enter offline mode');
+  // Network emulation does not close an already-open WebSocket. Use the same
+  // retained real-socket close path as reconnect-retention, not forged app state.
+  await bounded(page.evaluate(()=>window.attachmentSockets.forEach(socket=>socket.close())),5000,'Close owned state transports');
+  await expect(connected).toContainText('Reconnecting');
   await expect(page.locator('[data-part="connection-notice"]')).toBeVisible({timeout:15000});
   await expect(composer).toHaveDraft('Keep draft C after B');
- }finally{await bounded(page.context().setOffline(false),5000,'Restore fixture network');}
+  report.transport={observedOpenSockets:open,disconnectObserved:true};
+ }finally{
+  await bounded(page.context().setOffline(false),5000,'Restore fixture network');
+  await bounded(page.evaluate(()=>window.dispatchEvent(new Event('online'))),5000,'Wake existing reconnect handler');
+ }
+ await expect(page.locator('.a-footer-status')).toContainText('Connected',{timeout:15000});
  await expect(page.locator('[data-part="connection-notice"]')).toHaveCount(0,{timeout:15000});
+ report.transport.reconnectObserved=true;
  await expect(page.locator('.a-composer img[alt="cycle-C.png"]')).toBeVisible();
  await cleanTrace(page,'Actual state transport reconnect retains draft C');
  const oldClient=(await state(page)).client.id;
@@ -217,6 +236,7 @@ async function twoCycles(page,owner,other){
  assert.notEqual((await state(page)).client.id,oldClient);
  await expect.poll(async()=>(await inspect(page)).attachments[owner]?.map(x=>x.id),{timeout:10000}).toEqual([c.id]);
  await cleanTrace(page,'Reload/client reconnect does not restore consumed IDs');
+ report.transport.reloadObserved=true;
  assert.equal((await inspect(page)).sends.filter(x=>x.sessionId===owner).length,2,'Reattachment never resends');
 }
 

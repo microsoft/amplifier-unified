@@ -219,9 +219,12 @@ async def test_accepted_attachments_settle_before_rpc_return(tmp_path, private, 
 
     async def add(identity, sid):
         # Same name and bytes deliberately yield different upload identities.
-        result = await action(identity, 'attachment.add', {
+        await action(identity, 'attachment.add', {
             'sessionId': sid, 'name': 'same.png', 'base64': base64.b64encode(PNG).decode()})
-        return next(row for row in result['state']['sessions'] if row['id'] == sid)['draftAttachments'][-1]
+        # Action snapshots include the selected chat, not every nonselected
+        # upload target. Read the explicit caller's actual private draft owner.
+        with app.clients.bind(identity):
+            return dict(app.clients.attachments(app._session(sid))[-1])
 
     def draft(identity, session):
         with app.clients.bind(identity):
