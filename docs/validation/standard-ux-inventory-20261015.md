@@ -821,3 +821,22 @@ races, validation failure/retry, offline use, stale metadata, and exact feature,
 handoff, and force-confirmation exclusions. The target is one validated newest
 known candidate and one restart after work is idle, with zero input replay.
 Network availability and live installation are not claimed by these fixtures.
+
+### Readiness fixture ownership and Home prerequisites (October 20)
+
+The existing `block-copy` journey starts from Home, creates a chat explicitly,
+and requires the composer after creation and reload. `workspace-switching`
+checks the exact project title separately from the visible Home breadcrumb;
+its draft, attachment, delayed-preview and workspace-selection assertions remain.
+
+The `pwa` journey must wait for its own child to bind. An unrelated healthy
+listener on the fixture port must fail startup without receiving browser requests.
+Keep its installability, offline recovery, draft, no-replay and authentication
+assertions. Bound browser and fixture cleanup and preserve original failures.
+
+When running these readiness journeys in the retained development DTU, give each
+scenario private network and mount namespaces, an owned `/tmp`, and private
+state directories. Record namespace identities, listener owners, source hashes
+and residual processes. Existing previews and their evidence are never valid
+substitutes for a test-owned fixture. This is a local isolation adapter, not an
+additional CI gate or a change to the frozen scenario inventory.
