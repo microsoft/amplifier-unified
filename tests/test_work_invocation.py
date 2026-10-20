@@ -12,6 +12,7 @@ import sqlite3
 
 import pytest
 
+from amplifier_web.management import Management
 from amplifier_web.service import AppError, AppService
 from test_collaborative_workspaces import app, Runtime, agent_action, generation, settled, until
 from test_peer_creation_operation import commission, initial_accepted, plan
@@ -168,7 +169,7 @@ async def test_required_set_is_delivered_association_not_all_owned_work(app, mon
     def forbidden(*args, **kwargs):
         pytest.fail('Invocation inspection hydrated history or started a worker')
     monkeypatch.setattr(app.history, 'ensure_loaded', forbidden)
-    monkeypatch.setattr(app, 'ensure_runtime', forbidden)
+    monkeypatch.setattr(Management, 'ensure_runtime', forbidden)
     work = await current_work(app, child)
     assert work['available']
     assert {row['id'] for row in work['discovery']['items']} == {first['id'], unrelated['id']}
@@ -379,9 +380,25 @@ async def test_mixed_delivered_inputs_cannot_hide_unsupported_lineage(app):
     item = await prepared_work(app, owner, 'mixed')
     created, child = await assert_available_commission(app, owner, item, 'mixed-bound-commission')
     unsupported = 'ordinary-followup-without-work-association'
-    await agent_action(app, owner, 'coordination.send', {
+    queued = await agent_action(app, owner, 'coordination.send', {
         'sessionId': child['id'], 'text': 'An ordinary untyped follow-up.', 'mode': 'queue'}, unsupported)
+    assert queued['delivery'] == 'queued' and child['status'] == 'working'
+    assert [entry[1] for entry in app.runtime.inputs] == [created['initialInputId']]
+    # The existing runtime fixture leaves accepted work busy. Settle that exact
+    # generation through the host's lifecycle events; do not bypass queue guards
+    # or write a successful admission/delivery into its receipt.
+    previous_generation = child['collaborationGeneration']['id']
+    await app.on_runtime_event('runtime.generation', {
+        'sessionId': child['id'], 'rootSessionId': child['id'],
+        'generation_id': previous_generation, 'event': 'generation.finished',
+        'input_ids': [created['initialInputId']],
+        'disposition': 'manager_turn_finished', 'active_job_ids': []})
+    assert child['collaborationGeneration']['terminal'] is True
+    assert child['collaborationGeneration']['completed'] is True
+    await app.on_runtime_event('runtime.status', {'sessionId': child['id'], 'status': 'idle'})
     await settled(app, unsupported, 'accepted')
+    assert [entry[1] for entry in app.runtime.inputs] == [created['initialInputId'], unsupported]
+    assert not app.collaboration.receipt(unsupported).get('workAssociationRef')
     # Both inputs are truly host-observed as delivered. A forged transport-only
     # input or an undelivered queue entry would miss the subset-dropping defect.
     await generation(app, child, 'mixed-delivered-generation',
@@ -606,7 +623,7 @@ async def test_restart_retains_lineage_but_does_not_replay_or_reuse_old_generati
         def forbidden(*args, **kwargs):
             pytest.fail('Restart inspection hydrated history or started a worker')
         monkeypatch.setattr(restored.history, 'ensure_loaded', forbidden)
-        monkeypatch.setattr(restored, 'ensure_runtime', forbidden)
+        monkeypatch.setattr(Management, 'ensure_runtime', forbidden)
         assert restored.collaboration.receipt(created['requestId'])['workAssociation'] == before
         result = await restored.app_bridge('coordination.current', binding, child['id'])
         assert result['work']['required']['status'] == 'unavailable'
