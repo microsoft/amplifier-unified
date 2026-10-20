@@ -22,6 +22,7 @@ async def make_work(app, tmp_path):
 async def test_workspace_browse_preserves_chat_draft_canvas_and_other_client(app, tmp_path, origin):
     paths, ids = await make_work(app, tmp_path)
     app.clients.attach('reader'); app.clients.attach('other')
+    other_view = deepcopy(app.clients.records['other']['view'])
     with app.clients.bind('reader'):
         await app.dispatch('session.select', {'id': ids[0][1]})
         await app.dispatch('view.update', {'patch': {'draft': 'Do not retarget this message'}})
@@ -40,7 +41,7 @@ async def test_workspace_browse_preserves_chat_draft_canvas_and_other_client(app
         await app.dispatch('session.draft', {'location': {'kind': 'managed'}})
         assert app.state['view']['workSurface'] == 'chat'
     with app.clients.bind('other'):
-        assert app.state['view'].get('workSurface', 'chat') == 'chat'
+        assert app.state['view'] == other_view
         assert app.state['selectedSessionId'] == ids[1][1]
 
 

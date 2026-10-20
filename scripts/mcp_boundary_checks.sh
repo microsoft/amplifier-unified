@@ -31,7 +31,7 @@ static_hashes = {str(path.relative_to(static)): hashlib.sha256(path.read_bytes()
 assert 'build.json' in static_hashes
 source_path = root / 'frontend/tests/mcp-recovery-browser.mjs'
 source = source_path.read_text()
-assert hashlib.sha256(source_path.read_bytes()).hexdigest() == '3030b649eb22c9d3e8786ab668c7b5e1cda67aa42931a3bbe0328ae0a1b2cf9b'
+assert hashlib.sha256(source_path.read_bytes()).hexdigest() == '60dba78089cb370efedae98ed7141b6398f3433a3882f2dc5c261b871c2302cc'
 positive = []
 for number in range(1, 4):
     name = f'mcp-recovery-repeat-{number}'
@@ -66,9 +66,9 @@ variant = variant.replace(' await expect(setup).toHaveCount(0);', ''' try{await 
   }));
   throw error;
  }''', 1)
-finally_text = '}finally{await secondBrowser?.close();await browser?.close();await stop();await rm(directory,{recursive:true,force:true})}'
+finally_text = "}finally{\n try{\n  await finishFixture({label:'MCP recovery fixture',close:[\n   ['second browser',async()=>{await secondBrowser?.close()}],\n   ['browser',async()=>{await browser?.close()}],\n  ],stop:async()=>{await stop();await rm(directory,{recursive:true,force:true})}});\n  cleanupComplete=true;\n }catch(error){if(originalError)console.error(error);else throw error}\n}"
 assert variant.count(finally_text) == 1
-variant = variant.replace(finally_text, finally_text[:-1] + ";await writeFile(process.env.MCP_NEGATIVE_CLEANUP,JSON.stringify({completed:true}))}", 1)
+variant = variant.replace(finally_text, finally_text[:-1] + ";await writeFile(process.env.MCP_NEGATIVE_CLEANUP,JSON.stringify({completed:cleanupComplete}))}", 1)
 negative_script = root / 'frontend/tests/.mcp-omit-close-negative.mjs'
 with negative_script.open('x') as handle:
     handle.write(variant)

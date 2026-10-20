@@ -363,6 +363,18 @@ inside an independent mixed conversation. Stop reports that limitation. With
 an enabled token/cost limit, queue/steer to such peers is refused; informational
 notices remain available, and commissioned helpers share the budget.
 
+Explicit user recovery uses revision-bound `assignment.resume` on the commissioning
+chat after interruption receipts, roots, native workers, preparations and current
+generations have settled. It preserves membership, task records, cumulative
+accounting and limits. It does not send input, resume paused local tasks or clear
+interruption revisions. Queued outbound requests and saved waits retain their
+original interruption binding; reopening cannot admit old requests or manufacture
+late continuation messages. A fresh user request may then start new work.
+Separately paused chat tasks and persisted local budget denials remain paused;
+the existing task/budget controls own their explicit revision-bound recovery.
+Stopped-assignment input is rejected before appending history or starting a worker,
+with guidance to the existing Shared tasks and assignment controls.
+
 The browser exposes assignment controls under Related work, with private drafts,
 revision conflicts and exact lost-response retries. Attached HTTP/session clients
 and agent actions use the same authority. Only the user can detach a settled

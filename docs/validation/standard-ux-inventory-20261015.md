@@ -735,3 +735,55 @@ hydration, cache/request identity, pin changes, starting preferences and client
 state isolation. The new smoke is a regression owner, not a requirement to rerun
 the unrelated browser census before release. Frozen inventory counts remain
 unchanged; current results must name the actual source/build and cleanup outcome.
+
+### Home breadcrumb on narrow chat headers (October 19)
+
+The existing `mobile-navigation` owner also requires a visible Home control with
+at least a 44×44px target and more than 100px for the current chat title at 320px.
+The decorative separator may collapse on phones; Home, navigation, Chat and
+Canvas controls remain available. Preserve the existing draft, reading-anchor,
+viewer and drawer-focus assertions across all eight maintained viewport sizes.
+The 0.20.182 failure measured an 84px title; the compact separator measured 108px
+in the owned Linux Chromium instance. This is browser geometry acceptance, not
+physical-device or enlarged-system-text qualification.
+
+### Post-release Home fixture repair (October 19)
+
+Existing feature journeys explicitly enter their preselected conversation when
+testing chat controls; they do not restore the old fresh-client landing behavior.
+`adaptive-work` remains the owner of genuine fresh Home arrival. The affected
+`peer-attribution`, `feedback-followup`, `settings`, `settings-mobile`,
+`workspace-starters`, `theme-definitions`, `smart-tools`, `shell-components`, and
+installed `inline-media` owners retain their product assertions. Menus use the
+current visible Project labels; screenshots use the task's evidence directory.
+
+`setup-journey` now includes both a negative discovery result for an unrelated
+workspace and a positive empty-connection result for the managed chat created
+by assisted setup from Home. The former must not reopen setup; the latter must.
+No broad provider discovery is added to saved-chat reading.
+
+`mcp-recovery` owns its fixture process group and waits for owned cache writers
+to stop before deleting its temporary directory. The opt-in MCP boundary proof
+must be deliberately requalified whenever this canonical scenario changes:
+three full recovery runs, one adjacent client run, and the original omit-Close
+negative assertion with screenshot and completed cleanup. A source hash update
+alone is not qualification, and the negative runner receipt must remain failed.
+
+The original 0.20.182 post-release run remains failed. Focused repair qualification
+is separate from the complete post-release suite and from physical-device checks.
+
+
+### Stopped assignment recovery (October 19)
+
+**ASSIGNMENT-RESUME** extends the existing `ordinary-workspace-work` browser owner.
+From a project’s Workspace work disclosure, stop the commissioning assignment,
+then use Resume assignment. Require the same membership, limits and cumulative
+accounting; Stop makes its one interruption request, while Resume adds no runtime
+call and preserves the private composer draft. Member controls cannot reopen the
+assignment. The focused Python owner `test_assignment_recovery.py` additionally
+covers rejected sends before history changes, new input after recovery, human/owner
+and revision boundaries, duplicate receipts across restart, unsettled Stop/runtime
+refusal, transactional failure, and suppression of pre-stop outbound requests and
+late saved waits. Frontend tests retain exact retry identity after uncertainty.
+These checks use synthetic runtime evidence; they do not claim live-provider or
+external-effect rollback. No extra browser lane or frozen inventory count is added.

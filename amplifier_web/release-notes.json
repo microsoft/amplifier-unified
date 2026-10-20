@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.183",
+      "title": "Resume stopped assignments and improve phone navigation",
+      "changes": [
+        "Reopen a stopped assignment from its commissioning chat after its workers settle. Keep shared tasks, membership, budgets and usage; old queued messages stay stopped and nothing is sent automatically. Separately paused chat tasks and budgets retain their own recovery controls.",
+        "Sending to a stopped assignment now explains how to resume it before accepting a message or starting a worker.",
+        "Improve the space available for chat titles and touch targets in the phone header.",
+        "Restore smoke-test coverage for fresh Home arrivals, settings, saved media and MCP recovery, with bounded cleanup of test processes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.182",
       "title": "A Home for your work",
       "changes": [

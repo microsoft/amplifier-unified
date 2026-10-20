@@ -34,15 +34,15 @@ try{
  await action('conversation.send',{text:'How can we make navigation work better on a phone?'});
  await patch({navPinned:true,navExpanded:false});
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent draft');
- const drawer=page.getByRole('dialog',{name:'Workspaces and conversations'});
+ const drawer=page.getByRole('dialog',{name:'Projects and chats'});
  for(const width of [320,360,390,412,600,760,1024,1440]){
   await page.setViewportSize({width,height:844});await page.waitForTimeout(150);
   const metrics=await page.evaluate(()=>{
    const box=s=>{const el=document.querySelector(s),b=el.getBoundingClientRect();return {x:b.x,width:b.width,height:b.height,display:getComputedStyle(el).display}};
-   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),title:box('.a-work-heading strong'),nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),width:b.getBoundingClientRect().width}))};
+   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),home:box('.a-work-home-crumb'),title:box('.a-work-heading strong'),nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),width:b.getBoundingClientRect().width}))};
   });
   results.push(metrics);assert.equal(metrics.body,width);assert.equal(metrics.font,'14px');
-  if(width<=760){assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');assert.ok(metrics.title.width>100);assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Chat','Open canvas']);assert.ok(metrics.actions.every(row=>row.width>=44))}
+  if(width<=760){assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');assert.ok(metrics.title.width>100);assert.notEqual(metrics.home.display,'none');assert.ok(metrics.home.width>=44&&metrics.home.height>=44);assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Chat','Open canvas']);assert.ok(metrics.actions.every(row=>row.width>=44))}
   await page.screenshot({path:`${out}/chat-${width}.png`});
   if(width<=760){
    await page.getByRole('button',{name:'Open navigation',exact:true}).tap();await drawer.waitFor();
@@ -166,4 +166,4 @@ try{
   results.push({reading:'retry-to-ready',removedHeight,before:retryBefore,after:retryAfter});
  }
  assert.deepEqual(errors,[]);await writeFile(`${out}/results.json`,JSON.stringify({results,errors},null,2));console.log('Responsive layouts, drawer focus, sheets, typography, delayed rapid toggles, retained viewer, draft and reload passed');
-}finally{await browser.close();fixture?.kill()}
+}finally{await writeFile(`${out}/results-partial.json`,JSON.stringify({results,errors},null,2));await browser.close();fixture?.kill()}
