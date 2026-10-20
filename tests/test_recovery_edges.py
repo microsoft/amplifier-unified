@@ -13,7 +13,7 @@ from test_collaborative_workspaces import settled
 
 
 async def provider_failure(app, target, category, *, terminal_id='failed-generation',
-                           terminal_inputs=None):
+                           terminal_inputs=None, terminal_category='unknown'):
     """Do not seed the failure identity required by peer recovery."""
     await generation(app, target, 'failed-generation', ['failed-input'])
     failure = RuntimeError({'authentication': 'Authentication failed',
@@ -46,7 +46,7 @@ async def provider_failure(app, target, category, *, terminal_id='failed-generat
     await app.on_runtime_event(*normalize_event({
         'type': 'generation.failed', 'generation_id': terminal_id,
         'input_ids': ['failed-input'] if terminal_inputs is None else terminal_inputs,
-        'error_category': 'unknown', 'error_type': 'ManagerTurnError',
+        'error_category': terminal_category, 'error_type': 'ManagerTurnError',
         'error_stage': 'manager_turn',
     }, target['id']))
     await app.on_runtime_event('runtime.error', {
@@ -373,3 +373,54 @@ async def test_budget_recheck_uses_only_fresh_host_admitted_human_input(app, mon
         assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == (27 if case in {'human', 'peer'} else 20)
     finally:
         await worker.close()
+
+
+@pytest.mark.parametrize('terminal_category', ['content_filter', 'authentication'])
+async def test_explicit_terminal_cause_replaces_earlier_provider_classification(app, terminal_category):
+    source, target, human = await paused_member(app)
+    await provider_failure(app, target, 'rate_limit', terminal_category=terminal_category)
+    assert target['failure']['category'] == terminal_category
+    assert target['failure']['generationId'] == 'failed-generation'
+    app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
+    if terminal_category == 'content_filter':
+        with pytest.raises(AppError, match='safety'):
+            await submit(app, source, target, human)
+        assert not app.runtime.inputs
+    else:
+        await submit(app, source, target, human)
+        receipt = await settled(app, 'resume-member', 'accepted')
+        assert receipt['humanResume']['failedRecovery']['failure']['category'] == terminal_category
+
+
+async def test_explicit_terminal_safety_after_preparation_cannot_borrow_earlier_rate_limit(app):
+    source, target, human = await paused_member(app)
+    await provider_failure(app, target, 'rate_limit')
+    app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
+
+    async def delayed(session, args, guard, emit):
+        await app.on_runtime_event(*normalize_event({
+            'type': 'generation.failed', 'generation_id': 'failed-generation',
+            'input_ids': ['failed-input'], 'error_category': 'content_filter',
+            'error_type': 'ContentFilterError', 'error_stage': 'provider_request',
+        }, target['id']))
+        assert target['failure']['category'] == 'content_filter'
+        assert 'safety' in guard()
+        assert not app.collaboration.admission(target['id'], args)['admitted']
+        return {'accepted': False, 'reason': guard()}
+
+    app.runtime.collaboration_input = delayed
+    await submit(app, source, target, human)
+    receipt = await settled(app, 'resume-member', 'suppressed')
+    assert 'safety' in receipt['admission']['reason']
+    assert not app.runtime.inputs
+
+
+async def test_explicit_non_safety_terminal_retains_prior_capture_safety_halt(app):
+    source, target, human = await paused_member(app)
+    await provider_failure(app, target, 'computer_capture_stop', terminal_category='authentication')
+    assert target['failure']['category'] == 'computer_capture_stop'
+    assert target['failure']['terminalFailure']['category'] == 'authentication'
+    app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
+    with pytest.raises(AppError, match='safety'):
+        await submit(app, source, target, human)
+    assert not app.runtime.inputs
