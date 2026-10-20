@@ -840,3 +840,9 @@ state directories. Record namespace identities, listener owners, source hashes
 and residual processes. Existing previews and their evidence are never valid
 substitutes for a test-owned fixture. This is a local isolation adapter, not an
 additional CI gate or a change to the frozen scenario inventory.
+
+The `voice-follow-latest` journey requires the selected pane and accepted Work
+receipt to belong to the expected chat. During an unrelated transcript update,
+keep the same visible message and pixel offset through any preparation notice;
+after Work is current, also retain the original raw scroll-position tolerance.
+Synthetic signaling still does not qualify physical audio.
