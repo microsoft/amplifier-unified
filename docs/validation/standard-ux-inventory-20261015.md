@@ -868,3 +868,8 @@ member, retained drafts and history, no input or Stop replay, cold reopen,
 and desktop/phone layout. The fixture uses the production service and built
 client with a synthetic runtime. Live provider execution and production adoption
 remain separate evidence. The frozen baseline inventory is unchanged.
+
+Existing-chat adoption adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
