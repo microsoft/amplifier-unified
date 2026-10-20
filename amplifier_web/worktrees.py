@@ -352,7 +352,7 @@ class Worktrees:
                    for path in set(paths) for root in roots)
 
     @staticmethod
-    async def finish_thread(function, *args, **kwargs):
+    async def finish_thread(function, *args, on_cancel=None, **kwargs):
         """Keep path reservations until a filesystem effect actually finishes."""
         task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
         cancelled = None
@@ -362,6 +362,14 @@ class Worktrees:
             except asyncio.CancelledError as exc:
                 # Cancelling the waiter cannot stop its filesystem thread.
                 cancelled = exc
+                if on_cancel:
+                    on_cancel()
+            except BaseException:
+                if cancelled is None:
+                    raise
+                # A pre-admission cancellation may make the worker refuse.
+                # Observe that failure below and preserve the caller's cancel.
+                break
         if cancelled is not None:
             task.exception()
             raise cancelled
@@ -475,6 +483,32 @@ class Worktrees:
                 async with self.app.lock: self.changed()
                 raise
 
+    def preparation_admission(self, action, sid, manager):
+        if not manager:
+            return None, None
+        loop = asyncio.get_running_loop()
+        caller_task = asyncio.current_task()
+        cancelled = False
+
+        def cancel():
+            nonlocal cancelled
+            cancelled = True
+
+        async def commit(effect):
+            async with self.app.lock:
+                if cancelled or caller_task.cancelling():
+                    raise ValueError('Checkout preparation was cancelled before admission.')
+                manager_placement.check_preparation(self.app, action, sid, manager)
+                # No await between authority and the first durable effect.
+                # Only this short receipt write runs here, never slow Git.
+                return effect()
+
+        def admit(effect):
+            # finish_thread owns this waiter until the actual effect settles.
+            # A timeout must not leave a queued callback that commits later.
+            return asyncio.run_coroutine_threadsafe(commit(effect), loop).result()
+        return admit, cancel
+
     async def _dispatch(self, action, args, origin, command_id, caller=None):
         sid = args['sessionId']
         manager = None
@@ -500,25 +534,29 @@ class Worktrees:
                 result['repository'] = await asyncio.to_thread(self.git.inspect, source)
                 result['repositorySelection'] = args.get('repositoryPath', '')
             async with self.app.lock:
+                manager_placement.check_preparation(self.app, action, sid, manager)
                 session['worktreeInspection'] = result
                 self.changed({sid})
             return result
         if action == 'worktree.status':
             self.record(sid, args['id'])
-            result = await asyncio.to_thread(self.git.status, args['id'])
+            # A manager's status read cannot reconcile another chat's archive.
+            result = await asyncio.to_thread(self.git.status, args['id'], reconcile=not manager)
             async with self.app.lock:
+                manager_placement.check_preparation(self.app, action, sid, manager)
                 session['worktreeStatus'] = result; self.changed({sid})
             return result
         self.check_host(session)
         identity = command_id or str(uuid.uuid4())
         if action in {'worktree.handoff', 'worktree.reconcile'}:
             return await self.handoff(action, args, origin, identity, manager)
+        admit, cancel = self.preparation_admission(action, sid, manager)
         if action == 'worktree.create':
             source = await asyncio.to_thread(self.repository_path, session, args.get('repositoryPath'))
-            result = await asyncio.to_thread(self.git.create, source, command_id=identity, expected_revision=args['sourceRevision'], mode=args.get('mode', 'clean'), ref=args.get('ref', 'HEAD'), branch=args.get('branch'), session_id=sid)
+            result = await self.finish_thread(self.git.create, source, command_id=identity, expected_revision=args['sourceRevision'], mode=args.get('mode', 'clean'), ref=args.get('ref', 'HEAD'), branch=args.get('branch'), session_id=sid, admit=admit, on_cancel=cancel)
         elif action == 'worktree.attach':
             source = await asyncio.to_thread(self.repository_path, session, args.get('repositoryPath'), attaching=True)
-            result = await asyncio.to_thread(self.git.attach, args['path'], source=source, command_id=identity, session_id=sid)
+            result = await self.finish_thread(self.git.attach, args['path'], source=source, command_id=identity, session_id=sid, admit=admit, on_cancel=cancel)
         elif action in {'worktree.remove', 'worktree.archive', 'worktree.restore'}:
             record = self.record(sid, args['id'])
             self.check_host(record)
@@ -533,6 +571,7 @@ class Worktrees:
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + command_id))
         path = self.receipt_dir / (identity + '.json')
         async with self.app.lock:
+            manager_placement.check_preparation(self.app, action, sid, manager)
             self.resolve_placements({sid})
             if path.exists():
                 record = self.read(sid, identity)

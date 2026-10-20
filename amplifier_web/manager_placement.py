@@ -56,24 +56,72 @@ def authorize(app, action, sid, caller):
 
 def prepare(app, action, target, source):
     assignment = member(app, source, target)
-    if action in READS:
-        return None
-    lineage = app.collaboration.lineage(source, 'agent')
-    active = target.get('collaborationGeneration') or {}
-    if (source.get('status') in {'stopped', 'stopping', 'error', 'interrupted'}
-            or target.get('status') != 'idle'
-            or active.get('id') and not active.get('terminal')
-            or target['id'] in getattr(app.runtime, '_preparations', {})
-            or any(target.get(key) for key in ('configurationBusy', 'configurationPending', 'fileAccessPending'))):
-        raise ValueError('Place only an idle commissioned member after its current work and settings have settled.')
+    lineage = app.collaboration.lineage(source, 'agent') if action in WRITES else {}
+    if action in WRITES:
+        require_idle(app, target)
+    if source.get('status') in {'stopped', 'stopping', 'error', 'interrupted'}:
+        raise ValueError('The manager stopped or failed before placement.')
     return {
         'sourceSessionId': source['id'], 'assignmentId': assignment['id'],
         'assignmentRevision': assignment['revision'],
         'sourceHumanMessageId': app.worktrees.latest_human(source),
         'sourceTask': task_binding(app, source),
+        'sourceInterruptionRevision': source.get('interruptionRevision', 0),
+        'sourceGenerationId': (source.get('collaborationGeneration') or {}).get('id'),
+        'sourceGenerationTerminal': (source.get('collaborationGeneration') or {}).get('terminal'),
         'sourceGenerationInputIds': list((source.get('collaborationGeneration') or {}).get('inputIds', [])),
+        'targetPreparation': preparation_binding(app, target),
         **lineage,
     }
+
+
+def preparation_binding(app, target):
+    return {
+        'placement': [target.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision')],
+        'interruptionRevision': target.get('interruptionRevision', 0),
+        'humanMessageId': app.worktrees.latest_human(target),
+        'task': task_binding(app, target),
+        'generationId': (target.get('collaborationGeneration') or {}).get('id'),
+    }
+
+
+def require_idle(app, target):
+    from .management import Management
+    active = target.get('collaborationGeneration') or {}
+    pending = target.get('pendingConfiguration') or {}
+    if (target.get('status') != 'idle'
+            or active.get('id') and not active.get('terminal')
+            or target['id'] in getattr(app.runtime, '_preparations', {})
+            or any(target.get(key) for key in ('configurationBusy', 'configurationPending', 'fileAccessPending'))
+            or pending.get('phase') in {'queued', 'applying'}
+            or Management.unresolved_configuration(target)):
+        raise ValueError('Place only an idle commissioned member after its current work and settings have settled.')
+
+
+def check_preparation(app, action, sid, scope):
+    """Revalidate under the state lock at operation admission or read publication."""
+    if not scope:
+        return
+    if reason := guard(app, {'sessionId': sid, 'managerPlacement': scope}, continuation=True):
+        raise ValueError(reason)
+    source = app._session(scope['sourceSessionId'])
+    active = source.get('collaborationGeneration') or {}
+    # Later turns may observe an already admitted placement, but cannot lend
+    # fresh authority to an old call still waiting to start or publish a read.
+    if (active.get('id') != scope['sourceGenerationId']
+            or active.get('terminal') != scope['sourceGenerationTerminal']
+            or list(active.get('inputIds', [])) != scope['sourceGenerationInputIds']):
+        raise ValueError('The manager’s calling turn changed before checkout admission.')
+    if action in WRITES:
+        app.collaboration.active_binding(source)
+    target = app._session(sid)
+    current = preparation_binding(app, target)
+    if current['placement'] != scope['targetPreparation']['placement']:
+        raise ValueError('The member moved during checkout preparation.')
+    if action in WRITES:
+        if current != scope['targetPreparation']:
+            raise ValueError('The member’s instruction or work changed during checkout preparation.')
+        require_idle(app, target)
 
 
 def guard(app, record, *, continuation=False):

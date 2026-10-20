@@ -101,7 +101,15 @@ reconciled through their existing controls first.
 
 The receipt captures the manager's transport-bound input ancestry, assignment
 revision, human/task/Stop boundaries and the member's existing placement guards.
-Authority is rechecked before release and before committing placement. The
+Checkout preparation revalidates that captured scope after repository lookup,
+Git lock waits and source inspection. The first durable checkout record is
+committed together with that check under the app state lock; slow Git runs
+outside it. A cancellation before admission creates no checkout. After
+admission, the exact operation settles with retained evidence even if its caller
+stops, and no later work is authorized by that receipt. Inspect/list/status
+revalidate the relationship and manager instruction before publishing results;
+manager status reads cannot reconcile a member's uncertain archive.
+Authority is also rechecked before release and before committing placement. The
 same objective may continue in later manager turns, and unrelated assignment
 updates do not cancel an accepted placement. The
 manager receives a reserved, guarded outcome notification, including unknown or
