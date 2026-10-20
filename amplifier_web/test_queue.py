@@ -16,6 +16,7 @@ import uuid
 from . import task_environments as environments
 from . import test_environment_profiles as profiles
 from . import test_capacity_settings as capacity_settings
+from . import registered_test_runners as registered_runners
 from . import test_execution_settings as execution_settings
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
@@ -130,7 +131,7 @@ class TestQueue:
     def public(self, receipt):
         job = receipt['job']
         value = {key: copy.deepcopy(job[key]) for key in ('id', 'status', 'createdAt', 'updatedAt', 'expiresAt',
-            'resourceId', 'capacity', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'resourceRequest', 'timingRequest', 'guestJob') if key in job}
+            'resourceId', 'capacity', 'testMachine', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'resourceRequest', 'timingRequest', 'guestJob') if key in job}
         # Full output lives in the existing exact operation receipt. Queue lists
         # cannot multiply a 32 KiB command result by the page size.
         for phase in ('launch', 'check', 'cleanup', 'removal'):
@@ -156,7 +157,9 @@ class TestQueue:
             raise ValueError('The assignment stopped; its queued check will not start.')
         self.app.configuration_authority.check(job.get('authority'))
         config, _, _ = environments.configuration(self.app)
-        if not config or environments.config_key(config) != job['backendKey']:
+        if job.get('runnerCandidates') and job.get('targetBound'):
+            config = registered_runners.resolve_job(self.app, job, config)
+        elif not config or environments.config_key(config) != job['backendKey']:
             raise ValueError('The approved test backend changed; this request will not start on another backend.')
         capacity_settings.load(self.app)
         return config
@@ -225,8 +228,9 @@ class TestQueue:
                 'nextOffset': offset+len(page) if offset+len(page)<len(content) else None,
                 'truncatedAtSource': bool(output.get('truncated') or output.get('stdout_truncated') or output.get('stderr_truncated')),
                 'retention': environments.public(self.app.data_dir, row)['retention'] if row else None}}
-        async with self.app.lock:
-            if action.endswith('.cancel'):
+        if action.endswith('.cancel'):
+            row = None
+            async with self.app.lock:
                 if origin not in {'ui', 'user'}:
                     owner.active_binding(owner.source(args, origin, caller, hydrate=False))
                 receipt = self.get(identity)
@@ -240,10 +244,12 @@ class TestQueue:
                     self.save(receipt)
                     if receipt['job']['status'] == 'starting' and receipt['job'].get('resourceId'):
                         row = environments.get(self.app.data_dir, source['id'], receipt['job']['resourceId'])
-                        environments.cancel_preparation(self.app, row)
                 self.wakeup.set()
                 self.wake_job(identity)
-                return {'accepted': True, 'result': self.public(receipt)}
+            if row is not None:
+                await asyncio.to_thread(environments.cancel_preparation, self.app, row)
+            return {'accepted': True, 'result': self.public(receipt)}
+        async with self.app.lock:
             digest = fingerprint([ACTION, args, source['id'], origin])
             previous = self.app.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
             if previous:
@@ -285,6 +291,7 @@ class TestQueue:
                     'timeoutSeconds': seconds, 'profileId': args['profileId'], 'resourceRequest': resource_request, 'timingRequest': timing_request, 'durableVersion': 1,
                     'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
+            receipt['job']['runnerCandidates'] = registered_runners.retain_candidates(self.app, config, args['profileId'])
             owner.require_causal_depth(receipt['causalDepth'])
             owner.insert(identity, digest, receipt)
             self.app.db.commit()
@@ -344,6 +351,7 @@ class TestQueue:
                 # The saved result survives a temporarily unavailable inbox.
                 pass
         capacities = {}
+        runner_observations = {}
         for receipt in self.active_page():
             identity = receipt['requestId']
             task = self.tasks.get(identity)
@@ -364,12 +372,29 @@ class TestQueue:
                 continue
             if self.admission.locked():
                 continue
+            if receipt['job'].get('runnerCandidates') and not receipt['job'].get('targetBound'):
+                selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff)
+                async with self.app.lock:
+                    receipt = self.get(identity)
+                    if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
+                        continue
+                    if selected is None or not registered_runners.enabled(self.app, selected):
+                        receipt['job']['detail'] = 'Waiting for room on an approved test machine.'
+                        self.save(receipt)
+                        continue
+                    self.guard(receipt)
+                    config = selected
+                    receipt['job'].update(backendKey=environments.config_key(config), targetBound=True,
+                        testMachine=({key: config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if config.get('remoteRunner') else None))
+                    self.save(receipt)  # Bind before source transfer or any target effect.
             key = receipt['job']['backendKey']
             if key not in capacities:
                 retry, delay = self.backoff.get(key, (0, 5))
                 if retry > time.time():
                     continue
-                capacity = await asyncio.to_thread(environments.capacity, self.app, config)
+                capacity = runner_observations.get(key)
+                if capacity is None:
+                    capacity = await asyncio.to_thread(environments.capacity, self.app, config)
                 limits, counts = capacity.get('limits', {}), capacity.get('counts', {})
                 maximum = limits.get('max_running', 1)
                 preparing = self.pending_count(preparing_backend=key)
@@ -438,6 +463,13 @@ class TestQueue:
             async with self.admission:
                 receipt = self.get(identity)
                 config = self.guard(receipt)
+                if receipt['job'].get('targetBound') and not receipt['job'].get('resourceId') and not registered_runners.enabled(self.app, config):
+                    receipt['job'].pop('targetBound', None)
+                    receipt['job'].pop('testMachine', None)
+                    receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
+                    receipt['job']['detail'] = 'Waiting for an enabled test machine.'
+                    self.save(receipt)
+                    return
                 # tick shares one physical observation across this FIFO batch.
                 # The backend rechecks atomically immediately before launch.
                 job = receipt['job']
@@ -469,6 +501,10 @@ class TestQueue:
                     receipt['job'].pop('resourceId', None)
                     receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
                     receipt['job']['status'] = 'queued'
+                    if receipt['job'].get('runnerCandidates'):
+                        receipt['job'].pop('targetBound', None)
+                        receipt['job'].pop('testMachine', None)
+                        receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
                     if launch['result'].get('machineResources'):
                         receipt['job']['capacity'] = {'available': False, 'machineResources': launch['result']['machineResources']}
                     self.save(receipt)

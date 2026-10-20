@@ -1730,6 +1730,77 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#test-execution-limits-october-20"
+    },
+    {
+      "id": "delta.922",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/922",
+      "reason": "Extend the registered Testing settings owner with approved remote machine setup and target budgets; preserve the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "settings.registered-test-machines",
+          "family": "settings",
+          "title": "Connect and adjust an approved test machine",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources",
+            "Other test machines"
+          ],
+          "prerequisites": [
+            "Actual private AppService and built client with bounded remote protocol fixture",
+            "No live machine policy changes or daemon setup"
+          ],
+          "steps": [
+            "Enter a named SSH machine and preserve its draft when closing Settings",
+            "Reconcile a lost registration acknowledgement with one write and exact readback",
+            "Edit target environment limits, including zero",
+            "Preserve a dirty target limit across close and a stale revision",
+            "Reconcile a lost target-limit save acknowledgement without replay",
+            "Pause new checks, refresh the controller, and reopen the page"
+          ],
+          "expectedResults": [
+            "Setup prerequisites and global same-account scope are explicit.",
+            "Source, budget and cleanup identities stay bound to their original owner.",
+            "Unknown acknowledgements do not cause duplicate writes.",
+            "Stale revisions preserve the edited draft and cannot overwrite newer values.",
+            "Dirty-close names the target settings and preserves their contents.",
+            "Controller refresh preserves the paused state.",
+            "Narrow layout and cold reopen retain the saved target and limits."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer",
+            "dirty-close"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Existing registered Extended browser owner and mounted affected-flow checks"
+            },
+            {
+              "path": "tests/test_registered_test_runners.py",
+              "relation": "Target ownership, immutable requests, registration and dispatch contracts"
+            },
+            {
+              "path": "tests/test_registered_test_runner_queue.py",
+              "relation": "Pause race, cancellation, retained unknown cleanup and observation backoff"
+            },
+            {
+              "path": "tests/test_registered_test_runner_recovery.py",
+              "relation": "Archive containment, lost replies, cleanup continuation and retained controller refresh"
+            }
+          ],
+          "limits": [
+            "Browser transport fixtures are not deployment evidence.",
+            "Live qualification covers existing native Linux Incus targets and a managed Linux origin.",
+            "Standalone Windows/macOS origin setup and remote daemon provisioning remain separate work."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#registered-test-machines-october-20"
     }
   ]
 }
