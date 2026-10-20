@@ -93,13 +93,25 @@ async def test_stopped_requester_late_reply_is_retained_but_cannot_restart_it(ap
     await finish(app, target, 'result-request')
     source['interruptionRevision'] = 1
     source['status'] = 'idle'
+    messages = copy.deepcopy(source['messages'])
+    inputs = copy.deepcopy(app.runtime.inputs)
     await generation(app, target, 'later', ['followup'])
     await revised(app, 'result-request', 1, kind='question', outcome='question')
     request = app.collaboration.receipt('result-request')
     identity = app.collaboration.continuation_identity(request['subscription'], 2)
     await app.collaboration.drain(source['id'])
-    assert app.collaboration.receipt(identity)['delivery'] == 'suppressed'
-    assert len(app.runtime.inputs) == 1
+    # Stop closes the saved wait before a new command or message is admitted.
+    assert request['subscription']['status'] == 'suppressed'
+    assert request['subscription']['open'] is False
+    assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone()
+    result = (await app.dispatch('coordination.result', {'requestId': 'result-request'}))['result']
+    assert result['responseRevision'] == 2
+    assert [row['responseRevision'] for row in result['revisions']] == [2, 1]
+    assert result['revisions'][0]['outcome'] == 'question'
+    assert result['revisions'][0]['text'] == 'An explicitly correlated later report'
+    assert source['messages'] == messages
+    assert len(inputs) == 1 and app.runtime.inputs == inputs
+    assert source['status'] == 'idle' and source['interruptionRevision'] == 1
 
 
 async def test_new_reply_revision_bound_is_explicit_and_preserves_prior_evidence(app):
