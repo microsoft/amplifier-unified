@@ -36,7 +36,13 @@ from . import test_capacity_settings as capacity_settings
 from . import registered_test_runners as registered_runners
 
 REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe'
-DTU_COMMIT = '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04'
+DTU_COMMIT = '5235833098d9a630791452a46558d92f58af0389'
+# New setup selects DTU_COMMIT. Existing owners retain their exact installation
+# so qualifying a new snapshot never strands its predecessor's cleanup.
+QUALIFIED_DTU_COMMITS = frozenset({
+    '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04',
+    DTU_COMMIT,
+})
 APPROVED_IMAGE = 'docker.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f'
 KIND = 'test-environment'
 PROFILE = 'linux-python'
@@ -96,11 +102,12 @@ def validate_configuration_value(app, value):
         raise ValueError('The operator configuration contains unsupported settings.')
     if 'retentionMode' in value and value['retentionMode'] not in {'files', 'full'}:
         raise ValueError('Choose files or full environment retention.')
-    if not DTU_COMMIT or value.get('commit') != DTU_COMMIT:
+    commit = value.get('commit')
+    if not isinstance(commit, str) or commit not in QUALIFIED_DTU_COMMITS:
         raise ValueError('The managed backend is not pinned to this app’s qualified revision.')
     manager = getattr(app, 'smart_tools', None)
     installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
-    if not installation or installation.get('status') != 'installed' or installation.get('commit') != DTU_COMMIT or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
+    if not installation or installation.get('status') != 'installed' or installation.get('commit') != commit or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
         raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
     identity = installation['id']
     if not re.fullmatch(r'[a-f0-9]{24}', identity):
