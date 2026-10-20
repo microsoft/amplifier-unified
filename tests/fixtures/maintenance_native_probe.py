@@ -61,10 +61,15 @@ __amplifier_module_type__ = "tool"
 class Effect:
     name = "maintenance_effect"
     description = "Append exactly one synthetic effect."
-    input_schema = {"type":"object", "properties":{"hold":{"type":"boolean"}}}
+    input_schema = {"type":"object", "properties":{"hold":{"type":"boolean"}, "approval":{"type":"boolean"}}}
     def __init__(self, coordinator, config):
         self.coordinator, self.config = coordinator, config or {}
     async def execute(self, arguments):
+        if arguments.get("approval"):
+            decision = await self.coordinator.approval_system.request_approval(
+                "Allow the counted synthetic effect?", ["allow", "deny"])
+            if decision != "allow":
+                return ToolResult(success=False, output="Synthetic effect denied; nothing was performed.")
         if arguments.get("hold"):
             Path(self.config["effects"] + ".started").write_text("waiting")
             while not Path(self.config["effects"] + ".release").exists():
@@ -90,6 +95,7 @@ def stamp(pid):
 
 
 async def run(root, mode="restart"):
+    root = root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     workspace, shared, home, queue = [root / name for name in ("workspace", "shared", "app", "queue")]
     for path in (workspace, shared, home, queue):
@@ -229,6 +235,37 @@ async def run(root, mode="restart"):
         native_id = runtime.workers[sid]["runtime_id"]
         await action("conversation.send", {"sessionId": sid, "text": "One original request"})
         root_request = await request("root", native_id)
+        if mode == 'approval':
+            reply(root_request, calls=[{'id': 'approval-effect', 'name': 'maintenance_effect',
+                                       'arguments': {'approval': True}}])
+            await until(lambda: bool(app._session(sid).get('approvals')))
+            approval = app._session(sid)['approvals'][0]['id']
+            await action('maintenance.pause')
+            await until(lambda: app.maintenance.value['held'])
+            assert not app.maintenance.snapshot()['readyForRestart']
+            await action('approval.respond', {'sessionId': sid, 'id': approval, 'decision': 'allow'}, status=409)
+            assert not effects.exists()
+            await action('approval.respond', {'sessionId': sid, 'id': approval, 'decision': 'deny'})
+            await until(lambda: app.maintenance.snapshot()['readyForRestart'])
+            paused = app.maintenance.snapshot()
+            assert not effects.exists()
+            await client.close()
+            client = None
+            client, app, runtime, headers = await launch()
+            assert app.maintenance.value['held'] and not runtime.workers
+            await action('maintenance.resume', {'epoch': paused['epoch']})
+            resumed_request = await request('root', native_id)
+            remember()
+            assert 'Synthetic effect denied' in str(resumed_request['request']['messages'])
+            reply(resumed_request, 'Denied effect retained without replay')
+            await until(lambda: any(row.get('text') == 'Denied effect retained without replay'
+                for row in app._session(sid)['messages']))
+            assert not effects.exists()
+            assert [(row['id'], row['status']) for row in app._session(sid)['approvals']] == [(approval, 'deny')]
+            assert sum(row['type'] == 'approval.requested' for row in runtime_events) == 1
+            report['stages'].append('approval-waits-without-auto-answer-denial-settles-and-survives-restart')
+            report['passed'] = True
+            return
         if mode in {"emergency", "held-tool"}:
             if mode == "held-tool":
                 reply(root_request, calls=[{"id": "held-effect", "name": "maintenance_effect",

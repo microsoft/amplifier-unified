@@ -104,3 +104,30 @@ The maintained owner checks are in `tests/test_maintenance.py`; adjacent service
 schedule, collaboration input and force-restart checks cover admission and the
 unchanged update confirmation boundary. These checks alone do not qualify native
 checkpoint contents, provider behavior, browser controls or installed packaging.
+
+## Support limits and review dependencies
+
+The coordinated implementation depends on public suspension changes in
+[loop-streaming #67](https://github.com/microsoft/amplifier-module-loop-streaming/pull/67),
+[loop-live #16](https://github.com/microsoft/amplifier-module-loop-live/pull/16), and
+[Foundation #447](https://github.com/microsoft/amplifier-foundation/pull/447).
+The application draft does not advance shipped dependency references. Review and
+normal dependency qualification must complete before release.
+
+A pending human approval is not serialized or answered automatically. It remains
+waiting and prevents safe readiness. Denial and explicit Stop remain available;
+allowing a new effect while admission is held is refused. A denied result can
+settle into the native checkpoint and is retained through restart without asking
+again. Unsupported provider-native engines, active voice and external tools do
+not gain a fictitious resumable checkpoint.
+
+Unresolved legacy settings remain a conversation-specific unknown-effect fence.
+Maintenance does not clear `configurationBusy`, manufacture apply authority, or
+replay that payload. Explicit Force restart retains the original record and
+requires confirmed owned shutdown before promoting a qualified candidate.
+Separating a historical recovery hold from normal update quiescence is a separate
+update-owner change; a stale absent-worker observation is not sufficient proof.
+
+Native qualification uses deterministic synthetic providers and counted effects.
+It proves the exercised Core/Foundation and loop ownership, not remote-provider
+cancellation, live-account parity or untested Windows descendant termination.

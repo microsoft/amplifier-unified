@@ -107,6 +107,10 @@ async def serve():
                 elif operation == 'change-confirmation':
                     async with service.lock:
                         service.maintenance._commit()
+                elif operation in {'auxiliary-start', 'auxiliary-settle'}:
+                    async with service.lock:
+                        service.state['voice']['status'] = 'connected' if operation == 'auxiliary-start' else 'ended'
+                        service._publish_changes(globals={'voice'})
                 else:
                     raise web.HTTPBadRequest()
             return web.json_response({'maintenance': service.maintenance.snapshot(),

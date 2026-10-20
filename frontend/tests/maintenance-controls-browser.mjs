@@ -66,6 +66,13 @@ try{
 
  await control('prepare-supported');await controls().getByRole('button',{name:'Pause all',exact:true}).click();
  await control('settle');await expect(controls()).toContainText('All tracked work is paused');
+ await control('auxiliary-start');await expect(controls()).toContainText('A voice call is active');
+ await expect(controls()).toContainText('Remote audio is not paused');
+ await expect(controls().getByRole('button',{name:'Resume paused work',exact:true})).toBeDisabled();
+ assert.equal((await evidence()).maintenance.readyForRestart,false);
+ await control('auxiliary-settle');await expect(controls()).toContainText('All tracked work is paused');
+ await expect(controls().getByRole('button',{name:'Resume paused work',exact:true})).toBeEnabled();
+ report.checks.push('Auxiliary activity disables safe readiness and Resume; canonical settlement refreshes both');
  await page.reload();await expect(controls()).toContainText('All tracked work is paused');
  const epoch=(await evidence()).maintenance.epoch;
  await controls().getByRole('button',{name:'Resume paused work',exact:true}).click();
