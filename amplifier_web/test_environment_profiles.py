@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 
 _ENVIRONMENT = {
     'PATH': '/opt/unified-prepared/venv/bin:/opt/unified-prepared/node-runtime/bin:/usr/local/bin:/usr/bin:/bin',
@@ -52,3 +54,22 @@ def validate_timeout(profile_id, seconds):
     if type(seconds) is not int or not 1 <= seconds <= profile['maxTimeoutSeconds']:
         raise ValueError('The check duration exceeds this test profile’s supported limit.')
     return seconds
+
+
+RESOURCE_FIELDS = ('cpus', 'memoryMiB', 'pids', 'tmpMiB', 'shmMiB')
+
+def freeze(profile_id):
+    profile = get(profile_id)
+    value = {'profileId': profile_id, **{key: profile[key] for key in RESOURCE_FIELDS}}
+    return {**value, 'sha256': hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()}
+
+def resources(profile_id, request=None):
+    profile = get(profile_id)
+    if request is None:  # Historical receipts keep their existing profile behavior.
+        return profile
+    if (not isinstance(request, dict) or set(request) != {'profileId', 'sha256', *RESOURCE_FIELDS}
+            or request['profileId'] != profile_id
+            or any(type(request[key]) is not int or not 1 <= request[key] <= 1048576 for key in RESOURCE_FIELDS)
+            or request['sha256'] != hashlib.sha256(json.dumps({key: value for key, value in request.items() if key != 'sha256'}, sort_keys=True).encode()).hexdigest()):
+        raise ValueError('The admitted test resource request changed.')
+    return {**profile, **{key: request[key] for key in RESOURCE_FIELDS}}

@@ -80,9 +80,42 @@ export function TestingSettings({act,navigate}){
      <p>Optional values for this configured connection only. Empty fields use the global defaults. A different connection, including an alias, has its own override; these are not machine-wide settings.</p>
      <Limits label="Runner overrides" draft={overrides} setDraft={setOverrides} disabled={busy}/>
     </details>}
-    <p className="a-caption">{data.limitsScope} CPU and memory budgets, automatic machine selection and queue limits are not controlled here.</p>
+    <p className="a-caption">{data.limitsScope} Machine resource budgets are shown below. Automatic machine selection and queue limits are not controlled here.</p>
    </details>
    <SettingsActions><button className="a-primary" disabled={busy||!dirty} onClick={save}>Save testing limits</button><button className="a-soft" disabled={busy} onClick={refresh}>{dirty?'Discard changes and reload':'Refresh settings'}</button></SettingsActions>
   </>}
+  <MachineResources act={act} navigate={navigate}/>
+ </section>;
+}
+
+const machineFields=[['maxReservedCpu','Reserved CPU cores',1],['maxReservedMemoryMiB','Reserved memory (GiB)',1024],['minAvailableMemoryMiB','Keep memory available (GiB)',1024],['minFreeBytes','Keep home disk space free (GiB)',gib],['maxLoadPercent','Maximum CPU load (%)',1],['maxPreparing','Concurrent dependency builds',1]];
+const machineInputs=value=>Object.fromEntries(machineFields.map(([key,,unit])=>[key,value[key]===undefined?'':String(value[key]/unit)]));
+function MachineResources({act,navigate}){
+ const [data,setData]=useState(null),[draft,setDraft]=useState(machineInputs({})),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState('');
+ const pending=useRef(false),action=useRef(act);action.current=act;
+ const dirty=!!data?.supported&&JSON.stringify(draft)!==JSON.stringify(machineInputs(data.limits));
+ function accept(current){setData(current);if(current.supported)setDraft(machineInputs(current.limits))}
+ useSettingsDraft('testing-machine',{label:'Machine test resources',dirty,review:()=>navigate('testing'),discard:()=>{if(data)accept(data)}});
+ async function load(){const response=await action.current('testing.machine.read',{});if(!response?.accepted||!response.result)throw Error(response?.error||'Machine resources could not be read.');return response.result}
+ useEffect(()=>{let live=true;load().then(current=>{if(live)accept(current)}).catch(e=>{if(live)setError(e.message)});return()=>{live=false}},[]);
+ async function refresh(){if(pending.current)return;pending.current=true;setBusy(true);setError('');try{accept(await load())}catch(e){setError(e.message)}finally{pending.current=false;setBusy(false)}}
+ async function save(){
+  if(pending.current)return;pending.current=true;setBusy(true);setError('');setMessage('');let intended;
+  try{
+   const limits={};for(const [key,,unit] of machineFields){if(draft[key]==='')continue;const value=Number(draft[key])*unit;if(!Number.isSafeInteger(value)||value<0)throw Error('Enter nonnegative resource amounts.');limits[key]=value}
+   intended={expectedRevision:data.revision,limits};
+   const response=await action.current('testing.machine.save',intended);if(!response?.accepted||!response.result)throw Error(response?.error||'Machine limits could not be saved.');
+   accept(response.result);setMessage('Machine limits saved. Active work keeps running. Waiting checks will reconsider capacity.');
+  }catch(e){let confirmed=false;if(intended)try{const current=await load();if(current.supported&&same(current.limits,intended.limits)){accept(current);setMessage('Current machine limits match your changes. No settings were replayed.');confirmed=true}}catch{}if(!confirmed)setError(e.message+' Your edits are kept.');}
+  finally{pending.current=false;setBusy(false)}
+ }
+ return <section aria-label="Shared machine resources"><h4>This machine’s test resources</h4>
+  {error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
+  {data?.supported?<><p>{data.scope}</p><p>Reserved: {data.reserved.cpus} CPU cores and {(data.reserved.memoryMiB/1024).toFixed(1)} GiB memory across {data.reserved.count} checks. {data.reserved.preparing} dependency builds are admitted.</p>
+   <p>Currently available: {(data.observed.availableMemoryMiB/1024).toFixed(1)} GiB memory and {(data.observed.freeBytes/gib).toFixed(1)} GiB disk space. These observations can change as other apps work.</p>
+   <details><summary>Advanced machine budgets</summary><p>These settings are shared by cooperating local installations using this account. Empty uses the automatic value; zero disables that limit. CPU reservations allow oversubscription, so a core limit is not a measurement of current CPU use. Home disk space protects this account’s local storage; the runner’s disk limit separately protects container storage. Lowering a budget never stops admitted work.</p>
+    <fieldset disabled={busy}><legend>Machine-wide limits for this account</legend>{machineFields.map(([key,label,unit])=><label className="a-field" key={key}>{label}<input type="number" min="0" step={unit===1?'1':'any'} value={draft[key]} placeholder={String(data.effective[key]/unit)} onChange={event=>setDraft(old=>({...old,[key]:event.target.value}))}/><small>Effective: {data.effective[key]===0?'No limit':data.effective[key]/unit} · {data.limits[key]===undefined?'Automatic':'Saved setting'}</small></label>)}</fieldset>
+   </details><button className="a-primary" disabled={busy||!dirty} onClick={save}>Save machine budgets</button></>:<p>{data?.reason||'Loading machine resource information…'}</p>}
+  <button className="a-soft" disabled={busy} onClick={refresh}>{dirty?'Discard machine edits and refresh':'Refresh machine resources'}</button>
  </section>;
 }

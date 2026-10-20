@@ -1551,6 +1551,61 @@
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#global-test-capacity-october-20"
     },
     {
+      "id": "delta.911",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/911",
+      "reason": "Extend the existing testing-settings browser owner to account-shared native machine budgets; no new scenario or frozen inventory rewrite.",
+      "workflowsAdded": [
+        {
+          "id": "settings.machine-test-resources",
+          "family": "settings",
+          "title": "Inspect and adjust shared native-machine test budgets",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources",
+            "This machine\u2019s test resources"
+          ],
+          "prerequisites": [
+            "Isolated synthetic machine authority; no production machine policy or runner effects"
+          ],
+          "steps": [
+            "Inspect effective limits, observed resources and reservations",
+            "Change a machine budget and zero headroom control",
+            "Lose save acknowledgement and reconcile exact readback without replay",
+            "Race another installation writer and preserve stale edits",
+            "Save dependency-build limit at narrow width"
+          ],
+          "expectedResults": [
+            "Scope explicitly describes one native machine OS account and unsupported remote authorities.",
+            "Current effective automatic/saved values and reservations are visible.",
+            "Lost acknowledgement produces one mutation and confirmed readback.",
+            "Stale machine edits cannot overwrite another writer.",
+            "Controls remain usable at narrow width."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "lost-acknowledgement",
+            "stale-writer"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Existing registered Extended browser owner expanded with exact machine budget assertions"
+            },
+            {
+              "path": "tests/test_test_host_resources.py",
+              "relation": "Shared authority, contention, target identity, request freezing and owner lifecycle"
+            }
+          ],
+          "limits": [
+            "No physical-container, remote-controller or native-Windows shared-authority qualification claimed."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#shared-machine-test-resources-october-20"
+    },
+    {
       "id": "delta.908",
       "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/908",
       "reason": "An authorized manager can add an existing chat; retain the frozen inventory and add the new browser owner.",
