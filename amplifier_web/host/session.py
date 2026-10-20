@@ -951,6 +951,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
             **routing_policy)
         coordinator = session.coordinator
+        coordinator.register_capability("approval.interactive", approvals.interactive)
         from ..read_policy import validate_mounted_read_policy
         validate_mounted_read_policy(coordinator)
         from ..provider_recording import install_request_redaction
