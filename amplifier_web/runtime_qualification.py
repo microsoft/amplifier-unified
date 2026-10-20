@@ -284,22 +284,8 @@ async def freeze(manager, generation, project):
     # Filesystem scans and payload hashing must not stall the serving event
     # loop while existing conversations continue on their pinned generation.
     graph = await asyncio.to_thread(installed_graph, project)
-    policies = environments.shared_build_policies(manager.home, generation, graph)
-    for row in graph:
-        vcs = row.get('directUrl', {}).get('vcs_info', {})
-        if vcs.get('vcs') == 'git':
-            policies[row['name']] = {'url': row['directUrl']['url'], 'ref': vcs.get('requested_revision') or vcs['commit_id'],
-                                     'subdirectory': row['directUrl'].get('subdirectory', '')}
-    # Already checked manifest branches remain policy when the refresh install
-    # encoded their qualified override commit as its requested revision.
-    from urllib.parse import parse_qs
-    for name, source in environments.locked_sources(project).items():
-        query = parse_qs(source.query)
-        ref = next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '')
-        record = next((row for row in graph if row['name'] == name), None)
-        vcs = (record or {}).get('directUrl', {}).get('vcs_info', {})
-        if name in policies and vcs.get('commit_id') == source.fragment and ref:
-            policies[name]['ref'] = ref
+    from .runtime_source_policy import freeze_policies
+    policies = freeze_policies(manager.home, generation, project, graph)
     checked_path = receipt / 'runtime-sources.json'
     checked = json.loads(checked_path.read_text()) if checked_path.exists() else {}
     installed = environments.installed_sources(project, graph=graph, tracked=checked)

@@ -91,3 +91,33 @@ is retained in workspace evidence under output/approved-followups.
 
 This release fixes the demonstrated pre-registration cancellation boundary;
 it makes no broader CPU improvement claim. Platform acceptance remains separate.
+
+## Source policy survives immutable installation
+
+The qualified worker manifest pins exact installed commits for reproducibility.
+Those commits are separate from the branch, tag, or explicit pin selected for
+future updates. Before freezing a newly prepared graph, preserve an authored
+requirement only when its repository, subdirectory, lock revision, and installed
+revision agree. A full commit written by the resolver may then retain the
+prepared declaration's original ref. An explicit installed tag, other branch,
+fork, different directory, or changed revision cannot be relabeled this way.
+
+`runtime-sources.json` records `policyOrigin` beside each newly captured policy:
+its basis, original ref, exact source identity, and (for prepared declarations)
+the manifest digest. Checked policies carry that origin through subsequent
+staging and freeze. Exact source drift still fails qualification. Installed
+owned clean cache modules retain their declared policy; unrelated or newer
+adjacent caches do not explain a Git distribution's old pin.
+
+Older pins without recorded origin remain unchanged. Their update-source detail
+reports that the origin is not recorded, so an intentional pin is not silently
+converted into branch tracking. Resolving a legacy policy requires the actual
+source declarations and configuration; conflicting bundle declarations require
+an explicit compatibility decision. This change does not automatically migrate
+legacy pins, alter registry component policy, or refresh qualified test adapters.
+
+Focused tests cover declaration recovery before freeze, direct/transitive
+requirements, policy origin across stage/freeze/next check, exact identity drift,
+explicit pins/branches/tags/forks, ambiguous declarations, clean owned cache
+boundaries, and retention of an unknown legacy pin. They establish source-policy
+behavior, not deployment or fresh-worker adoption on a user's installation.
