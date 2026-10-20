@@ -1,9 +1,10 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {CoordinationPanel} from './coordination';
+export {SharedWorkBrowser} from './shared-work-browser';
 
 export function WorkspaceWork({workspace,session,dispatch,onOpenChat}){
  const [open,setOpen]=useState(false);
- return <details className="a-workspace-work-entry" onToggle={event=>{if(event.target===event.currentTarget)setOpen(event.currentTarget.open)}}><summary>Workspace work</summary>
+ return <details className="a-workspace-work-entry" onToggle={event=>{if(event.target===event.currentTarget)setOpen(event.currentTarget.open)}}><summary>Chat coordination review</summary>
   {open&&<WorkspaceWorkInspection key={workspace.id} workspace={workspace} session={session} dispatch={dispatch} onOpenChat={onOpenChat}/>}
  </details>;
 }

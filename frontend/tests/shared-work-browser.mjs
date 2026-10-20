@@ -27,6 +27,8 @@ const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
 let browser,originalError,result,page,fixtureUrl;
+const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null};
+fixture.once('close',(code,signal)=>{termination.fixtureClose={code,signal,at:Date.now()}});
 try {
  const url=await new Promise((resolve,reject)=>{
   let body='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),30000);
@@ -37,6 +39,7 @@ try {
  fixtureUrl=url;
  await mkdir(output,{recursive:true});
  browser=await chromium.launch(launch);
+ browser.on('disconnected',()=>{termination.browserDisconnectedAt=Date.now()});
  page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
  observePage(page,'primary');
  const calls=observer.calls;
@@ -173,9 +176,17 @@ try {
  try {
   if(page&&fixtureUrl)failure.fixture=await (await page.request.get(fixtureUrl+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
   await writeFile(path.join(output,'failure.json'),JSON.stringify(failure,null,2)+'\n');
+  if(page&&!page.isClosed())await page.screenshot({path:path.join(output,'failure.png'),timeout:actionTimeoutMs});
  } catch(evidenceError){console.error('Failure evidence unavailable:',evidenceError.message)}
  throw error;
 }
-finally {await finishFixture({label:'Shared Work fixture',close:[['browser',()=>browser?.close()]],stop,originalError})}
+finally {
+ termination.closeRequestedAt=Date.now();
+ try{await finishFixture({label:'Shared Work fixture',close:[['browser',()=>browser?.close()]],stop,originalError})}
+ finally{
+  try{await writeFile(path.join(output,'termination.json'),JSON.stringify(termination,null,2)+'\n')}
+  catch(error){if(originalError)console.error('Termination evidence unavailable:',error.message);else throw error}
+ }
+}
 await writeFile(path.join(output,'result.json'),JSON.stringify(result,null,2)+'\n');
 console.log(JSON.stringify(result));
