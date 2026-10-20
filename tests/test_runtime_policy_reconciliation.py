@@ -367,3 +367,28 @@ def test_retained_extra_usage_requires_matching_completed_profile_selection(sele
     migration.annotate_retained(s.home, None, rows)
     assert rows[0]['usage'] == ('unknown' if change == 'none' else 'configured')
     assert rows[0]['current'] == OLD
+
+@pytest.mark.parametrize('form', ['relative', 'parent-relative', 'file-subdirectory'])
+async def test_real_resolver_local_module_override_never_becomes_branch(selected, monkeypatch, form):
+    from amplifier_foundation.sources.resolver import SimpleSourceResolver
+    from amplifier_web.host.session import module_source
+    s = selected
+    monkeypatch.chdir(s.config.workspace)
+    if form == 'relative':
+        reference = './' + s.root.relative_to(s.config.workspace).as_posix()
+    elif form == 'parent-relative':
+        reference = '../' + s.config.workspace.name + '/' + s.root.relative_to(s.config.workspace).as_posix()
+    else:
+        reference = s.root.parent.as_uri() + '#subdirectory=' + s.root.name
+    s.config._source_policy_observer = s.collector
+    s.config.settings['sources'] = {'modules': {'fixture': reference}}
+    components = SimpleNamespace(source=lambda module, source, **kw: source,
+                                 owns=lambda module, source: False)
+    effective = module_source(s.config, False, 'fixture', 'git+' + URL + '@main', components)
+    resolved = await SimpleSourceResolver(cache_dir=s.config.registry_home / 'cache',
+                                          base_path=s.config.workspace).resolve(effective)
+    assert resolved.active_path == s.root
+    s.batch.names[NAME] = resolved.active_path
+    report = await s.collector.report(s.batch, s.config)
+    assert report['packages'][NAME]['status'] == 'local'
+    assert migration.selected_policies(migration.legacy_candidates([row(ref=s.old, current=s.old)]), report)[0] == {}

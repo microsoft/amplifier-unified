@@ -118,9 +118,18 @@ class Collector:
                 registered = config.registrations.get(reference.split(':', 1)[0])
             if not isinstance(registered, str):
                 if explicit_local:
-                    path = Path(reference.removeprefix('file://')).expanduser()
-                    if path.is_absolute():
-                        self.local_sources.add(path)
+                    # Use the resolver's URI grammar, including file fragments
+                    # and workspace-relative paths. A local override remains
+                    # local even when it points inside a branch-backed cache.
+                    from amplifier_foundation.paths.resolution import parse_uri
+                    parsed = parse_uri(reference)
+                    if parsed.is_file:
+                        path = Path(parsed.path).expanduser()
+                        if not path.is_absolute():
+                            path = Path(config.workspace) / path
+                        if parsed.subpath:
+                            path = path / parsed.subpath
+                        self.local_sources.add(path.resolve())
                 return
             reference = config.resolve_source(registered) or registered
 
