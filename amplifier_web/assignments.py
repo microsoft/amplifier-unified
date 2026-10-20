@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, AsyncExitStack
 
 from amplifier_operations.coordination import fingerprint
 from .capacity import LIVE, aggregate, evaluate, number, usage_snapshot
@@ -134,13 +134,17 @@ class Assignments:
 
     def require_settled(self, value):
         """Resume cannot race outstanding Stop or revive unobserved runtime work."""
+        unknown = {}
         for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='assignment.stop'
                 AND json_extract(receipt,'$.assignmentId')=?""", (value['id'],)):
             receipt = json.loads(encoded)
             if (identity in self.interrupting or receipt.get('interruptionsPending') or
-                    any(status != 'returned' for status in receipt.get('interruptions', {}).values())):
-                self.service.collaboration.error('The assignment stop has not settled. Inspect its interruption results before resuming.', 409)
+                    any(status not in {'returned', 'unknown'} for status in receipt.get('interruptions', {}).values())):
+                self.service.collaboration.error('The assignment stop has not settled. Try continuing after it finishes.', 409)
+            for sid, status in receipt.get('interruptions', {}).items():
+                if status == 'unknown':
+                    unknown.setdefault(sid, []).append(identity)
         for sid, member in value['members'].items():
             if member['status'] != 'bound':
                 continue
@@ -153,6 +157,8 @@ class Assignments:
                     or any(row.get('status') in {'queued', 'starting', 'running', 'working', 'idle', 'stopping'} for row in session.get('workers', []))
                     or sid in getattr(self.service.runtime, '_preparations', {})):
                 self.service.collaboration.error('Wait for assignment chats and their workers to settle before resuming.', 409)
+
+        return unknown
 
     def require_request(self, source, target, mode):
         value = self.current(source)
@@ -298,8 +304,8 @@ class Assignments:
             return {'accepted': True, 'result': self.snapshot(source)}
         identity = command_id or str(uuid.uuid4())
         digest = fingerprint([action, args, origin, source['id']])
-        stops = []
-        async with self.service.lock, self.mutation(source, identity):
+        stops, recovery = [], []
+        async with self.service.lock, self.mutation(source, identity), AsyncExitStack() as boundary:
             duplicate = collaboration.duplicate(identity, digest)
             if duplicate:
                 return duplicate
@@ -318,7 +324,16 @@ class Assignments:
                         collaboration.error('Only the user can resume a stopped assignment.')
                     if value['status'] != 'stopped':
                         collaboration.error('Only a stopped assignment can resume.', 409)
-                    self.require_settled(value)
+                    unknown = self.require_settled(value)
+                    for sid, receipts in sorted(unknown.items()):
+                        prove = getattr(self.service.runtime, 'stopped_boundary', None)
+                        if prove is None:
+                            collaboration.error('This runtime cannot confirm that the earlier stop has settled.', 409)
+                        try:
+                            evidence = boundary.enter_context(prove(self.service._session(sid)))
+                        except (OSError, RuntimeError, ValueError) as exc:
+                            collaboration.error(f'Could not confirm that this chat has stopped. {exc}', 409)
+                        recovery.append({'stopRequestIds': receipts, **evidence})
                     value.update(status='active', resumedAt=time.time(), resumedBy=origin)
                 elif action == 'assignment.integration':
                     responsible = args['responsibleSessionId']
@@ -379,6 +394,8 @@ class Assignments:
             receipt = {'accepted': True, 'commandAction': action, 'assignmentId': value['id'],
                        'result': {'assignment': copy.deepcopy(value)},
                        'interruptions': {sid: 'requested' for sid in stops}, 'interruptionsPending': len(stops)}
+            if recovery:
+                receipt['result']['stopRecovery'] = {'assignmentRevision': args['expectedRevision'], 'members': recovery}
             if action == 'assignment.stop':
                 receipt['result']['independentWork'] = self.external_requests(value)
             collaboration.insert(identity, digest, receipt)

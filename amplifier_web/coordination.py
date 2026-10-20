@@ -177,7 +177,7 @@ class Coordination:
                         modes.append("steer")
                     item.update(canFollowup=permitted, canInterrupt=False,
                                 peerActions=[{"modes": modes}] if permitted else [])
-                items.append({key: value for key, value in item.items() if key not in {"results", "signal", "identity", "wakeable"}})
+                items.append({key: value for key, value in item.items() if key not in {"results", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):
                     return {"items": items, "truncated": more if not include_workers else True,
                             "nextOffset": offset + session_number + 1 if more or include_workers else None}

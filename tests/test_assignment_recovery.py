@@ -196,3 +196,30 @@ async def test_resume_preserves_separate_budget_pause_until_explicit_budget_edit
         assert not result['allowed'] and any('limit reached' in reason for reason in result['reasons'])
     finally:
         await worker.close()
+
+
+async def test_later_confirmed_stop_recovers_unknown_receipt_without_rewriting_it(app):
+    source = app.state['sessions'][0]
+    target, _ = await child(app, source)
+    await stop(app, source)
+    old = app.collaboration.receipt('stop-recovery')
+    old['interruptions'][target['id']] = 'unknown'
+    app.collaboration.save('stop-recovery', old); app.db.commit()
+    await app.dispatch('assignment.stop', {
+        'sessionId': source['id'],
+        'expectedRevision': app.assignments.current(source)['revision'],
+    }, command_id='confirmed-stop')
+    await until(lambda: not app.assignments.interrupting)
+    for sid in (source['id'], target['id']):
+        await app.on_runtime_event('runtime.ended', {'sessionId': sid})
+    before = copy.deepcopy(app.assignments.current(source))
+    inputs = list(app.runtime.inputs)
+    from amplifier_web.runtime import RuntimeManager
+    app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
+    result = await resume(app, source)
+    assert result['result']['stopRecovery']['assignmentRevision'] == before['revision']
+    assert result['result']['stopRecovery']['members'][0]['stopRequestIds'] == ['stop-recovery']
+    assert result['result']['assignment']['id'] == before['id']
+    assert result['result']['assignment']['members'] == before['members']
+    assert app.collaboration.receipt('stop-recovery') == old
+    assert app.runtime.inputs == inputs

@@ -343,7 +343,9 @@ expectedInterruptionRevision}` for a fresh queued request from a commissioning
 owner to a current member of its active assignment. The host verifies the latest
 actual human input against the calling root's admitted input bindings. It must
 postdate the recipient's Stop; peer prose, questions and scheduled inputs cannot
-authorize resume. Assignment, task, source/recipient Stop and latest human input
+authorize resume. `coordination.list` includes the current bounded `signal`,
+including `interruptionRevision`, for resident and dormant roots so a manager
+can construct this binding without loading history or starting the recipient. Assignment, task, source/recipient Stop and latest human input
 are rechecked during preparation and native admission.
 
 The one-input exception permits a stopped recipient and a paused/blocked task to
@@ -391,6 +393,15 @@ accounting and limits. It does not send input, resume paused local tasks or clea
 interruption revisions. Queued outbound requests and saved waits retain their
 original interruption binding; reopening cannot admit old requests or manufacture
 late continuation messages. A fresh user request may then start new work.
+A historical unknown Stop acknowledgement is not a permanent barrier. On the
+same explicit Resume action, the native adapter can prove that the affected
+root has no process, preparation, pending admission or unobserved shutdown, and
+hold its existing native session ownership lock through the recovery commit.
+A live/foreign owner, unsupported adapter, execution handoff fence or outstanding
+Stop still refuses recovery. The Resume receipt retains revision-bound settlement
+evidence separately; original unknown Stop receipts are unchanged. This proves
+current ownership settlement, never rollback or success of external effects.
+
 Separately paused chat tasks and persisted local budget denials remain paused;
 the existing task/budget controls own their explicit revision-bound recovery.
 Stopped-assignment input is rejected before appending history or starting a worker,

@@ -62,6 +62,7 @@ async def worker(app, sid, wid="child-a", **patch):
 async def test_list_pages_dormant_peers_without_admission_or_body_reads(app, monkeypatch):
     caller, peer = app.state['sessions']
     peer_id = peer['id']
+    peer.update(status='stopped', interruptionRevision=7)
     peer['workers'] = [{'id': 'saved-child', 'status': 'completed', 'name': 'Retained worker', 'kind': 'session'}]
     app.state.setdefault('runtimeControl', {})[peer_id] = {'task.get': {'task': {
         'id': 'saved-task', 'status': 'blocked', 'revision': 3, 'questionIds': []}}}
@@ -94,6 +95,7 @@ async def test_list_pages_dormant_peers_without_admission_or_body_reads(app, mon
             offset = page['nextOffset']
         assert {row['target']['sessionId'] for row in rows} == {caller['id'], peer_id}
         saved = next(row for row in rows if row['target']['sessionId'] == peer_id)
+        assert saved['signal']['interruptionRevision'] == 7
         assert saved['taskId'] == 'saved-task' and saved['attention']
         assert saved['canFollowup'] and not saved['canInterrupt']
         assert saved['peerActions'] == [{'modes': ['notify', 'queue']}]

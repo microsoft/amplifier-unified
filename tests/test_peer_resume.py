@@ -131,3 +131,18 @@ async def test_unknown_resume_is_not_replayed_after_restart(app):
             "SELECT fingerprint FROM commands WHERE id='resume-member'").fetchone()[0])['duplicate']
     finally:
         await other.close()
+
+
+async def test_manager_can_build_resume_from_the_public_list_response(app):
+    source, target, human = await paused_member(app)
+    found = await agent_action(app, source, 'coordination.list',
+        {'sessionId': target['id'], 'limit': 1}, 'discover-resume')
+    item = found['result']['items'][0]
+    assert item['status'] == 'stopped'
+    await agent_action(app, source, 'coordination.send', {
+        'sessionId': item['target']['sessionId'], 'text': 'Continue the existing task.',
+        'mode': 'queue', 'resume': {'sourceMessageId': human['id'],
+            'expectedInterruptionRevision': item['signal']['interruptionRevision']},
+    }, 'public-list-resume')
+    await settled(app, 'public-list-resume', 'accepted')
+    assert len(app.runtime.inputs) == 1
