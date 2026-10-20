@@ -48,7 +48,9 @@ def open_policy(content):
                 or any(re.sub(r'[-_.]+', '-', name).lower() == CORE for name in uv.get('sources', {}))
                 or core_requirements(uv.get('override-dependencies', []))
                 or core_requirements(uv.get('constraint-dependencies', []))
-                or uv.get('index') != [{'url': INDEX, 'default': True}]):
+                or uv.get('index') != [{'url': INDEX, 'default': True}]
+                or any(key in uv for key in ('index-url', 'extra-index-url', 'find-links',
+                                             'no-index', 'index-strategy'))):
             return None
         version(bounds[0].version)
         return bounds[0].version

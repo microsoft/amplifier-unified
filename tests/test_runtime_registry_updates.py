@@ -237,3 +237,27 @@ async def test_a_newer_installed_core_is_not_offered_a_downgrade(worker, monkeyp
     monkeypatch.setattr('amplifier_web.app_component_graph.index_latest', AsyncMock(return_value='2.0.3'))
     await registry.check(row)
     assert row['status'] == 'current'
+
+
+@pytest.mark.parametrize('setting', [
+    'extra-index-url=["https://custom.invalid/simple"]',
+    'index-url="https://custom.invalid/simple"',
+    'find-links=["https://custom.invalid/wheels"]',
+    'no-index=true',
+    'index-strategy="unsafe-best-match"',
+])
+async def test_matching_recorded_alternate_resolver_policy_stays_protected(worker, monkeypatch, setting):
+    # Core currently came from PyPI; a configured alternative still owns future resolution.
+    policy = BASE.replace(b'[tool.uv]\n', ('[tool.uv]\n' + setting + '\n').encode())
+    worker.manifest.write_bytes(policy)
+    (worker.project / 'pyproject.toml').write_bytes(policy)
+    for name in ('runtime-base.toml', 'runtime.toml'):
+        (worker.receipt / name).write_bytes(policy)
+    assert registry.open_policy(policy) is None
+    row = core(worker)
+    assert not row.get('registryManaged') and not row['eligible']
+    before = {path.name: path.read_bytes() for path in worker.receipt.iterdir()}
+    with pytest.raises(environments.ProtectedRuntimeSource):
+        await stage_fixture(worker, monkeypatch)
+    assert before == {path.name: path.read_bytes() for path in worker.receipt.iterdir()}
+    assert (worker.project / 'pyproject.toml').read_bytes() == policy
