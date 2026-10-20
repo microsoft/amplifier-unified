@@ -67,7 +67,7 @@ export function MaintenanceControls({state,act,active=true}){
  }
  if(!status)return null;
  const counts=status.counts||{},attention=(counts.unsupported||0)+(counts.uncertain||0);
- const [title,detail]=status.phase==='paused'&&!status.readyForRestart?['Work is held','New work is held. Some running work has not confirmed a safe pause. Inspect its status below.']:status.readyForRestart&&!counts.suspended&&counts.stopped>0?['Work has stopped','New work remains held. Stopped execution will not resume automatically.']:phases[status.phase]||['Work status unavailable','Inspect the saved status before starting or stopping work.'];
+ const [title,detail]=status.phase==='uncertain'&&!status.held?['Some resumed work needs inspection','New work can run, but some resumed work was not confirmed. Inspect it or choose Pause all to capture current work.']:status.phase==='paused'&&!status.readyForRestart?['Work is held','New work is held. Some running work has not confirmed a safe pause. Inspect its status below.']:status.readyForRestart&&!counts.suspended&&counts.stopped>0?['Work has stopped','New work remains held. Stopped execution will not resume automatically.']:phases[status.phase]||['Work status unavailable','Inspect the saved status before starting or stopping work.'];
  const busy=!!request||previewing;
  const detailsCurrent=page&&identity(page)===key;
  return <section className="a-maintenance-controls" aria-label="Pause and stop work" data-part="host-maintenance">
@@ -78,10 +78,12 @@ export function MaintenanceControls({state,act,active=true}){
    {!!counts.blocked&&<p>{counts.blocked} {counts.blocked===1?'chat will':'chats will'} stay stopped because its authority or limits changed.</p>}
    {status.held&&!status.inventoryComplete&&<p>The host could not confirm all running work. It is not ready for a safe restart.</p>}
    {!!counts.waiting&&<p>{counts.waiting} {counts.waiting===1?'chat is':'chats are'} still reaching a safe point. Waiting will not automatically stop it.</p>}
+   {status.held&&!!status.auxiliary?.items?.length&&<ul>{status.auxiliary.items.map((row,index)=><li key={row.kind+'-'+index}><strong>{row.label}</strong><p className="a-caption">{row.detail}</p></li>)}</ul>}
+   {status.auxiliary?.scope==='host-observed'&&<p className="a-caption">This status covers work observed by this host. It does not confirm that work already accepted by an external service has stopped.</p>}
   </div>
   <div className="a-dialog-actions">
    {status.held?<button type="button" className="a-primary" data-action="maintenance.resume" disabled={busy||status.canResume!==true||!status.epoch} onClick={()=>command('maintenance.resume',{epoch:status.epoch})}>Resume paused work</button>
-    :<button type="button" className="a-soft" data-action="maintenance.pause" disabled={busy||status.phase!=='open'} onClick={()=>command('maintenance.pause')}>Pause all</button>}
+    :<button type="button" className="a-soft" data-action="maintenance.pause" disabled={busy||status.canPause!==true} onClick={()=>command('maintenance.pause')}>Pause all</button>}
    <button ref={stopButton} type="button" className="a-soft a-danger" data-action="maintenance.stopPreview" disabled={busy} onClick={preview}>{previewing?'Checking work…':'Stop now…'}</button>
   </div>
   {status.held&&!status.canResume&&<p className="a-caption">Resume becomes available after the host confirms all tracked work is safely paused, stopped or idle.</p>}

@@ -9,8 +9,8 @@ const {MaintenanceControls}=await server.ssrLoadModule('/src/maintenance-control
 const {ActivityPanel}=await server.ssrLoadModule('/src/attention.jsx');
 const {UpdateSettings}=await server.ssrLoadModule('/src/updates.jsx');
 test.after(()=>server.close());globalThis.IS_REACT_ACT_ENVIRONMENT=true;
-const open={epoch:null,revision:1,phase:'open',held:false,inventoryComplete:true,counts:{},total:0,readyForRestart:false,canResume:false};
-const paused={...open,epoch:'pause-one',revision:2,phase:'paused',held:true,counts:{suspended:1},total:1,readyForRestart:true,canResume:true};
+const open={epoch:null,revision:1,phase:'open',held:false,inventoryComplete:true,counts:{},total:0,readyForRestart:false,canResume:false,canPause:true};
+const paused={...open,epoch:'pause-one',revision:2,phase:'paused',held:true,counts:{suspended:1},total:1,readyForRestart:true,canResume:true,canPause:false};
 const state=status=>({hostMaintenance:status,sessions:[],view:{},settings:{},updates:{}});
 const button=(root,label)=>root.root.findAllByType('button').find(row=>row.children.join('')===label);
 const text=root=>JSON.stringify(root.toJSON());
@@ -59,6 +59,35 @@ test('resume follows canonical readiness and never infers permission from phase 
   assert.equal(button(root,'Resume paused work').props.disabled,true);
   await act(async()=>root.unmount());
  }
+});
+test('auxiliary work remains visible without promising remote cancellation',async()=>{
+ const root=await make({...paused,readyForRestart:false,canResume:false,auxiliary:{
+  settled:false,scope:'host-observed',remoteCancellationConfirmed:false,
+  items:[{kind:'voice',label:'A voice call is active',detail:'End the call before restarting.'},
+   {kind:'smart-tools',label:'A Smart Tool operation is still running',detail:'Wait for the operation to settle.'},
+   {kind:'naming',label:'Chat naming is still running',detail:'Wait for the current naming request.'}],
+ }},async()=>({accepted:true}));
+ assert.match(text(root),/A voice call is active/);assert.match(text(root),/Chat naming is still running/);
+ assert.match(text(root),/Smart Tool operation is still running/);assert.match(text(root),/work observed by this host/);
+ assert.match(text(root),/does not confirm that work already accepted by an external service has stopped/);
+ assert.doesNotMatch(text(root),/All tracked work is paused/);
+ assert.equal(button(root,'Resume paused work').props.disabled,true);
+ await act(async()=>root.unmount());
+});
+test('released uncertainty allows only canonical fresh Pause and never duplicate Resume',async()=>{
+ const calls=[],dispatch=async(...args)=>{calls.push(args);return {accepted:true}};
+ const released={...open,phase:'uncertain',epoch:'released-pause',counts:{uncertain:1},canPause:true};
+ const root=await make(released,dispatch);
+ assert.equal(button(root,'Pause all').props.disabled,false);
+ assert.equal(button(root,'Resume paused work'),undefined);
+ assert.match(text(root),/New work can run/);assert.doesNotMatch(text(root),/New work is held/);
+ await act(async()=>button(root,'Pause all').props.onClick());
+ assert.equal(calls.length,1);assert.equal(calls[0][0],'maintenance.pause');
+ for(const canPause of [false,undefined]){
+  await change(root,{...released,canPause},dispatch);
+  assert.equal(button(root,'Pause all').props.disabled,true);
+ }
+ await act(async()=>root.unmount());
 });
 test('stop only previews until explicit confirmation and Cancel is passive',async()=>{
  const calls=[],dispatch=async(...args)=>{calls.push(args);return preview};
