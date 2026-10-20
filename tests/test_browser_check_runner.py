@@ -248,6 +248,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
                               'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/test-environments'},
         'access-mode': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/access-mode'},
         'adaptive-work': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/adaptive-work'},
+        'attachment-consumption': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
@@ -264,7 +265,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 95
+    assert len(original) == 65 and len(rows) == 96
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
