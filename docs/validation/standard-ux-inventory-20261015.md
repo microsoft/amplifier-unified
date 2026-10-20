@@ -736,6 +736,15 @@ state isolation. The new smoke is a regression owner, not a requirement to rerun
 the unrelated browser census before release. Frozen inventory counts remain
 unchanged; current results must name the actual source/build and cleanup outcome.
 
+### Everyday settings draft ownership (October 19)
+
+The existing `settings-everyday-browser.mjs` Public readiness journey starts by
+checking fresh Home, then explicitly opening its saved fixture chat before typing
+the draft whose persistence it tests. Home's new-chat draft and a saved chat's
+draft are different owners. Preserve the acknowledged chat-draft save, return
+from connection setup, provider/privacy checks, and all 120 settings layouts.
+Screenshots belong to the run's `AMPLIFIER_TEST_OUTPUT` evidence directory.
+
 ### Home breadcrumb on narrow chat headers (October 19)
 
 The existing `mobile-navigation` owner also requires a visible Home control with
@@ -787,3 +796,22 @@ refusal, transactional failure, and suppression of pre-stop outbound requests an
 late saved waits. Frontend tests retain exact retry identity after uncertainty.
 These checks use synthetic runtime evidence; they do not claim live-provider or
 external-effect rollback. No extra browser lane or frozen inventory count is added.
+
+### Waiting app update supersession (October 19)
+
+**UPDATE-LATEST** adds maintained ownership for the existing `update-effects`
+browser journey. While a qualified app waits for a running chat, use **Check for
+newer release** and verify the offered version changes without an installation,
+restart, conversation input, or change to the retained qualified receipt. An
+offline check must keep that receipt usable and show a warning. The journey also
+retains uncertain-install refusal, explicit failed-install retry, rollback intent,
+saved history, and composer draft checks. Installer effects in this UI fixture are
+synthetic. This is an additive scenario; the frozen original 65 are unchanged.
+
+`tests/test_pending_app_updates.py` owns actual stage/activation orchestration
+with isolated synthetic installer/probe/restart boundaries: supersession while
+busy, a fresh idle check, manual-read separation, held check and lifecycle-lock
+races, validation failure/retry, offline use, stale metadata, and exact feature,
+handoff, and force-confirmation exclusions. The target is one validated newest
+known candidate and one restart after work is idle, with zero input replay.
+Network availability and live installation are not claimed by these fixtures.

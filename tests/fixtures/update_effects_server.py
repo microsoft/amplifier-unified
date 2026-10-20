@@ -13,6 +13,7 @@ from pathlib import Path
 
 from aiohttp import web
 from settings_ui_server import main as settings_app
+from amplifier_web import app_updates
 
 
 async def serve():
@@ -29,10 +30,19 @@ async def serve():
         original_messages = copy.deepcopy(session['messages'])
         calls = []
         generation = {'active': 'original-generation', 'previous': 'previous-generation'}
-        application = {'current': '0.20.165', 'latest': '99.0.0', 'status': 'update', 'canInstall': True}
-        target = {'revision': 'a'*40, 'generation': 'b'*32, 'attemptId': 'fixture-staging-attempt'}
+        application = {'id': 'application', 'label': 'Amplifier Unified', 'kind': 'app', 'current': '0.20.165', 'latest': '99.0.0', 'revision': 'a'*40, 'status': 'update', 'canInstall': True}
+        target = {'revision': 'a'*40, 'latest': '99.0.0', 'generation': 'b'*32, 'attemptId': 'fixture-staging-attempt'}
+        available = copy.deepcopy(application)
+        checks = []
+
+        async def check():
+            checks.append(copy.deepcopy(available))
+            await asyncio.sleep(.2)
+            return copy.deepcopy(available)
+        app_updates.check = check  # Private fixture release channel; real check owner.
 
         async def install():
+            target.update({key: service.state['updates']['application'][key] for key in ('revision', 'latest')})
             calls.append({'operation': 'install', 'application': copy.deepcopy(service.state['updates']['application'])})
             await manager.publish(phase='staging', error=None)
             await asyncio.sleep(.2)
@@ -52,11 +62,16 @@ async def serve():
                               sequence={}, error=None, application=application)
 
         async def control(request):
+            nonlocal available
             if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
                 raise web.HTTPForbidden()
             if request.method == 'POST':
                 mode = (await request.json())['mode']
-                if mode == 'unknown':
+                if mode == 'newer-release':
+                    available = {**application, 'latest': '99.0.1', 'revision': 'c'*40}
+                elif mode == 'offline':
+                    available = {'status': 'check_failed'}
+                elif mode == 'unknown':
                     await manager.publish(phase='error', pendingApp=None,
                                           pendingReplacement={'attemptId': 'unconfirmed-attempt'},
                                           error='Synthetic installation outcome unknown; verify the installed generation.')
@@ -70,7 +85,7 @@ async def serve():
                                           application={**application, 'status': 'current', 'latest': '0.20.165'})
                 else:
                     raise web.HTTPBadRequest()
-            return web.json_response({'calls': calls, 'generation': generation,
+            return web.json_response({'calls': calls, 'checks': checks, 'generation': generation,
                                       'target': target, 'updates': service.state['updates'],
                                       'sessionId': session['id'], 'messages': session['messages'],
                                       'originalMessages': original_messages})
