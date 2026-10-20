@@ -374,10 +374,19 @@ def verify_resolution(resolved, row):
     if resolved is None:
         mismatches = ['source']
     else:
-        query = parse_qs(resolved.query)
+        query = parse_qs(resolved.query, keep_blank_values=True)
+        refs = [(key, value) for key in ('branch', 'rev', 'tag') for value in query.get(key, [])]
+        ref = refs[0][1] if len(refs) == 1 else None
+        # uv can replace a moving rev with its full checked commit. This is
+        # identity equivalence only, never permission to follow a different ref
+        # or accept a newer commit than the one offered by Check for updates.
+        normalized = (refs == [('rev', row['latest'])] and
+                      re.fullmatch(r'[0-9a-f]{40}', row['latest']) is not None and
+                      resolved.fragment == row['latest'])
+        subdirectories = query.get('subdirectory', [''])
         observed = {'repository': urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', '')),
-                    'ref': next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), ''),
-                    'subdirectory': next(iter(query.get('subdirectory', [''])), ''),
+                    'ref': row['ref'] if normalized else ref,
+                    'subdirectory': subdirectories[0] if len(subdirectories) == 1 else None,
                     'revision': resolved.fragment}
         mismatches = [key for key in expected if expected[key] != observed[key]]
     if mismatches:
@@ -390,6 +399,8 @@ def verify_resolution(resolved, row):
             **({'observedRevision': resolved.fragment} if resolved is not None else {}),
         }
         raise error
+    return {'url': row['url'], 'ref': row['ref'], 'subdirectory': row.get('subdirectory', ''),
+            'revision': row['latest']}
 
 
 async def stage(manager, generation, candidates, *, finalize=True):
@@ -439,10 +450,16 @@ async def stage(manager, generation, candidates, *, finalize=True):
     await manager.diagnostics.run('ecosystem-runtime-lock', process, uv, 'lock', '--project', str(project),
                                   '--python', '3.13', *flags, timeout=900)
     locked = locked_sources(project)
+    policies = {}
     for row in selected:
         if row.get('kind') == 'runtime dependency':
             installed = locked.get(row['package'])
-            verify_resolution(installed, row)
+            policies[row['package']] = verify_resolution(installed, row)
+    if not receipt.exists():
+        # Handoff checked policy separately from uv's representation. Freeze
+        # binds it again to installed identity; recorded generations stay intact.
+        from .deployment import write_private
+        write_private(receipt.with_name('runtime-sources.json'), json.dumps(policies, indent=2) + '\n')
     if finalize and not receipt.exists():
         receipt.with_name('runtime-base.toml').write_bytes(manifest_path().read_bytes())
         shutil.copy2(project / 'pyproject.toml', receipt.with_name('runtime.toml'))
