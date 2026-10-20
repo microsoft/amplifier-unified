@@ -123,7 +123,11 @@ def freeze_policies(home, generation, project, graph):
     from . import runtime_environment as environments
     manifest = Path(project) / 'pyproject.toml'
     content = manifest.read_bytes() if manifest.is_file() else b''
-    declared = declarations(content)
+    # uv.toml takes precedence over [tool.uv]. This helper has no proof that a
+    # separate resolver configuration is represented by the prepared manifest.
+    # Retain the resolved/installed ref instead of inferring a moving branch.
+    separate_config = Path(project) / 'uv.toml'
+    declared = {} if separate_config.exists() or separate_config.is_symlink() else declarations(content)
     digest = hashlib.sha256(content).hexdigest()
     locked = environments.locked_sources(project)
     policies = {name: with_origin(policy, 'owned-shared-binding') for name, policy in
