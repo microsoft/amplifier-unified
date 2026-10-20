@@ -12,15 +12,7 @@ import re
 from pathlib import Path
 
 
-def _owned(path, base):
-    """A copied source must not escape the unpublished generation via a link."""
-    path, base = Path(path), Path(base)
-    if not path.resolve().is_relative_to(base.resolve()):
-        raise ValueError('A staged source is outside its candidate.')
-    if any(part.is_symlink() for part in (path, *path.parents)
-           if part == base or part.is_relative_to(base)):
-        raise ValueError('A staged source uses a symbolic link.')
-    return path
+from .staged_sources import owned_path as _owned, owned_git_checkout, retarget_registry, require_exclusive_registry_owner
 
 
 async def align_checked_sources(manager, stage):
@@ -61,14 +53,13 @@ async def align_checked_sources(manager, stage):
         if policy is None or pinned(data.get('ref') or 'HEAD'):
             continue
         root = meta.parent
-        _owned(root / '.git', base)
-        if not (root / '.git').is_dir():
-            raise ValueError('A staged managed source is not an owned Git checkout.')
+        await owned_git_checkout(root, base)
         current = await process('git', 'rev-parse', 'HEAD', cwd=root, timeout=10)
         dirty, _ = await cache_changes(root)
         if dirty or current != data.get('commit'):
             raise ValueError('A staged managed source changed before preparation.')
         if current != policy['revision']:
+            require_exclusive_registry_owner(base / 'registry.json', data['git_url'], data.get('ref') or 'HEAD', root)
             rows.append({
                 'path': str(root.relative_to(base)), 'url': data['git_url'],
                 'ref': data.get('ref') or 'HEAD', 'current': current,
@@ -94,7 +85,6 @@ async def align_checked_sources(manager, stage):
     if not environment:
         raise ValueError('The checked source needs shared storage support.')
     store = SharedSourceStore(environment['AMPLIFIER_SOURCE_STORE'])
-    replacements = {}
     for path, data, policy in bindings:
         _owned(path, base)
         if json.loads(path.read_text()) != data:
@@ -102,12 +92,4 @@ async def align_checked_sources(manager, stage):
         await asyncio.to_thread(store.verify, data['git_url'], data['commit'])
         old = store.checkout(data['git_url'], data['commit'])
         target = await store.bind(path.parent.parent, data['git_url'], data['ref'], policy['revision'])
-        replacements[str(old)] = str(target)
-    registry = base / 'registry.json'
-    if registry.exists():
-        _owned(registry, base)
-        text = registry.read_text()
-        for old, new in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
-            text = text.replace(old, new)
-        registry.write_text(text)
-
+        retarget_registry(base / 'registry.json', data['git_url'], data['ref'], old, target)

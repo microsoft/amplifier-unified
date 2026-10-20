@@ -9,6 +9,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .staged_sources import owned_git_checkout, owned_path, retarget_registry
+
 
 def store_environment(home):
     # Feature detection keeps older Foundation installations functional during
@@ -124,13 +126,8 @@ async def stage_binding(manager, stage, row):
     target = await store.bind(
         stage / "foundation/cache", row["url"], row["ref"], row["latest"]
     )
-    registry = stage / "foundation/registry.json"
-    if registry.exists():
-        registry.write_text(
-            registry.read_text().replace(
-                str(store.checkout(row["url"], row["current"])), str(target)
-            )
-        )
+    retarget_registry(stage / "foundation/registry.json", row["url"], row["ref"],
+                      store.checkout(row["url"], row["current"]), target)
 
 
 async def adopt_clean_sources(manager, stage):
@@ -148,7 +145,6 @@ async def adopt_clean_sources(manager, stage):
 
     store = SharedSourceStore(environment["AMPLIFIER_SOURCE_STORE"])
     base = stage / "foundation"
-    replacements = {}
     roots = sorted(
         (base / "cache").rglob(".amplifier_cache_meta.json"),
         key=lambda path: len(path.parts),
@@ -163,6 +159,7 @@ async def adopt_clean_sources(manager, stage):
         root = meta.parent
         key = None
         try:
+            owned_path(meta, base)
             data = json.loads(meta.read_text())
             if not isinstance(data, dict):
                 continue
@@ -170,6 +167,7 @@ async def adopt_clean_sources(manager, stage):
             key = source_id(url, ref)
             if root.is_symlink() or not root.resolve().is_relative_to(base.resolve()):
                 raise ValueError("External checkout")
+            await owned_git_checkout(root, base)
             if not await asyncio.to_thread(clean_checkout, root):
                 raise ValueError("Local work retained")
             revision = await process("git", "rev-parse", "HEAD", cwd=root, timeout=10)
@@ -191,16 +189,10 @@ async def adopt_clean_sources(manager, stage):
     for key, root, url, ref, revision in candidates:
         if key in protected or len(revisions[key]) != 1 or not root.exists():
             continue
+        await owned_git_checkout(root, base)
         target = await store.bind(base / "cache", url, ref, revision, existing=root)
-        replacements[str(root)] = str(target)
-        await asyncio.to_thread(shutil.rmtree, root)
-    # Registry local paths are convenience receipts, never ref policy. Redirect
-    # only owned, exactly adopted paths in this staged registry.
-    registry = base / "registry.json"
-    if registry.exists():
-        text = registry.read_text()
-        for old, new in sorted(
-            replacements.items(), key=lambda pair: len(pair[0]), reverse=True
-        ):
-            text = text.replace(old, new)
-        registry.write_text(text)
+        retained = retarget_registry(base / "registry.json", url, ref, root, target)
+        # A local/pinned registration can share this cache path. Its authored
+        # choice still needs the staged copy, even when a moving binding adopts.
+        if not retained:
+            await asyncio.to_thread(shutil.rmtree, root)
