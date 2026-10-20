@@ -20,6 +20,7 @@ def target(tmp_path, monkeypatch):
     directory.mkdir(mode=0o700)
     identity = {'backend': 'incus', 'daemon': 'daemon-a', 'project': 'test'}
     monkeypatch.setattr(controller, 'state', lambda: directory)
+    controller.write(directory / 'authority.json', {'version': 1, 'id': 'a'*32})
     monkeypatch.setattr(controller, 'configuration', lambda: {'project': 'test'})
     monkeypatch.setattr(controller, 'backend', lambda config, root: (identity, {'supported': True, 'machineId': 'machine-a'}))
     monkeypatch.setattr(host, 'identity', lambda: 'machine-a')
@@ -37,7 +38,7 @@ def payload(identity='one'):
 
 
 def request(target, value, action, **extra):
-    return controller.dispatch({'version': 1, 'machineId': 'machine-a', 'backendIdentity': target[1], 'payload': {**value, 'action': action, **extra}})
+    return controller.dispatch({'version': 1, 'machineId': 'a'*32, 'backendIdentity': target[1], 'payload': {**value, 'action': action, **extra}})
 
 
 def prepared(target, identity='one'):
@@ -196,3 +197,64 @@ def test_systemd_daemon_restart_during_proof_is_not_accepted(monkeypatch, tmp_pa
     monkeypatch.setattr(host.subprocess, 'run', run)
     monkeypatch.setattr(Path, 'read_text', lambda p: 'incusd\n')
     assert not host.activated_daemon(socket, {'incusd'})
+
+
+def test_cloned_machine_ids_have_distinct_account_authorities_and_alias_reuse(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    first = tmp_path / 'first'; first.mkdir(mode=0o700)
+    second = tmp_path / 'second'; second.mkdir(mode=0o700)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        values = list(pool.map(lambda _: controller.authority_id(first, create=True), range(8)))
+    assert len(set(values)) == 1
+    assert controller.authority_id(second, create=True) != values[0]
+    assert controller.authority_id(first) == values[0]
+
+
+def test_reconcile_exact_terminal_launch_settles_fence_without_replay(target, monkeypatch):
+    value = prepared(target)
+    value['expectedBackendIdentity'] = target[1]
+    effects = []
+    def effect(p):
+        effects.append(p['action'])
+        if p['action'] == 'start':
+            raise TimeoutError('reply lost')
+        observation = controller.worker.common.observation(p, controller.worker.identity(p), target[1], 'retained-launch', 'matched', True)
+        return {'ok': True, 'status': 'stopped', 'observation': observation}
+    monkeypatch.setattr(controller.worker, 'execute_call', effect)
+    with pytest.raises(TimeoutError):
+        request(target, value, 'start')
+    assert host.snapshot()['reserved']['count'] == 1
+    assert request(target, value, 'reconcile')['status'] == 'stopped'
+    assert host.snapshot()['reserved']['count'] == 0
+    settled = request(target, value, 'start')
+    assert settled['creationSettled'] and not settled['ok']
+    assert effects == ['start', 'reconcile']
+
+
+def test_cancellation_marker_reaches_builder_while_effect_lock_is_held(target):
+    value = prepared(target)
+    root = target[0] / ('owner-' + controller.digest(controller.owner(value)))
+    with controller.locked(root):
+        result = request(target, value, 'cancelPreparation')
+        assert result['status'] == 'cancellation-requested'
+        assert controller.preparation.cancelled(root / 'preparation')
+    assert host.snapshot()['reserved']['count'] == 0
+    with pytest.raises(ValueError, match='exact original'):
+        request(target, {**value, 'snapshot': {'archive_sha256': 'b'*64}}, 'cancelPreparation')
+
+
+def test_frozen_preparation_deadline_controls_target_and_transport(target, monkeypatch, tmp_path):
+    value, content = payload()
+    value.update(profileId='python-project', resourceRequest=profiles.freeze('python-project'), timingRequest=profiles.freeze_timing('python-project', {'preparationTimeoutSeconds': 4000}))
+    request(target, value, 'source', offset=0, content=base64.b64encode(content).decode())
+    request(target, value, 'prepare')
+    seen = []
+    def prepare(*args, **kwargs):
+        seen.append(kwargs['timing_request'])
+        return {'status': 'ready'}
+    monkeypatch.setattr(controller.preparation, 'prepare', prepare)
+    assert request(target, value, 'prepareDependencies')['ok']
+    assert seen == [value['timingRequest']]
+    monkeypatch.setattr(client, 'call', lambda runner, payload, timeout: {'ok': True, 'timeout': timeout})
+    result = client.invoke({'remoteRunner': {}}, tmp_path, {**value, 'action': 'prepareDependencies'})
+    assert result['timeout'] == 4200

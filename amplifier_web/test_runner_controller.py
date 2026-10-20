@@ -314,7 +314,8 @@ def dispatch(request):
             launch = read(root / 'launch-dispatched.json')
             completed_launch = read(root / ('effect-' + digest([launch['requestId'], 'start']) + '.json')) if launch else None
             if (action in {'stop', 'remove', 'finishCleanup'} and result.get('ok') and result.get('status') in {'stopped', 'removed'}
-                    and completed_launch and completed_launch.get('state') == 'completed' and completed_launch.get('result', {}).get('ok')):
+                    and completed_launch and completed_launch.get('state') == 'completed'
+                    and (completed_launch.get('result', {}).get('ok') or completed_launch.get('result', {}).get('creationSettled'))):
                 machine.settle(row, release=True)
             if action == 'start' and result.get('effectAdmitted') is False and not prepared:
                 machine.settle(row, release=True)
@@ -344,8 +345,9 @@ def reconcile_launch(root, payload, result, row):
         return
     # DTU's exact original launch receipt is terminal. This settles the target
     # fence without repeating create; an inventory-only absence cannot do so.
-    write(path, {**original, 'state': 'completed', 'result': {'ok': True, 'status': 'removed' if state == 'absent' else state,
-        'universeId': worker.identity(payload), 'reconciled': True, 'observation': observed}})
+    write(path, {**original, 'state': 'completed', 'result': {'ok': False, 'status': 'removed' if state == 'absent' else state,
+        'universeId': worker.identity(payload), 'reconciled': True, 'creationSettled': True, 'observation': observed,
+        'message': 'The original create settled. Source installation and test execution were not replayed or claimed successful.'}})
     if state in {'stopped', 'absent'}:
         if (not read(root / 'preparation/intent.json') or read(root / 'prepared.json')
                 or (read(root / 'preparation/cleanup.json', {}) or {}).get('complete')):
