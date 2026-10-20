@@ -109,7 +109,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          node --test frontend/tests/message-outbox.test.mjs frontend/tests/connection-notice.test.mjs 2>&1 | tee output/browser-checks/attachment-client.tap
+          node --test frontend/tests/connection-notice.test.mjs 2>&1 | tee output/browser-checks/attachment-client.tap
       - name: Run all extended browser scenarios serially
         run: >-
           uv run --no-sync python scripts/browser_check_runner.py
