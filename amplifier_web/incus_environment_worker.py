@@ -20,14 +20,18 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 # Preserve previously qualified owners and configuration identity during upgrades.
 # Launcher bytes vary with installation path; package pairs are exact.
 QUALIFIED_PACKAGES = {
     '0.4.0': '5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39',
     '0.4.1': 'b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06',
+    '0.4.2': '0911d18ec7256913253b53ce66520fac2f6cc78d19696a3f7b724a646dd909b8',
+    '0.4.3': '2019e9b6ed0d2a1e882f90d8767f3652a278e9a5df0902efcf2a4a3b869a09ff',
 }
+CURRENT_QUALIFIED_VERSION = '0.4.3'
+CREATION_RECOVERY_DIGESTS = frozenset(QUALIFIED_PACKAGES[version] for version in ('0.4.2', '0.4.3'))
 OUTPUT_BYTES = 8192
 CONTROL_BYTES = 65536
 EXPORT_BYTES = 8 * 1024 ** 3
@@ -303,18 +307,39 @@ def export_selected(config, env, name, destination, *, selections=common.retenti
 def reconcile(config, env, name, payload, backend, binding_source):
     # Inventory uses one successful actual daemon/project query. launch-status
     # alone may be a cached unknown receipt and cannot establish absence.
-    raw = checked(incus(config, env, ['query', '/1.0/instances?recursion=1']))
+    # Names only: peer instance metadata can exceed the bounded control reply
+    # even in a modest shared project. Fetch metadata for this owner alone.
+    raw = checked(incus(config, env, ['query', '/1.0/instances']))
     if raw['truncated']:
         raise BackendFailure('response_limit', 'The actual inventory exceeded its bound.')
     instances = json.loads(raw['stdout'])
-    if not isinstance(instances, list):
+    if not isinstance(instances, list) or any(not isinstance(item, str) for item in instances):
         raise BackendFailure('backend_unknown', 'The actual inventory is unavailable.')
-    matches = [item for item in instances if item.get('name') == name]
+    resources = [urlsplit(item) for item in instances]
+    if any(uri.scheme or uri.netloc or uri.fragment or not uri.path.startswith('/1.0/instances/')
+           or parse_qs(uri.query) not in ({}, {'project': [config['project']]}) for uri in resources):
+        raise BackendFailure('backend_unknown', 'The actual inventory identity is unavailable.')
+    matches = [uri for uri in resources if uri.path == '/1.0/instances/' + quote(name, safe='')]
     if len(matches) > 1:
         raise BackendFailure('ownership_conflict', 'The actual inventory has conflicting identities.')
+    if matches:
+        raw = checked(incus(config, env, ['query', '/1.0/instances/' + quote(name, safe='')]))
+        if raw['truncated']:
+            raise BackendFailure('response_limit', 'The owned instance observation exceeded its bound.')
+        item = json.loads(raw['stdout'])
+        if not isinstance(item, dict):
+            raise BackendFailure('backend_unknown', 'The owned instance observation is unavailable.')
+        matches = [item]
     request = cli(config, env, ['launch-status', payload['operationId']])
     matches_owner = request.get('name') == name and request.get('owner_root') == payload['rootOwner']
-    complete = matches_owner and request.get('state') in {'ready', 'stopped', 'removed'}
+    # Qualified 0.4.2 and 0.4.3 record definitive pre-submission rejection and terminal creation
+    # failure. Exact receipt identity plus an empty actual inventory can settle
+    # these attempts; an absent unknown receipt remains unresolved.
+    failed_creation = (config.get('packageSha256') in CREATION_RECOVERY_DIGESTS
+                       and request.get('request_id') == payload['operationId']
+                       and request.get('state') == 'failed')
+    complete = matches_owner and (request.get('state') in {'ready', 'stopped', 'removed'}
+                                  or failed_creation and not matches)
     if matches:
         item = matches[0]
         metadata = item.get('config', {})
@@ -360,7 +385,9 @@ def check_legacy_image(config, env, payload):
 
 def observe(config, env, name, payload, confinement=False):
     request = cli(config, env, ['launch-status', payload['operationId']])
-    if request['state'] in {'not_recorded', 'removed', 'failed'}:
+    failed_instance = (config.get('packageSha256') in CREATION_RECOVERY_DIGESTS
+                       and request.get('state') == 'failed' and 'instance_status' in request)
+    if request['state'] in {'not_recorded', 'removed', 'failed'} and not failed_instance:
         return request, None
     if request.get('name') != name or request.get('owner_root') != payload['rootOwner'] or request['state'] == 'conflict':
         raise BackendFailure('ownership_conflict', 'The environment no longer matches this task\'s ownership.')
