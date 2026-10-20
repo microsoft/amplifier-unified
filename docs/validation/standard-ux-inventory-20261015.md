@@ -736,6 +736,15 @@ state isolation. The new smoke is a regression owner, not a requirement to rerun
 the unrelated browser census before release. Frozen inventory counts remain
 unchanged; current results must name the actual source/build and cleanup outcome.
 
+### Everyday settings draft ownership (October 19)
+
+The existing `settings-everyday-browser.mjs` Public readiness journey starts by
+checking fresh Home, then explicitly opening its saved fixture chat before typing
+the draft whose persistence it tests. Home's new-chat draft and a saved chat's
+draft are different owners. Preserve the acknowledged chat-draft save, return
+from connection setup, provider/privacy checks, and all 120 settings layouts.
+Screenshots belong to the run's `AMPLIFIER_TEST_OUTPUT` evidence directory.
+
 ### Home breadcrumb on narrow chat headers (October 19)
 
 The existing `mobile-navigation` owner also requires a visible Home control with
