@@ -339,3 +339,26 @@ def test_skip_failed_artifact_proof_removes_only_settled_unpublished_runtime(eng
     assert target.dispatch({'action': 'skip', 'id': identity})['complete']
     assert not (engine.path / 'runtime').exists()
     assert (engine.path / 'qualification.json').exists()
+
+
+@pytest.mark.parametrize('lost_ack', [False, True])
+def test_later_selection_change_never_retires_previously_published_runtime(engine, monkeypatch, lost_ack):
+    identity = started(engine)
+    for _ in range(4):
+        target.advance(identity)
+    if lost_ack:
+        original = target.save
+        def lose(path, record, **changes):
+            if changes.get('state') == 'selected':
+                raise TimeoutError('selection acknowledgement lost')
+            return original(path, record, **changes)
+        monkeypatch.setattr(target, 'save', lose)
+        with pytest.raises(TimeoutError):
+            target.advance(identity)
+        monkeypatch.setattr(target, 'save', original)
+    else:
+        assert target.advance(identity)['complete']
+    # A different current config says nothing about already accepted old jobs.
+    controller.write(engine.config_path, engine.config)
+    assert target.dispatch({'action': 'skip', 'id': identity})['complete']
+    assert (engine.path / 'runtime').exists()

@@ -131,7 +131,12 @@ def installed_candidate(path, record):
 
 def discard_private_runtime(path, record):
     """Remove only an unpublished, settled install; keep its evidence files."""
-    if not record.get('installFinished') or selected_result(path, record):
+    if not record.get('installFinished') or record.get('state') == 'selected' or selected_result(path, record):
+        return False
+    candidate = record.get('candidate')
+    if candidate and (root() / ('selection-' + generations.digest(candidate) + '.json')).exists():
+        # Written before the config CAS: even a lost acknowledgement or later
+        # rollback cannot prove this generation was never used by another job.
         return False
     name = record.get('runtimeDirectory', 'runtime')
     if not re.fullmatch(r'runtime(?:-[1-9][0-9]*)?', name):
