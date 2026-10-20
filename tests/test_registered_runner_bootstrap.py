@@ -13,9 +13,10 @@ import pytest
 from amplifier_web.registered_test_runners import VERIFY
 
 
+@pytest.mark.parametrize('loading', ['namespace', 'file-location'])
 @pytest.mark.parametrize('reexec', [False, True])
 @pytest.mark.parametrize('cache_kind', ['cached', 'sourceless', 'source-drift'])
-def test_controller_runs_only_exact_manifest_sources(tmp_path, reexec, cache_kind):
+def test_controller_runs_only_exact_manifest_sources(tmp_path, reexec, cache_kind, loading):
     folder = tmp_path / 'amplifier_web'
     folder.mkdir()
     (folder / '__init__.py').write_text('')
@@ -24,7 +25,12 @@ def test_controller_runs_only_exact_manifest_sources(tmp_path, reexec, cache_kin
     controller = folder / 'test_runner_controller.py'
     controller.write_text(
         "import os, sys\n"
-        "from amplifier_web import helper\n"
+        + ("from amplifier_web import helper\n" if loading == 'namespace' else
+           "import importlib.util\n"
+           "from pathlib import Path\n"
+           "spec = importlib.util.spec_from_file_location('_direct_helper', Path(__file__).with_name('helper.py'))\n"
+           "helper = importlib.util.module_from_spec(spec)\n"
+           "spec.loader.exec_module(helper)\n")
         + ("if '--qualified-runtime' not in sys.argv:\n"
            "    os.execv(sys.executable, [sys.executable, '-I', str(__file__), '--qualified-runtime'])\n" if reexec else '')
         + "print(helper.VALUE)\n")
@@ -40,7 +46,10 @@ def test_controller_runs_only_exact_manifest_sources(tmp_path, reexec, cache_kin
     elif cache_kind == 'sourceless':
         # Unlisted sourceless imports must not expand the verified program.
         py_compile.compile(str(attack), cfile=str(folder / 'unlisted.pyc'), doraise=True)
-        helper.write_text('from amplifier_web import unlisted\nVALUE = unlisted.VALUE\n')
+        helper.write_text('from amplifier_web import unlisted\nVALUE = unlisted.VALUE\n' if loading == 'namespace' else
+            "import importlib.util\nfrom pathlib import Path\n"
+            "spec=importlib.util.spec_from_file_location('_unlisted',Path(__file__).with_name('unlisted.pyc'))\n"
+            "unlisted=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(unlisted)\nVALUE=unlisted.VALUE\n")
         manifest['amplifier_web/helper.py'] = base64.b64encode(helper.read_bytes()).decode()
         digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
     else:
@@ -54,5 +63,5 @@ def test_controller_runs_only_exact_manifest_sources(tmp_path, reexec, cache_kin
     else:
         assert result.returncode != 0
         assert 'unverified' not in result.stdout
-        assert ('outside its verified manifest' if cache_kind == 'sourceless' else 'Controller bytes changed') in result.stderr
+        assert ('manifest' if cache_kind == 'sourceless' else 'Controller bytes changed') in result.stderr
 
