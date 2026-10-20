@@ -145,14 +145,14 @@ def call(runner, payload, timeout=60):
     if not isinstance(names, list) or not 1 <= len(names) <= 64 or len(set(names)) != len(names) or not {'__init__.py', 'test_runner_controller.py'} <= set(names) or any(not isinstance(name, str) or not re.fullmatch(r'[a-z_]+\.py', name) for name in names):
         raise ValueError('The retained controller manifest is invalid.')
     request = {'version': 1, 'machineId': runner.get('machineId'), 'backendIdentity': runner.get('backendIdentity'), 'payload': payload}
-    return ssh(runner['connection'], ['/usr/bin/python3', '-I', '-c', VERIFY, controller, runner['packageDigest'], json.dumps(names)], request, timeout)
+    return ssh(runner['connection'], ['/usr/bin/python3', '-I', '-B', '-c', VERIFY, controller, runner['packageDigest'], json.dumps(names)], request, timeout)
 
 
 def register(connection, name, config_path=''):
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
         raise ValueError('Give the test machine a short name.')
     package = bundle()
-    installed = ssh(connection, ['/usr/bin/python3', '-I', '-c', INSTALL], {**package, 'configPath': config_path}, timeout=90)
+    installed = ssh(connection, ['/usr/bin/python3', '-I', '-B', '-c', INSTALL], {**package, 'configPath': config_path}, timeout=90)
     runner = {'connection': connection, 'controller': installed['controller'], 'packageDigest': package['digest'], 'packageFiles': ['__init__.py', *FILES], 'configPath': config_path}
     observed = call(runner, {'action': 'describe'})
     if not observed.get('ok') or observed.get('version') != 1:
@@ -191,7 +191,7 @@ def qualify_retained(app, config):
 
 def export_source(config, folder, source):
     script = "import json,dataclasses;from pathlib import Path;from digital_twin_universe import lib;s=lib.export_repository_snapshot(Path(__import__('sys').argv[1]),Path(__import__('sys').argv[2]));print(json.dumps(s.model_dump(mode='json')))"
-    result = subprocess.run([config['python'], '-I', '-c', script, source, str(folder / 'source.tar')], capture_output=True, timeout=300)
+    result = subprocess.run([config['python'], '-I', '-B', '-c', script, source, str(folder / 'source.tar')], capture_output=True, timeout=300)
     if result.returncode or len(result.stdout) > 65536:
         raise ValueError('The exact source snapshot could not be exported.')
     return json.loads(result.stdout)
