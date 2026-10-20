@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import AsyncExitStack
 from contextvars import ContextVar
 import json
 import time
@@ -705,8 +706,8 @@ class Collaboration:
             resuming = peer_resume.pending(receipt)
             if resuming and (reason := peer_resume.guard(self.service, receipt, source, target)):
                 return reason
-            if target.get("status") in {"stopping", "interrupted", "error"} or (
-                    target.get("status") == "stopped" and not resuming):
+            if target.get("status") in {"stopping", "interrupted"} or (
+                    target.get("status") in {"stopped", "error"} and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
             if task.get("status") in {"paused", "blocked", "completed"} and not resuming:
@@ -1394,7 +1395,7 @@ class Collaboration:
             prepared_artifacts = await prepare(self, source, args, origin, identity, digest)
             if prepared_artifacts.get('duplicate'):
                 return prepared_artifacts['duplicate']
-        async with self.service.lock:
+        async with self.service.lock, AsyncExitStack() as recovery_boundary:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
@@ -1514,7 +1515,7 @@ class Collaboration:
                 resume = None
                 if args.get('resume'):
                     from .peer_resume import prepare
-                    resume = prepare(self.service, source, target, args['resume'], lineage)
+                    resume = prepare(self.service, source, target, args['resume'], lineage, recovery_boundary)
                     envelope['humanResume'] = {
                         'sourceMessageId': resume['sourceMessageId'],
                         'instruction': 'The host verified a fresh human resume request in the commissioning owner. '

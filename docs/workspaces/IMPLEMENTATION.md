@@ -1363,3 +1363,7 @@ Stop. New input reaches only a fresh process and only once. Existing messages
 and peer attribution remain intact. These checks make no real-model or deployed
 release claim. No existing stopped/error record is silently reclassified, and
 previously suppressed or unknown requests are not replayed.
+
+#### Settled failed members
+
+A fresh human-backed owner request can admit one reconciliation input to a failed commissioned member. The host requires a recorded terminal generation, no active child work, and the existing native ownership lock proving the previous worker is absent. Ownership stays held through the saved receipt. The failed generation and its effects remain evidence; no input or command is retried. A newer failure, Stop, membership change, human input or pending access change invalidates admission. Explicit provider/tool safety stops remain blocked. This resolves the former instruction to inspect a failure followed by an unconditional refusal even after inspection.

@@ -293,3 +293,5 @@ independently verified artifact correctness, even if the host seals its declarat
 Pause, stop, changed task and exhausted budget suppress automatic
 admission. Messages remain readable. Never broaden authority to recover a blocked
 exchange, take over another native owner, or allocate infrastructure implicitly.
+
+A fresh human-backed member resume may recover a failed turn only after the host confirms native settlement. Inspect retained outcomes; never replay failed or unknown input. Tool and provider safety stops remain in effect.
