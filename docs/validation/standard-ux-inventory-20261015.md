@@ -858,3 +858,25 @@ Status switch, independent Home/sidebar state and paging, visibility-scoped
 catalog demand, retained drafts, header toggle and mobile focus/navigation.
 It runs as an affected-flow smoke in the owned DTU and in Extended browser
 checks; it adds no broad publication gate.
+
+### Host pause and emergency Stop (October 20)
+
+`maintenance-controls` owns the ordinary Activity and Settings > Updates paths:
+immediate admission hold, honest waiting/unsupported status, bounded owner-detail
+pages, editable retained drafts with new sends held, explicit eligible resume
+after reload, and independently confirmed Stop
+without a staged update. Desktop and phone checks exercise Tab, Shift+Tab, Escape,
+focus restoration, stale confirmation and an accepted request whose reply is lost.
+The retry must keep the original command identity; no automatic replay occurs.
+Resume remains disabled until the canonical host reports `canResume`; waiting,
+unsupported and uncertain work must settle before admission can reopen.
+
+The built-client fixture uses real HTTP actions, durable host receipts and
+synthetic runtime boundaries. It does not qualify native checkpoint restoration,
+provider interruption or external-effect rollback. Those belong to the integrated
+native pause acceptance described in `docs/maintenance-pause.md`. The browser
+report records pause-to-visible-hold and total elapsed time; its synthetic timing
+is a regression baseline, not a live-provider performance guarantee.
+
+This is an additive standard-UX owner in the delta ledger and Extended browser
+plan. The frozen 65-scenario migration hash and original inventory remain intact.

@@ -14,6 +14,7 @@ export function sessionStatus(session) {
       busy:true,
     };
     case 'stopping': return {label:'Stopping the current work…',detail,busy:true};
+    case 'paused': return {label:'Paused for maintenance',detail:'Use Resume paused work in Activity when you are ready.',busy:false};
     case 'working': case 'running': case 'busy': return {label:'Amplifier is working…',detail,busy:true};
     case 'error': case 'failed': return {label:'Amplifier needs your attention',detail:'',busy:false};
     case 'stopped': return {label:'Work stopped. Ready for your next message.',detail:'',busy:false};

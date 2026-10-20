@@ -10,6 +10,10 @@ test('navigation distinguishes unresolved input, active work, errors, and new re
  assert.equal(activityFor({id:'new'}, {attention:{sessions:{new:1}}}).kind,'unread');
  assert.equal(activityFor({activity:{kind:'attention',label:'Approval requested'}}).label,'Approval requested');
 });
+test('paused navigation names the intentional hold without inventing an error or dismissing decisions',()=>{
+ assert.deepEqual(activityFor({status:'paused'}),{kind:'idle',label:'Paused for maintenance'});
+ assert.equal(activityFor({status:'paused',approvals:[{status:'pending'}]}).label,'Approval requested');
+});
 test('reviewing an exact failure clears its marker without hiding current obligations',()=>{
  const chat={id:'failed',status:'error',error:'Saved failure'};
  const item={id:'session:failed',sessionId:'failed',read:true,fingerprint:'current'};

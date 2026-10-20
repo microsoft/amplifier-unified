@@ -22,3 +22,8 @@ test('progress uses reported text without fabricating percentages or completed s
  assert.equal(sessionStatus({status:'working',progress:'Preparing the requested tool'}).detail,'Preparing the requested tool');
  assert.equal(sessionStatus({status:'error',progress:'Earlier progress'}).detail,'');
 });
+test('a saved pause is neither ready nor completed and names its explicit resume path',()=>{
+ const view=sessionStatus({status:'paused',progress:'Earlier activity'});
+ assert.equal(view.label,'Paused for maintenance');assert.equal(view.busy,false);
+ assert.match(view.detail,/Resume paused work in Activity/);
+});
