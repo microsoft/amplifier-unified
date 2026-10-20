@@ -432,10 +432,14 @@ def host_target(config, env):
         current = checked(run([config['incusExecutable'], 'remote', 'get-default'], env, output_bytes=CONTROL_BYTES))['stdout'].strip()
         remotes = json.loads(checked(run([config['incusExecutable'], 'remote', 'list', '--format', 'json'], env, output_bytes=CONTROL_BYTES))['stdout'])
         remote = remotes[current]
-        address = remote.get('Addr', remote.get('addr'))
-        if address is None and isinstance(remote.get('Addrs'), list) and len(remote['Addrs']) == 1:
-            address = remote['Addrs'][0]
-        return common.host_resources.local_target(address, {'incusd'})
+        addresses = [remote[key] for key in ('Addr', 'addr') if key in remote]
+        if 'Addrs' in remote:
+            if not isinstance(remote['Addrs'], list) or len(remote['Addrs']) != 1:
+                raise ValueError('The Incus endpoint is ambiguous.')
+            addresses.extend(remote['Addrs'])
+        if not addresses or any(not isinstance(value, str) or value != addresses[0] for value in addresses):
+            raise ValueError('The Incus endpoint identity is ambiguous.')
+        return common.host_resources.local_target(addresses[0], {'incusd'})
     except (KeyError, TypeError, ValueError, BackendFailure):
         return {'supported': False, 'reason': 'The Incus execution target has no verified local machine authority. Backend limits still apply.'}
 
