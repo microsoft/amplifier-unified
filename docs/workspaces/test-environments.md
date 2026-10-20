@@ -125,6 +125,18 @@ executor, including an unbound journal entry, blocks a new destructive identity.
 It uses the retained original backend configuration. The failed operation receipt,
 test outcome and partial exports remain unchanged.
 
+One older returned failure has a separate, narrow qualification: Docker's
+`export-too-large` receipt, containing the exact retained universe and source
+snapshot. In the original helper this synchronous export rejection occurred
+before destruction, reaped the copy process, and returned through the host's
+drain-and-reap boundary. Timeout, restart-only, malformed, unbound and generic
+UNKNOWN records do not qualify. The host also requires retained backend,
+installation, launch, source and root-owner identities. It records the exact
+original receipt digest and those bindings on the new cleanup continuation,
+without rewriting the original UNKNOWN. Another unresolved removal still blocks
+continuation. A passive read reports this qualification separately from current
+physical state and continuation availability; it performs no backend action.
+
 A separate case is a guest whose successful removal is already committed while
 only owned dependency preparation cleanup remains pending. The public `remove`
 or `finishCleanup` action can finish that preparation through the original
