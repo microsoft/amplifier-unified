@@ -80,6 +80,18 @@ async def test_start_execute_stop_remove_retain_storage_and_exact_requests(app, 
     assert (await start(app, 'second'))['resource']['id'] != row['id']
 
 
+@pytest.mark.parametrize('key,value', [
+    ('env', {'HOME': '/root'}), ('environment', {'PATH': '/caller'}),
+    ('jobEnvironment', {'HOME': '/root'}), ('profileId', 'browser-test'),
+    ('uid', 0), ('gid', 0), ('user', 'root'), ('durableJob', True),
+])
+async def test_manual_execute_schema_refuses_workload_policy_overrides(app, backend, key, value):
+    row = (await start(app))['resource']
+    with pytest.raises(AppError):
+        await act(app, 'execute', row, 'override', command='true', **{key: value})
+    assert [action for action, _ in backend] == ['prepare', 'start']
+
+
 async def test_one_environment_per_root_and_no_storage_retirement_bypass(app, backend):
     row = (await start(app))['resource']
     with pytest.raises(AppError, match='already owns'):
