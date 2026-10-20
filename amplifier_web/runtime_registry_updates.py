@@ -72,6 +72,9 @@ def registry_lock(project):
 
 def managed_source(project, receipt, baseline, graph, current_manifest):
     """Require base policy, resolver identity, and actual installed agreement."""
+    separate_config = Path(project) / 'uv.toml'
+    if separate_config.exists() or separate_config.is_symlink():
+        return None  # A separate resolver policy is not represented by our manifest receipt.
     minimum = open_policy(baseline)
     if minimum is None or open_policy(current_manifest) is None:
         return None

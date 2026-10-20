@@ -261,3 +261,17 @@ async def test_matching_recorded_alternate_resolver_policy_stays_protected(worke
         await stage_fixture(worker, monkeypatch)
     assert before == {path.name: path.read_bytes() for path in worker.receipt.iterdir()}
     assert (worker.project / 'pyproject.toml').read_bytes() == policy
+
+
+@pytest.mark.parametrize('linked', [False, True])
+async def test_separate_uv_config_stays_protected(worker, monkeypatch, linked):
+    path = worker.project / 'uv.toml'
+    if linked:
+        path.symlink_to(worker.home / 'user-owned-uv.toml')
+    else:
+        path.write_text('extra-index-url=["https://custom.invalid/simple"]\n')
+    row = core(worker)
+    assert not row.get('registryManaged') and not row['eligible']
+    with pytest.raises(environments.ProtectedRuntimeSource):
+        await stage_fixture(worker, monkeypatch)
+    assert path.is_symlink() if linked else path.read_text().startswith('extra-index-url')
