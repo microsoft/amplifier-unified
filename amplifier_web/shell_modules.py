@@ -669,7 +669,9 @@ class ShellModules:
                 # Use the current bounded pages, including later Status pages.
                 # Rebuilding a full navigation snapshot can miss those rows.
                 envelope = self.resources.snapshot(identity) or {}
-                context = envelope.get('instances', {}).get(instance['id'], {}).get('resources', {}).get('context', {}).get('value', {})
+                resources = envelope.get('instances', {}).get(instance['id'], {}).get('resources', {})
+                record = 'context' if instance['package'] in BUILTINS else 'customSnapshot'
+                context = resources.get(record, {}).get('value', {})
             else:
                 context = self.navigation(client, instance, identity=identity)
             visible = {item['id'] for item in context.get('attention', {}).get('items', ())}

@@ -367,6 +367,51 @@ async def test_read_state_accepts_observed_later_status_page_only(service):
                           'fingerprints': {'unread:' + invisible['id']: 'not-observed'}})
 
 
+async def test_read_state_preserves_registered_custom_navigation_receipts(service, monkeypatch):
+    from amplifier_web.shell_resources import scope_for
+    identity = 'custom-reader'
+    digest = await stage(service, capabilities=['navigation.read', 'chats.manage'])
+    record_validation(service, digest)
+    composition = deepcopy(DEFAULT)
+    composition['instances'].append({'id': 'custom', 'package': digest, 'slot': 'navigation',
+                                     'scope': {'mode': 'pinned', 'workspaceId': 'one'}})
+    change = await prepare(service, composition, client=identity)
+    await command(service, 'shell.changes.apply', clientId=identity, changeId=change, expectedRevision=0)
+    for session in service.state['sessions']:
+        session['manualUnread'] = 'first-mark'
+    service._publish()
+    service.clients.attach(identity)
+    with service.clients.bind(identity):
+        service.shell.resources.register(identity, 1, ['recentNavigation'], scope_for(service.state))
+        snapshot = await settled_resources(service, identity)
+        entry = snapshot['instances']['custom']
+        assert set(entry['resources']) == {'customSnapshot'}
+        receipt, = entry['resources']['customSnapshot']['value']['attention']['items']
+        assert receipt['id'] == 'unread:alpha' and not receipt['read']
+        args = {'ids': [receipt['id']], 'fingerprints': {receipt['id']: receipt['fingerprint']}}
+        target = {'clientId': identity, 'instanceId': 'custom', 'generation': entry['generation'],
+                  'action': 'attention.read'}
+        before = deepcopy(service.state['sessions'])
+        await command(service, 'shell.command', **target, args=args)
+        assert service.state['sessions'] == before
+        notices = {item['id']: item for item in service.projections.attention(service.state)['items']}
+        assert notices['unread:alpha']['read'] and not notices['unread:beta']['read']
+        with pytest.raises(AppError, match='Only observed conversation notices'):
+            await command(service, 'shell.command', **target, args={
+                'ids': ['unread:beta'], 'fingerprints': {'unread:beta': notices['unread:beta']['fingerprint']}})
+        service.state['sessions'][0]['manualUnread'] = 'newer-mark'
+        service._publish()
+        await command(service, 'shell.command', **target, args=args)
+        notices = {item['id']: item for item in service.projections.attention(service.state)['items']}
+        assert not notices['unread:alpha']['read']
+        with pytest.raises(AppError, match='component was replaced'):
+            await command(service, 'shell.command', **{**target, 'generation': entry['generation'] + 1}, args=args)
+        with monkeypatch.context() as patch:
+            patch.setattr(service.shell.resources, 'snapshot', lambda _: {'instances': {}})
+            with pytest.raises(AppError, match='Only observed conversation notices'):
+                await command(service, 'shell.command', **target, args=args)
+
+
 async def test_sort_and_pin_order_use_shared_commands_and_keep_other_views(service):
     for session in service.state['sessions']:
         session.update(workspace=str(service.default_workspace), messages=[])
