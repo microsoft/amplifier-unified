@@ -486,7 +486,8 @@ def execute_call(payload):
             command = payload['command']
             if not isinstance(command, str) or not command or len(command) > 16384:
                 raise ValueError('The command is invalid.')
-            result = incus(config, env, ['exec', name, '--cwd', '/workspace', '--', '/bin/sh', '-lc', command], seconds)
+            arguments = common.jobs.arguments({**payload, 'jobEnvironment': common.selected_profile(payload)['environment']})
+            result = incus(config, env, ['exec', name, '--cwd', '/workspace', '--', *arguments], seconds)
             return {'ok': True, 'universeId': name, 'result': result}
         if action == 'stop':
             if instance.get('status') != 'Stopped':
