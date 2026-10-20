@@ -82,7 +82,7 @@ def definitions(schema, string):
             "idleStart": {"type": "boolean"}, "allowCreate": {"type": "boolean"},
         }, ["sessionId", "participants", "purpose", "modes"])),
         "coordination.revoke": ("Retired. Legacy work cannot resume; use ordinary human Stop for current task work.", schema({**sid, "grantId": string(200)}, ["sessionId", "grantId"])),
-        "coordination.context": ("Read bounded related request receipts and historical grants without loading peer transcripts.", schema(sid, ["sessionId"])),
+        "coordination.context": ("Read bounded related receipts, current admitted humanInput identity and historical grants without loading peer transcripts. humanInput is null outside the current human-backed root generation; it is not a permission grant.", schema(sid, ["sessionId"])),
         "coordination.recap": ("Compare bounded saved work with an optional private caller cursor. Passive; no model, history hydration or shared read-state write. nextCursor advances only returned changes; retain it only after presenting those changes.", schema({**sid, "cursor": string(16000)}, ["sessionId"])),
         "coordination.diagnostics": ("Read portable bounded phase/timing metadata for this root. Hashed correlation IDs, no prompts, drafts, paths or tool payloads; unavailable timing remains explicit. Does not start work.", schema(sid, ["sessionId"])),
         "coordination.decide": ("Retired. Legacy pending proposals cannot authorize new work.", schema({
@@ -421,6 +421,23 @@ class Collaboration:
                 or binding["_generationId"] != active.get("id") or active.get("terminal")):
             self.error("Collaboration requires the current transport-bound root generation.")
         return binding, active
+
+    def current_human_input(self, source):
+        """Expose a bounded current-input identity, never a permission grant."""
+        from .service import AppError
+        from .schedule_handoff import latest_human
+        try:
+            binding, active = self.active_binding(source)
+        except AppError:
+            return None
+        human = latest_human(source)
+        admitted = set(active.get('inputIds', [])) & {
+            row.get('inputId') for row in binding.get('_inputBindings', [])}
+        if (not human or human.get('questionId') or human.get('scheduledRunId')
+                or human.get('inputId') not in admitted):
+            return None
+        return {'sourceMessageId': human['id'], 'sourceInputId': human['inputId'],
+                'createdAt': human.get('createdAt'), 'generationId': active['id']}
 
     def validate_reply(self, source, args):
         binding, active = self.active_binding(source)
@@ -1318,6 +1335,7 @@ class Collaboration:
                 self.error("Current coordination context belongs to the caller.")
             result = self.current(args["sessionId"])
             source = self.service._session(args['sessionId'])
+            result['humanInput'] = self.current_human_input(source)
             from .workspace_awareness import packet, observed_intent
             result['awareness'] = packet(self.service, source['id'], principal=PRINCIPAL.get())
             result['writeIntent'] = observed_intent(self.service, source)

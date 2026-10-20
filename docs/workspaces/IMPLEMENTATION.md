@@ -345,7 +345,10 @@ actual human input against the calling root's admitted input bindings. It must
 postdate the recipient's Stop; peer prose, questions and scheduled inputs cannot
 authorize resume. `coordination.list` includes the current bounded `signal`,
 including `interruptionRevision`, for resident and dormant roots so a manager
-can construct this binding without loading history or starting the recipient. Assignment, task, source/recipient Stop and latest human input
+can construct this binding without loading history or starting the recipient.
+`coordination.context.humanInput` provides the exact latest admitted human message
+identity to the current root generation; peer, scheduled, question and stale
+inputs are ineligible. It is an observation, not new execution authority. Assignment, task, source/recipient Stop and latest human input
 are rechecked during preparation and native admission.
 
 The one-input exception permits a stopped recipient and a paused/blocked task to

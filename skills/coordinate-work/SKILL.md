@@ -60,7 +60,10 @@ compare those exact links, not equal message text.
    their current task, completed effects and `signal.interruptionRevision` through
    `coordination.list`. For each intended unfinished member, send one fresh
    queued request with `resume: {sourceMessageId, expectedInterruptionRevision}`.
-   Cite the actual latest human message admitted in your current generation.
+   Use `humanInput.sourceMessageId` returned by `coordination.context` for the
+   actual latest human message admitted in your current generation. A null
+   `humanInput` means no eligible current human instruction; do not guess an ID
+   or search guessed state paths. This observation does not itself grant permission.
    This supported path lets you act on the user's resume instruction without
    asking them to visit each chat and press Continue. The assignment must already
    be active; `assignment.resume` still reopens only assignment admission.
