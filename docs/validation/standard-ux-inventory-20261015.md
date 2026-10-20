@@ -745,6 +745,12 @@ draft are different owners. Preserve the acknowledged chat-draft save, return
 from connection setup, provider/privacy checks, and all 120 settings layouts.
 Screenshots belong to the run's `AMPLIFIER_TEST_OUTPUT` evidence directory.
 
+The image connection journey also retains fresh Home underneath Settings. Its
+single ordinary image-choice assertion belongs to the image-generation Settings
+surface; Home's workspace choice is a separate control. Keep the four supported
+choices, advanced model selection, persistence, failed-save retry, optional
+connection inspection, and absence of model/image submission checks intact.
+
 ### Home breadcrumb on narrow chat headers (October 19)
 
 The existing `mobile-navigation` owner also requires a visible Home control with
