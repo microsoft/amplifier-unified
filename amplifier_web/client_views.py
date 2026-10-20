@@ -252,6 +252,23 @@ class ClientViews:
             return session.setdefault("draftAttachments", [])
         return record.setdefault("attachments", {}).setdefault(session["id"] if session else "", [])
 
+    def consume_attachments(self, session, attachments):
+        """Settle exact uploaded IDs with positive delivery, not the later RPC."""
+        consumed = {row['id'] for row in attachments}
+        if not consumed:
+            return
+        # Uploads mint unique IDs. A resumed page can copy the same draft while
+        # its send is pending; settle those copies too, but only in this chat.
+        # Never use the runtime callback's ambient client or current selection.
+        for identity, record in self.records.items():
+            draft = record.get('attachments', {}).get(session['id'], [])
+            remaining = [row for row in draft if row['id'] not in consumed]
+            if len(remaining) != len(draft):
+                draft[:] = remaining
+                self.dirty.add(identity)
+        draft = session.get('draftAttachments', [])
+        draft[:] = [row for row in draft if row['id'] not in consumed]
+
     def project(self, snapshot):
         record = self.record()
         if record is None:

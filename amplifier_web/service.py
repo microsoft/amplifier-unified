@@ -3858,6 +3858,10 @@ class AppService:
                 message_bound and message['delivery'].get('status') == 'failed'):
             return  # A racing timeout cannot erase an explicit pre-input rejection.
         if message_bound:
+            if status == 'accepted':
+                # Publish acceptance and consumption together: the browser may
+                # retire its outbox before the awaited send RPC returns.
+                self.clients.consume_attachments(session, message.get('attachments', []))
             message['delivery'] = {'status':status}
             if status in {'accepted', 'failed', 'unknown'}:
                 self._post_disposition(session, message, 'accepted' if status == 'accepted' else 'retained')
