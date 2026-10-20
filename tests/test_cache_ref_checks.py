@@ -111,6 +111,8 @@ async def test_real_explicit_ref_namespace_is_authoritative(repo, ref, kind):
     result = await ref_policy(repo[0].as_uri(), ref, runner)
     assert result['kind'] == kind
     assert result['revision'] == (repo[2] if kind == 'branch' else repo[1])
+    from amplifier_web.runtime_policy_reconciliation import moving_revision as legacy_revision
+    assert await legacy_revision(repo[0].as_uri(), ref, updates.process) == (repo[2] if kind == 'branch' else None)
     assert set(calls[0][3:]) == ({ref} if ref.startswith('refs/') else
         {'refs/heads/release/custom', 'refs/tags/release/custom'})
 

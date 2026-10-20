@@ -21,6 +21,7 @@ async def main():
     parser.add_argument("--install-overrides", type=Path)
     parser.add_argument("--read-only", action="store_true")
     parser.add_argument("--profiles", type=Path)
+    parser.add_argument("--source-policy-only", type=Path)
     parser.add_argument("--global-only", action="store_true")
     parser.add_argument("--runtime-plan", type=Path)
     args = parser.parse_args()
@@ -36,16 +37,25 @@ async def main():
             batch = DependencyBatch()
             profiles = json.loads(args.profiles.read_text())
             catalog = {}
+            from amplifier_web.runtime_policy_reconciliation import Collector
+            collector = Collector() if args.source_policy_only else None
             if not isinstance(profiles, list) or not profiles or any(not isinstance(p, str) for p in profiles):
                 raise ValueError('Invalid qualification profiles')
             for index, profile in enumerate(profiles):
                 facts['profileIndex'] = index + 1
                 await prepare_dependencies(args.workspace, bundle=profile,
                     install_overrides=args.install_overrides, dependency_batch=batch, global_only=True, runtime_plan=runtime_plan,
-                    profile_catalog=catalog)
+                    profile_catalog=catalog, source_policy_collector=collector)
             facts.pop('profileIndex', None)
-            report = await batch.install()
             from amplifier_web.host.config import load_config
+            if collector is not None:
+                from amplifier_web.deployment import write_private
+                evidence = await collector.report(batch, load_config(args.workspace, global_only=True))
+                write_private(args.source_policy_only, json.dumps(evidence))
+                facts.update(ok=True, stage='source-policy-collected', dependenciesPrepared=False)
+                print(PROBE_PREFIX + json.dumps(facts), flush=True)
+                return
+            report = await batch.install()
             from amplifier_web.profile_catalog import save_catalog
             save_catalog(load_config(args.workspace, global_only=True), profiles, catalog)
             facts.update(ok=True, stage='prepared', dependenciesPrepared=True, **report)
