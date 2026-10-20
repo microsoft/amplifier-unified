@@ -319,13 +319,15 @@ async def index_latest(name, loader):
 
 async def read_ref_policy(url, ref, runner, environment=None):
     """Observe branch and same-name tag in one response, without guessing kind."""
-    if ref == 'HEAD':
-        patterns = ['HEAD']
-    elif ref.startswith('refs/') and not ref.startswith('refs/heads/'):
+    explicit_tag = ref.startswith('refs/tags/')
+    if ref == 'HEAD' or ref.startswith('refs/heads/') or explicit_tag:
+        # Fully qualified refs carry their authored kind. A same-name ref in
+        # another namespace cannot change what Git resolves this name to.
+        patterns = [ref]
+    elif ref.startswith('refs/'):
         return {'kind': 'unresolved'}
     else:
-        name = ref.removeprefix('refs/heads/')
-        patterns = ['refs/heads/' + name, 'refs/tags/' + name]
+        patterns = ['refs/heads/' + ref, 'refs/tags/' + ref]
     output = await runner('git', 'ls-remote', url, *patterns, env=environment, timeout=35)
     found = {}
     for line in output.splitlines():
@@ -334,6 +336,8 @@ async def read_ref_policy(url, ref, runner, environment=None):
             if pair[1] in found and found[pair[1]] != pair[0]:
                 return {'kind': 'unresolved'}
             found[pair[1]] = pair[0]
+    if explicit_tag:
+        return {'kind': 'tag', 'revision': found[ref]} if ref in found else {'kind': 'unresolved'}
     branch = found.get(patterns[0])
     tag = found.get(patterns[1]) if len(patterns) > 1 else None
     if tag:

@@ -184,3 +184,7 @@ a branch/tag name collision, and an ordinary branch. An exact qualified authored
 receipt remains authoritative even when a same-name tag exists. Unchecked transitive
 references stay protected with their original name available for selected-source
 reconciliation; they are not assumed to be permanently fixed by this check.
+
+Fully qualified `refs/heads/...` and `refs/tags/...` names preserve their explicit
+branch or fixed-tag intent; only unqualified names need the same-name collision
+check. Other ref namespaces remain protected without inferred policy.

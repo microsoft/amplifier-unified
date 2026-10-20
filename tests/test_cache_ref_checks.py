@@ -98,15 +98,21 @@ async def test_failed_fresh_proof_does_not_reuse_old_success(tmp_path):
     await cache.close()
 
 
-@pytest.mark.parametrize('same_tag', [False, True])
-async def test_explicit_heads_ref_uses_exact_branch_and_same_name_tag(same_tag):
+@pytest.mark.parametrize('ref,kind', [('refs/heads/release/custom', 'branch'),
+                                    ('refs/tags/release/custom', 'tag'),
+                                    ('release/custom', 'ambiguous')])
+async def test_real_explicit_ref_namespace_is_authoritative(repo, ref, kind):
+    git(repo[0], 'branch', 'release/custom', repo[2])
+    git(repo[0], 'tag', 'release/custom', repo[1])
     calls = []
     async def runner(*args, **kwargs):
         calls.append(args)
-        return 'a' * 40 + '\trefs/heads/release/custom' + ('\n' + 'b' * 40 + '\trefs/tags/release/custom' if same_tag else '')
-    result = await ref_policy('https://example.invalid/repo', 'refs/heads/release/custom', runner)
-    assert set(calls[0][3:]) == {'refs/heads/release/custom', 'refs/tags/release/custom'}
-    assert result['kind'] == ('ambiguous' if same_tag else 'branch')
+        return await updates.process(*args, **kwargs)
+    result = await ref_policy(repo[0].as_uri(), ref, runner)
+    assert result['kind'] == kind
+    assert result['revision'] == (repo[2] if kind == 'branch' else repo[1])
+    assert set(calls[0][3:]) == ({ref} if ref.startswith('refs/') else
+        {'refs/heads/release/custom', 'refs/tags/release/custom'})
 
 
 @pytest.mark.parametrize('topology,authored', [('tag-only', False), ('same-name', False),
