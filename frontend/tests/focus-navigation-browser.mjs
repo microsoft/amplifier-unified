@@ -124,6 +124,26 @@ try{
  await expect(page.locator('.a-focus-navigation [role=status]')).toContainText('1 of 3');
  report.checks.push('Scope/search isolate passes; a project visit retains position; the last item explicitly restarts without hiding work');
 
+ await next.click();await expect(card).toHaveAttribute('data-session-id',scopedSecond);
+ await page.getByLabel('Search your work',{exact:true}).fill('no-matching-focus-work');
+ await expect(page.getByRole('heading',{name:'No matching work.',exact:true})).toBeVisible();
+ await page.reload();await ready();
+ await page.getByRole('button',{name:'Clear work search',exact:true}).click();
+ await expect(page.locator('.a-focus-navigation [role=status]')).toContainText('1 of 3');
+ await next.click();
+ await page.getByRole('group',{name:'Work view'}).getByRole('button',{name:'Brief',exact:true}).click();
+ await page.getByLabel('Work scope',{exact:true}).selectOption('managed');
+ await expect(page.getByRole('heading',{name:'A fresh place to begin.',exact:true})).toBeVisible();
+ await page.getByLabel('Work scope',{exact:true}).selectOption(project.id);await ready();
+ await page.getByRole('group',{name:'Work view'}).getByRole('button',{name:'Focus',exact:true}).click();
+ await expect(page.locator('.a-focus-navigation [role=status]')).toContainText('1 of 3');
+ await next.click();
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workHomeScope:'focus-unavailable-project',workHomePages:{}}}));
+ await expect(page.getByRole('alert')).toContainText('This project is unavailable.');
+ await page.evaluate(id=>window.amplifier.dispatch('view.update',{patch:{workHomeScope:id,workHomePages:{}}}),project.id);
+ await ready();await expect(page.locator('.a-focus-navigation [role=status]')).toContainText('1 of 3');
+ report.checks.push('Empty searches survive reload without reviving an old pass; empty and unavailable scopes reset even when changed from Brief');
+
  await page.getByRole('button',{name:'See all 3',exact:true}).click();
  await expect(page.locator('.a-adaptive-home')).toHaveAttribute('data-view','brief');
  await expect(page.locator('.a-home-filtered .a-work-card')).toHaveCount(3);

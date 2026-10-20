@@ -80,6 +80,11 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  const focusMode=mode==='focus';
  const rememberFocus=value=>{setFocusCursor(value);saveFocusCursor(window,value)};
  useLayoutEffect(()=>{
+  // Committed search/scope changes start a pass even with no result or while
+  // another Home mode is visible. Otherwise returning revives the old key.
+  if(focusCursor&&focusCursor.key!==focusKey){
+   focusPending.current=null;focusRestore.current=null;rememberFocus(null);
+  }
   if(!ready||!focusMode||!focus)return;
   // Do not overwrite the destination cursor while a page request is settling.
   if(focusPending.current?.key!==focusKey)focusRestore.current=null;
