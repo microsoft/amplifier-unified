@@ -348,7 +348,7 @@ def advance(identity):
         before = record.get('phase')
         if record.get('cancelled'):
             if before in {'prepare', 'start'} and never_dispatched(record):
-                save(path, record, state='cancelled', phase='failed')
+                save(path, record, state='cancelled', phase='failed', probeRemoved=True)
             elif before == 'qualified':
                 save(path, record, state='cancelled', phase='failed')
             elif before not in {'stop', 'remove', 'failed'}:
@@ -509,7 +509,7 @@ def dispatch(value):
                 if record.get('candidate'):
                     proof = controller.read(path / 'qualification.json') or {}
                     if (record.get('phase') == 'prepare' and never_dispatched(record)
-                            or proof.get('probeRemoved') is True and not proof.get('checkPassed')
+                            or proof.get('probeRemoved') is True
                             or record.get('phase') == 'failed' and record.get('probeRemoved') is True):
                         discard_private_runtime(path, record)
                 save(path, record, state='skipped')

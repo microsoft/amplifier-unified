@@ -317,3 +317,25 @@ def test_changed_generation_cannot_borrow_qualified_engine_proof(engine, monkeyp
         controller.write(path, value)
     with pytest.raises(ValueError):
         generations.verify(config)
+
+
+def test_skip_prelaunch_cancel_removes_known_unused_runtime(engine):
+    identity = started(engine)
+    engine.policy['ref'] = 'changed'
+    assert target.advance(identity) == {'complete': True, 'cancelled': True}
+    assert target.dispatch({'action': 'skip', 'id': identity})['complete']
+    assert not (engine.path / 'runtime').exists()
+
+
+def test_skip_failed_artifact_proof_removes_only_settled_unpublished_runtime(engine, monkeypatch):
+    identity = started(engine)
+    for _ in range(3):
+        target.advance(identity)
+    monkeypatch.setattr(target, 'retained_proof', lambda result: False)
+    target.advance(identity)
+    record = controller.read(engine.path / 'update.json')
+    assert record['phase'] == 'failed' and record['proof']['probeRemoved']
+    assert record['proof']['checkPassed'] and not record['proof']['artifactVerified']
+    assert target.dispatch({'action': 'skip', 'id': identity})['complete']
+    assert not (engine.path / 'runtime').exists()
+    assert (engine.path / 'qualification.json').exists()

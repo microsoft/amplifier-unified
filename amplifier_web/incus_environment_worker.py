@@ -120,6 +120,13 @@ def launcher_interpreter(path):
     return interpreter
 
 
+def engine_generations():
+    spec = importlib.util.spec_from_file_location('_incus_engine_generations', Path(__file__).with_name('incus_engine_generations.py'))
+    generations = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generations)
+    return generations
+
+
 def validate_configuration(value, *, _engine_owner=None):
     """Read-only qualification of an explicitly installed legacy CLI generation."""
     required = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir', 'admissionDir', 'project', 'image'}
@@ -161,11 +168,9 @@ def validate_configuration(value, *, _engine_owner=None):
         raise ValueError('The installed legacy backend is not this app\'s qualified generation.')
     # A purpose-created candidate cannot become a historical static-qualified
     # install by dropping its receipt, including unchanged package source bytes.
-    spec = importlib.util.spec_from_file_location('_incus_engine_generations', Path(__file__).with_name('incus_engine_generations.py'))
-    generations = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(generations)
+    generations = engine_generations()
     if config.get('engineQualification') or Path(config['executable']).is_relative_to(generations.root()):
-        generations.verify(config, owner=_engine_owner)
+        generations.verify(config, owner=_engine_owner, runtime=False)
     config.update(interpreter=str(interpreter), packageDirectory=installed['directory'])
     for key, env_key in [('maxRunning', 'AMPLIFIER_DTU_MAX_RUNNING'), ('maxInstances', 'AMPLIFIER_DTU_MAX_INSTANCES'), ('minFreeBytes', 'AMPLIFIER_DTU_MIN_FREE_BYTES')]:
         # Preserve explicit operator environment policy when host configuration
@@ -458,6 +463,8 @@ def execute_call(payload, *, _engine_owner=None):
     root = private_directory(payload['root'])
     config = (validate_configuration(payload['incus'], _engine_owner=_engine_owner) if _engine_owner
               else validate_configuration(payload['incus']))
+    if config.get('engineQualification'):
+        engine_generations().verify(config, owner=_engine_owner, runtime=True)
     env = environment(config, root)
     action = payload['action']
     name = None if action == 'capacity' else identity(payload)
