@@ -3,6 +3,18 @@ name: Full Python checks
 on:
   workflow_dispatch:
     inputs:
+      suite:
+        description: Full qualification or one fixed repair suite (focused checks do not qualify the full suite)
+        type: choice
+        default: full
+        options:
+          - full
+          - inline-chat-card
+          - queued-configuration
+          - security-redaction
+          - patch-placement-recovery
+          - patch-placement-native
+          - managed-removal-recovery
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -22,10 +34,43 @@ jobs:
     if: ${{ !inputs.core_wheels }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      CHECK_SUITE: ${{ inputs.suite || 'full' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
+      - name: Record and validate the fixed Python selection
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          suites = {
+              'full': [],
+              'inline-chat-card': ['tests/test_chat_references.py'],
+              'queued-configuration': ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py'],
+              'security-redaction': ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py'],
+              'patch-placement-recovery': ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py'],
+              'patch-placement-native': ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py'],
+              'managed-removal-recovery': ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py'],
+          }
+          selection = os.environ['CHECK_SUITE']
+          if selection not in suites:
+              raise SystemExit('Unknown fixed Python suite: ' + selection)
+          targets = suites[selection]
+          output = Path('output/python-checks')
+          output.mkdir(parents=True, exist_ok=True)
+          git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
+          missing = [path for path in targets if not Path(path).is_file()]
+          record = {'suite': selection, 'fullSuite': selection == 'full', 'targets': targets,
+                    'revision': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'),
+                    'runId': os.environ.get('GITHUB_RUN_ID'), 'runAttempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
+                    'missing': missing}
+          (output / 'selection.json').write_text(json.dumps(record, indent=2) + '\n')
+          (output / 'targets.txt').write_text(''.join(path + '\n' for path in targets))
+          if missing:
+              raise SystemExit('Selected tests are missing: ' + ', '.join(missing))
+          PY
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -63,11 +108,23 @@ jobs:
               if not callable(mount) or mount is not module.mount:
                   raise RuntimeError('Native module entry point is not its canonical mount: ' + name)
           PY
+      - name: Select the prepared native-controls interpreter
+        if: ${{ env.CHECK_SUITE == 'patch-placement-native' }}
+        run: echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
       - name: Run the complete Python suite
+        if: ${{ env.CHECK_SUITE == 'full' }}
         run: |
           mkdir -p output/python-checks
           set -o pipefail
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml 2>&1 | tee output/python-checks/pytest.log
+      - name: Run the selected repair suite
+        if: ${{ env.CHECK_SUITE != 'full' }}
+        shell: bash
+        run: |
+          mapfile -t targets < output/python-checks/targets.txt
+          test "${#targets[@]}" -gt 0
+          set -o pipefail
+          uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml "${targets[@]}" 2>&1 | tee output/python-checks/pytest.log
       - name: Retain complete and partial Python results
         if: always()
         uses: actions/upload-artifact@v4
@@ -75,8 +132,15 @@ jobs:
           name: python-results-${{ github.run_attempt }}
           path: output/python-checks/
           if-no-files-found: warn
+  incompatible-selection:
+    if: ${{ inputs.core_wheels && inputs.suite && inputs.suite != 'full' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo 'Core-wheel qualification requires suite=full; focused selection was not run.'
+          exit 1
   core-wheels:
-    if: ${{ inputs.core_wheels }}
+    if: ${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}
     uses: ./.github/workflows/core-wheels.yml
     secrets:
       LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}

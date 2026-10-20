@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -18,7 +19,7 @@ try{
  page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/sessions')chatQueries.push(Object.fromEntries(url.searchParams))});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const workspace=(await state()).workspaces[0];
  const first=await action('session.create',{workspace:workspace.path,title:'Preview owner'});
  const second=await action('session.create',{workspace:workspace.path,title:'Independent peer',select:false});

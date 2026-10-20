@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -15,7 +16,7 @@ try{
   class Peer extends EventTarget{constructor(){super();this.connectionState='new';this.iceGatheringState='complete';probe.peer=this}createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){this.connectionState='closed'}}
   window.RTCPeerConnection=Peer;window.microphoneDenied=true;window.microphoneAttempts=0;navigator.mediaDevices.getUserMedia=async()=>{window.microphoneAttempts++;if(window.microphoneDenied)throw new DOMException('Fixture permission declined','NotAllowedError');const track=probe.track=new EventTarget();Object.assign(track,{enabled:true,readyState:'live',stop(){this.readyState='ended'}});return {getTracks:()=>[track],getAudioTracks:()=>[track]}};
  });
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const activity=(sessionId,status)=>page.evaluate(async data=>{const response=await fetch('/fixture/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(!response.ok)throw Error('Fixture activity failed')},{sessionId,status});
  const inspect=()=>page.evaluate(async()=>await(await fetch('/fixture')).json());
@@ -33,13 +34,16 @@ try{
  assert.equal(await page.evaluate(()=>window.microphoneAttempts),2);
  // A second browser's rejected start cannot finalize the owner's call.
  const observer=await page.context().newPage();
- await observer.goto(url);await observer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await observer.goto(url);await showFixtureConversation(observer);await observer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await observer.evaluate(id=>window.amplifier.dispatch('session.select',{id}),original);
  const beforeEnds=(await inspect()).ends.length;
  const rejected=await observer.evaluate(()=>window.amplifier.dispatch('call.start').then(()=>null,error=>error.code));
  assert.equal(rejected,'call_active');assert.equal((await inspect()).ends.length,beforeEnds);
  assert.equal(await page.evaluate(()=>voiceProbe.peer.connectionState),'connected');await observer.close();
  await activity(original,'working');
+ await action('view.update',{patch:{workSurface:'home'}});
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeHidden();
+ await expect(page.getByRole('button',{name:'End call',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Mute microphone',exact:true}).click();
  await expect(page.getByText('Microphone muted. Replies and work continue.',{exact:true})).toBeVisible();
  assert.deepEqual((await inspect()).stopped,[]);

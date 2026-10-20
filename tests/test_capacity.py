@@ -429,3 +429,79 @@ async def test_disabled_budget_admission_retains_receipts_without_building_usage
     finally:
         await worker.close()
         await app.close()
+
+
+async def test_fresh_human_recovery_rechecks_current_host_budget_without_reset(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    worker = controls("budget-recovery")
+    policy = copy.deepcopy(worker.capacity.policy)
+    state = {"allowed": False}
+    async def admit(row):
+        return {"allowed": state["allowed"], "budgetRevision": policy["revision"],
+                "assignmentRevision": 2 if state["allowed"] else 1,
+                "reasons": [] if state["allowed"] else ["assignment limit reached"]}
+    worker.capacity.admit = admit
+    with pytest.raises(ValueError, match="budget paused"):
+        await worker.capacity.guard({"id": "denied"})
+    denial = copy.deepcopy(worker.capacity.last_denial)
+    assert not await worker.tasks.continuation_allowed()
+    assert await worker.tasks.continuation_allowed(resume=True)
+    assert worker.capacity.last_denial == denial
+    # Admitting the human message cannot make a denied model call execute.
+    with pytest.raises(ValueError, match="budget paused"):
+        await worker.capacity.guard({"id": "still-denied"})
+    state["allowed"] = True  # Host now confirms changed assignment capacity.
+    await worker.capacity.guard({"id": "admitted"})
+    assert worker.capacity.policy == policy
+    assert worker.capacity.last_denial is None
+    restored = controls("budget-recovery")
+    await restored.restore()
+    assert restored.capacity.last_denial is None
+    assert await restored.tasks.continuation_allowed()
+    await restored.close()
+    await worker.close()
+
+
+@pytest.mark.parametrize('case', ['fresh', 'native', 'unbound', 'wrong-origin', 'old', 'background', 'terminal', 'other-input', 'exhausted'])
+async def test_spoken_input_rechecks_derived_denial_only_with_exact_current_provenance(tmp_path, case):
+    app = AppService(tmp_path, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    sid, identity = session['id'], 'voice:call:request'
+    message = app._message(session, 'user', 'Continue the task', 'call',
+                           voiceId='call', voiceItemId='utterance', inputOrigin='voice', voiceInputId=identity)
+    message['createdAt'] = 20
+    session['collaborationGeneration'] = {'id': 'current', 'inputIds': [identity], 'terminal': False}
+    row = call('fresh-call', sid, rootSessionId=sid, turnId=identity,
+               phase='running', endedAt=None, usage={})
+    if case == 'native':
+        message.update(source='native', nativeInputId=identity, voiceDelegation=True)
+    elif case == 'unbound':
+        message.pop('voiceInputId')
+    elif case == 'wrong-origin':
+        message['inputOrigin'] = 'peer'
+    elif case == 'old':
+        message['createdAt'] = 5
+    elif case == 'background':
+        row['lifecycle'] = 'background'
+    elif case == 'terminal':
+        session['collaborationGeneration']['terminal'] = True
+    elif case == 'other-input':
+        message['voiceInputId'] = 'voice:call:unrelated'
+    elif case == 'exhausted':
+        ingest(session, call('previous', sid, rootSessionId=sid, usage={'totalTokens': 100}))
+    saved = {'capacity': {'revision': 1, 'enabled': True, 'maxTotalTokens': 100},
+             'capacityLastDenial': {'budgetRevision': 1, 'at': 10, 'reasons': ['Old assignment allowance denied']}}
+    path = app.data_dir / 'sessions' / sid / 'control-state.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(saved))
+    try:
+        result = await admission(app, sid, {'call': row})
+        assert result['allowed'] is (case in {'fresh', 'native'})
+        if case == 'exhausted':
+            assert any('limit reached' in reason for reason in result['reasons'])
+        elif case not in {'fresh', 'native'}:
+            assert 'Old assignment allowance denied' in result['reasons']
+        assert json.loads(path.read_text()) == saved  # No budget or saved evidence reset.
+    finally:
+        await app.close()

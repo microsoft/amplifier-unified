@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
@@ -17,7 +18,7 @@ try{
  vite=await createServer({configFile:false,root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
- await page.goto(vite.resolvedUrls.local[0]);
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);
  const plan=page.getByRole('region',{name:'Plan',exact:true});
  await expect(plan).toHaveCount(1);await expect(plan).toHaveClass(/a-chat-plan-composer/);
  await expect(plan).toContainText('1 of 3 done');await expect(plan).toContainText('Drafting the team update');

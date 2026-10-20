@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Actual separately built JavaScript identities; synthetic rollout, no installer.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -26,7 +27,7 @@ try{
  const errors=[],assetReads=[];let buildReads=0;page.on('pageerror',error=>errors.push(error.message));
  page.on('request',r=>{if(new URL(r.url()).pathname==='/build.json')buildReads++});
  page.on('response',r=>{const path=new URL(r.url()).pathname;if([entry(oldTree),entry(newTree)].includes(path))assetReads.push(r.body().then(bytes=>({path,sha256:hash(bytes)}),error=>({path,error:String(error)})))});
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true}),pane=page.getByRole('log',{name:'Conversation messages',exact:true});await expect(composer).toBeEditable();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true}),pane=page.getByRole('log',{name:'Conversation messages',exact:true});await expect(composer).toBeEditable();
  await expect(page.locator('[data-part=app-reload]')).toHaveCount(0);
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'reload-evidence.txt',mimeType:'text/plain',buffer:Buffer.from('Private reload attachment')});
  const strip=page.locator('[data-part="composer"] .a-attachment');await expect(strip).toContainText('reload-evidence.txt');await expect(page.getByText('Uploading attachments…',{exact:true})).toHaveCount(0);

@@ -59,9 +59,29 @@ async def worker(app, sid, wid="child-a", **patch):
     await app.on_runtime_event("worker.updated", {"sessionId": sid, "id": wid, "kind": "session", "parentSessionId": "native-parent", "runId": "run-1", "persistent": True, "status": "running", **patch})
 
 
+async def test_list_exposes_revision_without_unbounded_wait_signal(app):
+    caller, peer = app.state['sessions']
+    peer.update(interruptionRevision=7,
+                approvals=[{'id': f'approval-{i}', 'status': 'pending'} for i in range(100)])
+    for i in range(100):
+        app.questions.store.put({
+            'id': f'question-{i}', 'sessionId': peer['id'], 'createdAt': i,
+            'status': 'pending', 'prompt': f'Question {i}', 'revision': 1,
+            'required': True,
+        })
+    app._publish()
+    page = app.coordination.list({'sessionId': peer['id']}, caller['id'])
+    item = page['items'][0]
+    assert item['signal'] == {'interruptionRevision': 7}
+    assert item['approvalIds'] == [f'approval-{i}' for i in range(64)]
+    assert item['questionIds'] == [f'question-{i}' for i in range(64)]
+    assert not app.runtime.sent and not app.runtime.messages
+
+
 async def test_list_pages_dormant_peers_without_admission_or_body_reads(app, monkeypatch):
     caller, peer = app.state['sessions']
     peer_id = peer['id']
+    peer.update(status='stopped', interruptionRevision=7)
     peer['workers'] = [{'id': 'saved-child', 'status': 'completed', 'name': 'Retained worker', 'kind': 'session'}]
     app.state.setdefault('runtimeControl', {})[peer_id] = {'task.get': {'task': {
         'id': 'saved-task', 'status': 'blocked', 'revision': 3, 'questionIds': []}}}
@@ -94,6 +114,7 @@ async def test_list_pages_dormant_peers_without_admission_or_body_reads(app, mon
             offset = page['nextOffset']
         assert {row['target']['sessionId'] for row in rows} == {caller['id'], peer_id}
         saved = next(row for row in rows if row['target']['sessionId'] == peer_id)
+        assert saved['signal']['interruptionRevision'] == 7
         assert saved['taskId'] == 'saved-task' and saved['attention']
         assert saved['canFollowup'] and not saved['canInterrupt']
         assert saved['peerActions'] == [{'modes': ['notify', 'queue']}]

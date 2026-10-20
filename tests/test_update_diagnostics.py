@@ -257,6 +257,63 @@ async def test_recovery_details_exclude_unknown_reason_package_paths_and_excepti
     await service.close()
 
 
+@pytest.mark.parametrize('changes,fields', [
+    ({'revision': 'b' * 40}, ['revision']),
+    ({'repository': 'https://other.invalid/private-repository'}, ['repository']),
+    ({'ref': 'private-other-ref'}, ['ref']),
+    ({'subdirectory': 'private/other/module'}, ['subdirectory']),
+    ({'repository': 'https://other.invalid/private-repository', 'revision': 'b' * 40},
+     ['repository', 'revision']),
+    (None, ['source']),
+])
+async def test_resolution_failure_receipt_identifies_mismatch_without_source_values(app, repo, changes, fields):
+    from urllib.parse import urlencode, urlsplit
+    from amplifier_web.runtime_environment import verify_resolution
+    manager, cache = await prepare(app, repo)
+    expected = {'repository': 'https://user:private-token@example.invalid/private-repository',
+                'ref': 'private-ref', 'subdirectory': 'private/module', 'revision': 'a' * 40}
+    observed = {**expected, **(changes or {})}
+    resolved = None if changes is None else urlsplit(
+        observed['repository'] + '?' + urlencode({'rev': observed['ref'], 'subdirectory': observed['subdirectory']})
+        + '#' + observed['revision'])
+    async def validate(*args):
+        verify_resolution(resolved, {'package': 'component-example', 'url': expected['repository'],
+                                     'ref': expected['ref'], 'subdirectory': expected['subdirectory'],
+                                     'latest': expected['revision']})
+    manager.validate = validate
+    sessions = json.loads(json.dumps(app.state['sessions']))
+    await manager.install()
+    failure = manager.diagnostics.state['lastFailure']
+    assert failure['phase'] == 'ecosystem-validation'
+    assert failure['errorType'] == 'ValueError'
+    assert failure['reason'] == 'runtime-resolution-mismatch'
+    assert failure['component'] == 'component-example'
+    assert failure['resolutionMismatches'] == fields
+    assert failure['expectedRevision'] == expected['revision']
+    if changes is not None:
+        assert failure['observedRevision'] == observed['revision']
+    else:
+        assert 'observedRevision' not in failure
+    assert 'private' not in json.dumps(failure)
+    assert 'example.invalid' not in json.dumps(failure)
+    assert app.state['sessions'] == sessions and app.runtime.closed == 0
+    assert not (app.data_dir / 'updates/active.json').exists()
+
+
+async def test_resolution_receipt_filters_untrusted_values(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    failure = manager.diagnostics.record('ecosystem-validation', 'failed',
+        reason='runtime-resolution-mismatch', component='https://user:private-token@example.invalid/repo',
+        resolutionMismatches=['revision', 'private-ref', {'path': '/private/file'}, 'revision'],
+        expectedRevision='/private/file', observedRevision='private-token')
+    assert failure['resolutionMismatches'] == ['revision']
+    assert not {'component', 'expectedRevision', 'observedRevision'} & failure.keys()
+    assert 'private' not in json.dumps(failure)
+    await service.close()
+
+
 @pytest.mark.parametrize('name,reason', [('ModuleActivationError','module-prepare-failed'), ('BundleLoadError','bundle-load-failed')])
 def test_recognized_prepare_failure_keeps_class_and_guidance_without_exception_text(name, reason):
     from amplifier_web.update_diagnostics import probe_failure

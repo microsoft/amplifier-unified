@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Actual disconnected transport, private attachments, drafts and reading anchors.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -16,7 +17,7 @@ try{
  const before=await control({op:'inspect'}),original=before.state.sessions.find(row=>row.id===alpha);
  browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:950},extraHTTPHeaders:headers}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.addInitScript(()=>{const Native=window.WebSocket;window.fixtureSockets=[];window.WebSocket=class extends Native{constructor(...args){super(...args);window.fixtureSockets.push(this)}}});
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true}),pane=page.getByRole('log',{name:'Conversation messages',exact:true});await expect(composer).toBeEditable();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true}),pane=page.getByRole('log',{name:'Conversation messages',exact:true});await expect(composer).toBeEditable();
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'retained-evidence.txt',mimeType:'text/plain',buffer:Buffer.from('Exact private attachment bytes')});
  const strip=page.locator('[data-part="composer"] .a-attachment');await expect(strip).toContainText('retained-evidence.txt');await expect(page.getByText('Uploading attachments…',{exact:true})).toHaveCount(0);
  await composer.fill('Private draft before disconnect');

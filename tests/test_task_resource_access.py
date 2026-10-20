@@ -67,3 +67,23 @@ async def test_changed_mount_and_unknown_tools_cannot_claim_access(tmp_path, mon
     custom = {'custom':object()}
     unknown = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name:custom))
     assert (await observe(unknown, [str(tmp_path)]))['paths'][str(tmp_path)]['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('engine', ['native', 'function'])
+async def test_default_workspace_authority_covers_nested_test_files_and_blocks_symlink_escape(tmp_path, engine):
+    from amplifier_web.host.session import _apply_host_policy
+    workspace, external = tmp_path/'workspace', tmp_path/'external'
+    workspace.mkdir(); external.mkdir()
+    target = workspace/'.amplifier'/'task-storage'/'tests'
+    target.mkdir(parents=True)
+    (workspace/'outside').symlink_to(external, target_is_directory=True)
+    bundle = SimpleNamespace(tools=[{'module':'tool-filesystem'}], agents={})
+    _apply_host_policy(bundle, SimpleNamespace(workspace=workspace, settings={}))
+    _, tools = await mounted(workspace, tmp_path/'locks', engine, **bundle.tools[0]['config'])
+    assert (await tools['write_file'].execute({'file_path':str(target/'check.txt'), 'content':'first\n'})).success
+    from test_file_source_guard import change
+    assert (await tools['read_file'].execute({'file_path':str(target/'check.txt')})).success
+    name, args = change(engine, str(target/'check.txt'))
+    assert (await tools[name].execute(args)).success
+    result = await tools['write_file'].execute({'file_path':str(workspace/'outside'/'escaped.txt'), 'content':'blocked'})
+    assert not result.success and not (external/'escaped.txt').exists()

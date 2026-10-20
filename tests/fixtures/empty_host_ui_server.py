@@ -170,7 +170,7 @@ async def main(home):
             if catalog_paused:
                 catalog_paused = False
                 app['service'].history.lock.release()
-        query_mode, entered, target_client = 'release', 0, None
+        query_mode, entered, target_client, target_resource = 'release', 0, None, 'sidebarSearch'
         query_events, query_invalidations = [], []
         original_invalidate = query_owner.resources.invalidate
         def record_invalidation(global_keys=None):
@@ -186,12 +186,12 @@ async def main(home):
             original_project = projector.project
             async def project(inputs, **options):
                 nonlocal entered
-                if inputs['operation'] == 'chats' and inputs['args']['section'] == 'search':
+                if inputs['operation'] == 'chats' and inputs['args']['section'] == ('recent' if target_resource == 'workHome' else 'search'):
                     job = query_owner.jobs.get(query_owner.active, {})
                     event = {'key': options.get('key'), 'at': time.monotonic(), 'fence': [digest(part) for part in job.get('fence', ())], 'mode': query_mode, 'interests': sorted({(item[2], item[3]) for item in job.get('interests', {}).values()})}
                     query_events.append(event)
                     del query_events[:-16]
-                    targeted = any(item[0] == target_client and item[2:4] == ('chats', 'sidebarSearch')
+                    targeted = any(item[0] == target_client and item[2:4] == ('chats', target_resource)
                                    for item in job.get('interests', {}).values())
                     event['targeted'] = targeted
                     if not targeted:
@@ -209,15 +209,18 @@ async def main(home):
             return projector
         query_owner.factory = controlled_factory
         async def query_control(request):
-            nonlocal query_mode, target_client, catalog_paused
+            nonlocal query_mode, target_client, target_resource, catalog_paused
             if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
                 raise web.HTTPForbidden()
             if request.method == 'POST':
                 payload = await request.json()
                 mode, identity = payload.get('mode'), payload.get('clientId')
+                resource = payload.get('resource', 'sidebarSearch')
                 if not isinstance(identity, str) or identity not in app['service'].clients.records:
                     raise web.HTTPBadRequest()
                 if mode not in {'hold', 'release', 'fail'}:
+                    raise web.HTTPBadRequest()
+                if resource not in {'sidebarSearch', 'workHome'}:
                     raise web.HTTPBadRequest()
                 if mode == 'hold' and not catalog_paused:
                     # This phase proves retry suppression for one unchanged data
@@ -227,6 +230,7 @@ async def main(home):
                     await app['service'].history.lock.acquire()
                     catalog_paused = True
                 target_client = identity
+                target_resource = resource
                 query_mode = mode
                 if mode == 'hold':
                     gate.clear()
@@ -241,6 +245,22 @@ async def main(home):
                     'currentInterests': sum(query_owner._current(item) for item in value['interests'].values())} for key, value in list(query_owner.failures.items())[-16:]]})
         app.router.add_get('/fixture/scoped-query', query_control)
         app.router.add_post('/fixture/scoped-query', query_control)
+
+        async def project_path(request):
+            # A race at the command boundary, confined to disposable fixture folders.
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            path = Path(data['path']).resolve()
+            if not path.is_relative_to(home.resolve()) or not path.is_dir():
+                raise web.HTTPBadRequest()
+            service = app['service']
+            workspace = next(row for row in service.state['workspaces'] if row['id'] == data['workspaceId'])
+            workspace['path'] = str(path)
+            service._publish()
+            return web.json_response({'ok': True})
+
+        app.router.add_post('/fixture/project-path', project_path)
     if '--canvas-download-cookie' in sys.argv:
         async def browser_session(request):
             # Native browser downloads use the normal session cookie; the

@@ -158,12 +158,12 @@ class GitWorktrees:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with FileLock(str(path), timeout=30): yield
 
-    def create(self, source, *, command_id, expected_revision, mode='clean', ref='HEAD', branch=None, session_id=None):
+    def create(self, source, *, command_id, expected_revision, mode='clean', ref='HEAD', branch=None, session_id=None, admit=None):
         with self.command_lock('create', command_id):
             return self._create(source, command_id=command_id, expected_revision=expected_revision,
-                                mode=mode, ref=ref, branch=branch, session_id=session_id)
+                                mode=mode, ref=ref, branch=branch, session_id=session_id, admit=admit)
 
-    def _create(self, source, *, command_id, expected_revision, mode='clean', ref='HEAD', branch=None, session_id=None):
+    def _create(self, source, *, command_id, expected_revision, mode='clean', ref='HEAD', branch=None, session_id=None, admit=None):
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'managed-worktree:' + command_id))
         signature = digest([str(source), expected_revision, mode, ref, branch, session_id])
         root, repository = common(source)
@@ -173,7 +173,8 @@ class GitWorktrees:
             if path.exists():
                 record = self.get(identity)
                 if record['signature'] != signature: raise ValueError('The command ID already has different contents')
-                return {**record, 'duplicate': True}
+                result = {**record, 'duplicate': True}
+                return admit(lambda: result) if admit else result
             before, cached, changes = snapshot(root)
             if before['sourceRevision'] != expected_revision: raise ValueError('The source checkout changed; inspect it again')
             if mode not in {'clean', 'carry_dirty'}: raise ValueError('Choose clean or carry_dirty explicitly')
@@ -192,7 +193,12 @@ class GitWorktrees:
             record = {'id': identity, 'revision': 1, 'signature': signature, 'sessionId': session_id, 'executionHost': copy.deepcopy(self.execution_host), 'source': str(root), 'repository': str(repository), 'path': str(target), 'head': commit, 'branch': branch, 'mode': mode, 'status': 'creating', 'owned': True, 'createdAt': time.time(), 'sourceRevision': before['sourceRevision'], 'manifest': {'sourceUnchanged': True, 'stagedPatchSha256': digest(cached), 'unstagedPatchSha256': digest(changes), 'untracked': before['untracked'] if mode == 'carry_dirty' else [], 'ignoredFilesIncluded': False}}
             evidence = self.directory / 'manifests' / identity
             record['manifest']['evidenceDirectory'] = str(evidence)
-            self.save(record)
+            # The host may commit this short durable admission under its state
+            # lock. All Git lock waits and read-only validation precede it.
+            # Once admitted, preserve and settle this exact operation even if
+            # its caller stops; never replay an uncertain filesystem effect.
+            if admit: admit(lambda: self.save(record))
+            else: self.save(record)
             evidence.mkdir(parents=True, exist_ok=False, mode=0o700)
             try:
                 if mode == 'carry_dirty':
@@ -227,11 +233,11 @@ class GitWorktrees:
             self.save(record)
             return record
 
-    def attach(self, path, *, source, command_id, session_id=None):
+    def attach(self, path, *, source, command_id, session_id=None, admit=None):
         with self.command_lock('attach', command_id):
-            return self._attach(path, source=source, command_id=command_id, session_id=session_id)
+            return self._attach(path, source=source, command_id=command_id, session_id=session_id, admit=admit)
 
-    def _attach(self, path, *, source, command_id, session_id=None):
+    def _attach(self, path, *, source, command_id, session_id=None, admit=None):
         target, repository = common(path)
         _, expected = common(source)
         if repository != expected: raise ValueError('The checkout must belong to this task’s repository')
@@ -241,16 +247,18 @@ class GitWorktrees:
                 record = self.get(identity)
                 if record['path'] != str(target) or record['sessionId'] != session_id or record['source'] != str(Path(source).resolve()):
                     raise ValueError('The command ID already names another checkout or source')
-                return record
+                return admit(lambda: record) if admit else record
             checked = snapshot(target)[0]
             if str(target) not in [row.get('worktree') for row in checked['worktrees']]: raise ValueError('Git does not register that worktree')
             record = {'id': identity, 'revision': 1, 'sessionId': session_id, 'executionHost': copy.deepcopy(self.execution_host), 'path': str(target), 'source': str(Path(source).resolve()), 'repository': str(repository), 'head': checked['head'], 'branch': checked['branch'], 'status': 'ready', 'owned': False, 'mode': 'attached', 'createdAt': time.time(), 'manifest': {'sourceUnchanged': True}}
-            self.save(record); return record
+            if admit: admit(lambda: self.save(record))
+            else: self.save(record)
+            return record
 
-    def status(self, identity):
+    def status(self, identity, *, reconcile=True):
         record = self.get(identity)
         if record['status'] == 'removed': return record
-        if record['status'] in {'archive_pending', 'archive_unknown'}:
+        if reconcile and record['status'] in {'archive_pending', 'archive_unknown'}:
             with self.lock(record['repository']):
                 record = self.get(identity)
                 for operation in record.get('archiveOperations', {}).values():

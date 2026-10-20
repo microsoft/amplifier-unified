@@ -6,6 +6,31 @@ Automatic update checks default to every **4 hours**. Under **Update preferences
 
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 
+A prepared app update that is waiting for active work continues checking the
+published release channel at the configured automatic-check interval. **Check
+for newer release** refreshes availability without installing or replacing the
+qualified candidate. The existing installation request then prepares a strictly
+newer published version in isolation; only successful validation replaces the
+waiting candidate. Before an ordinary idle restart, the updater refreshes again
+unless it has checked within the last minute. This final check belongs to the
+already requested installation, even if periodic checks are disabled.
+
+An unavailable release channel leaves the prepared update usable and shows a
+nonfatal warning. A newer candidate that fails validation retains the earlier
+receipt but stops automatic adoption until an explicit retry. Older metadata,
+a moved tag at the same version, or a changed commit without a newer version
+cannot replace a qualified candidate or discard a newer known target. The final
+activation lock also rejects an obsolete candidate if a concurrent check found
+a newer release while activation waited. These checks cannot guarantee knowledge
+of a release published after the last lookup. An already started replacement or
+restart, an explicit optional-feature selection, and a confirmed force restart
+retain their exact target; none is silently retargeted.
+
+Superseded app staging directories and their qualification receipts remain on
+disk. The existing automatic retention owner covers ecosystem generations, not
+app-installation generations; this path does not infer that an older app directory
+is safe to delete.
+
 When a qualified application update is waiting, expand **View active work** to
 find **Force restart…**. Its confirmation explains that running chats, workers,
 tools and calls will be interrupted, saved history and drafts are retained, and
@@ -52,6 +77,13 @@ Availability checks reuse a private inventory index, invalidated by generation, 
 Core, Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
 
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
+
+If a worker dependency resolves differently from the checked update, activation
+stops. The diagnostic receipt identifies the component, checked/resolved commit
+IDs when available, and which fields differ: repository, ref, subdirectory,
+revision, or a missing Git source. It does not include the source URLs, ref values
+or paths. A successful resolver command alone does not prove a matching candidate,
+and this failure does not by itself prove that a remote branch moved.
 
 Application activation also verifies that the running host and the executable on PATH belong to the same uv tool installation. A development checkout or a different launcher cannot replace another installed tool. Candidate and installed-package probes use isolated Python imports, reject packages outside that environment, and cannot accidentally validate a checkout from the launch directory or PYTHONPATH. The installed package is checked again after replacement; a failed check leaves the running host up for recovery. The restart helper uses the separate validated environment, and new work remains blocked until restart. It preserves the effective bind addresses, public origins, TLS certificate/key, session lifetime, port, workspace and data directory without writing CLI overrides into saved server settings. The replacement host acknowledges the pending restart only after an authenticated HTTP request to its live listener confirms the expected version, exact installed Git revision, data directory identity, and a different process instance. Package probes and application construction alone cannot acknowledge a restart. Smart Tool servers are reported disconnected after restart and can be reconnected explicitly. The recovery record stores the actual prior installation source when available, rather than assuming an older release tag exists. Repeated installation requests reuse a pending validated generation. Cache symlinks remain symlinks while staging; external workspace trees are not copied into the update.
 
@@ -257,6 +289,13 @@ that attempt can reuse evidence only while their complete installed metadata,
 source content and explicit policy match; graph changes invalidate that reuse.
 A new attempt always starts with fresh dependency resolution. Existing explicit
 local/registry overrides are not replaced by a remembered Git lock.
+
+uv may represent a checked moving ref as `rev=<full checked commit>#<same commit>`.
+That spelling is equivalent only when repository, subdirectory and exact commit
+also match; abbreviated commits, other refs and branch movement still fail.
+The checked ref policy is carried separately into qualification and bound again
+to the installed source identity. Frozen installs retain exact commits while the
+next update check continues following the configured branch.
 
 After the uv-managed launcher supports generation activation, an already tested
 application environment becomes the live launch target through an atomic private

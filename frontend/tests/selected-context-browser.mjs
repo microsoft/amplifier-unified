@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -39,7 +40,7 @@ try{
   await expect.poll(async()=>(await state()).browserResources).toEqual(children?['selectedContext','subagentNavigation']:['selectedContext']);
   const value=await state();contextShape(value,children);return value;
  };
- await page.goto(url);
+ await page.goto(url);await showFixtureConversation(page);
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await expect(composer).toBeVisible();await expect(page.getByText('Saved response',{exact:true})).toBeVisible();
  const initial=await info(),parent=initial.initialSession;

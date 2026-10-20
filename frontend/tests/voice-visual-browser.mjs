@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -21,7 +22,7 @@ try {
    Object.defineProperty(track,'label',{value:'Synthetic test window'});track.getSettings=()=>({displaySurface:'window'});track.addEventListener('ended',()=>clearInterval(timer));window.captureTrack=track;return stream;
   };
  });
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const openComputerAccess=async()=>{
   await page.getByRole('button',{name:'Chat',exact:true}).click();

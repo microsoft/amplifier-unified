@@ -7,6 +7,7 @@ import {Copy,Check,Pencil,GitBranch,ArrowUp,AlertCircle,RotateCcw,LoaderCircle} 
 import {AttachmentStrip} from './chat-controls';
 import {usePendingMessageEdit} from './pending-message-edits';
 import {InlineMedia} from './inline-media';
+import {ChatReferences} from './chat-reference';
 import {PeerMessage,isPeerMessage} from './peer-message';
 import {VoiceWorkMessage} from './voice-work-message.jsx';
 import {isVoiceWorkMessage} from './voice-work-message.js';
@@ -83,6 +84,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} disabled={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch({...edit,text,fork:e.target.checked})}}/>Create a separate chat (fork)</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':!localDelivery&&edit?.fork?'Create edited chat':'Save & regenerate'}</button></div>
   </form>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act} displayOnly={m.displayOnly}/>}
+  {m.role==='assistant'&&!m.displayOnly&&!m.ephemeral&&!localDelivery&&!editing&&!!m.id&&<ChatReferences key={`${session.id}:${m.id}`} sessionId={session.id} messageId={m.id} revision={session.chatReferenceRevision||''} available={session.linkedChatReferencesAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>}
   {m.role==='assistant'&&!m.displayOnly&&!editing&&!omitMedia&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>}
   </div>
   <AssistantReactions message={m}/>

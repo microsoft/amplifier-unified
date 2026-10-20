@@ -336,6 +336,32 @@ and the separate registered-history scope. These are not OS,
 universal credential, per-tool or multi-tenant isolation guarantees. Existing
 registered own-history access is independent of configuration grants.
 
+## Human-directed member resume — 2026-10-20
+
+`coordination.send` accepts `resume: {sourceMessageId,
+expectedInterruptionRevision}` for a fresh queued request from a commissioning
+owner to a current member of its active assignment. The host verifies the latest
+actual human input against the calling root's admitted input bindings. It must
+postdate the recipient's Stop; peer prose, questions and scheduled inputs cannot
+authorize resume. `coordination.list` includes the current bounded `signal`,
+including `interruptionRevision`, for resident and dormant roots so a manager
+can construct this binding without loading history or starting the recipient.
+`coordination.context.humanInput` provides the exact latest admitted human message
+identity to the current root generation; peer, scheduled, question and stale
+inputs are ineligible. It is an observation, not new execution authority. Assignment, task, source/recipient Stop and latest human input
+are rechecked during preparation and native admission.
+
+The one-input exception permits a stopped recipient and a paused/blocked task to
+receive the reconciliation request. It does not rewrite the task or reset its
+saved goal progress. The recipient deliberately resumes its own task after
+checking its blockers. Capacity policy and saved turn budgets still apply.
+Completed objectives stay completed: an explicit reconciliation/follow-on input
+can reach their chat without reactivating the old goal. Independent chats and
+failed/unsettled runtimes are ineligible.
+The retained receipt consumes this human/member/Stop authorization once, including
+unknown admission outcomes; old suppressed or uncertain requests are not replayed.
+Assignment admission itself still uses the existing explicit `assignment.resume`.
+
 ## Assignment admission and scoped Stop — 2026-10-14
 
 New commissioned roots now share their initiating root's assignment. Nested
@@ -362,6 +388,27 @@ Stop targets. The current adapter cannot interrupt or account for one request
 inside an independent mixed conversation. Stop reports that limitation. With
 an enabled token/cost limit, queue/steer to such peers is refused; informational
 notices remain available, and commissioned helpers share the budget.
+
+Explicit user recovery uses revision-bound `assignment.resume` on the commissioning
+chat after interruption receipts, roots, native workers, preparations and current
+generations have settled. It preserves membership, task records, cumulative
+accounting and limits. It does not send input, resume paused local tasks or clear
+interruption revisions. Queued outbound requests and saved waits retain their
+original interruption binding; reopening cannot admit old requests or manufacture
+late continuation messages. A fresh user request may then start new work.
+A historical unknown Stop acknowledgement is not a permanent barrier. On the
+same explicit Resume action, the native adapter can prove that the affected
+root has no process, preparation, pending admission or unobserved shutdown, and
+hold its existing native session ownership lock through the recovery commit.
+A live/foreign owner, unsupported adapter, execution handoff fence or outstanding
+Stop still refuses recovery. The Resume receipt retains revision-bound settlement
+evidence separately; original unknown Stop receipts are unchanged. This proves
+current ownership settlement, never rollback or success of external effects.
+
+Separately paused chat tasks and persisted local budget denials remain paused;
+the existing task/budget controls own their explicit revision-bound recovery.
+Stopped-assignment input is rejected before appending history or starting a worker,
+with guidance to the existing Shared tasks and assignment controls.
 
 The browser exposes assignment controls under Related work, with private drafts,
 revision conflicts and exact lost-response retries. Attached HTTP/session clients
@@ -1298,3 +1345,31 @@ sources, while already active work and retained explicit child ceilings remain
 preserved. Source tests and a provider-free Core/Foundation mount cover this
 behavior; release, installed-worker adoption and the reported provider conversation
 remain separate acceptance steps.
+
+## Idle worker retirement preserves peer admission — 2026-10-19
+
+Retiring a settled worker for memory retention or an updated runtime is process
+maintenance. It leaves the conversation idle and eligible for a new guarded
+peer request, including after host restart. A native `session.closed` event at
+that boundary must not mark the conversation Stopped and require a human relay.
+The host records the maintenance reason before sending the retirement command;
+refusal clears that reason, and an unacknowledged exit remains an explicit error.
+A concurrent user Stop takes precedence even after the retirement acknowledgement.
+
+Regression coverage exercises real subprocess transport, AppService persistence,
+and exact host admission with a scripted native endpoint: a fresh peer request
+after retirement, during retirement, after host restart, and after an explicit
+Stop. New input reaches only a fresh process and only once. Existing messages
+and peer attribution remain intact. These checks make no real-model or deployed
+release claim. No existing stopped/error record is silently reclassified, and
+previously suppressed or unknown requests are not replayed.
+
+#### Settled failed members
+
+A fresh human-backed owner request can admit one reconciliation input to a failed commissioned member. The host requires a recorded terminal generation, no active child work, and the existing native ownership lock proving the previous worker is absent. A classified provider cause gains terminal identity only when its observed admitted input and active generation match the failure event; later generic worker errors retain that cause. Ownership stays held through the saved receipt. The failed generation and its effects remain evidence; no input or command is retried. A newer failure, Stop, membership change, human input or pending access change invalidates admission.
+
+Explicit provider/tool safety failures block peer resumption even after ordinary Stop changes the displayed status. Passive inspection and a separate permitted human request through normal chat admission remain available; this is not a permanent ban on unrelated work or a mechanism for clearing the halted operation.
+
+Unknown assignment Stop receipts retain their original outcomes. A later durable recovery receipt can settle only its explicitly listed session/Stop pairs, using the native ownership proof held through that recovery commit. Further recovery consumes this historical evidence instead of reacquiring a detached former member's new independent writer. Current bound members must still settle, and any new or unproved unknown Stop still needs native ownership proof.
+
+Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. The input must be newer than the cached denial and belong to the observed active generation. Peer input additionally needs its actual admitted human-resume receipt; a caller-supplied flag or message text is insufficient. Only successful durable host admission clears the worker's old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a no-op settings edit in every worker, including workers with enabled local budgets. A still-exhausted or uncertain local allowance remains blocked by its current policy.

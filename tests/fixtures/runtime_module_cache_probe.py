@@ -24,7 +24,7 @@ from amplifier_foundation.modules.activator import ModuleActivator
 from amplifier_module_loop_live.runtime import Input
 from amplifier_web.host import session as host
 from amplifier_web.host.storage import SessionStore
-from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+from amplifier_web.builtin_behaviors import APPENDED_DEFAULTS, app_behaviors
 
 
 def git(path, *args):
@@ -103,12 +103,14 @@ async def mount(coordinator, config=None):
         "providers": [{"module": "provider-cache-fixture", "source": str(provider)}],
         "hooks": [{"module": "hook-context-intelligence", "source": source}]}))
     # This probe intentionally disables dependency installation and exercises
-    # only its synthetic cache hook. Exclude the automatic image capability so
-    # it does not import unrelated modules or contact a community source.
-    (shared / "settings.yaml").write_text(json.dumps({
+    # only its explicitly declared synthetic cache hook. Exclude automatic
+    # overlays so they cannot import unrelated modules or community sources.
+    settings = {
         "bundle": {"active": str(bundle), "app": []},
-        "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]},
-    }))
+        "web_bundles": {"excluded": list(APPENDED_DEFAULTS)},
+    }
+    assert app_behaviors(settings) == [], "The cache fixture must not compose automatic overlays"
+    (shared / "settings.yaml").write_text(json.dumps(settings))
     return shared, app, workspace, bundle, old, old_head, old_content, valid
 
 

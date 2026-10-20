@@ -1,4 +1,5 @@
 // Production UI and shared actions with synthetic audio/signaling. No device or API call.
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -33,7 +34,7 @@ try {
    return {getAudioTracks:()=>[track],getTracks:()=>[track]};
   };
  });
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  await action('session.create');await page.evaluate(()=>callProbe.holdCapture=true);await action('call.start');
  await expect.poll(()=>page.evaluate(()=>typeof callProbe.releaseCapture)).toBe('function');

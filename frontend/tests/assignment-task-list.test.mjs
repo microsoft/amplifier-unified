@@ -103,3 +103,19 @@ test('integration member fallback stays distinct without loading more histories'
  globalThis.sessionStorage=storage();const calls=[];const assignment={...control(3),members:{owner:{status:'bound'},'unlisted-a':{status:'bound'},'unlisted-b':{status:'bound'}}};const dispatch=async action=>{calls.push(action);return {result:{assignment}}};let root;
  try{await act(async()=>{root=create(React.createElement(AssignmentControls,{dispatch,sessionId:'owner'}))});await toggle(root,'Shared tasks and assignment',true);const names=root.root.findAllByType('option').map(row=>row.children.join(''));assert.ok(names.includes('Member chat · unlisted-a'));assert.ok(names.includes('Member chat · unlisted-b'));assert.deepEqual(calls,['assignment.read'])}finally{await act(async()=>root.unmount())}
 });
+
+test('observed worker blockage updates without changing responsibility or readiness',async()=>{
+ globalThis.sessionStorage=storage();const value=board();value.tasks[0]={...value.tasks[0],status:'claimed',claim:{id:'claim',sessionId:'peer',status:'current'},worker:{label:'Working',blockedReason:''}};const f=fixture(value);let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);assert.match(text(root),/Working/);const next=structuredClone(value);next.version='worker-blocked';next.tasks[0].worker={label:'Work blocked',blockedReason:'Waiting for a decision'};await act(async()=>f.wake(next));assert.match(text(root),/Work blocked/);assert.match(text(root),/Waiting for a decision/);assert.match(text(root),/Claimed/);assert.match(text(root),/Draft helper/);assert.equal(button(root,'Claim for this chat'),undefined);assert.ok(f.calls.every(row=>['assignment.tasks.list','assignment.tasks.wait'].includes(row.action)))}finally{await act(async()=>root.unmount())}
+});
+
+test('explicit assignment resume preserves revision and uncertain command identity without sending',async()=>{
+ globalThis.sessionStorage=storage();const calls=[];let status='stopped',revision=9,first=true;
+ const dispatch=async(action,args,meta)=>{calls.push({action,args,meta});if(action==='assignment.read')return {result:{assignment:{...control(revision),status}}};if(action==='assignment.resume'){if(first){first=false;throw Error('Response lost')}status='active';revision=10;return {accepted:true}}throw Error(action)};let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentControls,{dispatch,sessionId:'owner'}))});await toggle(root,'Shared tasks and assignment',true);assert.match(text(root),/nothing is sent automatically/);await act(async()=>button(root,'Resume assignment').props.onClick());assert.ok(button(root,'Check the same change'));await act(async()=>button(root,'Check the same change').props.onClick());const resumes=calls.filter(row=>row.action==='assignment.resume');assert.equal(resumes.length,2);assert.deepEqual(resumes[0],resumes[1]);assert.deepEqual(resumes[0].args,{sessionId:'owner',expectedRevision:9});assert.ok(button(root,'Stop assignment'));assert.equal(button(root,'Resume assignment'),undefined);assert.ok(calls.every(row=>['assignment.read','assignment.resume'].includes(row.action)))}finally{await act(async()=>root.unmount())}
+});
+
+test('commissioned member cannot resume its assignment from its own controls',async()=>{
+ globalThis.sessionStorage=storage();const dispatch=async()=>({result:{assignment:{...control(9),status:'stopped'}}});let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentControls,{dispatch,sessionId:'helper'}))});await toggle(root,'Shared tasks and assignment',true);assert.equal(button(root,'Resume assignment'),undefined);assert.match(text(root),/commissioning chat/)}finally{await act(async()=>root.unmount())}
+});

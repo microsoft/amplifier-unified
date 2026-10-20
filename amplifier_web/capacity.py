@@ -220,6 +220,12 @@ class CapacityController:
         if result['allowed']:
             row['budgetRevision'] = result['budgetRevision']
             row['admittedAt'] = result.get('admittedAt')
+            if self.last_denial:
+                # An assignment allowance may change without changing the
+                # local conversation policy revision. Clear stale denial only
+                # after authoritative admission, preserving limits and usage.
+                self.last_denial = None
+                self.controls.persist(task_only=True)
         if not result['allowed']:
             self.last_denial = {**result, 'at': time.time(), 'callId': row['id']}
             self.controls.persist(task_only=True)
@@ -321,6 +327,33 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         return {'accepted': True, 'result': result, **({'state': service.browser_state()} if include_state else {})}
 
 
+def fresh_human_input(service, session, row, denial):
+    """Recheck a derived pause only for a new host-admitted human input."""
+    active = session.get('collaborationGeneration') or {}
+    identity = row.get('turnId')
+    if (not active.get('id') or active.get('terminal') or not identity
+            or identity not in active.get('inputIds', [])
+            or row.get('lifecycle') == 'background'
+            or row.get('sessionId') != session['id'] or not number(denial.get('at'))):
+        return False
+    message = next((m for m in reversed(session.get('messages', []))
+                    if m.get('role') == 'user' and (m.get('inputId') == identity
+                        or m.get('inputOrigin') == 'voice' and m.get('voiceInputId') == identity)), None)
+    if (not message or message.get('questionId') or message.get('scheduledRunId')
+            or message.get('createdAt', 0) <= denial['at']):
+        return False
+    if message.get('inputOrigin') in {'ui', 'user', 'voice'}:
+        return True
+    saved = service.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
+    receipt = json.loads(saved[0]) if saved else {}
+    return bool(message.get('inputOrigin') == 'peer'
+        and receipt.get('commandAction') == 'coordination.send' and receipt.get('humanResume')
+        and receipt.get('accepted') is True and receipt.get('inputId') == identity
+        and receipt.get('target', {}).get('sessionId') == session['id']
+        and receipt.get('interruptionRevision') == session.get('interruptionRevision', 0)
+        and receipt.get('delivery') in {'accepted', 'applied', 'submitting'})
+
+
 async def admission(service, session_id, args):
     """Private worker-to-host gate; model actions cannot supply accounting data."""
     from .service import AppError
@@ -348,7 +381,13 @@ async def admission(service, session_id, args):
             return {'allowed': False, 'state': 'paused', 'budgetRevision': policy['revision'],
                     'reasons': ['This model-call ID was already admitted; its outcome must not be replayed']}
         usage = usage_snapshot(session, admission_only=not policy.get('enabled'))
-        result = {**evaluate(policy, usage), 'budgetRevision': policy['revision']}
+        effective = policy
+        if policy.get('lastDenial') and fresh_human_input(service, session, row, policy['lastDenial']):
+            # Saved denials are observations, not deliberate budget edits.
+            # Both current policies still apply. The worker clears its cached
+            # denial only after this admission and its durable receipt succeed.
+            effective = {key: value for key, value in policy.items() if key != 'lastDenial'}
+        result = {**evaluate(effective, usage), 'budgetRevision': policy['revision']}
         for key in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
             row.pop(key, None)  # Assignment authority is selected by the host.
         assignment = service.assignments.admission(session, row)

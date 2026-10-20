@@ -9,6 +9,7 @@ import {retainEqual} from './wire';
 import {navigationResources} from './navigation-demand';
 import {shellScope,resourceSnapshots,matchesResources,retainResourceVersions,pendingSnapshots} from './resources';
 import {createShellDiagnostics} from './diagnostics';
+import {navigationExpanded,useNarrowScreen} from '../responsive-navigation';
 
 export const ShellContext=createContext(null);
 export function useShellContext(){return useContext(ShellContext)}
@@ -36,7 +37,9 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
  const [reconnectTick,setReconnectTick]=useState(0);
  if(!diagnostics.current)diagnostics.current=createShellDiagnostics();
  const [visible,setVisible]=useState(()=>!document.hidden);
- const resources=visible?navigationResources(state):[],scope=shellScope(state),demandKey=JSON.stringify([scope,resources]);
+ const navigationNarrow=useNarrowScreen('(max-width: 900px)');
+ const supportsStatus=!data?.resolvedInstances||data.resolvedInstances.some(row=>row.package==='builtin.chats');
+ const resources=visible?navigationResources(state,navigationExpanded(state?.view,navigationNarrow),supportsStatus):[],scope=shellScope(state),demandKey=JSON.stringify([scope,resources]);
  if(demand.current.key!==demandKey)demand.current={id:demand.current.id+1,key:demandKey,scope,resources};
  latest.current={...latest.current,dispatch,state:displayState,authoritative:state,connection,visible,demand:demand.current};
  const publish=useCallback(next=>{

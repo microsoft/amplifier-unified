@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
@@ -24,7 +25,7 @@ try{
  // Browser-managed downloads use the real signed session cookie; Chromium
  // does not forward Playwright's extra Authorization header to downloads.
  await page.context().addCookies([{name:'amplifier_unified_session',value:fixtureCookie,url:base,httpOnly:true,sameSite:'Strict'}]);
- await page.goto(base);
+ await page.goto(base);await showFixtureConversation(page);
  const groups=page.locator('[data-group-id]'),before=page.locator('[data-group-id$="@before"]'),interim=page.locator('[data-group-id$="@interim"]');
  // The bounded saved-event window settles independently of live host groups.
  // Wait for that real receipt rather than racing its arrival with UI clicks.
@@ -114,7 +115,7 @@ try{
  assert.equal(requestReads.length,2);assert.equal(responseReads.length,1);
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await expect(model.getByRole('button',{name:/^View request/})).toBeVisible();assert.equal(responseReads.length,1);
- const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
+ const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/This call’s request recording isn’t available here/);
  const priorWindow=await saved.getAttribute('data-group-id');
  await control({op:'canonical-append'});
  await expect(saved).not.toHaveAttribute('data-group-id',priorWindow,{timeout:15000});

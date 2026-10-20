@@ -367,13 +367,40 @@ def augmented_manifest(content, rows):
             '\n'.join(json.dumps(key) + ' = ' + toml_value(value) for key, value in data.items()) + '\n').encode()
 
 
-def matches_resolution(resolved, row):
-    if resolved is None or resolved.fragment != row['latest']:
-        return False
-    query = parse_qs(resolved.query)
-    ref = next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '')
-    url = urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', ''))
-    return url == row['url'] and ref == row['ref'] and next(iter(query.get('subdirectory', [''])), '') == row.get('subdirectory', '')
+def verify_resolution(resolved, row):
+    """Reject changed sources with evidence that is safe to copy for diagnosis."""
+    expected = {'repository': row['url'], 'ref': row['ref'],
+                'subdirectory': row.get('subdirectory', ''), 'revision': row['latest']}
+    if resolved is None:
+        mismatches = ['source']
+    else:
+        query = parse_qs(resolved.query, keep_blank_values=True)
+        refs = [(key, value) for key in ('branch', 'rev', 'tag') for value in query.get(key, [])]
+        ref = refs[0][1] if len(refs) == 1 else None
+        # uv can replace a moving rev with its full checked commit. This is
+        # identity equivalence only, never permission to follow a different ref
+        # or accept a newer commit than the one offered by Check for updates.
+        normalized = (refs == [('rev', row['latest'])] and
+                      re.fullmatch(r'[0-9a-f]{40}', row['latest']) is not None and
+                      resolved.fragment == row['latest'])
+        subdirectories = query.get('subdirectory', [''])
+        observed = {'repository': urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', '')),
+                    'ref': row['ref'] if normalized else ref,
+                    'subdirectory': subdirectories[0] if len(subdirectories) == 1 else None,
+                    'revision': resolved.fragment}
+        mismatches = [key for key in expected if expected[key] != observed[key]]
+    if mismatches:
+        error = ValueError('A runtime source resolved differently after checking; check for updates again.')
+        # Field names and commits distinguish drift from other resolver
+        # differences without exposing repository URLs, refs or local paths.
+        error.diagnostic_facts = {
+            'reason': 'runtime-resolution-mismatch', 'component': row['package'],
+            'resolutionMismatches': mismatches, 'expectedRevision': row['latest'],
+            **({'observedRevision': resolved.fragment} if resolved is not None else {}),
+        }
+        raise error
+    return {'url': row['url'], 'ref': row['ref'], 'subdirectory': row.get('subdirectory', ''),
+            'revision': row['latest']}
 
 
 async def stage(manager, generation, candidates, *, finalize=True):
@@ -423,11 +450,34 @@ async def stage(manager, generation, candidates, *, finalize=True):
     await manager.diagnostics.run('ecosystem-runtime-lock', process, uv, 'lock', '--project', str(project),
                                   '--python', '3.13', *flags, timeout=900)
     locked = locked_sources(project)
+    policies = {}
     for row in selected:
         if row.get('kind') == 'runtime dependency':
             installed = locked.get(row['package'])
-            if not matches_resolution(installed, row):
-                raise ValueError('A runtime branch moved after checking; check for updates again.')
+            policies[row['package']] = verify_resolution(installed, row)
+    declared = {package_name(name): source for name, source in declared.items()}
+    for row in observed:
+        if (row.get('kind') != 'runtime dependency' or row['package'] in policies
+                or row.get('override') or not row.get('url') or not row.get('ref')):
+            continue
+        installed = locked.get(row['package'])
+        source = declared.get(row['package'])
+        if source and (source.get('git') != row['url']
+                or (source.get('branch') or source.get('rev') or source.get('tag')) != row['ref']
+                or source.get('subdirectory', '') != row.get('subdirectory', '')):
+            continue  # A changed manifest's policy is not the old source policy.
+        if installed is not None and installed.fragment == row.get('current'):
+            try:
+                # A different tier can leave a source unchanged while uv
+                # normalizes its ref. Retain only that exact prior identity.
+                policies[row['package']] = verify_resolution(installed, {**row, 'latest': row['current']})
+            except ValueError:
+                pass  # Never apply an old policy to a changed or ambiguous source.
+    if not receipt.exists():
+        # Handoff checked policy separately from uv's representation. Freeze
+        # binds it again to installed identity; recorded generations stay intact.
+        from .deployment import write_private
+        write_private(receipt.with_name('runtime-sources.json'), json.dumps(policies, indent=2) + '\n')
     if finalize and not receipt.exists():
         receipt.with_name('runtime-base.toml').write_bytes(manifest_path().read_bytes())
         shutil.copy2(project / 'pyproject.toml', receipt.with_name('runtime.toml'))

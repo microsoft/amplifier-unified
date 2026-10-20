@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -11,7 +12,7 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),page=await context.newPage(),errors=[],requests=[];
  page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.method()==='POST')requests.push({path:new URL(request.url()).pathname,body:request.postData()})});
- await page.goto(base);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(base);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const agent=(action,args={},id)=>page.evaluate(async data=>{data.clientId=window.amplifier.getState().client.id;const response=await fetch('/fixture/semantic-settings-agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(!response.ok)throw Error(await response.text());return response.json()},{action,args,id});
  const inspect=()=>page.evaluate(async()=>await(await fetch('/fixture/semantic-settings')).json());
@@ -71,6 +72,11 @@ try{
  await expect(dialog).toBeVisible();await expect(workspaceKey).toHaveValue('private-workspace-only-draft');
  await dialog.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.workWorkspaceSettings)).toBe('ai-connections');
+ await agent('view.update',{patch:{workSurface:'home'}},'workspace-to-home');
+ await expect(dialog).toBeVisible();await expect(workspaceKey).toHaveValue('private-workspace-only-draft');
+ await dialog.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.workSurface)).toBe('workspace');
+ await expect(workspaceKey).toHaveValue('private-workspace-only-draft');
  await agent('settings.open',{page:'ai-connections',surface:'canvas'},'workspace-to-global');
  await expect(dialog).toBeVisible();await expect(workspaceKey).toHaveValue('private-workspace-only-draft');
  await dialog.getByRole('button',{name:'Discard changes',exact:true}).click();

@@ -8,6 +8,7 @@ import uuid
 
 from amplifier_operations.coordination import ChangeSignal, delivery
 from .owned_history import SCOPE, selected, require, metadata as scope_metadata
+from .task_binding import continuation_epoch
 
 ACTIVE = {"working", "running", "starting", "ready", "queued", "pending", "stopping"}
 ATTENTION = {"error", "failed", "interrupted", "cancelled", "stopped"}
@@ -84,7 +85,8 @@ class Coordination:
         latest = value.get("reportSequence", 0) if wid else len(results)
         # Status changes during work do not repeatedly wake waiting callers.
         signal = {"status": status if status not in ACTIVE else "active", "approvals": approvals, "questions": questions,
-            "taskStatus": task.get("status"), "taskRevision": task.get("revision"), "interruptionRevision": value.get("interruptionRevision", 0)}
+            "taskId": task.get("id"), "taskStatus": task.get("status"),
+            "taskContinuationEpoch": continuation_epoch(task), "interruptionRevision": value.get("interruptionRevision", 0)}
         # Transition to another active phase is progress only. Starting a new
         # turn is also quiet; the next report/attention signal wakes the waiter.
         if status in ACTIVE:
@@ -175,7 +177,10 @@ class Coordination:
                         modes.append("steer")
                     item.update(canFollowup=permitted, canInterrupt=False,
                                 peerActions=[{"modes": modes}] if permitted else [])
-                items.append({key: value for key, value in item.items() if key not in {"results", "signal", "identity", "wakeable"}})
+                # Discovery needs the interruption revision, not the full
+                # wait fingerprint's unbounded pending approval/question lists.
+                item["signal"] = {"interruptionRevision": item["signal"]["interruptionRevision"]}
+                items.append({key: value for key, value in item.items() if key not in {"results", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):
                     return {"items": items, "truncated": more if not include_workers else True,
                             "nextOffset": offset + session_number + 1 if more or include_workers else None}

@@ -223,6 +223,121 @@ def test_desktop_ceiling_preserves_effective_expanded_policy(monkeypatch, key, v
     assert parent == before
 
 
+@pytest.mark.parametrize(('config', 'expected'), [
+    ({}, {'read_only': True}),
+    ({'read_only': None, 'gate_writes': None}, {'read_only': True}),
+    ({'read_only': False}, {'gate_writes': True}),
+    ({'read_only': False, 'gate_writes': None}, {'gate_writes': True}),
+    ({'read_only': False, 'gate_writes': False}, {}),
+    ({'read_only': None, 'gate_writes': True}, {'read_only': True, 'gate_writes': True}),
+    ({'read_only': 'false'}, {'read_only': True}),
+    ({'read_only': False, 'gate_writes': 'false'}, {'gate_writes': True}),
+    ({'read_only': 0, 'gate_writes': ''}, {}),
+])
+def test_desktop_ceiling_includes_effective_remote_defaults(config, expected):
+    from amplifier_web.host.children import _desktop_ceiling
+    policies = [{'target': 'ssh://desktop.invalid', **config}]
+    before = copy.deepcopy(policies)
+    assert _desktop_ceiling(policies) == expected
+    # A later writable declaration cannot weaken an earlier restriction.
+    assert _desktop_ceiling([*policies, {'read_only': False, 'gate_writes': False}]) == expected
+    assert policies == before
+
+
+@pytest.mark.parametrize('target', [
+    None, '', False, 0,
+    'ssh://desktop.invalid', 'ssh://user@desktop.invalid:2222', 'ssh://[::1]:2222',
+    ' ssh://desktop.invalid ',
+    'local', 'https://desktop.invalid', 'ssh://', 'ssh://::1',
+])
+def test_desktop_ceiling_preserves_target_for_backend_validation(target):
+    from amplifier_web.host.children import child_plan
+    # The pinned registry chooses remote for any truthy target, then validates
+    # SSH syntax. Invalid values must reach that validator unchanged, not be
+    # silently removed/normalized into local access by host policy derivation.
+    parent = {'tools': [{'module': 'tool-computer-use', 'config': {'target': target}}]}
+    before = copy.deepcopy(parent)
+    result = child_plan(parent, {})
+    assert result['tools'][0]['config']['target'] == target
+    assert result['_unified_desktop_policy'] == ({'read_only': True} if target else {})
+    assert parent == before
+
+
+@pytest.mark.parametrize(('target', 'config', 'expected'), [
+    ('ssh://desktop.invalid', {}, {'read_only': True}),
+    ('ssh://desktop.invalid', {'read_only': False}, {'gate_writes': True}),
+    ('', {}, {}),
+])
+def test_desktop_ceiling_expands_target_without_mutating_configuration(monkeypatch, target, config, expected):
+    from amplifier_web.host.children import child_plan
+    monkeypatch.setenv('UNIFIED_TEST_DESKTOP_TARGET', target)
+    parent = {'tools': [{'module': 'tool-computer-use', 'config': {
+        'target': '${UNIFIED_TEST_DESKTOP_TARGET}', **config}}]}
+    before = copy.deepcopy(parent)
+    result = child_plan(parent, {})
+    assert result['_unified_desktop_policy'] == expected
+    assert result['tools'][0]['config']['target'] == '${UNIFIED_TEST_DESKTOP_TARGET}'
+    assert parent == before
+
+
+@pytest.mark.parametrize('overlay_config', [
+    {'target': 'ssh://desktop.invalid'},
+    {'target': 'ssh://desktop.invalid', 'read_only': False},
+])
+def test_partial_remote_overlay_retains_inherited_explicit_write_grant(overlay_config):
+    from amplifier_web.host.children import child_plan
+    config = {'target': 'ssh://desktop.invalid', 'read_only': False, 'gate_writes': False}
+    parent = {'tools': [{'module': 'tool-computer-use', 'instance_id': 'desktop', 'config': config}]}
+    overlay = {'tools': [{'module': 'tool-computer-use', 'instance_id': 'desktop',
+                          'config': overlay_config}]}
+    before = copy.deepcopy((parent, overlay))
+    result = child_plan(parent, overlay)
+    assert result['tools'][0]['config'] == config
+    assert result['_unified_desktop_policy'] == {}
+    assert (parent, overlay) == before
+
+
+@pytest.mark.parametrize(('config', 'expected'), [
+    ({}, {'read_only': True}),
+    ({'read_only': None}, {'read_only': True}),
+    ({'read_only': False, 'gate_writes': None}, {'gate_writes': True}),
+])
+def test_child_remote_defaults_use_merged_configuration(config, expected):
+    from amplifier_web.host.children import child_plan
+    # This child introduces a remote target without an ancestor ceiling.
+    overlay = {'tools': [{'module': 'tool-computer-use',
+                         'config': {'target': 'ssh://desktop.invalid', **config}}]}
+    before = copy.deepcopy(overlay)
+    result = child_plan({}, overlay)
+    assert result['_unified_desktop_policy'] == expected
+    assert all(result['tools'][0]['config'][key] is True for key in expected)
+    assert overlay == before
+
+
+@pytest.mark.parametrize('origin', ['tools', 'spawn', 'saved'])
+@pytest.mark.parametrize('key', ['read_only', 'gate_writes'])
+def test_implicit_remote_ceiling_survives_tool_omission_and_alias(origin, key):
+    from amplifier_web.host.children import child_plan
+    config = {'target': 'ssh://desktop.invalid', 'read_only': None, 'gate_writes': None}
+    if key == 'gate_writes':
+        config['read_only'] = False
+    tools = [{'module': 'tool-computer-use', 'instance_id': 'original', 'config': config}]
+    root = {'tools': tools} if origin == 'tools' else (
+        {'spawn': {'tools': tools}} if origin == 'spawn' else {})
+    saved = tools if origin == 'saved' else None
+    original = copy.deepcopy((root, saved))
+    middle = child_plan(root, {}, retained_image_tools=saved,
+                        tool_inheritance={'exclude_tools': ['tool-computer-use']})
+    assert middle['tools'] == []
+    assert middle['_unified_desktop_policy'] == {key: True}
+    child = child_plan(middle, {'_unified_desktop_policy': {}, 'tools': [
+        {'module': 'tool-computer-use', 'instance_id': 'alias',
+         'config': {'read_only': False, 'gate_writes': False}}]})
+    assert child['tools'][0]['config'][key] is True
+    assert child['_unified_desktop_policy'] == {key: True}
+    assert (root, saved) == original
+
+
 @pytest.mark.parametrize('origin', ['tools', 'spawn', 'marker'])
 @pytest.mark.parametrize('key', ['read_only', 'gate_writes'])
 def test_expanded_desktop_ceiling_survives_omission_and_redeclaration(monkeypatch, origin, key):

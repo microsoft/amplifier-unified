@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {openSettingsDialog} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
@@ -15,7 +16,7 @@ try{
  const configure=async options=>{const response=await page.request.post(url+'/fixture/ownership',{data:options});assert.ok(response.ok())};
  const finish=()=>page.request.post(url+'/fixture/finish');
  const stats=async()=>(await page.request.get(url+'/fixture')).json();
- await page.goto(url);await page.waitForSelector('#amp-one');
+ await page.goto(url);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
  const draft=page.locator('[role="textbox"][aria-label="Message Amplifier"]');
  const access=page.getByRole('region',{name:'Conversation access'});
  const takeover=access.getByRole('button',{name:'Continue here',exact:true});

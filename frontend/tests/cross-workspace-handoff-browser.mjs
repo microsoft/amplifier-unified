@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Real host direct-start/review receipts and packaged UI; recipient is synthetic.
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
@@ -30,8 +31,8 @@ try{
  for(const current of [page,other])current.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const composer=page.getByRole('textbox',{name:'Message Amplifier'}),otherComposer=other.getByRole('textbox',{name:'Message Amplifier'});
- await page.goto(info.url);await composer.waitFor();await action(page,'session.select',{id:info.sourceId});
- await other.goto(info.url);await otherComposer.waitFor();await action(other,'session.select',{id:info.sourceId});
+ await page.goto(info.url);await showFixtureConversation(page);await composer.waitFor();await action(page,'session.select',{id:info.sourceId});
+ await other.goto(info.url);await showFixtureConversation(other);await otherComposer.waitFor();await action(other,'session.select',{id:info.sourceId});
  const clientId=(await state(page)).client.id,otherClientId=(await state(other)).client.id;assert.notEqual(clientId,otherClientId);
  observations.clientBuild=(await state(page)).client.build;observations.browserVersion=browser.version();
  const inspect=async()=>{const response=await page.request.get(info.url+'/fixture/check');assert.equal(response.status(),200);return response.json()};

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -11,7 +12,7 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const row=id=>page.locator(`[data-message-id="${id}"]`),summary=row('backend-result').getByRole('button',{name:/Amplifier result/});
  await expect(summary).toHaveAttribute('aria-expanded','false');
  await expect(row('backend-result')).not.toHaveClass(/a-assistant/);
@@ -27,7 +28,7 @@ try{
  await expect(row('backend-result')).not.toContainText('via call');
  await row('backend-result').getByRole('button',{name:'Copy message as Markdown'}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe('**The requested change is complete.**');
- await page.reload();await expect(summary).toHaveAttribute('aria-expanded','false');
+ await page.reload();await showFixtureConversation(page);await expect(summary).toHaveAttribute('aria-expanded','false');
  const inspect=()=>page.evaluate(async()=>await(await fetch('/fixture/voice-work')).json());
  const before=await inspect();
  await page.evaluate(sessionId=>window.amplifier.dispatch('message.reveal',{sessionId,messageId:'backend-result'}),before.sessionId);

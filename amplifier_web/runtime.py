@@ -6,7 +6,7 @@ app-owned Foundation lifecycle and standalone Amplifier configuration.
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 import json
 import os
 from pathlib import Path
@@ -321,10 +321,11 @@ class RuntimeManager:
         except (ValueError, IndexError) as exc:
             raise RuntimeError("The runtime command does not identify a uv project.") from exc
 
-    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None):
+    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None, preserve_configuration=False):
         sid = session["id"]
         async with self._admission(sid):
-            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard)
+            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
+                **({'preserve_configuration': True} if preserve_configuration else {}))
 
     @asynccontextmanager
     async def _admission(self, sid):
@@ -362,8 +363,10 @@ class RuntimeManager:
             except TimeoutError as exc:
                 raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
-    async def _start_locked(self, session, emit, *, preserve_emit=False, guard=None):
+    async def _start_locked(self, session, emit, *, preserve_emit=False, guard=None, preserve_configuration=False):
         # Host callbacks only: no command argument can authorize a restart.
+        if preserve_configuration and guard is None:
+            raise ValueError('Placement-only startup requires the retained host operation guard.')
         if guard is not None: guard()
         if self._closed:
             raise RuntimeHostClosingError()
@@ -519,10 +522,13 @@ class RuntimeManager:
         # browser's execution logs, catalogs and attachment history is redundant.
         config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        if preserve_configuration:
+            config['_preserveConfiguration'] = True
         row['runtime_id'] = config['id']
         row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
         row['start_session'].pop('replaceSavedSelection', None)
         row['start_session'].pop('bundleReplacement', None)
+        row['start_session'].pop('_preserveConfiguration', None)
         row['parked'] = False
         self.retention.wake()
         if session.get('forkContext'):
@@ -808,7 +814,7 @@ class RuntimeManager:
                     normalized = normalize_event(data, sid, row["inputId"])
                     if (normalized and normalized[0] == 'runtime.status'
                             and normalized[1].get('status') == 'stopped'
-                            and row.get('stop_reason') in {'configuration', 'shutdown'}):
+                            and row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}):
                         # Closing a process for maintenance is not a user Stop.
                         normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
@@ -865,7 +871,7 @@ class RuntimeManager:
         # lock. Only successful delivery suppresses the stop-path retry.
         row["executionEnded"] = True
 
-    async def _request(self, sid, op, **args):
+    async def _request(self, sid, op, *, guard=None, **args):
         row = self.workers.get(sid)
         if op == 'approval' and row and not row['ready'].done():
             # A module can ask for approval during initialization. start() owns
@@ -875,9 +881,18 @@ class RuntimeManager:
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
         async with self._admission(sid):
+            if guard is not None: guard()
             if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
                 session, emit = self._retired[sid]
-                await self._start_locked(session, emit)
+                # Retirement can occur after preservation-aware preparation but
+                # before this control. Keep its original host guard and startup
+                # preservation; the native attempt still checks the old PID.
+                placement = op == 'control' and args.get('operation') == 'configuration.patchPlacement.bind'
+                await self._start_locked(session, emit, **({'guard': guard} if guard is not None else {}),
+                    **({'preserve_configuration': True} if placement else {}))
+            # No suspension between this authority check and _admit's transport
+            # write. The callback is host-only and is never serialized.
+            if guard is not None: guard()
             pending = await self._admit(sid, op, args)
         return await self._reply(*pending, op=op, args=args)
 
@@ -1111,6 +1126,39 @@ class RuntimeManager:
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
         return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel)
 
+    @contextmanager
+    def stopped_boundary(self, session):
+        """Hold existing native ownership while proving a stopped root is absent.
+
+        Called under the service mutation lock. This non-awaiting inspection
+        neither starts nor stops workers, and never requests another owner yield.
+        The lease remains held through the caller's durable recovery commit.
+        """
+        from amplifier_foundation.session import SharedSessionStore
+        sid = session['id']
+        self._check_execution(sid, session)
+        row = self.workers.get(sid)
+        lock = self._locks.get(sid)
+        if (self._closed or sid in self._preparations or lock and lock.locked()
+                or row and (row['process'].returncode is None or not row.get('executionEnded')
+                            or any(not task.done() for task in row.get('bridge_tasks', ()))
+                            or row.get('stop_task') and not row['stop_task'].done())):
+            raise RuntimeError('Wait for this chat and its workers to settle before continuing.')
+        store = SharedSessionStore(session['workspace'],
+            session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+        held = store.acquire(app='amplifier-unified-stop-recovery')
+        try:
+            from .host_identity import local_host_identity
+            yield {'sessionId': sid, 'nativeSessionId': store.session_id,
+                   'executionHost': local_host_identity(),
+                   'executionRevision': session.get('executionRevision', 0),
+                   'interruptionRevision': session.get('interruptionRevision', 0),
+                   'observedAt': time.time(), 'workerAbsent': True,
+                   'ownershipAcquisitionId': held.owner['acquisition_id'],
+                   'effectsRolledBack': False, 'inputsReplayed': False}
+        finally:
+            held.release()
+
     async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
         """Save and release a known local writer before moving execution cwd."""
         from amplifier_foundation.session import SharedSessionStore, SessionBusyError, request_release
@@ -1149,8 +1197,9 @@ class RuntimeManager:
             finally:
                 await asyncio.to_thread(held.release)
 
-    async def approval(self, session_id, approval_id, decision):
-        return await self._request(session_id, "approval", approval_id=approval_id, decision=decision)
+    async def approval(self, session_id, approval_id, decision, comment=None):
+        return await self._request(session_id, "approval", approval_id=approval_id, decision=decision,
+                                   **({"comment": comment} if comment else {}))
 
     async def scheduled_input(self, session_id, arguments, guard):
         """Internal authorized schedule handoff using ordinary worker admission."""
@@ -1182,8 +1231,9 @@ class RuntimeManager:
             pending = await self._admit(session_id, "control", args)
         return await self._reply(*pending, op="control", args=args)
 
-    async def control(self, session_id, operation, arguments=None):
-        return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
+    async def control(self, session_id, operation, arguments=None, *, guard=None):
+        return await self._request(session_id, "control", operation=operation, arguments=arguments or {},
+            **({'guard': guard} if guard is not None else {}))
 
     async def integration_validation_supported(self, session_id):
         """Require a positive current-worker capability; older adapters refuse."""
@@ -1355,7 +1405,7 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        cold = row.get("retiring") or row.get('stop_reason') in {'configuration', 'shutdown'}
+        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if cold else "stopped"})
         if self.workers.get(session_id) is row:

@@ -251,7 +251,7 @@ def checked(result):
     return result
 
 
-def export_selected(config, env, name, destination):
+def export_selected(config, env, name, destination, *, selections=common.retention.SELECTION, archive_only=False):
     """Filter a stopped instance's backup stream without extracting guest paths."""
     process = subprocess.Popen([config['incusExecutable'], '--quiet', '--project', config['project'],
         'export', name, '-', '--instance-only', '--compression', 'none'], stdin=subprocess.DEVNULL,
@@ -283,7 +283,7 @@ def export_selected(config, env, name, destination):
             selector.register(process.stdout, selectors.EVENT_READ)
             selector.register(process.stderr, selectors.EVENT_READ)
             reader = Reader(selector)
-            archives = common.retention.filter_incus_stream(reader, destination, name)
+            archives = common.retention.filter_incus_stream(reader, destination, name, selections=selections, archive_only=archive_only)
             while reader.read(65536):
                 pass
             if reader.tail != bytes(1024) or process.wait(timeout=max(1, deadline - time.monotonic())) != 0:
@@ -407,6 +407,7 @@ def execute_call(payload):
     if payload.get('universeId') and payload['universeId'] != name:
         raise ValueError('The retained environment identity changed.')
     snapshot = payload.get('snapshot')
+    phase = None
     try:
         if action == 'capacity':
             capacity = cli(config, env, ['capacity'])
@@ -485,7 +486,8 @@ def execute_call(payload):
             command = payload['command']
             if not isinstance(command, str) or not command or len(command) > 16384:
                 raise ValueError('The command is invalid.')
-            result = incus(config, env, ['exec', name, '--cwd', '/workspace', '--', '/bin/sh', '-lc', command], seconds)
+            arguments = common.jobs.arguments({**payload, 'jobEnvironment': common.selected_profile(payload)['environment']})
+            result = incus(config, env, ['exec', name, '--cwd', '/workspace', '--', *arguments], seconds)
             return {'ok': True, 'universeId': name, 'result': result}
         if action == 'stop':
             if instance.get('status') != 'Stopped':
@@ -493,12 +495,17 @@ def execute_call(payload):
             _, after = observe(config, env, name, payload)
             stopped = after is not None and after.get('status') == 'Stopped'
             return {'ok': stopped, 'universeId': name, 'status': 'stopped' if stopped else 'unknown', 'message': 'Stopped; source and artifacts remain retained.' if stopped else 'Stop is not confirmed.'}
-        if action == 'remove':
-            mode = payload.get('retentionMode', 'files')
-            if mode not in {'files', 'full'}:
+        if action in {'remove', 'finishCleanup', 'exportArtifacts'}:
+            artifacts_only = action == 'exportArtifacts'
+            recovering = action == 'finishCleanup'
+            mode = 'archive-only' if recovering else payload.get('retentionMode', 'files')
+            if not artifacts_only and mode not in {'files', 'full', 'archive-only'}:
                 raise BackendFailure('retention_unsupported', 'The selected retention policy is unsupported. The stopped environment remains.', admitted=False)
             if instance.get('status') != 'Stopped':
                 raise BackendFailure('not_stopped', 'Removal requires an observed stopped environment.', admitted=False)
+            if not artifacts_only:
+                phase = 'preserving'
+                common.cleanup_phase(payload, phase)
             capacity = cli(config, env, ['capacity'])
             if any(capacity.get('scope', {}).get(key) != backend_identity[key] for key in ('daemon', 'project')):
                 raise BackendFailure('backend_changed', 'The actual backend changed before export. The environment remains.', admitted=False)
@@ -507,25 +514,50 @@ def execute_call(payload):
                     or pool_free < EXPORT_BYTES + FREE_RESERVE_BYTES
                     or shutil.disk_usage(root).free < EXPORT_BYTES + FREE_RESERVE_BYTES):
                 raise BackendFailure('retention_storage', 'There is not enough free space for a bounded retained export. The stopped environment remains.', admitted=False)
-            destination = root / ('retained-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
+            destination = root / (('artifacts-' if artifacts_only else 'retained-')
+                                  + hashlib.sha256(payload['requestId'].encode()).hexdigest())
             destination.mkdir(mode=0o700)
             archive = destination / 'instance.tar'
             try:
-                if mode == 'full':
+                if artifacts_only:
+                    # The input stream/member/deadline bounds remain unchanged.
+                    # Only selected artifacts, never the workspace, are retained.
+                    archives = export_selected(config, env, name, destination, selections=('artifacts',))
+                elif mode == 'full':
                     checked(incus(config, env, ['export', name, str(archive), '--instance-only', '--compression', 'none'], 300, watched_file=archive))
                     digest, size = file_digest(archive, EXPORT_BYTES)
                     archives = [{'id': name, 'source': '/', 'retainedPaths': ['/workspace', '/artifacts'], 'destination': str(archive), 'bytes': size, 'sha256': digest}]
                 else:
-                    archives = export_selected(config, env, name, destination)
-                retained = common.retention.verify_retention(root, archives, mode)
+                    archives = export_selected(config, env, name, destination, archive_only=recovering)
+                if not artifacts_only:
+                    phase = 'verifying'
+                    common.cleanup_phase(payload, phase)
+                retained = (common.retention.verify_artifacts(archives) if artifacts_only
+                            else common.retention.verify_retention(root, archives, mode))
                 common.retain_manifest(destination, archives)
             except Exception:
                 (destination / 'incomplete.json').write_text(json.dumps({'status': 'unknown', 'environmentPreserved': True,
                     'policy': mode, 'partialArchives': [str(path) for path in destination.glob('*.tar')]}))
                 raise
+            if artifacts_only:
+                return {'ok': True, 'universeId': name, 'status': 'stopped', 'archives': archives,
+                        'artifactExport': retained,
+                        'message': 'Artifacts retained. The stopped environment and workspace are unchanged; removal is not authorized.'}
+            phase = 'rechecking'
+            common.cleanup_phase(payload, phase)
+            _, current = observe(config, env, name, payload)
+            if current is None or current.get('status') != 'Stopped':
+                return common.cleanup_failure(payload, phase, name, 'owner_changed')
+            phase = 'removing'
+            common.cleanup_phase(payload, phase)
             cli(config, env, ['destroy', name, '--owner-root', payload['rootOwner'], '--request-id', payload['operationId']], 120)
             after = cli(config, env, ['launch-status', payload['operationId']])
             removed = after['state'] == 'removed'
+            if recovering:
+                phase = 'observing'
+                common.cleanup_phase(payload, phase)
+                observed = reconcile(config, env, name, payload, backend_identity, binding_source)
+                removed = observed['status'] == 'absent'
             if removed:
                 common.retain_settlement(payload, name, backend_identity, 'removed')
             return {'ok': removed, 'universeId': name, 'status': 'removed' if removed else 'unknown', 'archives': archives,
@@ -533,9 +565,16 @@ def execute_call(payload):
                     'message': 'The complete source and artifact filesystem was retained before removal.' if removed else 'The export is retained; removal is not confirmed.'}
         raise ValueError('Unsupported managed test environment action.')
     except BackendFailure as exc:
+        if phase is not None:
+            return common.cleanup_failure(payload, phase, name, exc.code)
         return {'ok': False, 'universeId': name, 'snapshot': snapshot, 'status': 'not-started' if action == 'start' and not exc.admitted else 'unknown',
                 'code': exc.code, 'effectAdmitted': exc.admitted,
                 'admissionDenied': action == 'start' and not exc.admitted and exc.code in {'execution_capacity', 'retained_capacity', 'storage_pressure', 'storage_unknown', 'admission_busy'}, 'capacity': exc.details.get('capacity'), 'message': str(exc)}
+
+    except (OSError, ValueError, common.retention.tarfile.TarError):
+        if phase is not None:
+            return common.cleanup_failure(payload, phase, name)
+        raise
 
 
 def main():

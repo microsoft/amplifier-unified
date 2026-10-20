@@ -1,8 +1,12 @@
 import {spawn} from 'node:child_process';
+import {mkdir} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-setup-journey');await mkdir(evidence,{recursive:true});
 import {openSettingsPage} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
@@ -129,12 +133,21 @@ try{
  // A normal configured visit does not force a setup dialog.
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{settingsCanvas:false,setupJourney:'done'}}));
  await page.reload();await expect(page.locator('.a-settings-experience')).toHaveCount(0);
- // Missing connections on a later visit reopens setup even after onboarding.
+ // A discovery result for the original project does not apply to the managed
+ // chat created by assisted setup from Home.
  await control({op:'setup',connected:false});await page.reload();
+ await page.waitForFunction(()=>{
+  const state=window.amplifier.getState(),session=state?.sessions?.find(row=>row.id===state.selectedSessionId);
+  return session&&state.setup?.providersLoadedAt&&state.setup.providersWorkspace!==session.workspace;
+ });
+ await expect(page.locator('.a-settings-experience')).toHaveCount(0);
+ // Missing connections in this chat's actual workspace reopen setup on a
+ // later visit, without requesting unrelated catalogs while reading history.
+ await control({op:'setup',connected:false,sessionId:sid});await page.reload();
  await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-settings-page','ai-connections');
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
- await page.screenshot({path:'/tmp/readiness101-onboarding-mobile.png'});
+ await page.screenshot({path:join(evidence,'onboarding-mobile.png')});
  assert.deepEqual(errors,[]);
  console.log('Setup journey passed: later empty connections, assistant handoff, single new chat, Canvas navigation/reload, narrow chat, and mobile.');
 }finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM')}

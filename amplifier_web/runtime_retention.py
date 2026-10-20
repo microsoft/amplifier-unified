@@ -84,6 +84,9 @@ class WorkerRetention:
     def schedule(self, sid, row):
         # Caller holds the per-session admission lock.
         row['closing'] = True
+        # Classify the boundary before sending: the worker can publish its
+        # close event immediately after the retirement acknowledgement.
+        row.setdefault('stop_reason', 'retention')
         task = asyncio.create_task(self.retire(sid, row))
         row['retirement_task'] = task
         self.retirements.add(task)
@@ -100,6 +103,8 @@ class WorkerRetention:
                 if not self.manager._closed and self.manager.workers.get(sid) is row and not row.get('stop_task'):
                     row['closing'] = False
                     row['parked'] = False
+                    if row.get('stop_reason') == 'retention':
+                        row.pop('stop_reason')
                     if row['process'].returncode is not None:
                         await row['emit']('runtime.error', {'sessionId': sid,
                             'error': 'The worker disconnected before idle retirement was confirmed. Work was not replayed.'})
@@ -110,10 +115,11 @@ class WorkerRetention:
             if not result.get('retired'):
                 row['closing'] = False
                 row['parked'] = False
+                if row.get('stop_reason') == 'retention':
+                    row.pop('stop_reason')
                 return
             session, emit = row['start_session'], row['emit']
-            row['retiring'] = True
-            await self.manager.stop(sid)
+            await self.manager.stop(sid, reason='retention')
             # Commands held behind even a late acknowledgement can restart.
             self.manager._retired[sid] = (session, emit)
 
