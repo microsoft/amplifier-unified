@@ -125,6 +125,11 @@ async def add_recovery_fixture(app):
  app.router.add_post('/fixture/recovery-release',release)
 
 async def main(home):
+ # Never read or change a developer's real machine resource authority.
+ from amplifier_web import test_host_resources as resources
+ resources.identity=lambda:'fixture-machine'
+ resources.directory=lambda:Path(home)/'synthetic-machine-authority'
+ resources.observe=lambda:{'cpuCount':16,'memoryMiB':65536,'availableMemoryMiB':50000,'freeBytes':100*1024**3,'loadPercent':10}
  os.environ['AMPLIFIER_HOME']=str(home/'native')
  os.environ['AMPLIFIER_WEB_HOME']=str(home);os.environ['AMPLIFIER_UNIFIED_IMPORT_HOME']=str(home/'legacy');os.environ['FIXTURE_KEY']='fixture-private-key'
  workspace=home/'workspace';workspace.mkdir();(workspace/'project').mkdir();(workspace/'project'/'bundle.yaml').write_text('bundle:\n  name: fixture\n')
