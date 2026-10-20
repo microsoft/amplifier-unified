@@ -86,3 +86,23 @@ available. Older records with no recorded host retain unknown provenance and are
 not rewritten. For separately paired hosts and canonical history migration, see
 [task portability](TASK-PORTABILITY.md); local handoff itself does not select a
 remote execution host.
+
+## Commissioning-manager placement
+
+An authenticated assignment owner may inspect, create or attach a checkout for
+one of its currently bound members and request that idle member's handoff.
+The same native settlement, writer-release and durable placement owner applies.
+The manager does not acquire arbitrary peer controls, cleanup, configuration or
+uncertain-handoff reconciliation authority. Independent peers are excluded.
+The member must be idle with settled settings; Stop and failed work must be
+reconciled through their existing controls first.
+
+The receipt captures the manager's transport-bound input ancestry, assignment
+revision, human/task/Stop boundaries and the member's existing placement guards.
+Authority is rechecked before release and before committing placement. The
+manager receives a reserved, guarded outcome notification, including unknown or
+rejected outcomes when its original authority remains valid. The member receives
+no new input and no replay. A new brief can run only after confirmed placement.
+Retries read the original receipt; restart retains unknown effects and does not
+redo a move with uncertain writer release. History, drafts, usage and task state
+remain with their existing owners.

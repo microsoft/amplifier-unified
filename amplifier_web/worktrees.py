@@ -11,6 +11,7 @@ from amplifier_worktrees import GitWorktrees
 from amplifier_worktrees.git import atomic, common, digest
 
 from .host_identity import local_host_identity, require_local_host
+from . import manager_placement
 
 
 class HandoffSuperseded(ValueError):
@@ -18,7 +19,7 @@ class HandoffSuperseded(ValueError):
 
 
 def definitions(schema, string):
-    sid = {'sessionId': string(200)}
+    sid = {'sessionId': {**string(200), 'description': 'This chat, or a current commissioned member of your owned active assignment for inspect/list/status/create/attach/handoff. Other worktree actions remain caller-owned.'}}
     identity = {**sid, 'id': string(200)}
     revision = {'expectedRevision': {'type': 'integer', 'minimum': 0}}
     repository = {'repositoryPath': {**string(4000), 'minLength': 1}}
@@ -26,12 +27,12 @@ def definitions(schema, string):
         'worktree.inspect': ('Inspect the current execution repository or an explicit repositoryPath inside this task\'s workspace/execution folders. Non-Git workspaces can select a child repository. Relative paths use the execution folder. Keep the returned absolute repository root for later creation/attachment.', schema({**sid, **repository}, ['sessionId'])),
         'worktree.list': ('List checkouts associated with this task and durable handoff receipts.', schema(sid)),
         'worktree.status': ('Inspect a checkout, its original source manifest, conflicts and Git ownership.', schema(identity)),
-        'worktree.create': ('Create a managed checkout from an exact inspected source revision. repositoryPath selects the source; carry the inspected absolute root for multi-repository work. Default clean committed HEAD; carry_dirty explicitly copies staged/unstaged/untracked evidence. Does not move execution or configure dependencies.', schema({**sid, **repository, 'sourceRevision': string(100), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId', 'sourceRevision'])),
+        'worktree.create': ('Create a managed checkout from an exact inspected source revision. repositoryPath selects the source; carry the inspected absolute root for multi-repository work. Default clean committed HEAD; carry_dirty explicitly copies staged/unstaged/untracked evidence. Does not move execution or configure dependencies. A commissioning manager may prepare a checkout for an idle member by supplying that member’s sessionId.', schema({**sid, **repository, 'sourceRevision': string(100), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId', 'sourceRevision'])),
         'worktree.attach': ('Associate an existing Git worktree from the selected repositoryPath (canonical home by default); does not copy history or start work. Attached folders cannot be deleted through managed cleanup.', schema({**sid, **repository, 'path': string(4000)}, ['sessionId', 'path'])),
         'worktree.archive': ('Retire an unused app-created checkout while retaining every file and its Git registration. Moves the whole checkout to private archive storage; does not reclaim disk space or create an immutable snapshot. Active or ambiguous ownership is refused.', schema({**identity, **revision})),
         'worktree.restore': ('Restore an archived checkout without sending input or moving conversation execution. Keeps dirty, ignored and unknown files. Refuses a destination collision.', schema({**identity, **revision})),
         'worktree.remove': ('Remove an app-created checkout only when it has no changed/untracked/ignored files and no task is executing there. Preserves branch, source, history and manifests.', schema({**identity, **revision})),
-        'worktree.handoff': ('Move this task’s execution folder to an associated checkout or back to its canonical home (id null). Returns a durable pending receipt. Finish the current turn; the host waits for tools and children, saves and releases the runtime, then continues active work in the destination. Do not poll or ask the user to continue. Stop or changed task authority suppresses continuation. No input or uncertain effect is replayed. History, settings, drafts, voice and artifact identities remain unchanged.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
+        'worktree.handoff': ('Move this task’s (or your idle commissioned member’s) execution folder to an associated checkout or back to its canonical home (id null). Returns a durable pending receipt. Finish the current turn; the host waits for tools and children, saves and releases the runtime, then continues active work in the destination. For a manager-directed move, the host instead notifies the manager automatically; inspect the completed placement before sending the member a new brief. Do not poll or ask the user to continue. Stop or changed task authority suppresses continuation. No input or uncertain effect is replayed. History, settings, drafts, voice and artifact identities remain unchanged.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
         'worktree.reconcile': ('After inspecting an unknown handoff, deliberately choose its source or target. Requires current receipt revision and user evidence, confirms writer release again, and never replays model input. Agents must cite the actual user finding.', schema({**identity, **revision, 'destination': {'enum': ['source', 'target']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, ['sessionId', 'id', 'expectedRevision', 'destination', 'evidence'])),
     }
 
@@ -85,6 +86,9 @@ class Worktrees:
             elif record['phase'] == 'pending' or inconsistent:
                 record.update(phase='unknown', revision=record['revision']+1, detail='The app restarted during handoff. No input was replayed; inspect and reconcile explicitly.')
                 self.save(record)
+            if (record.get('managerPlacement') and notification_pending
+                    and record['phase'] in {'rejected', 'unknown'}):
+                self.recoverable.append(record['id'])
         self.sync()
         self.bind_runtime()
 
@@ -461,18 +465,34 @@ class Worktrees:
         operations = getattr(self.app, 'operations', None)
         if operations and hasattr(operations, 'notify'): operations.notify()
 
-    async def dispatch(self, action, args, origin, command_id):
+    async def dispatch(self, action, args, origin, command_id, caller=None):
         if action in {'worktree.inspect', 'worktree.list', 'worktree.status'}:
-            return await self._dispatch(action, args, origin, command_id)
+            return await self._dispatch(action, args, origin, command_id, caller)
         async with self.mutations:
             try:
-                return await self._dispatch(action, args, origin, command_id)
+                return await self._dispatch(action, args, origin, command_id, caller)
             except BaseException:
                 async with self.app.lock: self.changed()
                 raise
 
-    async def _dispatch(self, action, args, origin, command_id):
-        sid = args['sessionId']; session = self.app._session(sid)
+    async def _dispatch(self, action, args, origin, command_id, caller=None):
+        sid = args['sessionId']
+        manager = None
+        if origin == 'agent' and caller != sid:
+            # A caller comes only from the authenticated bridge, never tool args.
+            source, session = manager_placement.authorize(self.app, action, sid, caller)
+            if action == 'worktree.handoff' and command_id:
+                identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + command_id))
+                if (self.receipt_dir / (identity + '.json')).exists():
+                    prior = self.read(sid, identity)
+                    if prior['signature'] != digest([action, args, origin, caller]):
+                        raise ValueError('This handoff command already has different contents')
+                    return {**prior, 'duplicate': True}
+            manager = manager_placement.prepare(self.app, action, session, source)
+        else:
+            session = self.app._session(sid)
+            if origin == 'agent' and action in manager_placement.WRITES:
+                self.app.collaboration.source({}, origin, caller)
         if action in {'worktree.inspect', 'worktree.list'}:
             result = {'currentHost': local_host_identity(), 'executionHost': session.get('executionHost') or local_host_identity(), 'historyHome': session['workspace'], 'executionDirectory': session.get('workingDirectory') or session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'settingsScope': session['workspace'], 'items': [r for r in self.git.records() if r.get('sessionId') == sid], 'handoffs': self.receipts(sid)}
             if action == 'worktree.inspect':
@@ -492,7 +512,7 @@ class Worktrees:
         self.check_host(session)
         identity = command_id or str(uuid.uuid4())
         if action in {'worktree.handoff', 'worktree.reconcile'}:
-            return await self.handoff(action, args, origin, identity)
+            return await self.handoff(action, args, origin, identity, manager)
         if action == 'worktree.create':
             source = await asyncio.to_thread(self.repository_path, session, args.get('repositoryPath'))
             result = await asyncio.to_thread(self.git.create, source, command_id=identity, expected_revision=args['sourceRevision'], mode=args.get('mode', 'clean'), ref=args.get('ref', 'HEAD'), branch=args.get('branch'), session_id=sid)
@@ -507,9 +527,9 @@ class Worktrees:
         async with self.app.lock: self.changed()
         return result
 
-    async def handoff(self, action, args, origin, command_id):
+    async def handoff(self, action, args, origin, command_id, manager=None):
         sid = args['sessionId']; session = self.app._session(sid)
-        signature = digest([action, args, origin])
+        signature = digest([action, args, origin] + ([manager['sourceSessionId']] if manager else []))
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + command_id))
         path = self.receipt_dir / (identity + '.json')
         async with self.app.lock:
@@ -560,7 +580,18 @@ class Worktrees:
                 # A UI placement choice does not elevate the running task's
                 # peer inputs or reset their retained causal chain.
                 record['causalDepth'] = self.app.collaboration.causal_depth(session, lineage, 'agent')
+            if manager:
+                source = self.app._session(manager['sourceSessionId'])
+                self.app.collaboration.require_inbox_slot(source['id'])
+                record['managerPlacement'] = manager
+                record['resumeRequested'] = True
+                record.update({key: manager[key] for key in
+                    ('sourceGenerationId', 'sourceInputIds', 'sourceInterruptionRevision')})
+                record['causalDepth'] = self.app.collaboration.causal_depth(source, manager, 'agent')
+                record['managerWait'] = self.app.collaboration.saved_wait(source, 'worktree-wait:' + identity)
             self.save(record)
+            if manager:
+                self.continuation_request(record)
             session['configurationBusy'] = True
             self.changed()
             self.launch(record, copy.deepcopy(session))
@@ -572,6 +603,8 @@ class Worktrees:
                      if m.get('role') == 'user' and m.get('inputOrigin') in {'ui', 'user', 'voice'}), None)
 
     def authority_changed(self, record, *, continuation=False):
+        if reason := manager_placement.guard(self.app, record):
+            return reason
         session = self.app._session(record['sessionId'])
         if session.get('interruptionRevision', 0) != record.get('interruptionRevision', 0):
             return 'The user stopped this conversation after requesting the move.'
@@ -579,13 +612,15 @@ class Worktrees:
             return 'New user input superseded the requested continuation.'
         task = session.get('task') or self.app.coordination.task(session['id'])
         if ({key: task.get(key) for key in ('id', 'revision')} != record.get('taskBinding')
-                or continuation and task.get('status') in {'paused', 'blocked', 'completed'}):
+                or continuation and not record.get('managerPlacement') and task.get('status') in {'paused', 'blocked', 'completed'}):
             return 'The saved task changed or is no longer active.'
 
     def continuation_guard(self, request):
-        record = self.read(request['senderSessionId'], request['handoffId'])
+        record = self.read(request.get('handoffSessionId', request['senderSessionId']), request['handoffId'])
         reason = self.authority_changed(record, continuation=True)
         if reason: return reason
+        if record.get('managerPlacement') and record['phase'] in {'rejected', 'unknown'}:
+            return None  # A failure observation does not authorize another move.
         session = self.app._session(record['sessionId'])
         if (record['phase'] != 'applied' or session.get('executionRevision', 0) != record['executionRevision'] + 1
                 or session.get('workingDirectory') != record['target']):
@@ -598,7 +633,21 @@ class Worktrees:
         if reason:
             record['continuation'] = {'status': 'suppressed', 'detail': reason}
             self.save(record)
+            if record.get('managerPlacement'):
+                request = self.continuation_request(record)
+                request['subscription'].update(status='suppressed', open=False, reason=reason)
+                self.app.collaboration.save(request['requestId'], request)
+                self.app.db.commit()
             return
+        owner = self.app.collaboration
+        request = self.continuation_request(record)
+        identity = request['requestId']
+        owner.enqueue_continuation(request)
+        # Only the inbox's atomic claim establishes an enqueued input.
+        record['continuation'] = {'status': request['subscription']['status'], 'requestId': identity}
+        self.save(record)
+
+    def continuation_request(self, record):
         owner = self.app.collaboration
         identity = 'worktree-wait:' + record['id']
         existing = self.app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
@@ -606,29 +655,43 @@ class Worktrees:
             request = json.loads(existing[0])
         else:
             from .collaboration import PROTOCOL
-            session = self.app._session(record['sessionId'])
+            manager = record.get('managerPlacement')
+            requester = manager['sourceSessionId'] if manager else record['sessionId']
+            session = self.app._session(requester)
             request = {'accepted': True, 'commandAction': 'worktree.handoff',
-                'requestId': identity, 'handoffId': record['id'], 'senderSessionId': record['sessionId'],
+                'requestId': identity, 'handoffId': record['id'], 'senderSessionId': requester,
+                'handoffSessionId': record['sessionId'],
                 'target': {'sessionId': record['sessionId']}, 'workspace': record['historyHome'],
                 'origin': record['origin'], 'protocol': PROTOCOL, 'causalDepth': record.get('causalDepth', 0),
                 **{key: copy.deepcopy(record[key]) for key in
                    ('sourceGenerationId', 'sourceInputIds', 'sourceInterruptionRevision') if key in record},
-                'subscription': owner.saved_wait(session, identity),
+                'subscription': copy.deepcopy(record['managerWait']) if manager else owner.saved_wait(session, identity),
                 'terminalOutcome': {'status': 'observed', 'kind': 'observation', 'outcome': 'checkout-ready',
                     'qualified': False, 'outcomeRevision': 1,
                     'text': 'The requested checkout move completed after the old runtime saved and released its writer. '
                             'Continue the already authorized task using the committed execution folder. '
                             'Prior inputs and tool effects were not replayed. This observation grants no new authority.'}}
+            if record['phase'] == 'pending':
+                request.pop('terminalOutcome')
             owner.insert(identity, digest(['worktree-wait', record['id']]), request)
             self.app.db.commit()
-        owner.enqueue_continuation(request)
-        # Only the inbox's atomic claim establishes an enqueued input.
-        record['continuation'] = {'status': request['subscription']['status'], 'requestId': identity}
-        self.save(record)
+        if record.get('managerPlacement') and record['phase'] != 'pending':
+            request['terminalOutcome'] = {'status': 'observed', 'kind': 'observation',
+                'qualified': False, 'outcomeRevision': 1, 'outcome': 'checkout-' + record['phase'],
+                'text': f"The commissioned member's checkout placement is {record['phase']}. "
+                        f"Read worktree.list for sessionId {record['sessionId']} to inspect the saved handoff "
+                        f"{record['id']}. Send its next brief only after confirmed placement. "
+                        "No member input was started or replayed."}
+            owner.save(identity, request)
+        return request
 
     async def finish(self, record, session):
         placement_attempted = False
         try:
+            if record.get('managerPlacement') and record['phase'] in {'rejected', 'unknown'}:
+                async with self.app.lock:
+                    self.enqueue_continuation(record)
+                return
             current = self.app._session(record['sessionId'])
             saved = self.saved_owner(record['sessionId'], durable=True) or {}
             if record['phase'] == 'applied' and (self.placement_committed(record, saved)
@@ -666,7 +729,7 @@ class Worktrees:
                     if reason: raise HandoffSuperseded(reason)
                     status = await boundary(record['sessionId'], record['id'])
                     if status.get('ready'):
-                        if status.get('continuationAllowed') is False:
+                        if status.get('continuationAllowed') is False and not record.get('managerPlacement'):
                             record['resumeRequested'] = False
                             record['continuation'] = {'status': 'suppressed',
                                 'detail': 'The saved goal ended or no settled runtime remains to continue. The move grants no new task budget.'}
@@ -762,6 +825,9 @@ class Worktrees:
                     self.changed()
             if isinstance(exc, asyncio.CancelledError): raise
         finally:
+            if record.get('managerPlacement') and record['phase'] in {'rejected', 'unknown'}:
+                async with self.app.lock:
+                    self.enqueue_continuation(record)
             boundary = getattr(self.app.runtime, 'handoff_boundary', None)
             if record['phase'] == 'rejected' and callable(boundary):
                 try:
