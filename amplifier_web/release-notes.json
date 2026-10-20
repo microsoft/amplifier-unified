@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.190",
+      "title": "Quiet navigation and consistent chat controls",
+      "changes": [
+        "Mark unread chats as read from Browse, Status or Home using the exact notice you saw. Newer responses stay unread, and approval decisions and error review remain separate.",
+        "Keep routine background refresh quiet over existing content so Home and sidebar rows stay in place. Initial loading, errors, Retry and explicit Refresh remain available.",
+        "Use the same chat controls, detail level and folder-path preferences in Browse and Status, including pinned project rows and drag previews."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.189",
       "title": "Prepare coordinated checkouts and explain update failures",
       "changes": [
