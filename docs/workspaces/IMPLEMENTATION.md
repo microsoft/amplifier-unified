@@ -336,6 +336,32 @@ and the separate registered-history scope. These are not OS,
 universal credential, per-tool or multi-tenant isolation guarantees. Existing
 registered own-history access is independent of configuration grants.
 
+## Human-directed member resume — 2026-10-20
+
+`coordination.send` accepts `resume: {sourceMessageId,
+expectedInterruptionRevision}` for a fresh queued request from a commissioning
+owner to a current member of its active assignment. The host verifies the latest
+actual human input against the calling root's admitted input bindings. It must
+postdate the recipient's Stop; peer prose, questions and scheduled inputs cannot
+authorize resume. `coordination.list` includes the current bounded `signal`,
+including `interruptionRevision`, for resident and dormant roots so a manager
+can construct this binding without loading history or starting the recipient.
+`coordination.context.humanInput` provides the exact latest admitted human message
+identity to the current root generation; peer, scheduled, question and stale
+inputs are ineligible. It is an observation, not new execution authority. Assignment, task, source/recipient Stop and latest human input
+are rechecked during preparation and native admission.
+
+The one-input exception permits a stopped recipient and a paused/blocked task to
+receive the reconciliation request. It does not rewrite the task or reset its
+saved goal progress. The recipient deliberately resumes its own task after
+checking its blockers. Capacity policy and saved turn budgets still apply.
+Completed objectives stay completed: an explicit reconciliation/follow-on input
+can reach their chat without reactivating the old goal. Independent chats and
+failed/unsettled runtimes are ineligible.
+The retained receipt consumes this human/member/Stop authorization once, including
+unknown admission outcomes; old suppressed or uncertain requests are not replayed.
+Assignment admission itself still uses the existing explicit `assignment.resume`.
+
 ## Assignment admission and scoped Stop — 2026-10-14
 
 New commissioned roots now share their initiating root's assignment. Nested
@@ -362,6 +388,27 @@ Stop targets. The current adapter cannot interrupt or account for one request
 inside an independent mixed conversation. Stop reports that limitation. With
 an enabled token/cost limit, queue/steer to such peers is refused; informational
 notices remain available, and commissioned helpers share the budget.
+
+Explicit user recovery uses revision-bound `assignment.resume` on the commissioning
+chat after interruption receipts, roots, native workers, preparations and current
+generations have settled. It preserves membership, task records, cumulative
+accounting and limits. It does not send input, resume paused local tasks or clear
+interruption revisions. Queued outbound requests and saved waits retain their
+original interruption binding; reopening cannot admit old requests or manufacture
+late continuation messages. A fresh user request may then start new work.
+A historical unknown Stop acknowledgement is not a permanent barrier. On the
+same explicit Resume action, the native adapter can prove that the affected
+root has no process, preparation, pending admission or unobserved shutdown, and
+hold its existing native session ownership lock through the recovery commit.
+A live/foreign owner, unsupported adapter, execution handoff fence or outstanding
+Stop still refuses recovery. The Resume receipt retains revision-bound settlement
+evidence separately; original unknown Stop receipts are unchanged. This proves
+current ownership settlement, never rollback or success of external effects.
+
+Separately paused chat tasks and persisted local budget denials remain paused;
+the existing task/budget controls own their explicit revision-bound recovery.
+Stopped-assignment input is rejected before appending history or starting a worker,
+with guidance to the existing Shared tasks and assignment controls.
 
 The browser exposes assignment controls under Related work, with private drafts,
 revision conflicts and exact lost-response retries. Attached HTTP/session clients
@@ -1270,3 +1317,55 @@ context-simple modules. Run it with the qualified runtime interpreter and a new
 private output directory; it uses no provider credentials or user history. This
 establishes runtime lifecycle with scripted model replies, not real-model
 cooperation, browser behavior, packaged-release acceptance or production adoption.
+
+
+### Ordinary reads and searches
+
+Unified now composes filesystem read limits into the reference grep/glob tools
+separately from write policy. Absent or null read limits remain unrestricted;
+explicit empty lists deny all, explicit narrower declarations remain ceilings,
+and read denials accumulate through fresh and retained child plans. The
+standalone search module keeps its working-directory default when configuration
+is omitted; Unified supplies explicit null for ordinary unrestricted reads.
+Module-level and per-tool search settings cannot erase inherited limits.
+
+Reference-module changes enforce reader denials and select the Python grep
+engine whenever explicit denials require per-file checks before opening.
+Case/Unicode aliases and hardlinks to denied files are checked by filesystem
+identity; unrelated hardlinks do not create allowlist grants. This mode uses
+Python regex semantics and may be slower. Restricted searches use tool exclusions
+instead of ambient ignore-file contents. Writes and history/draft authority are
+unchanged. Arbitrary shell/external tools remain outside these guarantees.
+
+Qualification checks the actual mounted reference modules before input admission,
+including the existing no-model update probe. Older recorded modules with missing
+semantics require Settings > Updates to check/install component updates; they do
+not justify a configuration grant. Fresh qualified generations can adopt updated
+sources, while already active work and retained explicit child ceilings remain
+preserved. Source tests and a provider-free Core/Foundation mount cover this
+behavior; release, installed-worker adoption and the reported provider conversation
+remain separate acceptance steps.
+
+## Idle worker retirement preserves peer admission — 2026-10-19
+
+Retiring a settled worker for memory retention or an updated runtime is process
+maintenance. It leaves the conversation idle and eligible for a new guarded
+peer request, including after host restart. A native `session.closed` event at
+that boundary must not mark the conversation Stopped and require a human relay.
+The host records the maintenance reason before sending the retirement command;
+refusal clears that reason, and an unacknowledged exit remains an explicit error.
+A concurrent user Stop takes precedence even after the retirement acknowledgement.
+
+Regression coverage exercises real subprocess transport, AppService persistence,
+and exact host admission with a scripted native endpoint: a fresh peer request
+after retirement, during retirement, after host restart, and after an explicit
+Stop. New input reaches only a fresh process and only once. Existing messages
+and peer attribution remain intact. These checks make no real-model or deployed
+release claim. No existing stopped/error record is silently reclassified, and
+previously suppressed or unknown requests are not replayed.
+
+#### Settled failed members
+
+A fresh human-backed owner request can admit one reconciliation input to a failed commissioned member. The host requires a recorded terminal generation, no active child work, and the existing native ownership lock proving the previous worker is absent. Ownership stays held through the saved receipt. The failed generation and its effects remain evidence; no input or command is retried. A newer failure, Stop, membership change, human input or pending access change invalidates admission. Explicit provider/tool safety stops remain blocked. This resolves the former instruction to inspect a failure followed by an unconditional refusal even after inspection.
+
+Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. Only a successful host admission clears the old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a separate settings edit in every worker.

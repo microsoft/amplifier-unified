@@ -13,6 +13,10 @@ has since been implemented; see the [progress note](assessment.md#progress-since
 and current [TUI guide](tui-handoff.md). The original source assessment stays
 explicitly historical instead of being presented as today's missing-work list.
 
+The [Home and sidebar design review](../ux/README.md) applies this approach to
+the accepted web UX direction. It includes the current promises, human review
+journeys, and a record of the product owner's decisions.
+
 ## Read the packet
 
 | Document | Purpose |

@@ -29,7 +29,7 @@ not a separate saved return target.
 ### Explicit Back/Forward history
 
 Header Back and Forward traverse this tab's last 30 visited destinations:
-saved chats, workspace pages, All workspaces and Search chats. The History button
+Home, saved chats, workspace pages, All projects and Search chats. The History button
 opens one list; mouse/pen holding an arrow for 450 ms opens the same list without
 also navigating. Touch uses the visible 44 px button. Keyboard users can open
 the list with Enter or Arrow Down, move with arrows/Home/End, and dismiss with
@@ -37,7 +37,7 @@ Escape. This is explicit navigation, not restoration of the removed remembered-
 chat banner or Escape-to-chat behavior; native browser Back/Forward is unchanged.
 
 Entries contain only typed IDs, bounded labels, workspace tabs and visit keys.
-Changing a workspace tab updates its current visit. Search text, filters,
+Changing a workspace tab updates its current visit. Home view modes, search text, filters,
 pagination and file-folder browsing do not create visits. Selecting the same
 destination does not add an adjacent duplicate. New navigation after Back
 replaces Forward; traversal itself moves the cursor without appending.

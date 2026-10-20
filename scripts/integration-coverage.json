@@ -28,6 +28,11 @@
         "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload",
         "tests/test_context_source.py::test_real_boundary_import_and_core_loader_remount",
         "tests/test_history_edit_worker.py::test_current_edit_parks_and_resumes_without_replaying",
+        "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[False]",
+        "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[True]",
+        "tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged",
+        "tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input",
+        "tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay",
         "tests/test_integration_validation.py::test_real_native_shell_command_and_postapproval_stop",
         "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity",
         "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset",
@@ -52,7 +57,12 @@
         "tests/test_operations.py::test_exact_mount_and_question_recheck_after_approval_before_real_spawn",
         "tests/test_output_image_pairs.py::test_real_loop_core_selected_provider_serializes_both_exact_images_together",
         "tests/test_runtime_controls.py::test_real_core_controls_and_tool_approval",
-        "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state"
+        "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state",
+        "tests/test_bundle_selection.py::test_real_bundle_switch_isolates_module_revisions_and_preserves_history",
+        "tests/test_search_read_policy.py",
+        "tests/test_default_capability_policy.py",
+        "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip",
+        "tests/fixtures/provider_isolation_native.py"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -77,6 +87,10 @@
         "tests/test_compaction_failure_contract.py",
         "tests/test_context_source.py",
         "tests/test_history_edit_worker.py",
+        "tests/test_host_components.py",
+        "tests/test_runtime.py",
+        "tests/test_session_handoff.py",
+        "tests/test_worktrees.py",
         "tests/test_integration_validation.py",
         "tests/test_kernels.py",
         "tests/test_live_terminal_runtime.py",
@@ -89,7 +103,22 @@
         "tests/fixtures/history_edit_probe.py",
         "tests/fixtures/live_terminal_probe.py",
         "tests/fixtures/standalone_controls_probe.py",
-        "tests/fixtures/warm_worker_probe.py"
+        "tests/fixtures/warm_worker_probe.py",
+        "amplifier_web/bundle_actions.py",
+        "amplifier_web/bundle_selection.py",
+        "tests/test_bundle_selection.py",
+        "tests/fixtures/bundle_switch_probe.py",
+        "amplifier_web/read_policy.py",
+        "amplifier_web/builtin_behaviors.py",
+        "amplifier_web/desktop_policy.py",
+        "tests/test_search_read_policy.py",
+        "tests/test_default_capability_policy.py",
+        "tests/test_default_export_literals.py",
+        "amplifier_web/provider_isolation.py",
+        "amplifier_web/provider_environment.py",
+        "amplifier_web/image_defaults.py",
+        "tests/test_provider_isolation.py",
+        "tests/fixtures/provider_isolation_native.py"
       ]
     },
     "release-runtime": {
@@ -135,6 +164,12 @@
     "browser-installed": {
       "runner": "desktop",
       "mode": "manual",
+      "qualificationCommand": [
+        "python",
+        "scripts/qualify_default_installed.py",
+        "run",
+        "--installed-pwa"
+      ],
       "selectors": [
         "tests/test_browser_auth.py::test_installed_pwa_launch"
       ],
@@ -143,8 +178,33 @@
         "amplifier_web/server*.py",
         "amplifier_web/static/pwa*",
         "frontend/src/pwa*",
-        "tests/test_browser_auth.py"
+        "tests/test_browser_auth.py",
+        "scripts/qualify_default_installed.py",
+        "scripts/integration_clients.py",
+        ".github/workflows/default-installed.yml"
       ]
+    },
+    "root-guest": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "command": ["python", "scripts/qualify_default_installed.py", "run", "--root-guest"],
+      "selectors": [
+        "tests/test_durable_guest_jobs.py::test_lost_response_repeated_identity_and_fresh_observer_do_not_replay",
+        "tests/test_durable_guest_jobs.py::test_cancel_is_prompt_and_terminal_requires_actual_exit",
+        "tests/test_durable_guest_jobs.py::test_timeout_is_enforced_in_guest_and_output_is_bounded",
+        "tests/test_durable_guest_jobs.py::test_worker_cannot_modify_supervisor_receipts_and_profile_environment_survives",
+        "tests/test_durable_guest_jobs.py::test_two_roots_execute_independently_and_cannot_adopt_identity",
+        "tests/test_durable_guest_jobs.py::test_dead_supervisor_is_unknown_and_same_request_never_restarts",
+        "tests/test_durable_guest_jobs.py::test_crash_after_reservation_does_not_launch_on_observe_or_repeat",
+        "tests/test_durable_guest_jobs.py::test_background_pipe_inheritance_does_not_hold_finished_check_until_deadline"
+      ],
+      "paths": [
+        "amplifier_web/test_job_guest.py",
+        "tests/test_durable_guest_jobs.py",
+        "scripts/qualify_default_installed.py",
+        ".github/workflows/default-installed.yml"
+      ],
+      "prerequisite": "Explicit owned Linux container with root supervisor, only SETUID/SETGID/KILL, actual /usr/bin/python3 UID-65534 workloads, private receipts and noneditable candidate wheel. All eight exact cases, source/dependency identity and owned cleanup must pass."
     },
     "cli-interop": {
       "runner": "ubuntu-latest",
@@ -239,6 +299,79 @@
         "tests/test_profiling_host.py"
       ],
       "prerequisite": "Canonical optional amplifier-profiling source must be supplied; no substitute implementation is accepted."
+    },
+    "default-installed": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "selectors": [
+        "tests/test_default_behaviors_integration.py",
+        "tests/test_default_runtime_safety.py",
+        "tests/test_default_mount_runtime.py",
+        "tests/test_default_routing_runtime.py"
+      ],
+      "paths": [
+        "amplifier_web/builtin_behaviors.py",
+        "amplifier_web/host/**",
+        "amplifier_web/desktop_policy.py",
+        "amplifier_web/bundles.py",
+        "amplifier_web/runtime*",
+        "tests/test_default_behaviors_integration.py",
+        "tests/test_default_runtime_safety.py",
+        "tests/test_default_mount_runtime.py",
+        "tests/test_default_routing_runtime.py",
+        "tests/fixtures/default_mount_probe.py",
+        "tests/fixtures/default_routing_probe.py"
+      ],
+      "prerequisite": "Explicit owned container, noneditable candidate wheel and source-bound offline behavior repositories/runtime packages. Run copied tests outside source, then integration_checks.py check --lane default-installed; missing prerequisites/skips fail the owner. See docs/validation/release-qualification.md and integration-coverage.md."
+    },
+    "default-desktop-safety": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "command": [
+        "python",
+        "scripts/qualify_default_installed.py",
+        "run",
+        "--desktop-safety"
+      ],
+      "selectors": [
+        "tests/test_default_desktop_safety.py"
+      ],
+      "paths": [
+        "amplifier_web/host/**",
+        "amplifier_web/desktop_policy.py",
+        "amplifier_web/runtime*",
+        "tests/test_default_*.py",
+        "scripts/qualify_default_installed.py",
+        "scripts/default-installed-pins.json",
+        ".github/workflows/default-installed.yml"
+      ],
+      "prerequisite": "Use the existing hosted manual workflow with desktop_safety=true, or the command prefix with required --loop-source, --work and --output arguments. Owned offline container, noneditable candidate wheel and exact prepared dependencies; separate preserved-22 and remote-defaults receipts must execute all 25 cases with zero skips. Adapter helpers and IC-13 baseline are separate. See docs/validation/integration-coverage.md."
+    },
+    "status-installed": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "command": [
+        "python",
+        "scripts/qualify_status_emitter.py"
+      ],
+      "selectors": [
+        "tests/fixtures/status_emitter_probe.py",
+        "tests/fixtures/status_package_probe.py"
+      ],
+      "paths": [
+        "amplifier_web/status_emitter.py",
+        "amplifier_web/status_protocol/**",
+        "amplifier_web/execution_events.py",
+        "amplifier_web/service.py",
+        "amplifier_web/runtime*",
+        "amplifier_web/host/**",
+        "scripts/qualify_status_emitter.py",
+        "tests/test_status_emitter.py",
+        "tests/test_status_qualification.py",
+        "tests/fixtures/status_emitter_probe.py",
+        "tests/fixtures/status_package_probe.py"
+      ],
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md."
     }
   },
   "baselineRecords": [
@@ -763,6 +896,176 @@
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "WARM_FOUNDATION_PATH"
+    }
+  ],
+  "additionalRecords": [
+    {
+      "node": "tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation shared-session ownership, loop-live and short private temporary socket root",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation shared-session handoff, loop-live and short private temporary socket root",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation shared-session handoff and short private temporary socket root",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[False]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Core/Foundation and loop-live imports; deterministic child-plan preparation without model calls",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[True]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Core/Foundation and loop-live imports; deterministic resumed child-plan preparation without model calls",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_search_read_policy.py",
+      "kind": "module_collection",
+      "owner": "native",
+      "prerequisite": "loop-live, current tool-filesystem/tool-search and actual ripgrep",
+      "introducedBy": "#817"
+    },
+    {
+      "node": "tests/test_default_capability_policy.py",
+      "kind": "test_module",
+      "owner": "native",
+      "prerequisite": "Core/Foundation/loop-live; deterministic local policy and lifecycle fixtures",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation registry export/import",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_behaviors_integration.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_runtime_safety.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_mount_runtime.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_routing_runtime.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/fixtures/status_emitter_probe.py",
+      "kind": "executable_probe",
+      "owner": "status-installed",
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
+      "introducedBy": "#290"
+    },
+    {
+      "node": "tests/fixtures/status_package_probe.py",
+      "kind": "executable_probe",
+      "owner": "status-installed",
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
+      "introducedBy": "#290"
+    },
+    {
+      "node": "tests/test_default_desktop_safety.py",
+      "kind": "module_collection",
+      "owner": "default-desktop-safety",
+      "prerequisite": "UNIFIED_BEHAVIOR_REPOS in the owned installed-wheel environment with exact prepared sources and matching packages; run the separate --desktop-safety qualification, not the IC-13 baseline. Missing prerequisites or skipped cases fail the owner.",
+      "introducedBy": "Installed desktop safety continuation"
+    },
+    {
+      "node": "tests/test_browser_auth.py::test_installed_pwa_launch",
+      "kind": "test_case",
+      "owner": "browser-installed",
+      "prerequisite": "Explicit unprivileged installed-wheel container, private Xvfb display, lock-matched Playwright/Chromium; real install/login/launch/relaunch/uninstall, zero skips and bounded evidence before teardown.",
+      "introducedBy": "Installed PWA qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_lost_response_repeated_identity_and_fresh_observer_do_not_replay",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_cancel_is_prompt_and_terminal_requires_actual_exit",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_timeout_is_enforced_in_guest_and_output_is_bounded",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_worker_cannot_modify_supervisor_receipts_and_profile_environment_survives",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_two_roots_execute_independently_and_cannot_adopt_identity",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_dead_supervisor_is_unknown_and_same_request_never_restarts",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_crash_after_reservation_does_not_launch_on_observe_or_repeat",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_durable_guest_jobs.py::test_background_pipe_inheritance_does_not_hold_finished_check_until_deadline",
+      "kind": "test_case",
+      "owner": "root-guest",
+      "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
+      "introducedBy": "Root guest qualification adapter"
     }
   ]
 }

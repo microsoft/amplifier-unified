@@ -83,15 +83,18 @@ class InputBudget:
         raise InputLimit()
 
 
-def capture_inputs(directory, state, operation, args, fence):
+def capture_workspaces(rows, budget):
+    # Copy only the query shape, never expanded configuration or other owners.
+    return [budget.copy({key: row[key] for key in WORKSPACE_FIELDS if key in row}) for row in rows]
+
+
+def capture_inputs(directory, state, operation, args, fence, *, workspace_capture=capture_workspaces):
     budget = InputBudget()
     frozen = budget.copy({field: state[field] for field in QUERY_GLOBALS
                           if field in state and field not in ('workspaces', 'conversationOrganization')})
     # Workspace registration metadata is already resident, but configuration and
     # other expanded fields are not part of the query. Allocate only this shape.
-    frozen['workspaces'] = []
-    for row in state.get('workspaces', ()):
-        frozen['workspaces'].append(budget.copy({key: row[key] for key in WORKSPACE_FIELDS if key in row}))
+    frozen['workspaces'] = workspace_capture(state.get('workspaces', ()), budget)
     archived = {}
     for identity in state.get('conversationOrganization', {}).get('archived', {}):
         archived[budget.copy(identity)] = None
@@ -134,6 +137,29 @@ class ShellQueryOwner:
         self.retiring = None
         self.closed = False
         self.closing = None
+        self.workspace_snapshot = None
+
+    def invalidate_workspaces(self):
+        self.workspace_snapshot = None
+
+    def _capture_workspaces(self, rows, budget):
+        # Scoped views share the canonical registry. Alternate caller-owned
+        # registries have no commit epoch and must be captured independently.
+        if rows is not getattr(self.service, '_state', {}).get('workspaces'):
+            return capture_workspaces(rows, budget)
+        epoch = self.resources._epochs({'workspaces'})
+        cached = self.workspace_snapshot
+        if cached is not None and cached[0] is rows and cached[1] == epoch:
+            budget.charge(cached[3])
+            return cached[2]
+        self.invalidate_workspaces()
+        before = budget.remaining
+        value = capture_workspaces(rows, budget)
+        # Retain one source identity witness and one bounded detached value.
+        # Queued inputs borrow only the value. Replacement never mutates it,
+        # including while the projector serializes an older job off-thread.
+        self.workspace_snapshot = (rows, epoch, value, before - budget.remaining)
+        return value
 
     @contextmanager
     def resource(self, identity, instance, name, key):
@@ -210,7 +236,8 @@ class ShellQueryOwner:
             self._fail(key, 5000, { (interest[0], interest[2], interest[3]): interest })
             raise PendingQuery(5000) from None
         try:
-            inputs = capture_inputs(directory, state, operation, args, fence)
+            inputs = capture_inputs(directory, state, operation, args, fence,
+                workspace_capture=self._capture_workspaces)
         except InputLimit:
             self._fail(key, 5000, { (interest[0], interest[2], interest[3]): interest })
             raise PendingQuery(5000) from None
@@ -269,6 +296,7 @@ class ShellQueryOwner:
             if key != self.active:
                 self.jobs.pop(key, None)
             elif self.projector is not None and self.retiring is None:
+                job['retiring'] = True
                 projector, self.projector = self.projector, None
                 self.retiring = asyncio.create_task(projector.close())
         self._wake_capacity()
@@ -310,6 +338,18 @@ class ShellQueryOwner:
                         self._diagnose(job, started_at, result, accepted=False)
                         if not self.closed:
                             self._wake_capacity()
+                        continue
+                    if job.get('retiring'):
+                        # Demand can return while its abandoned read is closing.
+                        # Capture a fresh current read; an intentional retirement
+                        # is not a catalog failure. The loop awaits the exact old
+                        # process before starting any replacement.
+                        self._diagnose(job, started_at, result, accepted=False)
+                        for identity in interested:
+                            with self.service.clients.bind(identity):
+                                self.resources.snapshot(identity)
+                            self.resources.shell.notify(identity)
+                        self._wake_capacity()
                         continue
                     try:
                         current = not self.service.db.in_transaction and self._fence(job['inputs']['operation']) == job['fence']
@@ -407,6 +447,7 @@ class ShellQueryOwner:
     async def close(self):
         if self.closing is None:
             self.closed = True
+            self.invalidate_workspaces()
             self.closing = asyncio.create_task(self._close())
         await asyncio.shield(self.closing)
 

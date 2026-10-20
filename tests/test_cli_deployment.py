@@ -113,7 +113,8 @@ def test_service_cli_reports_reused_definition_and_backup(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize('installed', [False, True])
-def test_default_launch_installs_or_starts_and_opens_only_when_ready(tmp_path, monkeypatch, installed):
+@pytest.mark.parametrize('public_url', [None, 'https://configured-public.example'])
+def test_default_launch_installs_or_starts_and_opens_only_when_ready(tmp_path, monkeypatch, installed, public_url):
     from amplifier_web import deployment_service as service, installation_health as health
     monkeypatch.setattr(sys, 'platform', 'darwin')
     monkeypatch.setattr(sys, 'argv', ['amplifier-unified', '--data-dir', str(tmp_path)])
@@ -124,11 +125,12 @@ def test_default_launch_installs_or_starts_and_opens_only_when_ready(tmp_path, m
     async def ready(home, wait):
         assert wait == 60
         calls.append('ready')
-        return {'ok': True, 'url': 'http://127.0.0.1:8941', 'message': 'Ready'}
+        return {'ok': True, 'url': 'http://127.0.0.1:8941', 'message': 'Ready',
+                'publicUrls': [public_url] if public_url else [], 'publicUrlsVerified': False}
     monkeypatch.setattr(health, 'status', ready)
     monkeypatch.setattr(cli.webbrowser, 'open', lambda url: calls.append(url))
     cli.main()
-    assert calls == ['start' if installed else 'install', 'ready', 'http://127.0.0.1:8941']
+    assert calls == ['start' if installed else 'install', 'ready', public_url or 'http://127.0.0.1:8941']
 
 
 def test_default_launch_failure_does_not_open_browser(tmp_path, monkeypatch):

@@ -42,7 +42,7 @@ async def main(args):
             os.environ.pop(key, None)
     import yaml
     from aiohttp import web
-    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    from amplifier_web.builtin_behaviors import APPENDED_DEFAULTS
     from amplifier_web.runtime import RuntimeManager
     from amplifier_web.server import create_app
     from amplifier_web.auth import new_session
@@ -67,7 +67,7 @@ async def main(args):
             'config':{'destinations':{},'base_path':str(home/'capture')}}]}))
     (shared/'settings.yaml').write_text(yaml.safe_dump({
         'bundle':{'active':str(bundle),'app':[], 'added':{'concurrency-fixture':str(bundle)}},
-        'web_bundles':{'excluded':[IMAGEGEN_BEHAVIOR_URI]},
+        'web_bundles':{'excluded':list(APPENDED_DEFAULTS)},
         'config':{'providers':[provider]}, 'sources':{'modules':{'context-simple':context_path,
                                                                'provider-concurrency':provider_path,
                                                                'hook-context-intelligence':capture_path}}}))

@@ -118,6 +118,11 @@ without replaying input. An interrupted preflight or boundary wait rejects the
 unperformed move with its source unchanged. An unconfirmed release remains
 unknown and requires deliberate reconciliation. A later committed placement
 suppresses an earlier move's pending notification; recovery never moves it back.
+Completion requires the matching placement in the saved owner, including the
+handoff identity for new moves. A receipt saved ahead of that placement remains
+fenced while recovery retries it; failed recovery retains an unknown receipt
+that can be reconciled explicitly. A notification failure after confirmed
+placement does not make the completed move unknown.
 
 If active work requested the move, the host uses the existing guarded inbox to
 deliver one completion observation and continue the already authorized task in
@@ -501,6 +506,15 @@ reassignment does not assert that prior external effects stopped or are safe to
 repeat. User-visible status distinguishes readiness, responsibility, stale
 authority, and reported completion.
 
+Task list reads also expose the current holder's observed activity separately
+from those ownership facts. A holder can be working, awaiting approval or an
+answer, blocked, paused, stopped, failed or unavailable while retaining its
+claim. Its saved blocked reason is bounded reference data. Passive task-list
+waits include these observations in their change token, without incrementing
+the assignment/item revision, loading transcripts or starting dormant runtimes.
+The same projection serves user and agent reads. A status observation never
+releases a claim, completes a dependency or authorizes takeover.
+
 New commissioned roots share an explicit host-owned assignment with their
 commissioning root. Existing peers and historical commissioning records are
 never enrolled retroactively. Native descendants share their root's admission.
@@ -576,6 +590,28 @@ saved task and Stop boundary. A newer meaningful report supersedes an
 unsubmitted earlier success notification, preserving both receipts and preventing
 stale dependency success. Requests made under older single-notification
 subscriptions keep that behavior until explicitly replaced by a new request.
+
+### Continuing-objective result delivery — 2026-10-19
+
+New waits and reply boundaries capture a task continuation epoch separately
+from its exact edit revision. Updating progress, references, constraints or
+corrections within the same objective preserves this epoch. Creating or changing
+the objective, pausing, blocking, resuming or completing it advances the epoch;
+a pause followed by resume cannot revive an earlier notification. Existing
+receipts without this field retain their exact-revision boundary. Migration
+never retries suppressed, accepted or uncertain input.
+
+Only correlated outcome observations and later reports about an already delivered
+request may use that continuing-objective boundary. Ordinary queued instructions
+and active steering retain their exact task revision. Notifications do not grant
+authority: admission rechecks current task state, budgets, Stop/interruption,
+assignment membership, ownership, permissions and any operation-specific
+placement/cancellation boundary. Current constraints apply before model work.
+The native adapter rechecks the same boundary at submission, including after
+awaited host authorization. Receipt identity and outcome qualification still
+prevent duplicate delivery and stale success. Retained results remain readable
+when automatic admission is refused. Routine progress edits alone do not wake
+coordination waiters; new results, changed authority or attention still do.
 
 One-shot status/idle watches are explicit commands with an expiry and cancellation.
 They observe only the named root's public lifecycle, do not load its history or
@@ -717,3 +753,30 @@ filesystem write allow/deny override keys. Shared workspace settings, read polic
 and other settings are preserved. Inherited configuration changes invalidate the
 preview; saved changes reach the existing runtime refresh boundary before the
 next input, with no replay or unsolicited turn.
+
+
+### Ordinary file reads and search
+
+Read authority is independent of write roots and configuration administration.
+Unified supplies an explicit unrestricted read policy when no file/search read
+boundary is configured; reading installed package source requires no
+`file_access` or `runtime_configuration` grant. Filesystem `allowed_read_paths`
+and search `allowed_paths` support unrestricted null and restrictive lists,
+including empty deny-all lists. The standalone search module retains its omitted
+configuration default of the working directory; Unified deliberately supplies
+null instead. Explicit module/per-tool search declarations and filesystem read
+ceilings intersect across root, child, spawn, overlay and retained plans; denials
+accumulate. Resuming a child cannot widen its saved explicit read boundary.
+
+The reference reader, grep and glob check denied paths, including filesystem
+aliases, before exposing contents or names. Grep chooses its Python engine when
+explicit denials exist so ripgrep cannot implicitly open denied ignore files.
+This policy mode uses Python regex semantics and may be slower. Unrestricted
+search retains ripgrep; restricted search uses explicit tool exclusions rather
+than ambient ignore files. These controls do not grant writes, widen scoped
+history APIs, expose private drafts, or establish shell/OS isolation.
+
+Root and child mounting reject reference modules that cannot honor the selected
+read policy before model input. The same check runs in existing no-model runtime
+qualification. Dependency updates use the existing checked staging/activation
+path; no capability approval or automatic replay repairs a recorded old worker.

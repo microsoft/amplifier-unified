@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -24,7 +25,7 @@ try{
  const status=async(target,status)=>{const response=await page.request.post(boot.url+'/api/fixture/managed-cleanup/state',{data:{target,status}});assert.ok(response.ok())};
  const probe=async(id,flows,run)=>{const row=await evidence.probe(id,flows,async()=>{await run();return evidence.snapshot(page,id,'#amp-one')});if(row.status!=='passed')throw Error('Stopped after '+id)};
  const click=(label,control)=>evidence.action(label,()=>control.click());
- await page.goto(boot.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeVisible();
+ await page.goto(boot.url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeVisible();
  const initial=await info(),pinned=page.locator('[data-sidebar-section="pinned"]');
  await expect(pinned.locator('[data-session-id]')).toHaveCount(5);await composer.fill('Selected chat draft stays local');
  const openDelete=async record=>{const row=pinned.locator(`[data-session-id="${record.id}"]`);if(!await row.isVisible())await click('Open navigation',page.getByRole('button',{name:'Open navigation',exact:true}));await row.hover();await click('Open exact chat row actions',row.getByRole('button',{name:'Details and actions for '+record.title,exact:true}));await click('Delete managed chat',page.getByRole('dialog',{name:'Details for '+record.title,exact:true}).getByRole('button',{name:'Delete '+record.title,exact:true}));};

@@ -67,28 +67,41 @@ class ClientViews:
             raise AppError("Choose a valid client ID.")
         return identity
 
-    def attach(self, identity, resume=None, kind="web"):
+    def attach(self, identity, resume=None, kind="web", *, device=None):
         from .service import AppError
         self.validate(identity)
         if kind not in {"web", "tui", "native", "api"}:
             raise AppError("Unsupported client kind.")
         if resume is not None:
             self.validate(resume)
+        if device is not None:
+            for candidate in (identity, resume):
+                if candidate is None:
+                    continue
+                previous = self.records.get(candidate)
+                if (candidate == resume and previous is None) or (previous is not None and previous.get('deviceOwner') != device):
+                    raise AppError("This client belongs to another connection.", 403)
         if identity not in self.records:
             previous = self.records.get(resume)
             if previous:
                 record = copy.deepcopy(previous)
                 if additions := getattr(getattr(self.service, "feedback", None), "additions", None):
                     additions.capture_on_attach(resume, previous, record)
+                if handoffs := getattr(self.service, "handoffs", None):
+                    handoffs.capture_on_attach(resume, previous, record)
             else:
                 shared = self.service._state
                 record = {key: copy.deepcopy(shared.get(key)) for key in LOCAL_KEYS}
                 record["view"] = record.get("view") or {}
+                if kind == 'web':
+                    record['view']['workSurface'] = 'home'
+                    record['view']['navPinned'] = False
+                    record['view'].pop('workHomeView', None)
                 record["canvas"] = record.get("canvas") or {}
                 record["drafts"] = {}
                 record["attachments"] = {}
                 # Preserve pre-client drafts during the first migration only.
-                if not shared.get("clientViewsMigrated"):
+                if device is None and not shared.get("clientViewsMigrated"):
                     for session in shared.get("sessions", []):
                         if session.get("draft"):
                             record["drafts"][session["id"]] = session["draft"]
@@ -100,6 +113,8 @@ class ClientViews:
                 else:
                     record["view"]["draft"] = ""
                     record["view"]["panel"] = None
+            if device is not None:
+                record['deviceOwner'] = device
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
             # A new page mounts its own inline viewers. Copying their leases
             # would retain invisible frames and stale commands from the old tab.
@@ -237,10 +252,29 @@ class ClientViews:
             return session.setdefault("draftAttachments", [])
         return record.setdefault("attachments", {}).setdefault(session["id"] if session else "", [])
 
+    def consume_attachments(self, session, attachments):
+        """Settle exact uploaded IDs with positive delivery, not the later RPC."""
+        consumed = {row['id'] for row in attachments}
+        if not consumed:
+            return
+        # Uploads mint unique IDs. A resumed page can copy the same draft while
+        # its send is pending; settle those copies too, but only in this chat.
+        # Never use the runtime callback's ambient client or current selection.
+        for identity, record in self.records.items():
+            draft = record.get('attachments', {}).get(session['id'], [])
+            remaining = [row for row in draft if row['id'] not in consumed]
+            if len(remaining) != len(draft):
+                draft[:] = remaining
+                self.dirty.add(identity)
+        draft = session.get('draftAttachments', [])
+        draft[:] = [row for row in draft if row['id'] not in consumed]
+
     def project(self, snapshot):
         record = self.record()
         if record is None:
             return snapshot
+        if handoffs := getattr(self.service, "handoffs", None):
+            snapshot["handoffs"] = handoffs.project()
         if feedback := getattr(self.service, "feedback", None):
             snapshot["feedback"] = feedback.followups.project(snapshot.get("feedback", {}))
         snapshot.pop("canvasTabs", None)
@@ -261,6 +295,14 @@ class ClientViews:
             session["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get(session["id"], []))
             if record['kind'] == 'web' and session['id'] == record.get('selectedSessionId'):
                 session['linkedMediaAvailable'] = self.service.outputs.store.has_linked_media(session['id'])
+                linked = self.service.outputs.store.has_linked_chat_references(session['id'])
+                session['linkedChatReferencesAvailable'] = linked
+                if linked:
+                    import json
+                    session['chatReferenceRevision'] = json.dumps([
+                        session.get('chatReferenceVersion', 0),
+                        self.service.directory.navigation_revision,
+                        self.service.directory.workspace_revision])
         return snapshot
 
     def remember_canvas(self, record=None):

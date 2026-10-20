@@ -1,4 +1,5 @@
 import io
+import copy
 import json
 import tarfile
 
@@ -178,3 +179,107 @@ def test_selected_writers_do_not_retain_member_metadata(tmp_path,monkeypatch):
     archives=retention.filter_incus_stream(source,tmp_path,'owned')
     assert len(written)==2 and all(not value.members for value in written)
     assert retention.inspect_archive(archives[0]['destination'],'workspace')==1000
+
+
+def test_artifacts_only_ignores_oversized_workspace_without_qualifying_removal(tmp_path, monkeypatch):
+    monkeypatch.setattr(retention, 'SELECTED_LIMIT', 5)
+    source = backup(ROOTS + [('workspace/large', tarfile.REGTYPE, b'123456'),
+                            ('artifacts/result', tarfile.REGTYPE, b'pass')])
+    archives = retention.filter_incus_stream(source, tmp_path, 'owned', selections=('artifacts',))
+    result = retention.verify_artifacts(archives)
+    assert result['selection'] == ['/artifacts'] and result['verified']
+    assert result['logicalBytes'] == 4 and not (tmp_path / 'workspace.tar').exists()
+    assert not (tmp_path / 'retention.json').exists()
+    with pytest.raises(ValueError, match='Both distinct'):
+        retention.verify_retention(tmp_path, archives)
+
+
+@pytest.mark.parametrize('change', ['missing', 'duplicate', 'wrong-root', 'escape', 'truncated', 'too-large'])
+def test_artifact_recovery_requires_complete_safe_bounded_selection(tmp_path, change, monkeypatch):
+    entries = [('artifacts', tarfile.DIRTYPE, '')]
+    if change == 'escape':
+        entries += [('artifacts/out', tarfile.SYMTYPE, '../workspace')]
+    else:
+        entries += [('artifacts/result', tarfile.REGTYPE, b'evidence')]
+    if change == 'missing':
+        entries = []
+    if change == 'too-large':
+        monkeypatch.setattr(retention, 'SELECTED_LIMIT', 2)
+    with pytest.raises((ValueError, tarfile.TarError)):
+        archives = retention.filter_incus_stream(backup(entries), tmp_path, 'owned', selections=('artifacts',))
+        if change == 'duplicate':
+            archives.append(dict(archives[0]))
+        if change == 'wrong-root':
+            archives[0]['source'] = '/workspace'
+        if change == 'truncated':
+            (tmp_path / 'artifacts.tar').write_bytes((tmp_path / 'artifacts.tar').read_bytes()[:512])
+        retention.verify_artifacts(archives)
+    assert not (tmp_path / 'artifacts-retention.json').exists()
+
+
+@pytest.mark.parametrize('existing_receipt', [False, True])
+def test_verifying_existing_exports_is_read_only_and_never_republishes(tmp_path, existing_receipt):
+    """Proposed publish=False permits inspection, never continuation authority."""
+    selected = tmp_path / 'retained'; selected.mkdir()
+    archives = retention.filter_incus_stream(backup(ROOTS), selected, 'owned')
+    (tmp_path / 'source.tar').write_bytes(b'original source snapshot')
+    if existing_receipt:
+        retention.verify_retention(tmp_path, archives)
+    before = {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in selected.iterdir()}
+    original = copy.deepcopy(archives)
+    inspected = retention.verify_retention(tmp_path, archives, publish=False)
+    assert inspected['verified'] and inspected['selection'] == ['/workspace', '/artifacts']
+    assert archives == original
+    assert before == {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in selected.iterdir()}
+
+
+def test_forged_verified_bit_never_replaces_archive_verification(tmp_path):
+    archives = retention.filter_incus_stream(backup(ROOTS), tmp_path, 'owned')
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    for row in archives:
+        row['verified'] = True
+    path = tmp_path / 'artifacts.tar'
+    path.write_bytes(b'not a tar archive')
+    with pytest.raises((ValueError, tarfile.TarError)):
+        retention.verify_retention(tmp_path, archives)
+    assert path.read_bytes() == b'not a tar archive'
+    assert not (tmp_path / 'retention.json').exists()
+
+
+def test_complete_retention_publication_never_overwrites_prior_receipt(tmp_path):
+    archives = retention.filter_incus_stream(backup(ROOTS), tmp_path, 'owned')
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    first = retention.verify_retention(tmp_path, archives)
+    before = (tmp_path / 'retention.json').read_bytes()
+    with pytest.raises(FileExistsError):
+        retention.verify_retention(tmp_path, archives)
+    assert (tmp_path / 'retention.json').read_bytes() == before
+    assert retention.verify_retention(tmp_path, archives, publish=False) == first
+    assert not list(tmp_path.glob('.retention-*'))
+
+
+def test_recovery_archives_preserve_pytest_absolute_links_without_following_them(tmp_path):
+    entries = ROOTS + [('artifacts/current', tarfile.SYMTYPE, '/artifacts/test-1'),
+                       ('artifacts/test-1', tarfile.DIRTYPE, ''),
+                       ('workspace/outside', tarfile.SYMTYPE, '/private/not-readable')]
+    archives = retention.filter_incus_stream(backup(entries), tmp_path, 'owned', archive_only=True)
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    result = retention.verify_retention(tmp_path, archives, 'archive-only')
+    assert result['verified'] and result['archiveOnly']
+    with tarfile.open(tmp_path / 'artifacts.tar') as value:
+        assert value.getmember('artifacts/current').linkname == '/artifacts/test-1'
+    with tarfile.open(tmp_path / 'workspace.tar') as value:
+        assert value.getmember('workspace/outside').linkname == '/private/not-readable'
+    assert not (tmp_path / 'test-1').exists()
+
+
+@pytest.mark.parametrize('entry', [
+    ('workspace/../escape', tarfile.REGTYPE, b'bad'),
+    ('workspace/socket', tarfile.FIFOTYPE, ''),
+    ('workspace/file', tarfile.REGTYPE, b'x' * 21),
+])
+def test_recovery_archive_keeps_path_type_and_size_bounds(tmp_path, monkeypatch, entry):
+    monkeypatch.setattr(retention, 'RECOVERY_LIMIT', 20)
+    with pytest.raises(ValueError):
+        retention.filter_incus_stream(backup(ROOTS + [entry]), tmp_path, 'owned', archive_only=True)
+    assert not (tmp_path / 'retention.json').exists()

@@ -1,11 +1,14 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {build} from 'esbuild';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {settingsButton} from './browser-settings.mjs';
+const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-smart-tools');await mkdir(evidence,{recursive:true});
 const temp=await mkdtemp(join(tmpdir(),'unified-mcp-browser-'));
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
 const app=new App({name:'Independent counter',version:'1.0.0'},{});
@@ -50,7 +53,7 @@ try{
   window.matchMedia=query=>({media:query,get matches(){return query==='(prefers-color-scheme: dark)'&&dark},addEventListener:(type,listener)=>{if(type==='change')listeners.add(listener)},removeEventListener:(type,listener)=>{if(type==='change')listeners.delete(listener)}});
   window.setSystemTheme=next=>{dark=next;for(const listener of listeners)listener({matches:dark,media:'(prefers-color-scheme: dark)'})};
  });
- await page.goto('http://127.0.0.1:8967/');await page.waitForSelector('#amp-one');
+ await page.goto('http://127.0.0.1:8967/');await showFixtureConversation(page,{navPinned:false});await page.waitForSelector('#amp-one');
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const observations=async()=>{const response=await page.request.get('http://127.0.0.1:8967/fixture/smart-tool-observations');assert.equal(response.status(),200);return response.json()};
  const operations=async()=>(await observations()).operations;
@@ -58,7 +61,7 @@ try{
  const appearance=async()=>{
   const navigation=page.getByRole('button',{name:'Open navigation',exact:true});
   if(await navigation.isVisible())await navigation.click();
-  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await settingsButton(page).click();
   await page.locator('[data-settings-section="appearance"]').click();
  };
  await action('view.update',{patch:{scheme:'system'}});
@@ -190,7 +193,7 @@ try{
  // Current Canvas controls expand beside the mounted live view.
  await page.getByRole('button',{name:'Canvas options',exact:true}).click();
  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
- await page.screenshot({path:'/tmp/amplifier-smart-tools-canvas.png'});
+ await page.screenshot({path:join(evidence,'canvas.png')});
  // A saved view cannot silently acquire a replacement server configuration.
  await action('smartTools.configure',{id:'counter',name:'Changed counter',command:'invalid-command',args:[]});
  await expect.poll(async()=>(await observations()).servers.find(s=>s.id==='counter')?.command).toBe('invalid-command');

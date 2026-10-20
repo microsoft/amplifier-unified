@@ -3,6 +3,8 @@ export class AppBridge{
  async connect(){}
  setHostContext(value){this.contexts.push(value)}
  async close(){this.closed=true}
+ async sendToolListChanged(){this.toolListChanges=(this.toolListChanges||0)+1}
+ async sendResourceListChanged(){this.resourceListChanges=(this.resourceListChanges||0)+1}
  async sendToolInput(){}
  async sendToolResult(){}
 }

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -15,7 +16,7 @@ try {
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const inspect=async()=>(await action('canvas.views.inspect')).result.views;

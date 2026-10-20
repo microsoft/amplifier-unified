@@ -68,10 +68,10 @@ try{
  assert.equal(await browse(paths.playgroundOne).count(),0,'a leaf root has no drill-in control');
  await row(paths.playgroundOne).getByRole('button',{name:'Open chats in '+paths.playgroundOne,exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.workspace===path,paths.playgroundOne);
- await page.getByRole('button',{name:'All workspaces',exact:true}).click();await showPath(paths.dev);
+ await page.getByRole('button',{name:'All projects',exact:true}).click();await showPath(paths.dev);
  await row(paths.mixed).getByRole('button',{name:'Open chats in '+paths.mixed,exact:true}).click();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,first);
- await page.getByRole('button',{name:'All workspaces',exact:true}).click();await showPath(paths.dev);await browse(paths.mixed).click();await waitPath(paths.mixed);
+ await page.getByRole('button',{name:'All projects',exact:true}).click();await showPath(paths.dev);await browse(paths.mixed).click();await waitPath(paths.mixed);
  assert.equal(await selected(),first);
  await browse(paths.mixed+'/extensions').click();await waitPath(paths.mixed+'/extensions');
  assert.equal(await browse(paths.nested).count(),0);
@@ -115,7 +115,7 @@ try{
  }
  await row(paths.playgroundTwo).getByRole('button',{name:'Open chats in '+paths.playgroundTwo,exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.workspace===path,paths.playgroundTwo);
- await page.getByRole('button',{name:'All workspaces',exact:true}).click();
+ await page.getByRole('button',{name:'All projects',exact:true}).click();
  await agent('view.update',{patch:{navWorkspaceFilter:'*/playground',navWorkspacePage:1}});
  await expect.poll(()=>page.locator('.a-workspace-row').evaluateAll(rows=>rows.map(row=>row.dataset.workspacePath).sort())).toEqual([paths.playgroundOne,paths.playgroundTwo].sort());
  assert.equal(await search.inputValue(),'*/playground');

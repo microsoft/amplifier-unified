@@ -1,0 +1,1121 @@
+{
+  "schemaVersion": 1,
+  "baseline": {
+    "stages": [
+      {
+        "workers": 1,
+        "warmAck": {
+          "count": 3,
+          "p50": 801.1818839999996,
+          "p95": 804.6155859999999,
+          "max": 804.6155859999999
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 793.7017210000004,
+            "serverTiming": "app;dur=576.61",
+            "firstVisibleMs": 1102.9472959999994,
+            "gestureToRequestMs": 119.625,
+            "requestToResponseHeadersMs": 634.747,
+            "requestToBodyMs": 636.58
+          },
+          {
+            "ackMs": 801.1818839999996,
+            "serverTiming": "app;dur=597.59",
+            "firstVisibleMs": 1050.2279479999997,
+            "gestureToRequestMs": 111.291015625,
+            "requestToResponseHeadersMs": 657.236,
+            "requestToBodyMs": 659.204
+          },
+          {
+            "ackMs": 804.6155859999999,
+            "serverTiming": "app;dur=686.64",
+            "firstVisibleMs": 1039.6867340000008,
+            "gestureToRequestMs": 98.270751953125,
+            "requestToResponseHeadersMs": 687.678,
+            "requestToBodyMs": 689.784
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 672.6797829999996,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 341.43176200000016,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 627.8545900000026,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 589.3752179999974,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 521.526332999998,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      },
+      {
+        "workers": 6,
+        "warmAck": {
+          "count": 3,
+          "p50": 992.6466570000011,
+          "p95": 1058.5877570000011,
+          "max": 1058.5877570000011
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 992.6466570000011,
+            "serverTiming": "app;dur=709.58",
+            "firstVisibleMs": 1372.5017390000012,
+            "gestureToRequestMs": 147.992919921875,
+            "requestToResponseHeadersMs": 808.074,
+            "requestToBodyMs": 809.435
+          },
+          {
+            "ackMs": 964.1411159999989,
+            "serverTiming": "app;dur=751.93",
+            "firstVisibleMs": 1265.9657640000005,
+            "gestureToRequestMs": 112.842041015625,
+            "requestToResponseHeadersMs": 815.931,
+            "requestToBodyMs": 817.259
+          },
+          {
+            "ackMs": 1058.5877570000011,
+            "serverTiming": "app;dur=824.17",
+            "firstVisibleMs": 1375.931230000002,
+            "gestureToRequestMs": 114.7158203125,
+            "requestToResponseHeadersMs": 920.502,
+            "requestToBodyMs": 921.907
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 791.9729829999997,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 343.82383499999924,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 773.1603649999997,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 440.75543099999777,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 514.5652850000006,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      },
+      {
+        "workers": 12,
+        "warmAck": {
+          "count": 3,
+          "p50": 1418.1991280000002,
+          "p95": 1503.6833590000024,
+          "max": 1503.6833590000024
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 1503.6833590000024,
+            "serverTiming": "app;dur=1314.89",
+            "firstVisibleMs": 2034.3954750000012,
+            "gestureToRequestMs": 75.406982421875,
+            "requestToResponseHeadersMs": 1396.123,
+            "requestToBodyMs": 1397.568
+          },
+          {
+            "ackMs": 1338.7103040000002,
+            "serverTiming": "app;dur=1180.30",
+            "firstVisibleMs": 1825.9590879999996,
+            "gestureToRequestMs": 115.11328125,
+            "requestToResponseHeadersMs": 1189.8,
+            "requestToBodyMs": 1191.205
+          },
+          {
+            "ackMs": 1418.1991280000002,
+            "serverTiming": "app;dur=988.69",
+            "firstVisibleMs": 1812.4842320000025,
+            "gestureToRequestMs": 103.06005859375,
+            "requestToResponseHeadersMs": 1195.962,
+            "requestToBodyMs": 1197.371
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 974.269017999999,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 857.6157249999997,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 815.3745390000004,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 793.264642999995,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 554.854843999994,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      }
+    ],
+    "source": "3d56cca31254aa521cbab570747e5634c3c9f6f1",
+    "build": {
+      "version": "0.20.177",
+      "id": "b7e9e6989a108f1b"
+    },
+    "stream12": {
+      "measuredActive": 12,
+      "streamLag": {
+        "count": 23,
+        "p50": 273,
+        "p95": 336,
+        "max": 403
+      },
+      "selection": {
+        "count": 3,
+        "p50": 382.2252100000005,
+        "p95": 696.1246370000008,
+        "max": 696.1246370000008
+      },
+      "copiedNavigation": {
+        "count": 3,
+        "p50": 406.10693600000013,
+        "p95": 697.1531050000012,
+        "max": 697.1531050000012
+      },
+      "passed": true,
+      "workersStopped": true
+    }
+  },
+  "firstCandidate": {
+    "stages": [
+      {
+        "workers": 1,
+        "warmAck": {
+          "count": 3,
+          "p50": 773.8219050000007,
+          "p95": 843.9474599999994,
+          "max": 843.9474599999994
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 773.8219050000007,
+            "serverTiming": "app;dur=537.98",
+            "firstVisibleMs": 1024.8912520000013,
+            "gestureToRequestMs": 174.620849609375,
+            "requestToResponseHeadersMs": 566.034,
+            "requestToBodyMs": 567.498
+          },
+          {
+            "ackMs": 843.9474599999994,
+            "serverTiming": "app;dur=665.66",
+            "firstVisibleMs": 1097.8398419999976,
+            "gestureToRequestMs": 113.212890625,
+            "requestToResponseHeadersMs": 715.49,
+            "requestToBodyMs": 716.967
+          },
+          {
+            "ackMs": 750.1408080000001,
+            "serverTiming": "app;dur=575.75",
+            "firstVisibleMs": 1024.8436000000002,
+            "gestureToRequestMs": 91.3359375,
+            "requestToResponseHeadersMs": 634.914,
+            "requestToBodyMs": 636.621
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 947.030031000002,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 424.18721000000005,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 514.090569,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 457.58333199999834,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 375.635162999999,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      },
+      {
+        "workers": 6,
+        "warmAck": {
+          "count": 3,
+          "p50": 988.9873219999972,
+          "p95": 1137.0563590000002,
+          "max": 1137.0563590000002
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 1137.0563590000002,
+            "serverTiming": "app;dur=762.41",
+            "firstVisibleMs": 1531.9089029999996,
+            "gestureToRequestMs": 199.530029296875,
+            "requestToResponseHeadersMs": 922.039,
+            "requestToBodyMs": 923.217
+          },
+          {
+            "ackMs": 894.0282460000017,
+            "serverTiming": "app;dur=748.59",
+            "firstVisibleMs": 1258.962093000002,
+            "gestureToRequestMs": 82.759033203125,
+            "requestToResponseHeadersMs": 773.608,
+            "requestToBodyMs": 775.768
+          },
+          {
+            "ackMs": 988.9873219999972,
+            "serverTiming": "app;dur=759.33",
+            "firstVisibleMs": 1396.7839859999985,
+            "gestureToRequestMs": 141.048828125,
+            "requestToResponseHeadersMs": 813.634,
+            "requestToBodyMs": 815.386
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 1166.3331340000004,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 474.4308289999972,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 581.9780460000002,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 671.7543040000019,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 614.7471399999995,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      },
+      {
+        "workers": 12,
+        "warmAck": {
+          "count": 3,
+          "p50": 1161.9103240000004,
+          "p95": 1354.4449079999977,
+          "max": 1354.4449079999977
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 1161.9103240000004,
+            "serverTiming": "app;dur=1040.30",
+            "firstVisibleMs": 1670.7900399999999,
+            "gestureToRequestMs": 102.6318359375,
+            "requestToResponseHeadersMs": 1042.027,
+            "requestToBodyMs": 1043.131
+          },
+          {
+            "ackMs": 1354.4449079999977,
+            "serverTiming": "app;dur=1135.41",
+            "firstVisibleMs": 1844.8781729999973,
+            "gestureToRequestMs": 104.6357421875,
+            "requestToResponseHeadersMs": 1229.012,
+            "requestToBodyMs": 1230.557
+          },
+          {
+            "ackMs": 1125.864206000002,
+            "serverTiming": "app;dur=971.80",
+            "firstVisibleMs": 1595.637705000001,
+            "gestureToRequestMs": 86.52197265625,
+            "requestToResponseHeadersMs": 1025.119,
+            "requestToBodyMs": 1026.471
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 1845.350387999999,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 833.9706619999997,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 732.3440539999974,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 659.7251460000007,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 711.9296319999994,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      }
+    ],
+    "source": "218899a6df92bdd9a821495cfbc68715b9bbbd41",
+    "build": {
+      "version": "0.20.177",
+      "id": "b7e9e6989a108f1b"
+    },
+    "stream12": {
+      "measuredActive": 12,
+      "streamLag": {
+        "count": 22,
+        "p50": 262,
+        "p95": 313,
+        "max": 317
+      },
+      "selection": {
+        "count": 3,
+        "p50": 459.36894200000097,
+        "p95": 486.9818000000014,
+        "max": 486.9818000000014
+      },
+      "copiedNavigation": {
+        "count": 3,
+        "p50": 620.564999000002,
+        "p95": 710.2895250000001,
+        "max": 710.2895250000001
+      },
+      "passed": true,
+      "workersStopped": true
+    }
+  },
+  "finalCandidate": {
+    "stages": [
+      {
+        "workers": 1,
+        "warmAck": {
+          "count": 3,
+          "p50": 717.4988659999999,
+          "p95": 738.1158639999994,
+          "max": 738.1158639999994
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 717.4988659999999,
+            "serverTiming": "app;dur=565.08",
+            "firstVisibleMs": 942.4815990000006,
+            "gestureToRequestMs": 79.4140625,
+            "requestToResponseHeadersMs": 606.408,
+            "requestToBodyMs": 608.16
+          },
+          {
+            "ackMs": 738.1158639999994,
+            "serverTiming": "app;dur=507.90",
+            "firstVisibleMs": 985.2019939999991,
+            "gestureToRequestMs": 197.839111328125,
+            "requestToResponseHeadersMs": 508.74,
+            "requestToBodyMs": 509.932
+          },
+          {
+            "ackMs": 700.2270209999988,
+            "serverTiming": "app;dur=533.60",
+            "firstVisibleMs": 992.6545619999997,
+            "gestureToRequestMs": 90.18408203125,
+            "requestToResponseHeadersMs": 592.154,
+            "requestToBodyMs": 593.601
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 795.3121259999971,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 305.26184000000285,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 364.19278999999733,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 405.33664099999805,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 513.9279390000011,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      },
+      {
+        "workers": 6,
+        "warmAck": {
+          "count": 3,
+          "p50": 912.9298669999989,
+          "p95": 941.8183349999999,
+          "max": 941.8183349999999
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 941.8183349999999,
+            "serverTiming": "app;dur=633.01",
+            "firstVisibleMs": 1317.2054580000004,
+            "gestureToRequestMs": 190.069091796875,
+            "requestToResponseHeadersMs": 720.174,
+            "requestToBodyMs": 721.444
+          },
+          {
+            "ackMs": 912.9298669999989,
+            "serverTiming": "app;dur=636.94",
+            "firstVisibleMs": 1237.7124879999992,
+            "gestureToRequestMs": 132.074951171875,
+            "requestToResponseHeadersMs": 749.415,
+            "requestToBodyMs": 751.17
+          },
+          {
+            "ackMs": 864.4560420000016,
+            "serverTiming": "app;dur=605.68",
+            "firstVisibleMs": 1438.1159650000009,
+            "gestureToRequestMs": 92.638916015625,
+            "requestToResponseHeadersMs": 741.175,
+            "requestToBodyMs": 742.173
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 693.283743,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 455.3886910000001,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 499.16091999999844,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 474.3771620000007,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 557.9227170000013,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      },
+      {
+        "workers": 12,
+        "warmAck": {
+          "count": 3,
+          "p50": 1236.2021310000018,
+          "p95": 1409.706760000001,
+          "max": 1409.706760000001
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 979.8892039999992,
+            "serverTiming": "app;dur=777.38",
+            "firstVisibleMs": 1501.9226830000007,
+            "gestureToRequestMs": 115.927978515625,
+            "requestToResponseHeadersMs": 833.194,
+            "requestToBodyMs": 834.706
+          },
+          {
+            "ackMs": 1236.2021310000018,
+            "serverTiming": "app;dur=932.61",
+            "firstVisibleMs": 1699.4475100000018,
+            "gestureToRequestMs": 68.51416015625,
+            "requestToResponseHeadersMs": 1138.126,
+            "requestToBodyMs": 1139.667
+          },
+          {
+            "ackMs": 1409.706760000001,
+            "serverTiming": "app;dur=1010.92",
+            "firstVisibleMs": 1839.372072000002,
+            "gestureToRequestMs": 125.107177734375,
+            "requestToResponseHeadersMs": 1220.191,
+            "requestToBodyMs": 1221.642
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 832.1575320000011,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 507.2033540000011,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 747.714896999998,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 507.4492280000013,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 768.8493880000024,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      }
+    ],
+    "source": "48f08e299d0e5d3a086b3d1af034e3140d0a3230",
+    "build": {
+      "version": "0.20.178",
+      "id": "b7e9e6989a108f1b"
+    },
+    "stream12": {
+      "measuredActive": 12,
+      "streamLag": {
+        "count": 24,
+        "p50": 273,
+        "p95": 356,
+        "max": 390
+      },
+      "selection": {
+        "count": 3,
+        "p50": 417.8569669999997,
+        "p95": 541.9346889999997,
+        "max": 541.9346889999997
+      },
+      "copiedNavigation": {
+        "count": 3,
+        "p50": 534.8712939999987,
+        "p95": 630.8285849999993,
+        "max": 630.8285849999993
+      },
+      "passed": true,
+      "workersStopped": true
+    }
+  },
+  "targetsMs": {
+    "warmSendAckP95": 300,
+    "workspacePage": 1000,
+    "filter": 500,
+    "streamLagP95": 250
+  },
+  "sourceLimits": {
+    "copiedSessions": 27508,
+    "copiedProjects": 5272,
+    "copiedWorkspaceChats": 274,
+    "pageRows": 40,
+    "eventShards": 32,
+    "effectiveCpus": 4,
+    "memoryGiB": 8,
+    "syntheticOwnersAllowed": 14,
+    "provider": "deterministic local 250ms",
+    "runtimeQualificationBypassed": true,
+    "globalAtomicSnapshot": false,
+    "fullEventFidelity": false,
+    "liveProviderQualified": false
+  },
+  "rawEvidenceHashes": {
+    "latency178-before-0.json": "4a8ad4e44a65d17ea91a2e79076b5cb3056edde842f6a455dd11ede9e09d32b7",
+    "latency178-before-6.json": "f57130df6b17113a00d65c9a4690f00335c4c1c17f9e1ceeeaa1fc2d6c871e41",
+    "latency178-before-12.json": "af9e71b33be8895b8a8aaa628c4765ea23a3149fab1f30a77ea33425a9784577",
+    "latency178-stream-before.json": "d499b9f87edfc779de4420b7542ebaf948775ab9fdf5a86dc5ce950a60ec9a03",
+    "latency178-after-0.json": "47e37d5b84723802e4daf1ad7958a15b12a4253885dfad0d14be8e9670415009",
+    "latency178-after-6.json": "5a75bd5634214fc84f55434fe2241e8dd50251284adb2426fbad600302eb5170",
+    "latency178-after-12.json": "f8911438e0f8d32894add04705252255740c036033797ef4cb807ad71b9abc61",
+    "latency178-stream-after.json": "1f6e555b4a45693d362ad014a0dcb9d9fc84a73d2a8e495b3a0aeaf60d4a607d",
+    "latency178-final-0.json": "458fb1dbe1b8b3bb1e52eed004344aaf3dbcf5390d1dfb15ab3dc5c0ac395cb0",
+    "latency178-final-6.json": "4cbe4b0ba572fc646c4fea5723e3dec74c38541d335acd4c4e8da8522700cb16",
+    "latency178-final-12.json": "fbe25b25b4618d1c38a20ee04d7e6da38d4ae4cef2575ad72395f8e35bc5e714",
+    "latency178-stream-final.json": "2d2c1cdb83e3fe9e0465ad9187aba4803db516b02fe2cafd23a5758eb0a95062",
+    "latency178-confirm-6.json": "ae2d2fe63fecd060f7f3ccdd1c6932e3f027d65023b1bdc2e8963ce5da7866ec",
+    "latency178-confirm-12.json": "55f32de96acc78a9b30874196140ebd2d8bf2fffcb35f8861592b35d173a3c39",
+    "latency178-stream-confirm.json": "0ea9e0d7803676480905628a00c9345f77942e16a197efd6be60812176cbab58",
+    "latency178-control-12.json": "c009a55918292436c3ed6e1a053e9979e368e8d7f9f63474ffa1bda178368fa1",
+    "latency178-stream-control.json": "4f152931ff2c73b4e2756d67abbc8328885742c1cc9f7f4c675a6e890cf89ee9"
+  },
+  "warnings": [
+    {
+      "candidate": "firstCandidate",
+      "workers": 1,
+      "measurement": "first workspace demand",
+      "beforeMs": 672.6797829999996,
+      "afterMs": 947.030031000002
+    },
+    {
+      "candidate": "firstCandidate",
+      "workers": 6,
+      "measurement": "first workspace demand",
+      "beforeMs": 791.9729829999997,
+      "afterMs": 1166.3331340000004
+    },
+    {
+      "candidate": "firstCandidate",
+      "workers": 6,
+      "measurement": "exact chat filter",
+      "beforeMs": 343.82383499999924,
+      "afterMs": 474.4308289999972
+    },
+    {
+      "candidate": "firstCandidate",
+      "workers": 6,
+      "measurement": "explicit next page",
+      "beforeMs": 440.75543099999777,
+      "afterMs": 671.7543040000019
+    },
+    {
+      "candidate": "firstCandidate",
+      "workers": 12,
+      "measurement": "first workspace demand",
+      "beforeMs": 974.269017999999,
+      "afterMs": 1845.350387999999
+    },
+    {
+      "candidate": "firstCandidate",
+      "workers": 12,
+      "measurement": "explicit previous page",
+      "beforeMs": 554.854843999994,
+      "afterMs": 711.9296319999994
+    },
+    {
+      "candidate": "firstCandidate",
+      "workers": 12,
+      "measurement": "copiedNavigation.p50",
+      "beforeMs": 406.10693600000013,
+      "afterMs": 620.564999000002
+    },
+    {
+      "candidate": "finalCandidate",
+      "workers": 6,
+      "measurement": "exact chat filter",
+      "beforeMs": 343.82383499999924,
+      "afterMs": 455.3886910000001
+    },
+    {
+      "candidate": "finalCandidate",
+      "workers": 12,
+      "measurement": "explicit previous page",
+      "beforeMs": 554.854843999994,
+      "afterMs": 768.8493880000024
+    },
+    {
+      "candidate": "finalCandidate",
+      "workers": 12,
+      "measurement": "copiedNavigation.p50",
+      "beforeMs": 406.10693600000013,
+      "afterMs": 534.8712939999987
+    }
+  ],
+  "confirmation": {
+    "stages": [
+      {
+        "workers": 6,
+        "warmAck": {
+          "count": 3,
+          "p50": 933.081365,
+          "p95": 945.458861000001,
+          "max": 945.458861000001
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 933.081365,
+            "serverTiming": "app;dur=688.60",
+            "firstVisibleMs": 1229.0197229999994,
+            "gestureToRequestMs": 89.246826171875,
+            "requestToResponseHeadersMs": 807.652,
+            "requestToBodyMs": 809.444
+          },
+          {
+            "ackMs": 945.458861000001,
+            "serverTiming": "app;dur=732.91",
+            "firstVisibleMs": 1272.2724130000006,
+            "gestureToRequestMs": 103.4541015625,
+            "requestToResponseHeadersMs": 811.713,
+            "requestToBodyMs": 813.373
+          },
+          {
+            "ackMs": 861.9075599999996,
+            "serverTiming": "app;dur=665.14",
+            "firstVisibleMs": 1107.906221000001,
+            "gestureToRequestMs": 160.045166015625,
+            "requestToResponseHeadersMs": 668.209,
+            "requestToBodyMs": 669.45
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 479.495089,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 473.8167140000005,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 462.83759900000223,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 541.5062149999976,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 425.66212200000155,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      },
+      {
+        "workers": 12,
+        "warmAck": {
+          "count": 3,
+          "p50": 1388.9093380000013,
+          "p95": 1713.2755089999991,
+          "max": 1713.2755089999991
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 1208.4171950000018,
+            "serverTiming": "app;dur=1017.99",
+            "firstVisibleMs": 1752.3637550000021,
+            "gestureToRequestMs": 115.401123046875,
+            "requestToResponseHeadersMs": 1061.703,
+            "requestToBodyMs": 1063.09
+          },
+          {
+            "ackMs": 1388.9093380000013,
+            "serverTiming": "app;dur=1181.80",
+            "firstVisibleMs": 1858.5731330000017,
+            "gestureToRequestMs": 112.589111328125,
+            "requestToResponseHeadersMs": 1234.023,
+            "requestToBodyMs": 1236
+          },
+          {
+            "ackMs": 1713.2755089999991,
+            "serverTiming": "app;dur=1475.33",
+            "firstVisibleMs": 2149.497862,
+            "gestureToRequestMs": 116.046875,
+            "requestToResponseHeadersMs": 1521.97,
+            "requestToBodyMs": 1523.035
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 881.4610339999999,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 573.285404000002,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 731.5992370000022,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 840.5502400000005,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 542.7559899999978,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      }
+    ],
+    "source": "48f08e299d0e5d3a086b3d1af034e3140d0a3230",
+    "build": {
+      "version": "0.20.178",
+      "id": "b7e9e6989a108f1b"
+    },
+    "stream12": {
+      "measuredActive": 12,
+      "streamLag": {
+        "count": 23,
+        "p50": 295,
+        "p95": 385,
+        "max": 420
+      },
+      "selection": {
+        "count": 3,
+        "p50": 326.11146799999915,
+        "p95": 500.4226230000022,
+        "max": 500.4226230000022
+      },
+      "copiedNavigation": {
+        "count": 3,
+        "p50": 544.0783569999985,
+        "p95": 686.6788209999995,
+        "max": 686.6788209999995
+      },
+      "source": "48f08e299d0e5d3a086b3d1af034e3140d0a3230",
+      "passed": true,
+      "workersStopped": true
+    }
+  },
+  "baselineControl": {
+    "stages": [
+      {
+        "workers": 12,
+        "warmAck": {
+          "count": 3,
+          "p50": 1320.0746550000003,
+          "p95": 1406.8812379999981,
+          "max": 1406.8812379999981
+        },
+        "warmSendSamples": [
+          {
+            "ackMs": 1406.8812379999981,
+            "serverTiming": "app;dur=1150.92",
+            "firstVisibleMs": 1871.3597520000003,
+            "gestureToRequestMs": 91.608154296875,
+            "requestToResponseHeadersMs": 1284.048,
+            "requestToBodyMs": 1286.073
+          },
+          {
+            "ackMs": 1313.5923519999997,
+            "serverTiming": "app;dur=1200.11",
+            "firstVisibleMs": 1775.2213499999998,
+            "gestureToRequestMs": 70.505859375,
+            "requestToResponseHeadersMs": 1210.781,
+            "requestToBodyMs": 1212.058
+          },
+          {
+            "ackMs": 1320.0746550000003,
+            "serverTiming": "app;dur=1147.71",
+            "firstVisibleMs": 1775.9891180000013,
+            "gestureToRequestMs": 83.468017578125,
+            "requestToResponseHeadersMs": 1206.852,
+            "requestToBodyMs": 1208.163
+          }
+        ],
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 911.2358000000022,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 907.919001000002,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 963.1546549999985,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 856.7165210000021,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 794.2252759999974,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "passed": true,
+        "workersStopped": true
+      }
+    ],
+    "source": "3d56cca31254aa521cbab570747e5634c3c9f6f1",
+    "build": {
+      "version": "0.20.177",
+      "id": "b7e9e6989a108f1b"
+    },
+    "stream12": {
+      "measuredActive": 12,
+      "streamLag": {
+        "count": 23,
+        "p50": 263,
+        "p95": 334,
+        "max": 434
+      },
+      "selection": {
+        "count": 3,
+        "p50": 551.6970560000009,
+        "p95": 558.8891900000017,
+        "max": 558.8891900000017
+      },
+      "copiedNavigation": {
+        "count": 3,
+        "p50": 512.6167419999983,
+        "p95": 513.0517379999983,
+        "max": 513.0517379999983
+      },
+      "source": "3d56cca31254aa521cbab570747e5634c3c9f6f1",
+      "passed": true,
+      "workersStopped": true
+    }
+  },
+  "warningAssessment": {
+    "sixWorkerFilter": "Final 455 ms and confirmation 474 ms remain below 500 ms goal, but slower than initial baseline 344 ms. Single-action samples are retained, not relabeled as passes against baseline.",
+    "twelveWorkerPreviousPage": "Final 769 ms; confirmation 543 ms; original-code accumulated-fixture control 794 ms. No repeatable candidate-specific regression established.",
+    "twelveWorkerCopiedNavigation": "Initial baseline median 406 ms; final 535 ms; confirmation 544 ms; original-code accumulated-fixture control 513 ms. The control supports fixture/run variation as a substantial contributor; the remaining candidate difference is not proven causal by three samples.",
+    "warmAcknowledgement": "Final three-send p95 at twelve workers 1410 ms; confirmation 1713 ms; original-code control 1407 ms. Do not claim stable tail improvement or that the 300 ms target is met.",
+    "streaming": "Twelve-worker p95 baseline 336 ms; final 356 ms; confirmation 385 ms; original-code control 334 ms. The 250 ms target remains unmet; no streaming improvement claimed."
+  },
+  "status": "checkpoint; additional performance tuning paused by user; issue633 remains open",
+  "limits": [
+    "Three warm sends per stage: p95 is observed maximum, not stable tail estimate.",
+    "One workspace action sample per stage, 22-24 stream markers per bounded run.",
+    "Sequential warm-cache runs grow synthetic history; this is not randomized causal attribution.",
+    "Offline real subprocess workers bypass normal cold module qualification; no live provider or microphone/native-device acceptance.",
+    "All copied backing is read-only; external networking and copied execution/schedules remain disabled.",
+    "Unchanged frozen browser harness; Chromium no-sandbox/no-zygote/disable-gpu without single-process."
+  ]
+}

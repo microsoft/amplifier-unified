@@ -6,16 +6,23 @@ import contextvars
 import copy
 import inspect
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 import uuid
 
-from .model_selection import inherited_selection, child_routing
+from .model_selection import (
+    inherited_selection, child_routing, child_preferences,
+    pinned_delegate_input, prepare_default_routing, ProviderSelectionError,
+    automatic_default_routing, routing_hooks,
+)
 from .components import merge_modules, compose_bundles
 from amplifier_module_loop_live.host import HostAdapter
 from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_module_loop_live.scope import JOB_CALL
 
 _PERSISTENT = contextvars.ContextVar("amplifier_unified_persistent_child", default=False)
+_PREFERENCES_SOURCE = contextvars.ContextVar("amplifier_unified_preferences_source", default=None)
+_CALL_ROLE = contextvars.ContextVar("amplifier_unified_call_role", default=None)
 _SUBPROCESS_UNSUPPORTED = (
     "Subprocess child sessions are not supported by Unified yet. "
     "Use an in-process recipe step (omit spawn_mode: subprocess) or run this recipe in amplifier-app-cli."
@@ -24,6 +31,26 @@ _SUBPROCESS_UNSUPPORTED = (
 
 def _module_id(row):
     return row.get("module") or row.get("id")
+
+
+def _desktop_ceiling(policies):
+    """Union effective ComputerTool restrictions, including remote defaults."""
+    from .config import expand_environment
+    ceiling = {}
+    for policy in policies:
+        config = expand_environment(policy)
+        # Computer Use's registry selects the remote path for a truthy target.
+        # Leave target parsing/errors to that registry: never mount, probe, or
+        # rewrite an invalid target into a usable local/default configuration.
+        remote = bool(config.get("target"))
+        read_only = config.get("read_only")
+        read_only = remote if read_only is None else bool(read_only)
+        gate_writes = config.get("gate_writes")
+        gate_writes = remote and not read_only if gate_writes is None else bool(gate_writes)
+        for key, restricted in (("read_only", read_only), ("gate_writes", gate_writes)):
+            if restricted:
+                ceiling[key] = True
+    return ceiling
 
 
 def _restrict_child_tools(rows, policies, working_dir, modules):
@@ -44,7 +71,8 @@ def _restrict_child_tools(rows, policies, working_dir, modules):
     restrictions = {}
     for kind in ("read", "write"):
         allowed, denied = f"allowed_{kind}_paths", f"denied_{kind}_paths"
-        limits = [paths(policy[allowed]) for policy in policies if allowed in policy]
+        limits = [paths(policy[allowed]) for policy in policies if allowed in policy
+                  and not (kind == "read" and policy[allowed] is None)]
         if limits:
             effective = limits[0]
             for limit in limits[1:]:
@@ -77,14 +105,27 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
         apply_provider_recording({'agents': agent_filter}, enabled=False)
     agents = parent.get("agents", {})
     spawn = parent.get("spawn") or {}
+    if retained_image_tools is not None and not isinstance(retained_image_tools, list):
+        raise ValueError("Saved child tools must be a list of module declarations.")
+    desktop_policies = [parent.get("_unified_desktop_policy", {})]
+    for rows in (parent.get("tools", []), spawn.get("tools", []), retained_image_tools or []):
+        desktop_policies.extend(row.get("config", {}) for row in rows
+                                if isinstance(row, dict) and row.get("module") == "tool-computer-use")
+    # Partial overlays inherit same-instance configuration. Preserve their
+    # explicit restrictions now, but derive defaults only after that merge.
+    desktop_policies.extend({key: row.get("config", {}).get(key)
+                             for key in ("read_only", "gate_writes")}
+                            for row in overlay.get("tools", [])
+                            if isinstance(row, dict) and row.get("module") == "tool-computer-use")
     image_policies = []
     file_policies = []
     patch_policies = []
-    if retained_image_tools is not None and not isinstance(retained_image_tools, list):
-        raise ValueError("Saved child tools must be a list of module declarations.")
+    search_configs = []
     for index, rows in enumerate((parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", []),
                                   retained_image_tools or [])):
         for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and row.get("module") == "tool-search":
+                search_configs.append(copy.deepcopy(row.get("config", {})))
             if not isinstance(row, dict) or row.get("module") not in {"tool-image", "tool-filesystem", "tool-apply-patch"}:
                 continue
             config = row.get("config", {})
@@ -138,6 +179,22 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     _restrict_child_tools(result.get("tools", []), file_policies, working_dir, {"tool-filesystem"})
     _restrict_child_tools(result.get("tools", []), [*file_policies, *patch_policies], working_dir, {"tool-apply-patch"})
     _restrict_child_tools(result.get("tools", []), image_policies, working_dir, {"tool-image"})
+    from ..read_policy import policy_paths, restrict_search
+    for row in result.get("tools", []):
+        if row.get("module") == "tool-search":
+            row["config"] = restrict_search(row.get("config", {}), files=file_policies,
+                searches=search_configs, paths=lambda values: policy_paths(values, working_dir or Path.cwd()))
+    # Child overlays and instance aliases cannot grant desktop writes that the
+    # parent did not opt into. Explicit root settings remain the authority.
+    desktop_policies.extend(row.get("config", {}) for row in result.get("tools", [])
+                            if row.get("module") == "tool-computer-use")
+    desktop_ceiling = _desktop_ceiling(desktop_policies)
+    # Retain ceilings even when an intermediate child omits the desktop tool.
+    # Neither an overlay nor a new instance ID can erase ancestor restrictions.
+    result["_unified_desktop_policy"] = desktop_ceiling
+    for row in result.get("tools", []):
+        if row.get("module") == "tool-computer-use":
+            row.setdefault("config", {}).update(desktop_ceiling)
     if agent_filter == "none":
         result["agents"] = {}
     elif isinstance(agent_filter, list):
@@ -230,6 +287,9 @@ class Children:
         self.prepared[session.session_id] = prepared
         self.sessions[session.session_id] = session
         coordinator = session.coordinator
+        from .approvals import Approvals
+        coordinator.register_capability("approval.interactive",
+            isinstance(self.approvals, Approvals) and self.approvals.interactive)
         coordinator.register_capability("session.spawn", self.spawn)
         async def resume(sub_session_id, instruction, parent_session=None, provider_preferences=None, model_role=None):
             return await self.resume(sub_session_id, instruction, parent_session or session, provider_preferences, model_role)
@@ -238,7 +298,7 @@ class Children:
         coordinator.register_capability("live.host", self.host_adapter)
         delegate = (coordinator.get("tools") or {}).get("delegate")
         if delegate and not isinstance(delegate, PersistentDelegate):
-            await coordinator.mount("tools", PersistentDelegate(delegate, self), name="delegate")
+            await coordinator.mount("tools", PersistentDelegate(delegate, self, coordinator), name="delegate")
             await coordinator.mount("tools", WorkerControl(self), name="live_worker")
 
     async def spawn(self, agent_name, instruction, parent_session, agent_configs=None, sub_session_id=None,
@@ -280,8 +340,30 @@ class Children:
         overlay = copy.deepcopy(metadata.get("agent_overlay", {}))
         if model_role is not None:
             overlay["model_role"] = model_role
+        retained_preferences = metadata.get("provider_preferences")
+        if model_role is not None and metadata.get("preferences_source") == "role":
+            retained_preferences = None
+        call_role = _CALL_ROLE.get()
+        from_delegate = call_role is not None and call_role[0] is parent_session.coordinator
+        call_source = _PREFERENCES_SOURCE.get() if from_delegate else None
+        if (model_role is not None and (not from_delegate or call_source == "role")
+                and metadata.get("preferences_source") == "default_fallback"):
+            # An actual new role request replaces a derived fallback just as it
+            # replaces derived preferences. A delegate replaying its cached role
+            # on ordinary resume is not a new request.
+            metadata = {**metadata, "preferences_source": "role"}
+            metadata.pop("effective_selection", None)
+        if call_source == "role" and (
+                (metadata.get("preferences_source") == "explicit" and retained_preferences)
+                or overlay.get("provider_preferences") or overlay.get("providers")):
+            # The delegate may already have resolved its call role. That derived
+            # list still cannot override a saved explicit pin/provider declaration.
+            provider_preferences = None
+        if provider_preferences:
+            source = (call_source or metadata.get("preferences_source", "explicit")) if from_delegate else "explicit"
+            metadata = {**metadata, "preferences_source": source}
         return await self._execute(sub_session_id, instruction, parent_session,
-            metadata.get("agent_name", "resumed"), overlay, provider_preferences=provider_preferences or metadata.get("provider_preferences"),
+            metadata.get("agent_name", "resumed"), overlay, provider_preferences=provider_preferences or retained_preferences,
             parent_messages=messages, resumed=True, session_metadata=metadata)
 
     async def _execute(self, identity, instruction, parent, agent, overlay, *, tool_inheritance=None,
@@ -294,12 +376,31 @@ class Children:
         prepared = self.prepared.get(parent.session_id)
         if prepared is None:
             raise RuntimeError("Parent bundle is not attached to the standalone host")
+        call_role = _CALL_ROLE.get()
+        call_source = (_PREFERENCES_SOURCE.get()
+                       if call_role and call_role[0] is parent.coordinator else None)
+        if call_role and call_role[0] is parent.coordinator and call_role[1]:
+            # Delegate resolves call roles before spawn and can pass None for
+            # an empty route. Retain that role so it cannot look unspecified,
+            # fall back under an explicit matrix, or resolve the agent's old role.
+            overlay = {**overlay, "model_role": call_role[1]}
         working_dir = getattr(parent.coordinator, "get_capability", lambda _: None)("session.working_dir")
         cwd = Path(working_dir or Path.cwd())
         retained_plan = (session_metadata or {}).get("mount_plan") if resumed else None
         plan = child_plan(parent.coordinator.config, overlay, tool_inheritance=tool_inheritance,
                           hook_inheritance=hook_inheritance, working_dir=cwd,
                           retained_image_tools=retained_plan.get("tools", []) if isinstance(retained_plan, dict) else None)
+        if isinstance(retained_plan, dict):
+            # A resumed child must not lose its prior write ceiling merely
+            # because its immediate parent currently omits the tool.
+            # child_plan also retains declarations from older checkpoints that
+            # predate the marker; neither representation can weaken the other.
+            retained_desktop = _desktop_ceiling([retained_plan.get("_unified_desktop_policy", {})])
+            ceiling = plan.setdefault("_unified_desktop_policy", {})
+            ceiling.update(retained_desktop)
+            for tool in plan.get("tools", []):
+                if tool.get("module") == "tool-computer-use":
+                    tool.setdefault("config", {}).update(ceiling)
         components = getattr(getattr(prepared, "bundle", None), "_host_components", None)
         if components is not None:
             # Late and resumed overlays follow the same supported-loop policy
@@ -324,19 +425,45 @@ class Children:
             if not isinstance(orchestrator, dict):
                 raise ValueError("Agent orchestrator must be configured as a module declaration")
             orchestrator.setdefault("config", {}).update(copy.deepcopy(orchestrator_config))
+        routing_policy = parent.coordinator.get_capability("web.default_routing_policy") is True
+        routing_saved = session_metadata if resumed else None
+        automatic_routing = routing_policy and automatic_default_routing(
+            parent.coordinator, overlay, saved=routing_saved)
+        preferences_source = ((None if resumed else call_source)
+                              or ((session_metadata or {}).get("preferences_source", "explicit")
+                                  if provider_preferences else
+                                  "explicit" if overlay.get("provider_preferences") else "role"))
+        if routing_policy:
+            if not provider_preferences and not overlay.get("provider_preferences") and overlay.get("providers"):
+                from .model_selection import prioritize_agent_providers
+                plan = prioritize_agent_providers(plan, overlay["providers"])
+            provider_preferences = await child_preferences(
+                parent.coordinator, overlay, provider_preferences, saved=routing_saved)
+            # The child selection below is authoritative. Do not retain a parent
+            # role or an old agent pin for a lifecycle hook to reapply afterward.
+            plan.pop("provider_preferences", None)
+            plan.pop("model_role", None)
         preferences = [ProviderPreference.from_dict(p) if isinstance(p, dict) else p for p in provider_preferences or []]
-        selection = inherited_selection(parent, overlay, preferences, session_metadata)
+        default_fallback = bool(automatic_routing and overlay.get("model_role")
+                                and not preferences and not overlay.get("providers"))
+        selection = inherited_selection(parent, overlay, preferences, session_metadata,
+                                        default_fallback=default_fallback)
+        if default_fallback:
+            preferences_source = "default_fallback"
         from ..provider_recording import apply_provider_recording, install_request_redaction
         if preferences:
             apply_provider_recording(plan, enabled=False)
-            plan = await apply_provider_preferences_with_resolution(plan, preferences, parent.coordinator)
+            selected_plan = await apply_provider_preferences_with_resolution(plan, preferences, parent.coordinator)
+            if routing_policy and selected_plan is plan:
+                raise ProviderSelectionError("No requested child provider/model is available; no default was substituted.")
+            plan = selected_plan
         apply_provider_recording(plan)
         overlay_bundle = Bundle.from_dict({key: value for key, value in overlay.items() if key != "agents"}, base_path=prepared.bundle.base_path)
         overlay_bundle.instruction = overlay.get("instruction") or (overlay.get("system") or {}).get("instruction")
         effective = compose_bundles(prepared.bundle, overlay_bundle)
         # Preserve the qualified file boundaries in the prepared bundle as well
         # as its mount plan, including child tool-inheritance exclusions.
-        file_modules = {"tool-image", "tool-filesystem", "tool-apply-patch"}
+        file_modules = {"tool-image", "tool-filesystem", "tool-apply-patch", "tool-search", "tool-computer-use"}
         effective.tools = [row for row in effective.tools if row.get("module") not in file_modules]
         effective.tools.extend(copy.deepcopy(row) for row in plan.get("tools", [])
                                if row.get("module") in file_modules)
@@ -344,6 +471,19 @@ class Children:
         if components is not None:
             components.apply(effective)
         child_prepared = replace(prepared, mount_plan=plan, bundle=effective)
+        parent_isolation = parent.coordinator.get_capability("web.provider_isolation")
+        isolation = None
+        if parent_isolation is not None:
+            from ..provider_isolation import ProviderIsolation
+            from ..provider_environment import materialize_bundle_providers
+            from types import SimpleNamespace
+            isolation = ProviderIsolation()
+            isolation.preparation = copy.deepcopy(parent_isolation.preparation)
+            # Validate this child's effective declaration, not a stale parent
+            # outcome. An explicit repair may differ even for the same account.
+            await materialize_bundle_providers(
+                SimpleNamespace(providers=plan.get("providers", []), agents=plan.get("agents", {})),
+                child_prepared, isolation=isolation)
         persistent = _PERSISTENT.get()
         # Resume metadata belongs to the previous invocation. Use this task's
         # dispatch identity, as the delegate tool itself does for its events.
@@ -353,7 +493,8 @@ class Children:
             (session_metadata or {}).get("tool_call_id") if not resumed else None)
         row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),
                "agent": agent, "status": "starting", "persistent": persistent, "report": "", "reports": 0,
-               "routing": child_routing(parent, overlay, preferences, selection),
+               "routing": child_routing(parent, overlay, preferences, selection,
+                                        preferences_source=preferences_source if routing_policy else None),
                "task": asyncio.current_task()}
         self.rows[identity] = row
         self._emit(row)
@@ -363,9 +504,16 @@ class Children:
         metadata = {**(session_metadata or {}), "parent_id": parent.session_id, "agent_name": agent,
                     "tool_call_id": call_id,
                     "agent_overlay": copy.deepcopy(overlay), "workspace": str(cwd), "persistent": persistent,
-                    "provider_preferences": [p.to_dict() for p in preferences], "mount_plan": plan}
+                    "provider_preferences": [p.to_dict() for p in preferences],
+                    "preferences_source": preferences_source, "mount_plan": plan,
+                    "automatic_default_routing": bool(
+                        automatic_routing and routing_hooks(plan) == routing_hooks(parent.coordinator.config))}
         if selection:
             metadata["effective_selection"] = selection
+        else:
+            # SessionStore merges metadata: omission would resurrect a prior
+            # fallback snapshot after an explicit/role selection replaced it.
+            metadata["effective_selection"] = None
         continuity = None
         checkpoint_ready = False
         async def checkpoint(status=None):
@@ -383,10 +531,25 @@ class Children:
             completion.update(data)
             return HookResult()
         try:
+            initialization = ({"before_initialize": partial(
+                prepare_default_routing, automatic=metadata["automatic_default_routing"])}
+                if routing_policy else {})
+            if isolation:
+                routing_callback = initialization.get("before_initialize")
+                async def initialize_with_isolation(session):
+                    await isolation.before_initialize(session)
+                    if routing_callback:
+                        await routing_callback(session)
+                initialization["before_initialize"] = initialize_with_isolation
+            from .approvals import Approvals
+            approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None)
+                         if isinstance(self.approvals, Approvals) else self.approvals)
             child = await child_prepared.create_session(session_id=identity, parent_id=parent.session_id,
-                approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
-                session_cwd=cwd, is_resumed=resumed)
+                approval_system=approvals, display_system=getattr(parent.coordinator, "display_system", None),
+                session_cwd=cwd, is_resumed=resumed, **initialization)
             coordinator = child.coordinator
+            from ..read_policy import validate_mounted_read_policy
+            validate_mounted_read_policy(coordinator)
             from ..session_files import capture_dir
             history_workspace = parent.coordinator.get_capability('web.history_workspace') or cwd
             install_request_redaction(coordinator, directory=capture_dir(history_workspace, identity))
@@ -401,6 +564,9 @@ class Children:
                 if not hasattr(child_loop, "root_provider"):
                     raise ValueError("The child orchestrator cannot apply the inherited model selection")
                 child_loop.root_provider = SelectedProvider(providers[provider_identity], selection)
+            if isolation:
+                from ..provider_isolation import require_selected
+                require_selected(coordinator)
             coordinator.register_capability("live.child", True)
             coordinator.register_capability("web.child.resumed", resumed)
             coordinator.register_capability("live.child_mode", "persistent" if persistent else "finite")
@@ -416,6 +582,8 @@ class Children:
             coordinator.hooks.register("context:compaction_finished", compacted, name="unified-child-context-checkpoint")
             for capability in ("model_role_resolver", "web.activity.install"):
                 value = parent.coordinator.get_capability(capability)
+                if routing_policy and capability == "model_role_resolver" and coordinator.get_capability(capability) is not None:
+                    continue
                 if value is not None:
                     coordinator.register_capability(capability, value)
             activity_installer = coordinator.get_capability("web.activity.install")
@@ -538,8 +706,8 @@ class Children:
 
 
 class PersistentDelegate:
-    def __init__(self, original, registry):
-        self.original, self.registry = original, registry
+    def __init__(self, original, registry, coordinator=None):
+        self.original, self.registry, self.coordinator = original, registry, coordinator
 
     def __getattr__(self, key):
         return getattr(self.original, key)
@@ -559,9 +727,32 @@ class PersistentDelegate:
             return ToolResult(success=False, error={"message": "Four persistent workers are already active"})
         token = _PERSISTENT.set(persistent)
         self.registry.reserved += int(persistent)
+        origin_token = None
+        role_token = None
         try:
-            return await self.original.execute({key: value for key, value in input.items() if key != "persistent"})
+            supplied = {key: value for key, value in input.items() if key != "persistent"}
+            if (self.coordinator is not None
+                    and self.coordinator.get_capability("web.default_routing_policy") is True
+                    and getattr(self.original, "provider_selection_enabled", False)):
+                saved = None
+                if supplied.get("session_id") and supplied.get("model_role") and not supplied.get("provider_preferences"):
+                    retained = self.registry.store.load(supplied["session_id"])
+                    if retained:
+                        metadata = retained[1]
+                        owner = metadata.get("parent_id") or metadata.get("parent_session_id")
+                        if owner and owner == getattr(self.coordinator, "session_id", None):
+                            saved = metadata
+                supplied = pinned_delegate_input(self.coordinator, supplied, saved=saved)
+                origin = ("explicit" if supplied.get("provider_preferences")
+                          else "role" if supplied.get("model_role") else None)
+                origin_token = _PREFERENCES_SOURCE.set(origin)
+                role_token = _CALL_ROLE.set((self.coordinator, supplied.get("model_role")))
+            return await self.original.execute(supplied)
         finally:
+            if origin_token is not None:
+                _PREFERENCES_SOURCE.reset(origin_token)
+            if role_token is not None:
+                _CALL_ROLE.reset(role_token)
             self.registry.reserved -= int(persistent)
             _PERSISTENT.reset(token)
 

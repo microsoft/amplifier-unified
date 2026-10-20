@@ -19,11 +19,15 @@ async def client_context(request, handler):
     identity = header or query
     if request.path == "/api/clients/attach":
         identity = None
+    if request.get('companion_device') and request.path != '/api/clients/attach':
+        record = service.clients.records.get(identity)
+        if record is None or record.get('deviceOwner') != request['companion_device']:
+            raise AppError("Attach a client owned by this device.", 403)
     with service.clients.bind(identity):
         try:
             return await handler(request)
         except AppError as exc:
-            if identity and exc.code == "session_busy":
+            if identity and exc.code == "session_busy" and not request.get("companion_device"):
                 exc.client_state = service.browser_state()
             raise
 
@@ -45,16 +49,17 @@ def setup_routes(app, streams):
             raise AppError("Unsupported client protocol version.", 409)
         identity = payload.get("clientId")
         async with service.lock:
-            service.clients.attach(identity, payload.get("resumeClientId"), payload.get("kind", "web"))
+            service.clients.attach(identity, payload.get("resumeClientId"), payload.get("kind", "web"),
+                                   device=request.get("companion_device"))
             service._save_changes()
             with service.clients.bind(identity):
                 from .client_observations import discovery
                 return web.json_response({"clientId": identity, "protocolVersion": 1,
                     "hostInstanceId": service.instance_id, "reconnect": "snapshot",
-                    "historyScope": request.get("history_scope"),
+                    **({"historyScope": request["history_scope"]} if request.get("history_scope") else {}),
                     **discovery(service),
                     "transports": ["http", "sse", "websocket"],
-                    **({} if payload.get('includeState') is False or request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
+                    **({} if request.get('companion_device') or payload.get('includeState') is False or request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
                        else {"state": with_history_scope(request, service.browser_state())})})
 
     def session_snapshot(identity, snapshot=None):
@@ -133,6 +138,7 @@ def setup_routes(app, streams):
             "coordination.artifact": "sessionId",
             "coordination.review": "sessionId",
             "coordination.recap": "sessionId", "coordination.diagnostics": "sessionId",
+            "access.get": "sessionId", "access.set": "sessionId",
             "capability.read": "sessionId", "capability.request": "sessionId",
             "capability.grant": "sessionId", "capability.revoke": "sessionId",
             "runtime.provenance": "sessionId", "integration.capture": "sessionId",
@@ -151,9 +157,13 @@ def setup_routes(app, streams):
         args = payload.get("args", {})
         if not isinstance(args, dict) or (key in args and args[key] != identity):
             raise AppError("The command targets a different session.")
+        from .device_pairing import command_admission
         task = service._task(service.dispatch(action, {**args, key: identity}, command_id=command_id,
-            expected_revision=payload.get("expectedRevision"), include_state=False))
+            expected_revision=payload.get("expectedRevision"), include_state=False, admission_check=command_admission(request)))
         result = await asyncio.shield(task)
+        if request.get('companion_device'):
+            from .device_pairing import companion_receipt
+            return web.json_response(companion_receipt(result))
         return web.json_response({**result, **session_snapshot(identity)})
 
     async def events(request):

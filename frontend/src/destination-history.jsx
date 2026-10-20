@@ -1,10 +1,11 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
-import {ArrowLeft,ArrowRight,History,MessageCircle,Folder,Search,Check} from 'lucide-react';
+import {ArrowLeft,ArrowRight,History,Home,MessageCircle,Folder,Search,Check} from 'lucide-react';
 
 // One menu for all visits. Pointer hold is an optional mouse/pen shortcut; the
 // always-visible opener and keyboard path do not depend on hover or long touch.
 export function DestinationHistory({history,onVisit,disabled=false}){
  const [open,setOpen]=useState(false),root=useRef(null),opener=useRef(null),focusReturn=useRef(null),hold=useRef(null),suppressClick=useRef(false),menuId=useId();
+ const busyCycle=useRef(0);
  const rows=history?.entries||[],busy=disabled||!history?.ready||history?.pending;
  const cancelHold=()=>{if(hold.current)clearTimeout(hold.current.timer);hold.current=null};
  const close=(restore=false)=>{cancelHold();setOpen(false);if(restore)opener.current?.focus()};
@@ -12,6 +13,7 @@ export function DestinationHistory({history,onVisit,disabled=false}){
  useEffect(()=>()=>cancelHold(),[]);
  useEffect(()=>{
   if(busy){
+   busyCycle.current++;
    if(root.current?.contains(document.activeElement))focusReturn.current=opener.current||document.activeElement;
    close();
   }else if(focusReturn.current){
@@ -32,7 +34,13 @@ export function DestinationHistory({history,onVisit,disabled=false}){
   document.addEventListener('pointerdown',dismiss);
   return()=>document.removeEventListener('pointerdown',dismiss);
  },[open]);
- const visit=key=>{if(!key||busy)return;focusReturn.current=opener.current;close(true);onVisit(key)};
+ const visit=key=>{
+  if(!key||busy)return;
+  const cycle=busyCycle.current,target=opener.current;
+  focusReturn.current=target;close(true);
+  const settled=()=>{if(busyCycle.current===cycle&&focusReturn.current===target)focusReturn.current=null};
+  Promise.resolve(onVisit(key)).then(settled,settled);
+ };
  const keyDown=event=>{
   if(event.key==='Escape'&&open){event.preventDefault();event.stopPropagation();close(true);return}
   if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return;
@@ -57,7 +65,7 @@ export function DestinationHistory({history,onVisit,disabled=false}){
    {history.memoryOnly&&<p role="status">History is kept only while this page stays open.</p>}
    <div id={menuId} role="menu" aria-label="Visited destinations" tabIndex={-1} data-private="true">
    {rows.map((row,index)=>{
-    const current=index===history.cursor&&!history.detached,Icon=row.kind==='chat'?MessageCircle:row.kind==='chats'?Search:Folder;
+    const current=index===history.cursor&&!history.detached,Icon=row.kind==='home'?Home:row.kind==='chat'?MessageCircle:row.kind==='chats'?Search:Folder;
     const detail=[row.kind==='chat'?row.workspaceLabel:row.kind==='workspace'?row.tab:'',duplicates(row.label)&&row.id?row.id:''].filter(Boolean).join(' · ');
     return <button type="button" role="menuitem" key={row.key} data-visit-key={row.key} data-view-label="Private navigation destination" aria-current={current?'page':undefined} disabled={current} onClick={()=>visit(row.key)}><Icon/><span><strong>{row.label}</strong>{detail&&<small>{detail}</small>}</span>{current&&<Check/>}</button>;
    })}

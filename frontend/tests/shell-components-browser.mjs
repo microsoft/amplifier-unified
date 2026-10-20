@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 // Build an independently authored package only after the production app opens.
 import {spawn} from 'node:child_process';
@@ -5,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {readFile,mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {settingsButton} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page;const errors=[];
@@ -13,7 +15,7 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:false});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const inspect=()=>action('shell.inspect',{clientId}).then(row=>row.result);
@@ -45,7 +47,7 @@ try{
  const controls=page.locator('[data-shell-component="extra-actions"]');
  await controls.getByRole('button',{name:'Toggle compact spacing'}).click();
  await expect(page.locator('#amp-one')).toHaveAttribute('data-density','compact');
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await settingsButton(page).click();
  await openPreferences();
  const editor=page.locator('[data-shell-component="preferences"]');
  await editor.getByLabel('Component note').fill('Keep this unfinished edit');
@@ -67,7 +69,7 @@ try{
  await page.waitForFunction(revision=>window.amplifier.getShellState()?.revision===revision,restoredChange.expectedRevision+1);
  await expect.poll(async()=>(await inspect()).reported?.instances?.preferences).toBe('inactive');
  assert.equal((await inspect()).reported.status,'incomplete');
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await settingsButton(page).click();
  await openPreferences();
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await expect.poll(async()=>(await inspect()).reported?.status).toBe('ready');
@@ -114,7 +116,7 @@ try{
  await action('shell.changes.apply',await change(updated));
  await assert.rejects(()=>action('shell.command',{clientId,instanceId:'extra-actions',generation:old.generation,action:'panel.open',args:{panel:'settings'}}),/replaced/);
  await page.reload();await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
- await page.getByRole('button',{name:'Settings',exact:true}).click();await openPreferences();
+ await settingsButton(page).click();await openPreferences();
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  // Reload attaches a fresh client while cloning this composition and view state.
@@ -130,7 +132,7 @@ try{
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
  await action('shell.recover',{clientId:reloaded,expectedRevision:current.revision+1,target:'default'});
  await expect(page.locator('[data-shell-component]')).toHaveCount(0);
- await expect(page.getByRole('button',{name:'Settings',exact:true})).toBeVisible();
+ await expect(settingsButton(page)).toBeVisible();
  assert.deepEqual(errors,[]);
  console.log('Component slots passed: independent hot loading, host validation, user actions, agent preview/apply, bounded summaries, dirty deferral, stale callbacks, persistent module state/draft, unchanged viewer/composer and default recovery.');
 }catch(error){console.error('Browser diagnostics',errors,await page?.locator('[role=alert]').allTextContents());throw error}finally{await browser?.close();fixture.kill()}

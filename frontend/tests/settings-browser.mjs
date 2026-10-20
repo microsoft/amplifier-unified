@@ -1,17 +1,17 @@
+import {finishFixture} from './fixture-lifecycle.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
-import {spawn} from 'node:child_process';
-import {fileURLToPath} from 'node:url';
+import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],{stdio:'ignore',env:{...process.env,SETTINGS_RELEASE_FIXTURE:'1'}});
-for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8957/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
-const browser=await chromium.launch({headless:true});
-const page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
-const errors=[];page.on('pageerror',error=>errors.push(error.message));
-const state=()=>page.request.get('http://127.0.0.1:8957/api/state').then(r=>r.json());
+const {base,stop}=await startSettingsFixture({SETTINGS_RELEASE_FIXTURE:'1'});
+let browser,page,failure;const errors=[];
+const state=()=>page.request.get(base+'/api/state').then(r=>r.json());
 try{
- await page.goto('http://127.0.0.1:8957/');
+ browser=await chromium.launch({headless:true});
+ page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(base+'/');
  await page.waitForSelector('#amp-one');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:[]}}));
  await openSettingsPage(page,'providers');
@@ -140,7 +140,7 @@ try{
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');
- await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
+ await page.getByRole('button',{name:'Choose project',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
  const attach=page.getByRole('form',{name:'Use existing folder',exact:true});
  await attach.getByRole('button',{name:'Browse',exact:true}).click();
@@ -168,4 +168,10 @@ try{
  await page.getByRole('button',{name:'Cancel preview',exact:true}).click();
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({attentionTrail:true,reviewClearsBadges:true,compactGroupedUpdates:true,narrowerModalBreakpoint:true,typedFolderPath:true,registeredBundlePicker:true,actionSpacing:true,focusedPages:true,wildcardFilters:true,filterRetainsSelection:true,inlineBundleRadio:true,inlineAddModule:true,singleModelSelector:true,providerResult:true,providerDragOrder:true,activeRoutingEdit:true,inlineCheckbox:true,mobileFullscreen:true,noHorizontalOverflow:true,liveModuleConfig:true,liveModuleToggle:true,folderBrowser:true,fileDrop:true,browserErrors:errors.length}));
-}catch(error){await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-failure.png'});console.error(JSON.stringify({pageErrors:errors,locationListing:(await state()).locationListing,locationPicker:(await state()).view.locationPicker}));throw error}finally{await browser.close();fixture.kill('SIGTERM')}
+}catch(error){
+ failure=error;
+ console.error(error);
+ try{await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
+ try{const view=await page.evaluate(()=>window.amplifier?.getState?.());console.error(JSON.stringify({pageErrors:errors,locationListing:view?.locationListing,locationPicker:view?.view?.locationPicker}))}catch(diagnosticError){console.error('Settings diagnostics unavailable:',diagnosticError.message)}
+ throw error;
+}finally{await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}

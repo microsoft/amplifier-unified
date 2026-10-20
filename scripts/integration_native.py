@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import tomllib
@@ -17,16 +18,30 @@ import tomllib
 
 EXTRA_DEPENDENCIES = (
     "amplifier-unified",
+    "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@main",
+    "amplifier-module-tool-search @ git+https://github.com/microsoft/amplifier-module-tool-search@main",
     "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@main#subdirectory=modules/context-managed",
     "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@main",
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@main",
+    "amplifier-module-hooks-routing @ git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=modules/hooks-routing",
 )
 REQUIRED_MODULES = (
     "amplifier_core", "amplifier_foundation", "amplifier_module_loop_live",
     "amplifier_module_context_simple", "amplifier_module_context_managed.boundary",
     "amplifier_module_provider_openai.native", "amplifier_module_tool_bash",
-    "amplifier_module_tool_exec",
+    "amplifier_module_tool_exec", "amplifier_module_tool_filesystem",
+    "amplifier_module_tool_search.grep", "amplifier_module_tool_search.glob",
+    "amplifier_module_hooks_routing.resolver",
 )
+
+
+def ripgrep_identity() -> dict:
+    """The read-policy owner exercises both real ripgrep and Python fallback."""
+    executable = shutil.which("rg")
+    if not executable:
+        raise ValueError("Native integration requires ripgrep (rg); install it before preparation")
+    version = subprocess.check_output([executable, "--version"], text=True).strip()
+    return {"path": executable, "version": version}
 
 
 def checkout_identity(path: Path, declared: dict) -> dict:
@@ -86,6 +101,7 @@ def write_json(path: Path, value) -> None:
 
 def prepare(root: Path, work: Path, profiling_source: str | None, uv: str, python: str,
             state: Path | None = None, loop_source: Path | None = None) -> dict:
+    ripgrep = ripgrep_identity()
     work = work.resolve()
     if work == root.resolve() or work in root.resolve().parents:
         raise ValueError("Preparation requires its own directory")
@@ -120,7 +136,7 @@ print(json.dumps({'python':sys.version,'modules':modules,'distributions':rows}))
                     "lockSha256": hashlib.sha256((work / "uv.lock").read_bytes()).hexdigest(),
                     "source": str(root.resolve()), "coreWheel": core_wheel(interpreter),
                     "profilingConfigured": bool(profiling_source), "loopCheckout": loop_identity,
-                    "modelCalls": False})
+                    "ripgrep": ripgrep, "modelCalls": False})
     write_json(work / "preparation.json", receipt)
     state = (state or work / "state").resolve()
     for name in ("home", "tmp"):

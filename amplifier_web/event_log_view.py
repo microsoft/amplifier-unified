@@ -1407,10 +1407,16 @@ class EventLogView:
         shell = getattr(self.service, 'shell', None)
         if shell is None:
             return
-        # Registered bundled interests are capped at 32. No dormant owner,
-        # independent API reader or unrelated client's frame is constructed.
-        for client in tuple(shell.resources.clients):
-            record = self.service.clients.records.get(client, {})
+        # A web subscription exists before shell-resource registration. Include
+        # connected/current readers as TranscriptWindows does; notify still
+        # filters to this selected owner and uses the existing loss-safe lane.
+        clients = self.service.clients
+        identities = set(shell.resources.clients)
+        identities.update(getattr(self.service, 'queue_clients', {}).values())
+        current = getattr(clients, 'current', None)
+        identities.add(current.get() if current is not None else None)
+        for client in identities:
+            record = clients.records.get(client, {})
             if record.get('kind') == 'web' and record.get('selectedSessionId') == identity:
                 shell.notify(client)
 

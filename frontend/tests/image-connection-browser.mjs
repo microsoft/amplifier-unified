@@ -18,6 +18,8 @@ try{
  const effects=()=>page.request.get(url+'/fixture/image-effects').then(response=>response.json());
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await openSettingsPage(page,'image-generation');
+ assert.equal((await state()).view.workSurface,'home');
+ const imageSettings=page.locator('.a-settings-experience[data-settings-page="image-generation"]');
  const choice=page.getByLabel('Use for images',{exact:true});
  await expect(choice).toHaveValue('automatic');
  await expect(page.getByText(/Currently would use/)).toBeVisible();
@@ -25,7 +27,7 @@ try{
  assert.deepEqual(await choice.locator('option:not([disabled])').evaluateAll(rows=>rows.map(row=>row.value)),['automatic','provider:one','provider:three','off']);
  await expect(page.getByRole('button',{name:'Image preferences',exact:true})).toHaveCount(0);
  await expect(page.getByLabel('Image provider',{exact:true})).toHaveCount(0);
- await expect(page.getByRole('combobox').filter({visible:true})).toHaveCount(1);
+ await expect(imageSettings.getByRole('combobox').filter({visible:true})).toHaveCount(1);
  const inspection=await effects();assert.deepEqual(inspection.sends,[]);assert.ok(inspection.probes.every(action=>['providers.imageModels','providers.models'].includes(action)));assert.ok(inspection.controls.every(operation=>operation==='configuration.inspect'));
  await choice.selectOption('provider:one');
  await expect(page.getByText('Image settings saved.',{exact:true})).toBeVisible();

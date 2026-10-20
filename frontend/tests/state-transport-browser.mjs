@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Production assets, real HTTP/SSE and a disposable Spark-sized catalog.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -64,7 +65,7 @@ try{
  cdp=await context.newCDPSession(page);await cdp.send('Network.enable');await cdp.send('Performance.enable');
  cdp.on('Network.eventSourceMessageReceived',event=>{recordFrame(event.eventName,Buffer.byteLength(event.data))});
  cdp.on('Network.webSocketFrameReceived',event=>{try{const frame=JSON.parse(event.response.payloadData);recordFrame(frame.event,Buffer.byteLength(event.response.payloadData))}catch{}});
- await page.goto(url);await page.getByRole('button',{name:'App options',exact:true}).waitFor();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});await page.getByRole('button',{name:'App options',exact:true}).waitFor();
  evidence.stage='baseline';const initialBytes=await page.evaluate(()=>JSON.stringify(window.amplifier.getState()).length);evidence.initialBytes=initialBytes;await persist();
  assert.ok(initialBytes<1_000_000,`Chat baseline should omit settings history: ${initialBytes}`);
  assert.equal(await page.evaluate(()=>!!window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).execution.retiredUsageNodes),false);

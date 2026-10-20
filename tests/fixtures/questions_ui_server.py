@@ -38,7 +38,20 @@ async def main(home):
 
     async def check(request):
         return web.json_response({'sent': runtime.sent, 'questions': service.questions.store.all(sid),
+                                 'sessionIds': [session['id'] for session in service.state['sessions']],
                                  'selectedSessionId': service.state['selectedSessionId']})
+
+    async def propose_handoff(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        args = await request.json()
+        result = await service.app_bridge('dispatch', {'action': 'session.handoff.propose',
+            'id': 'questions-handoff-proposal', 'args': {
+                'requestId': 'questions-handoff-review', 'sessionId': sid,
+                'clientId': args['clientId'], 'workspace': str(home / 'workspace' / 'project'),
+                'title': 'Question companion review', 'text': 'Do not start this cancelled review.',
+                'bundle': 'anchors', 'selection': {'instance': 'one', 'model': 'fixture-model'}}}, sid)
+        return web.json_response(result)
 
     async def voice(request):
         q = await ask('Which style should the spoken summary use?', options=[{'id': 'plain', 'label': 'Plain language'}])
@@ -48,8 +61,28 @@ async def main(home):
             'id': q['id'], 'expectedRevision': 1, 'optionId': 'plain', 'sourceMessageId': source['id']}}, sid)
         return web.json_response(result['result'])
 
+    async def usage(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        count = (await request.json()).get('count')
+        if count not in (6, 12):
+            raise web.HTTPBadRequest()
+        for index in range(count):
+            await service.on_runtime_event('execution.event', {
+                'id': f'questions-usage-{index}', 'kind': 'llm',
+                'sessionId': sid, 'rootSessionId': sid, 'turnId': 'questions-usage',
+                'producerId': 'questions-fixture', 'revision': count,
+                'liveObservation': True, 'phase': 'completed',
+                'startedAt': 1792220000 + index, 'endedAt': 1792220001 + index,
+                'provider': f'fixture-provider-{index}',
+                'model': f'Long descriptive fixture model name {index} for narrow layout',
+                'usage': {'inputTokens': 100, 'outputTokens': 10, 'totalTokens': 110}})
+        return web.json_response({'calls': count})
+
+    app.router.add_post('/fixture/usage', usage)
     app.router.add_get('/fixture/check', check)
     app.router.add_post('/fixture/voice', voice)
+    app.router.add_post('/fixture/handoff', propose_handoff)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)

@@ -4,6 +4,33 @@ import copy
 from amplifier_web.service import AppService
 
 
+async def test_reviewed_diagnostic_losses_ignore_healthy_index_changes_but_not_new_losses(tmp_path):
+    from amplifier_web.attention import snapshot
+    app = AppService(tmp_path / 'data', workspace=tmp_path)
+    try:
+        local = {'records': 200, 'oldest': 1, 'newest': 2, 'dropped': 39,
+                 'storageError': False, 'configurationError': False}
+        app.state['diagnostics']['local'] = local
+        notice = lambda: next(row for row in snapshot(app.state)['items'] if row['id'] == 'diagnostics:capture')
+        original = notice()['fingerprint']
+        await app.dispatch('attention.read', {'ids': ['diagnostics:capture'],
+            'fingerprints': {'diagnostics:capture': original}})
+        local.update(records=250, oldest=2, newest=100)
+        assert notice()['read']
+        for change in ({'dropped': 40}, {'storageError': True}, {'configurationError': True}):
+            local.update(change)
+            assert not notice()['read']
+            await app.dispatch('attention.read', {'ids': ['diagnostics:capture'],
+                'fingerprints': {'diagnostics:capture': original}})
+            assert not notice()['read']
+            original = notice()['fingerprint']
+            await app.dispatch('attention.read', {'ids': ['diagnostics:capture'],
+                'fingerprints': {'diagnostics:capture': original}})
+            assert notice()['read']
+    finally:
+        await app.close()
+
+
 async def test_completions_are_durable_scoped_and_fingerprint_acknowledged(tmp_path):
     app=AppService(tmp_path/'data',workspace=tmp_path)
     try:

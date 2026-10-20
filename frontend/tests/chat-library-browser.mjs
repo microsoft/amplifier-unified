@@ -61,7 +61,7 @@ try{
  assert.deepEqual((await info()).runtimeStarts,[]);
  assert.deepEqual((await info()).runtimeSends,[]);
 
- assert.equal(await page.getByRole('button',{name:'New workspace',exact:true}).count(),1);
+ assert.equal(await page.getByRole('button',{name:'New project',exact:true}).count(),1);
 
  // Bounded paging does not change selection. Pinning reveals the global pin while Recent keeps its page.
  await page.getByRole('button',{name:'Show more conversations'}).click();await waitPage(1);assert.equal(await rows().count(),40);

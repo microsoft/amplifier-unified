@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
@@ -22,7 +23,7 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:headers,permissions:['clipboard-read','clipboard-write']});
  await context.addCookies([{name:'amplifier_unified_session',value:started.cookie,url:base,httpOnly:true,sameSite:'Strict'}]);
  const page=await context.newPage(),errors=[];debugPage=page;debugErrors=errors;page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(15000);
- await control({op:'interim-start'});await page.goto(base);
+ await control({op:'interim-start'});await page.goto(base);await showFixtureConversation(page);
  await expect(page.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await control({op:'interim-finish'});
  await expect(page.getByText('The final next step.',{exact:true})).toBeVisible();
@@ -60,7 +61,7 @@ try{
  otherBrowser=await chromium.launch(launchOptions);
  const other=await otherBrowser.newContext({extraHTTPHeaders:headers});
  await other.addCookies([{name:'amplifier_unified_session',value:started.cookie,url:base,httpOnly:true,sameSite:'Strict'}]);
- const second=await other.newPage();await second.goto(base);
+ const second=await other.newPage();await second.goto(base);await showFixtureConversation(second);
  await expect(second.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await otherBrowser.close();otherBrowser=null;
  await control({op:'interim-start'});await expect(group).toHaveCount(0);
@@ -96,12 +97,21 @@ try{
  await expect(group.locator('[data-kind="tool"]')).toHaveCount(2);
  if(process.env.EVIDENCE_DIR){await mkdir(process.env.EVIDENCE_DIR,{recursive:true});await page.screenshot({path:process.env.EVIDENCE_DIR+'/interim-mobile-expanded.png',fullPage:true});}
  await page.setViewportSize({width:1280,height:1000});
- await control({op:'interim-start',long:true});
+ const longStart=await control({op:'interim-start',long:true});
+ const longProgress=longStart.state.sessions.find(row=>row.id===started.alpha).messages.find(message=>message.text.includes('A retained progress paragraph.'));
+ assert.ok(longProgress?.generationId);
+ await expect(page.locator(`[data-message-id="${longProgress.id}"]`)).toContainText('A retained progress paragraph.');
  await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
- await control({op:'interim-finish'});
- await expect(group,'scrollback defers automatic folding').toHaveCount(0);
- await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ const completed=await control({op:'interim-finish'});
+ const finalMessage=completed.state.sessions.find(row=>row.id===started.alpha).messages.find(message=>message.generationId===longProgress.generationId&&message.text==='The final next step.');
+ assert.ok(finalMessage?.id);
+ // HTTP completion does not mean the browser has rendered the terminal frame.
+ // Bind to this exact generation before testing the user's scroll transition.
+ await expect(page.locator(`[data-message-id="${finalMessage.id}"]`)).toBeAttached();
+ await expect.poll(()=>page.evaluate(({sid,generation,id})=>window.amplifier.getState().sessions.find(row=>row.id===sid)?.messages.some(message=>message.generationId===generation&&message.response?.status==='completed'&&message.response.finalMessageIds?.includes(id)),{sid:started.alpha,generation:longProgress.generationId,id:finalMessage.id})).toBe(true);
+ await expect(group,'scrollback defers automatic folding after terminal render').toHaveCount(0);
+ await page.getByRole('button',{name:'Jump to latest messages',exact:true}).click();
  await expect(group).toHaveCount(1);
  await openSettingsPage(page,'appearance');
  const rejectSave=async route=>{

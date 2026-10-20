@@ -64,6 +64,7 @@ def library(monkeypatch):
 def payload(tmp_path, action):
     (tmp_path/'source.tar').write_bytes(b'source')
     return {'rootOwner': 'parent-root', 'expectedBackendIdentity': {'backend': 'docker', 'daemon': 'fixture-daemon'}, 'action': action, 'root': str(tmp_path), 'source': '/approved/task/worktree',
+            'resourceId': 'fixture-resource', 'resourceRevision': 9, 'admissionRevision': 8, 'backendKey': 'fixture-config-key',
             'snapshot': {'snapshot_commit': 'exact', 'snapshot_tree': 'tree', 'archive_sha256': 'digest'},
             'operationId': 'durable-launch', 'universeId': 'owned', 'dockerHost': 'unix:///approved/docker.sock',
             'image': owner.APPROVED_IMAGE, 'requestId': 'stable-request', 'timeoutSeconds': 12, 'command': 'python -V',
@@ -73,7 +74,8 @@ def payload(tmp_path, action):
 def test_fixed_profile_has_no_host_mount_ports_or_privilege_escalation():
     profile = worker.profile(owner.APPROVED_IMAGE)
     twin = profile['services']['twin']
-    assert twin['volumes'] == ['workspace:/workspace', 'artifacts:/artifacts']
+    assert twin['volumes'] == ['workspace:/workspace', 'artifacts:/artifacts', 'control:/var/lib/unified-jobs']
+    assert set(twin['cap_add']) == {'CHOWN', 'SETUID', 'SETGID', 'KILL'}
     assert 'ports' not in twin and 'privileged' not in twin and 'build' not in twin
     assert twin['read_only'] and twin['cap_drop'] == ['ALL']
     assert twin['security_opt'] == ['no-new-privileges:true']
@@ -144,7 +146,7 @@ def test_readiness_receipt_requires_exact_snapshot_and_universe(library, tmp_pat
         (tmp_path / 'source-ready.json').unlink()
     assert worker.execute_call(altered)['status'] == 'unknown'
     assert not worker.execute_call({**altered, 'action': 'execute'})['ok']
-    assert sum(name == 'execute' for name, _, _ in calls) == 1
+    assert sum(name == 'execute' for name, _, _ in calls) == 2
 
 
 def test_confirmed_source_survives_lost_host_response_without_reextraction(library, tmp_path):
@@ -153,7 +155,7 @@ def test_confirmed_source_survives_lost_host_response_without_reextraction(libra
     lib.status = lambda *a, **k: Value(state='running', services=[])
     observed = worker.execute_call(payload(tmp_path, 'read'))
     assert observed['status'] == 'running' and observed['sourceReady']
-    assert sum(name == 'execute' for name, _, _ in calls) == 1
+    assert sum(name == 'execute' for name, _, _ in calls) == 2
 
 
 def test_partial_source_can_still_be_stopped_and_preserved(library, tmp_path):
@@ -193,8 +195,12 @@ def test_retention_persistence_failure_never_destroys(library, tmp_path, monkeyp
     def fail(directory, archives):
         raise OSError('cannot persist archive receipt')
     monkeypatch.setattr(worker, 'retain_manifest', fail)
-    with pytest.raises(OSError):
+    with pytest.raises(worker.RemovalFailure) as failure:
         worker.execute_call(payload(tmp_path, 'remove'))
+    result = failure.value.receipt
+    assert result['status'] == 'unknown'
+    assert result['removal'] == {
+        'version': 1, 'phase': 'publish-manifest', 'code': 'phase_failed', 'destroyEffect': 'not_dispatched'}
     assert [name for name, _, _ in calls] == ['status', 'export', 'export']
 
 
@@ -202,6 +208,13 @@ def test_remove_never_stops_or_removes_running_environment(library, tmp_path):
     lib, calls = library
     lib.status = lambda *a, **k: Value(state='running', services=[])
     result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert not result['ok'] and calls == []
+
+
+def test_finish_cleanup_never_stops_or_removes_running_environment(library, tmp_path):
+    lib, calls = library
+    lib.status = lambda *a, **k: Value(state='running', services=[])
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
     assert not result['ok'] and calls == []
 
 
@@ -254,6 +267,29 @@ def test_docker_full_retention_is_rejected_without_export(library, tmp_path):
     result = worker.execute_call({**payload(tmp_path, 'remove'), 'retentionMode': 'full'})
     assert result['code'] == 'retention_unsupported'
     assert not any(name in {'export', 'destroy'} for name, _, _ in calls)
+
+
+def test_artifact_recovery_exports_fixed_selection_without_other_effects(library, tmp_path):
+    lib, calls = library
+    result = worker.execute_call(payload(tmp_path, 'exportArtifacts'))
+    assert result['ok'] and result['status'] == 'stopped'
+    assert result['artifactExport']['selection'] == ['/artifacts']
+    assert [name for name, _, _ in calls] == ['status', 'export']
+    assert calls[-1][1][1] == '/artifacts'
+    assert len(list(tmp_path.glob('artifacts-*/manifest.json'))) == 1
+    assert not list(tmp_path.glob('retained-*'))
+
+
+def test_artifact_recovery_refuses_running_or_foreign_backend(library, tmp_path):
+    lib, calls = library
+    lib.status = lambda *a, **k: Value(state='running', services=[])
+    result = worker.execute_call(payload(tmp_path, 'exportArtifacts'))
+    assert not result['ok'] and result['effectAdmitted'] is False
+    assert not calls
+    value = payload(tmp_path, 'exportArtifacts')
+    value['expectedBackendIdentity']['daemon'] = 'replacement'
+    assert worker.execute_call(value)['code'] == 'backend_unverified'
+    assert not calls
 
 
 @pytest.mark.parametrize('has_settlement,has_pending,confirmed', [(False, False, False), (True, True, False), (True, False, True)])
@@ -365,3 +401,625 @@ def test_corrupt_settlement_never_proves_absence(library,tmp_path,monkeypatch):
     monkeypatch.setattr(worker.subprocess,'run',lambda *a,**k:SimpleNamespace(stdout=''))
     result=worker.execute_call(value)
     assert result['status']=='unknown' and not result['observation']['absenceConfirmed']
+
+
+def removal_main(monkeypatch, value):
+    """Exercise the actual sanitized JSON boundary, not a fixture error adapter."""
+    output = io.StringIO()
+    with monkeypatch.context() as streams:
+        streams.setattr(worker.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(json.dumps(value).encode())))
+        streams.setattr(worker.sys, 'stdout', output)
+        worker.main()
+    return json.loads(output.getvalue())
+
+
+@pytest.mark.parametrize('fault,phase,effect', [
+    ('workspace-export', 'export-workspace', 'not_dispatched'),
+    ('artifacts-export', 'export-artifacts', 'not_dispatched'),
+    ('archive-validation', 'verify-exports', 'not_dispatched'),
+    ('retention-publication', 'verify-exports', 'not_dispatched'),
+    ('manifest-publication', 'publish-manifest', 'not_dispatched'),
+    ('destroy-acknowledgement', 'destroy', 'unknown'),
+    ('settlement-publication', 'settle', 'confirmed'),
+])
+def test_removal_boundary_reports_bounded_phase_not_exception_text(library, tmp_path, monkeypatch, fault, phase, effect):
+    """Proposed receipt fields are deliberately absent in the frozen baseline."""
+    lib, calls = library
+    value = payload(tmp_path, 'remove')
+    marker = 'secret-fixture-token=/private/fixture/settings.yaml'
+    original_export = lib.export_files
+    original_dump = worker.json.dump
+    fired, destroyed = [], []
+
+    def export(identity, source, destination, **kwargs):
+        if fault == source.strip('/') + '-export':
+            destination.write_bytes(b'partial export')
+            fired.append(fault)
+            raise OSError(marker)
+        receipt = original_export(identity, source, destination, **kwargs)
+        if fault == 'archive-validation' and source == '/artifacts':
+            destination.write_bytes(b'invalid archive')
+            receipt.bytes = destination.stat().st_size
+            receipt.sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
+            fired.append(fault)  # Hash matches; real archive structure must fail.
+        return receipt
+
+    def dump(data, stream, *args, **kwargs):
+        is_retention = isinstance(data, dict) and 'archiveBytes' in data
+        is_manifest = isinstance(data, list)
+        is_settlement = isinstance(data, dict) and data.get('state') == 'removed'
+        if ((fault == 'retention-publication' and is_retention)
+                or (fault == 'manifest-publication' and is_manifest)
+                or (fault == 'settlement-publication' and is_settlement)):
+            fired.append(fault)
+            stream.write('{"partial":')
+            stream.flush()
+            raise OSError(marker)
+        return original_dump(data, stream, *args, **kwargs)
+
+    def destroy(*args, **kwargs):
+        destroyed.append(args[0])
+        if fault == 'destroy-acknowledgement':
+            fired.append(fault)
+            error = Failure(marker)
+            error.code = marker  # Backend-defined codes are not a safe enum.
+            raise error
+        return Value(complete=True, outcome='removed')
+
+    lib.export_files, lib.destroy = export, destroy
+    monkeypatch.setattr(worker.json, 'dump', dump)
+    result = removal_main(monkeypatch, value)
+    assert fired == [fault], 'The intended boundary must actually be reached'
+    assert not result['ok'] and result['status'] == 'unknown'
+    assert destroyed == (['owned'] if effect != 'not_dispatched' else [])
+    serialized = json.dumps(result)
+    assert marker not in serialized and str(tmp_path) not in serialized
+    assert len(serialized) < 4096
+    assert result.get('removal') == {
+        'version': 1, 'phase': phase, 'code': 'phase_failed', 'destroyEffect': effect}
+    # A diagnostic describes future execution; it is not a retrospective
+    # authority receipt permitting continuation of an older UNKNOWN.
+
+
+def test_destroy_sees_verified_manifest_and_original_export_bytes(library, tmp_path):
+    lib, calls = library
+    seen = []
+    def destroy(identity, **kwargs):
+        directory, = tmp_path.glob('retained-*')
+        manifest = json.loads((directory / 'manifest.json').read_text())
+        accounting = json.loads((directory / 'retention.json').read_text())
+        assert identity == 'owned' and accounting['verified']
+        assert {item['source'] for item in manifest} == {'/workspace', '/artifacts'}
+        for item in manifest:
+            raw = Path(item['destination']).read_bytes()
+            assert item['id'] == identity and item['verified']
+            assert item['sha256'] == hashlib.sha256(raw).hexdigest()
+            assert item['bytes'] == len(raw)
+            worker.retention.inspect_archive(item['destination'], item['source'].strip('/'))
+        seen.append(manifest)
+        return Value(complete=True, outcome='removed')
+    lib.destroy = destroy
+    result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert result['ok'] and len(seen) == 1
+    assert [name for name, _, _ in calls] == ['status', 'export', 'export']
+
+
+def test_destroy_dispatch_has_private_bound_intent_before_backend_call(library, tmp_path):
+    """Proposed durable intent is a no-replay fence, never proof of completion."""
+    value = {**payload(tmp_path, 'remove'), 'resourceId':'fixture-resource',
+        'resourceRevision':9, 'admissionRevision':8, 'backendKey':'fixture-config-key'}
+    seen = []
+    def destroy(identity, **kwargs):
+        directory, = tmp_path.glob('retained-*')
+        proof = worker.read_private_record(directory / 'destroy-dispatched.json')
+        assert proof is not None, 'Destroy must not start before its private intent is durable'
+        assert proof['version'] == 1 and proof['phase'] == 'destroy-dispatched'
+        assert proof['binding'] == {
+            'rootOwner':value['rootOwner'], 'resourceId':value['resourceId'],
+            'resourceRevision':9, 'admissionRevision':8, 'requestId':value['requestId'],
+            'operationId':value['operationId'], 'universeId':identity,
+            'backendKey':value['backendKey'], 'backendIdentity':value['expectedBackendIdentity'],
+            'snapshot':value['snapshot']}
+        for name in ('manifest', 'retention'):
+            assert proof[name + 'Sha256'] == hashlib.sha256(
+                (directory / (name + '.json')).read_bytes()).hexdigest()
+        manifest = json.loads((directory / 'manifest.json').read_text())
+        assert proof['archives'] == [
+            {key:item[key] for key in ('source', 'sha256', 'bytes')} for item in manifest]
+        seen.append(proof)
+        return Value(complete=True, outcome='removed')
+    library[0].destroy = destroy
+    assert worker.execute_call(value)['ok'] and len(seen) == 1
+
+
+@pytest.mark.parametrize('filename', ['manifest.json', 'retention.json'])
+def test_interrupted_retention_publication_has_no_complete_filename(library, tmp_path, monkeypatch, filename):
+    """A prefix in the final filename is not an atomic complete receipt."""
+    value = payload(tmp_path, 'remove')
+    original = worker.json.dump
+    injected = []
+    def interrupted(data, stream, *args, **kwargs):
+        selected = (isinstance(data, list) if filename == 'manifest.json'
+                    else isinstance(data, dict) and 'archiveBytes' in data)
+        if selected:
+            injected.append(True)
+            stream.write('{"partial":')
+            stream.flush()
+            raise OSError('synthetic interrupted publication')
+        return original(data, stream, *args, **kwargs)
+    monkeypatch.setattr(worker.json, 'dump', interrupted)
+    result = removal_main(monkeypatch, value)
+    directory, = tmp_path.glob('retained-*')
+    assert injected == [True] and not result['ok']
+    assert not any(name == 'destroy' for name, _, _ in library[1])
+    assert sorted(p.name for p in directory.glob('*.tar')) == ['artifacts.tar', 'workspace.tar']
+    assert not (directory / filename).exists(), 'Incomplete publication escaped under its final name'
+
+
+@pytest.mark.parametrize('field,replacement', [
+    ('rootOwner', 'foreign-root'), ('operationId', 'foreign-launch'),
+    ('universeId', 'foreign-universe'),
+    ('expectedBackendIdentity', {'backend':'docker', 'daemon':'foreign-daemon'}),
+])
+def test_removal_rechecks_original_private_backend_binding_before_exports(library, tmp_path, field, replacement):
+    value = payload(tmp_path, 'prepare')
+    assert worker.execute_call(value)['ok']
+    library[1].clear()
+    result = worker.execute_call({**value, 'action':'remove', field:replacement})
+    assert result['code'] == 'backend_unverified'
+    assert not library[1] and not list(tmp_path.glob('retained-*'))
+
+
+def test_diagnostic_serialization_failure_keeps_removal_unknown_without_secret(library, tmp_path, monkeypatch):
+    """Diagnostics must not make a failed remove unparseable or disclose text."""
+    value = payload(tmp_path, 'remove')
+    marker = 'private-diagnostic-fixture'
+    def fail(*args, **kwargs):
+        raise OSError(marker)
+    library[0].export_files = fail
+    original, intercepted = worker.json.dumps, []
+    def cannot_serialize_diagnostic(data, *args, **kwargs):
+        if isinstance(data, dict) and 'removal' in data:
+            intercepted.append(True)
+            raise ValueError(marker)
+        return original(data, *args, **kwargs)
+    monkeypatch.setattr(worker.json, 'dumps', cannot_serialize_diagnostic)
+    result = removal_main(monkeypatch, value)
+    assert intercepted == [True], 'The new bounded diagnostic must be exercised'
+    assert not result['ok'] and result['status'] == 'unknown'
+    assert marker not in original(result)
+    assert not any(name == 'destroy' for name, _, _ in library[1])
+
+
+def test_removal_helper_binds_resource_revision_and_original_request(tmp_path, monkeypatch):
+    home, row = allocated(tmp_path)
+    row.update(universeId='owned', backendIdentity={'backend':'docker', 'daemon':'original-daemon'})
+    admission_revision = row['revision']
+    row = {**row, 'revision':admission_revision + 1}  # effect() saved pending state.
+    monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
+    (tmp_path / 'test_environment_worker.py').write_text(
+        "import json,sys\np=json.load(sys.stdin)\n"
+        "keys=('rootOwner','resourceId','resourceRevision','admissionRevision',"
+        "'operationId','universeId','expectedBackendIdentity','backendKey','requestId')\n"
+        "print(json.dumps({'ok':True,'binding':{k:p.get(k) for k in keys}}))\n")
+    # This child echoes the real host payload only; it creates no phase proof.
+    result = owner.invoke({'python':sys.executable, 'dockerHost':'unix:///socket'},
+        home, row, 'remove', {'requestId':'original-remove', 'expectedRevision':admission_revision})
+    assert result['binding'] == {
+        'rootOwner':row['sessionId'], 'resourceId':row['id'], 'resourceRevision':row['revision'],
+        'admissionRevision':admission_revision, 'operationId':row['launchOperationId'],
+        'universeId':'owned', 'expectedBackendIdentity':row['backendIdentity'],
+        'backendKey':row['backendKey'], 'requestId':'original-remove'}
+
+
+@pytest.mark.parametrize('evidence', ['missing', 'forged', 'stale', 'destroy-dispatched'])
+def test_original_removal_inspection_never_continues_without_complete_bound_evidence(library, tmp_path, monkeypatch, evidence):
+    """Proposed read-only consumer; absence must fail, not skip or fake success."""
+    inspect = getattr(worker, 'inspect_removal', None)
+    assert callable(inspect), 'Missing owner-bound read-only removal evidence inspection'
+    value = {**payload(tmp_path, 'remove'), 'resourceId':'fixture-resource',
+        'resourceRevision':9, 'admissionRevision':8, 'backendKey':'fixture-config-key'}
+    directory = tmp_path / ('retained-' + hashlib.sha256(value['requestId'].encode()).hexdigest())
+    if evidence == 'destroy-dispatched':
+        def lost(*args, **kwargs):
+            raise Failure('synthetic lost destroy acknowledgement')
+        library[0].destroy = lost
+        assert not worker.execute_call(value)['ok']
+        assert worker.read_private_record(directory / 'destroy-dispatched.json') is not None
+    elif evidence != 'missing':
+        directory.mkdir(mode=0o700)
+        # Private file shape and plausible hashes alone do not establish the
+        # original phase chain, export bytes, or exact request binding.
+        worker.write_private_record(directory / 'destroy-dispatched.json', {
+            'version':1, 'phase':'manifest-complete', 'destroyEffect':'not_dispatched',
+            'requestId':value['requestId'] if evidence == 'forged' else 'stale-request',
+            'manifestSha256':'a' * 64, 'retentionSha256':'b' * 64})
+    before = {str(p.relative_to(tmp_path)):(p.read_bytes(), p.stat().st_mtime_ns)
+              for p in tmp_path.rglob('*') if p.is_file()}
+    def forbidden(*args, **kwargs):
+        pytest.fail('Read-only removal inspection contacted an effectful backend')
+    for name in ('export_files', 'destroy', 'stop', 'launch', 'execute'):
+        monkeypatch.setattr(library[0], name, forbidden)
+    result = inspect(value)
+    assert result == {
+        'version':1, 'status':'held', 'continuationAvailable':False,
+        'code':'destroy_outcome_unknown' if evidence == 'destroy-dispatched'
+               else 'removal_evidence_unverified'}
+    assert before == {str(p.relative_to(tmp_path)):(p.read_bytes(), p.stat().st_mtime_ns)
+                      for p in tmp_path.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('change', ['none', 'root', 'resource', 'revision', 'request', 'backend',
+                                  'snapshot', 'manifest', 'archive', 'intent', 'symlink'])
+def test_produced_removal_chain_inspection_is_exact_and_never_authorizes_replay(library, tmp_path, monkeypatch, change):
+    value = payload(tmp_path, 'remove')
+    def lost(*args, **kwargs):
+        raise Failure('synthetic acknowledgement loss')
+    library[0].destroy = lost
+    assert not worker.execute_call(value)['ok']
+    directory, = tmp_path.glob('retained-*')
+    assert worker.read_private_record(directory / 'destroy-dispatched.json')['binding']['resourceId'] == value['resourceId']
+    inspected = dict(value)
+    if change in {'root', 'resource', 'revision', 'request', 'backend', 'snapshot'}:
+        field, replacement = {
+            'root':('rootOwner','other-root'), 'resource':('resourceId','other-resource'),
+            'revision':('resourceRevision',10), 'request':('requestId','other-remove'),
+            'backend':('expectedBackendIdentity',{'backend':'docker','daemon':'other-daemon'}),
+            'snapshot':('snapshot',{'archive_sha256':'other-source'}),
+        }[change]
+        inspected[field] = replacement
+    elif change in {'manifest', 'intent'}:
+        name = 'manifest.json' if change == 'manifest' else 'destroy-dispatched.json'
+        with (directory / name).open('ab') as stream:
+            stream.write(b'changed')
+    elif change == 'archive':
+        with (directory / 'workspace.tar').open('ab') as stream:
+            stream.write(b'changed')
+    elif change == 'symlink':
+        original = directory / 'destroy-dispatched.json'
+        saved = directory / 'kept-intent.json'
+        original.rename(saved)
+        original.symlink_to(saved.name)
+    before = {str(p.relative_to(tmp_path)):(p.read_bytes(), p.stat().st_mtime_ns)
+              for p in tmp_path.rglob('*') if p.is_file()}
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('Inspection called a backend')
+    for name in ('destroy', 'export_files', 'execute', 'stop', 'status'):
+        monkeypatch.setattr(library[0], name, forbidden)
+    result = worker.inspect_removal(inspected)
+    assert result == {'version':1, 'status':'held', 'continuationAvailable':False,
+        'code':'destroy_outcome_unknown' if change == 'none' else 'removal_evidence_unverified'}
+    assert not calls
+    assert before == {str(p.relative_to(tmp_path)):(p.read_bytes(), p.stat().st_mtime_ns)
+                      for p in tmp_path.rglob('*') if p.is_file()}
+
+
+def test_confirmed_destroy_metadata_failure_is_not_unknown_external_destruction(library, tmp_path, monkeypatch):
+    value = payload(tmp_path, 'remove')
+    original = worker.retain_settlement
+    def fail(payload, identity, backend, state):
+        if state == 'removed':
+            raise OSError('private synthetic settlement failure')
+        return original(payload, identity, backend, state)
+    monkeypatch.setattr(worker, 'retain_settlement', fail)
+    result = removal_main(monkeypatch, value)
+    assert not result['ok'] and result['status'] == 'unknown'
+    assert result['removal'] == {'version':1, 'phase':'settle', 'code':'phase_failed', 'destroyEffect':'confirmed'}
+    inspected = worker.inspect_removal(value)
+    assert inspected == {'version':1, 'status':'held', 'continuationAvailable':False,
+                         'code':'destroy_confirmation_recorded'}
+    assert sum(c[0] == 'destroy' for c in library[1]) == 1
+
+
+@pytest.mark.parametrize('boundary', ['started', 'dispatch', 'failure-diagnostic'])
+def test_phase_record_persistence_failures_never_admit_destructive_replay(library, tmp_path, monkeypatch, boundary):
+    value = payload(tmp_path, 'remove')
+    write = worker.write_private_record
+    injected = []
+    if boundary == 'failure-diagnostic':
+        def broken_export(*args, **kwargs):
+            raise OSError('private original export failure')
+        library[0].export_files = broken_export
+    name = {'started':'removal-started.json', 'dispatch':'destroy-dispatched.json',
+            'failure-diagnostic':'removal-failed.json'}[boundary]
+    def fail(path, record):
+        if path.name == name:
+            injected.append(path.name)
+            raise OSError('private phase persistence failure')
+        return write(path, record)
+    monkeypatch.setattr(worker, 'write_private_record', fail)
+    result = removal_main(monkeypatch, value)
+    assert injected == [name] and not result['ok']
+    assert result['removal']['destroyEffect'] == 'not_dispatched'
+    assert 'private' not in json.dumps(result)
+    assert not any(c[0] == 'destroy' for c in library[1])
+    assert worker.inspect_removal(value)['continuationAvailable'] is False
+
+
+@pytest.mark.parametrize('field', ['resourceId', 'resourceRevision', 'admissionRevision', 'snapshot'])
+def test_remove_missing_original_binding_refuses_before_export(library, tmp_path, monkeypatch, field):
+    value = payload(tmp_path, 'remove'); value.pop(field)
+    result = removal_main(monkeypatch, value)
+    assert result['removal']['phase'] == 'prepare-retention' and result['removal']['destroyEffect'] == 'not_dispatched'
+    assert not any(c[0] in {'export','destroy'} for c in library[1])
+
+
+def test_serialization_loss_after_destroy_retains_confirmed_external_outcome(library, tmp_path, monkeypatch):
+    value = payload(tmp_path, 'remove')
+    original = worker.json.dumps
+    def fail(data, *args, **kwargs):
+        if isinstance(data, dict) and 'removal' in data:
+            raise ValueError('private synthetic serialization failure')
+        return original(data, *args, **kwargs)
+    monkeypatch.setattr(worker.json, 'dumps', fail)
+    result = removal_main(monkeypatch, value)
+    assert not result['ok'] and result['status'] == 'unknown'
+    assert result['destroyEffect'] == 'confirmed' and result['code'] == 'receipt_unavailable'
+    assert 'private' not in original(result)
+    assert sum(c[0] == 'destroy' for c in library[1]) == 1
+    assert worker.inspect_removal(value)['code'] == 'destroy_confirmation_recorded'
+
+
+@pytest.mark.parametrize('field,replacement', [
+    ('id', 'other-guest'), ('source', '/other-root'), ('destination', '/other/receipt.tar')])
+def test_removal_export_receipt_must_match_requested_guest_and_selection(library, tmp_path, monkeypatch, field, replacement):
+    value = payload(tmp_path, 'remove')
+    export = library[0].export_files
+    def changed(*args, **kwargs):
+        result = export(*args, **kwargs)
+        setattr(result, field, replacement)
+        return result
+    library[0].export_files = changed
+    result = removal_main(monkeypatch, value)
+    assert result['removal'] == {
+        'version':1, 'phase':'verify-exports', 'code':'phase_failed', 'destroyEffect':'not_dispatched'}
+    assert sum(c[0] == 'export' for c in library[1]) == 2
+    assert not any(c[0] == 'destroy' for c in library[1])
+    assert not list(tmp_path.glob('retained-*/manifest.json'))
+
+
+def test_confirmation_record_failure_does_not_skip_existing_admission_cleanup(library, tmp_path, monkeypatch):
+    value = payload(tmp_path, 'remove')
+    original_write, original_release, original_settle = worker.write_private_record, worker.release_admission, worker.retain_settlement
+    calls = []
+    def write(path, record):
+        if path.name == 'destroy-confirmed.json':
+            calls.append('failed-confirmation-record')
+            raise OSError('private synthetic confirmation failure')
+        return original_write(path, record)
+    def release(*args):
+        calls.append('release')
+        return original_release(*args)
+    def settle(*args):
+        calls.append('settle')
+        return original_settle(*args)
+    monkeypatch.setattr(worker, 'write_private_record', write)
+    monkeypatch.setattr(worker, 'release_admission', release)
+    monkeypatch.setattr(worker, 'retain_settlement', settle)
+    result = removal_main(monkeypatch, value)
+    assert calls == ['failed-confirmation-record', 'release', 'settle']
+    assert not result['ok'] and result['removal']['destroyEffect'] == 'confirmed'
+    assert worker.read_private_record(tmp_path / 'backend-removed.json')['state'] == 'removed'
+    assert worker.inspect_removal(value)['code'] == 'destroy_outcome_unknown'
+    assert sum(c[0] == 'destroy' for c in library[1]) == 1
+
+
+def test_cleanup_recovery_preserves_all_files_and_verifies_absence(library, tmp_path, monkeypatch):
+    lib, calls = library
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    observations = iter(['stopped', 'stopped', 'absent'])
+    def observed(*args):
+        state = next(observations)
+        return {'status': state, 'observation': {
+            'ownership': 'absent' if state == 'absent' else 'matched', 'absenceConfirmed': state == 'absent'}}
+    monkeypatch.setattr(worker, 'docker_reconcile', observed)
+    original = lib.export_files
+    def export(identity, source, destination, **kwargs):
+        if source == '/artifacts':
+            calls.append(('export', (identity, source, destination), kwargs))
+            with tarfile.open(destination, 'w') as archive:
+                item = tarfile.TarInfo('artifacts'); item.type = tarfile.DIRTYPE; archive.addfile(item)
+                item = tarfile.TarInfo('artifacts/current'); item.type = tarfile.SYMTYPE
+                item.linkname = '/artifacts/test-1'; archive.addfile(item)
+            return Value(id=identity, source=source, destination=str(destination),
+                         bytes=destination.stat().st_size, sha256=hashlib.sha256(destination.read_bytes()).hexdigest())
+        return original(identity, source, destination, **kwargs)
+    lib.export_files = export
+    value = payload(tmp_path, 'finishCleanup')
+    result = worker.execute_call(value)
+    assert result['ok'] and result['status'] == 'removed'
+    assert result['retention']['archiveOnly']
+    assert [name for name, *_ in calls if name in {'execute','stop','export','destroy'}] == ['export','export','destroy']
+    assert all(kwargs['max_bytes'] == worker.retention.RECOVERY_LIMIT for name, _, kwargs in calls if name == 'export')
+    assert all(kwargs['timeout_seconds'] == 300 for name, _, kwargs in calls if name == 'export')
+    assert {p.stem for p in next(tmp_path.glob('cleanup-*')).glob('*.json')} == {'preserving','verifying','rechecking','removing','observing'}
+    before = {str(p.relative_to(tmp_path)): (p.read_bytes(), p.stat().st_mtime_ns)
+              for p in tmp_path.rglob('*') if p.is_file()}
+    assert worker.inspect_removal(value) == {
+        'version': 1, 'status': 'held', 'continuationAvailable': False, 'code': 'destroy_confirmation_recorded'}
+    assert before == {str(p.relative_to(tmp_path)): (p.read_bytes(), p.stat().st_mtime_ns)
+                      for p in tmp_path.rglob('*') if p.is_file()}
+
+
+def test_failed_preservation_reports_known_phase_and_never_destroys(library, tmp_path):
+    lib, calls = library
+    def fail(*args, **kwargs):
+        raise Failure('export too large')
+    lib.export_files = fail
+    result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert result['phase'] == 'preserving'
+    assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+    assert not any(name == 'destroy' for name, *_ in calls)
+
+
+@pytest.mark.parametrize('last_state', ['stopped', 'absent'])
+def test_cleanup_recovery_keeps_owner_until_physical_absence(library, tmp_path, monkeypatch, last_state):
+    _, calls = library
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    observations = iter(['stopped', 'stopped', last_state])
+    monkeypatch.setattr(worker, 'docker_reconcile', lambda *args: {
+        'status': next(observations), 'observation': {'ownership': 'matched', 'absenceConfirmed': False}})
+    released = []
+    monkeypatch.setattr(worker, 'release_admission', lambda *args: released.append(args))
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert any(name == 'destroy' for name, *_ in calls)
+    assert result['status'] == 'unknown' and result['phase'] == 'observing'
+    assert result['retention']['archiveOnly']
+    assert not released and not (tmp_path / 'backend-removed.json').exists()
+
+
+@pytest.mark.parametrize('code', ['owner_unverified', 'owner_changed', 'ownership_conflict', 'backend_changed'])
+def test_cleanup_changed_owner_does_not_claim_stopped(code):
+    result = worker.cleanup_failure({}, 'verifying', 'owned', code)
+    assert result['status'] == 'unknown' and result['effectAdmitted'] is False
+    assert 'No removal was attempted' in result['message']
+    assert 'unchanged' not in result['message']
+
+
+def test_cleanup_owner_recheck_failure_is_not_preservation_failure(library, tmp_path, monkeypatch):
+    _, calls = library
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    observed = []
+    def inspect(*args):
+        observed.append(args)
+        if len(observed) == 1:
+            return {'status': 'stopped', 'observation': {'ownership': 'matched'}}
+        raise ValueError('The actual owner changed')
+    monkeypatch.setattr(worker, 'docker_reconcile', inspect)
+    result = worker.execute_call(payload(tmp_path, 'finishCleanup'))
+    assert result['status'] == 'unknown' and result['effectAdmitted'] is False
+    assert result['phase'] == 'rechecking' and result['code'] == 'owner_unverified'
+    assert len(observed) == 2
+    assert not any(name == 'destroy' for name, *_ in calls)
+
+
+def test_cleanup_recovery_retains_private_bound_intent_before_destroy(library, tmp_path, monkeypatch):
+    lib, calls = library
+    value = payload(tmp_path, 'finishCleanup')
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    order = []
+    states = iter(['stopped', 'stopped', 'absent'])
+    def observe(*args):
+        state = next(states)
+        order.append(state)
+        return {'status': state, 'observation': {
+            'ownership': 'absent' if state == 'absent' else 'matched', 'absenceConfirmed': state == 'absent'}}
+    monkeypatch.setattr(worker, 'docker_reconcile', observe)
+    original_destroy = lib.destroy
+    def destroy(identity, **kwargs):
+        assert order == ['stopped', 'stopped']
+        directory = worker.removal_directory(value)
+        started = worker.read_private_record(directory / 'removal-started.json')
+        intent = worker.read_private_record(directory / 'destroy-dispatched.json')
+        expected = worker.removal_binding(value, identity, value['expectedBackendIdentity'])
+        assert started == {'version': 1, 'phase': 'started', 'binding': expected}
+        assert intent['version'] == 1 and intent['phase'] == 'destroy-dispatched'
+        assert intent['binding'] == expected
+        assert intent['startedSha256'] == hashlib.sha256((directory / 'removal-started.json').read_bytes()).hexdigest()
+        for name in ('manifest', 'retention'):
+            assert intent[name + 'Sha256'] == hashlib.sha256((directory / (name + '.json')).read_bytes()).hexdigest()
+        manifest = worker.read_private_record(directory / 'manifest.json')
+        assert intent['archives'] == [{key: item[key] for key in ('source', 'sha256', 'bytes')} for item in manifest]
+        for item in manifest:
+            raw = Path(item['destination']).read_bytes()
+            assert item['id'] == identity and item['verified'] is True
+            assert item['sha256'] == hashlib.sha256(raw).hexdigest() and item['bytes'] == len(raw)
+        assert worker.read_private_record(directory / 'retention.json')['archiveOnly'] is True
+        order.append('destroy')
+        return original_destroy(identity, **kwargs)
+    lib.destroy = destroy
+    original_release, original_settle = worker.release_admission, worker.retain_settlement
+    def release(*args):
+        assert order[-1] == 'absent'
+        order.append('release')
+        return original_release(*args)
+    def settle(*args):
+        assert order[-1] == 'release'
+        order.append('settle')
+        return original_settle(*args)
+    monkeypatch.setattr(worker, 'release_admission', release)
+    monkeypatch.setattr(worker, 'retain_settlement', settle)
+    result = worker.execute_call(value)
+    assert result['ok'] and result['removal']['destroyEffect'] == 'confirmed'
+    assert order == ['stopped', 'stopped', 'destroy', 'absent', 'release', 'settle']
+    assert sum(name == 'destroy' for name, *_ in calls) == 1
+
+
+@pytest.mark.parametrize('entry', ['direct', 'json'])
+@pytest.mark.parametrize('filename,phase', [
+    ('observing.json', 'observe-absence'),
+    ('destroy-confirmed.json', 'settle'),
+    ('backend-removed.json', 'settle'),
+])
+def test_cleanup_confirmed_destroy_write_failure_keeps_failure_class_and_effect(
+        library, tmp_path, monkeypatch, entry, filename, phase):
+    value = payload(tmp_path, 'finishCleanup')
+    marker = 'private-fixture-token=/private/fixture/cleanup'
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    states = iter(['stopped', 'stopped', 'absent'])
+    observed = []
+    def observe(*args):
+        state = next(states)
+        observed.append(state)
+        return {'status': state, 'observation': {
+            'ownership': 'absent' if state == 'absent' else 'matched', 'absenceConfirmed': state == 'absent'}}
+    monkeypatch.setattr(worker, 'docker_reconcile', observe)
+    original_write, original_release = worker.write_private_record, worker.release_admission
+    failures, released = [], []
+    def write(path, record):
+        if path.name == filename:
+            failures.append(filename)
+            raise OSError(marker)
+        return original_write(path, record)
+    def release(*args):
+        assert observed[-1] == 'absent'
+        released.append(True)
+        return original_release(*args)
+    monkeypatch.setattr(worker, 'write_private_record', write)
+    monkeypatch.setattr(worker, 'release_admission', release)
+    if entry == 'direct':
+        with pytest.raises(worker.RemovalFailure) as failure:
+            worker.execute_call(value)
+        result = failure.value.receipt
+    else:
+        result = removal_main(monkeypatch, value)
+    assert failures == [filename] and sum(name == 'destroy' for name, *_ in library[1]) == 1
+    assert not result['ok'] and result['status'] == 'unknown'
+    assert result['removal'] == {
+        'version': 1, 'phase': phase, 'code': 'phase_failed', 'destroyEffect': 'confirmed'}
+    assert marker not in json.dumps(result) and str(tmp_path) not in json.dumps(result)
+    assert released == ([] if filename == 'observing.json' else [True])
+    assert observed == (['stopped', 'stopped'] if filename == 'observing.json' else ['stopped', 'stopped', 'absent'])
+    assert (tmp_path / 'backend-removed.json').exists() is (filename == 'destroy-confirmed.json')
+
+
+@pytest.mark.parametrize('action', ['remove', 'finishCleanup'])
+def test_known_export_failure_has_safe_code_and_nested_removal_diagnostic(library, tmp_path, monkeypatch, action):
+    lib, calls = library
+    value = payload(tmp_path, action)
+    marker = 'private-fixture-token=/private/fixture/backend-error'
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    monkeypatch.setattr(worker, 'docker_reconcile', lambda *args: {
+        'status': 'stopped', 'observation': {'ownership': 'matched'}})
+    def export(*args, **kwargs):
+        error = Failure(marker)
+        error.code = marker
+        raise error
+    lib.export_files = export
+    result = removal_main(monkeypatch, value)
+    assert result['code'] == 'preservation_failed' and result['phase'] == 'preserving'
+    assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+    assert result['removal'] == {
+        'version': 1, 'phase': 'export-workspace', 'code': 'phase_failed', 'destroyEffect': 'not_dispatched'}
+    assert marker not in json.dumps(result) and str(tmp_path) not in json.dumps(result)
+    assert not any(name == 'destroy' for name, *_ in calls)
+
+
+@pytest.mark.parametrize('code', ['private arbitrary backend code', {'private': 'backend code'}, None])
+def test_cleanup_failure_rejects_arbitrary_backend_codes(code):
+    result = worker.cleanup_failure({}, 'verifying', 'owned', code)
+    assert result['code'] == 'archive_verification_failed'
+    assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+    assert 'private' not in json.dumps(result)

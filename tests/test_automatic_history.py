@@ -1122,20 +1122,40 @@ async def test_existing_index_classification_refreshes_without_using_ui_fork_par
     assert restored._session(fork_row['id'])['parentId'] == 'ui-fork-lineage'
 
 
-async def test_internal_classification_refresh_preserves_history_and_diagnostic_access(tmp_path, app_factory):
+@pytest.mark.parametrize('slice_budget', [None, 1])
+async def test_internal_classification_refresh_preserves_history_and_diagnostic_access(
+        tmp_path, app_factory, monkeypatch, slice_budget):
     from amplifier_web.chat_navigation import snapshot
     workspace = tmp_path / 'cli'
     native_session(workspace, 'human-root')
     directory = native_session(workspace, 'internal-job')
-    app = app_factory()
-    await app.history.refresh()
-    row = next(row for row in native_rows(app) if row['nativeIdentity'] == 'internal-job')
+    def create():
+        app = app_factory()
+        if slice_budget is not None:
+            app.history.index._recovery_budget = slice_budget
+            monkeypatch.setattr(app.history.index, '_invalidations', lambda: (False, set()))
+        return app
+
+    async def refresh_kind(app, expected):
+        # Discovery is bounded even for explicit refresh. Advance its slices
+        # without depending on watcher timing or relaxing the exact result.
+        row = None
+        for _ in range(64):
+            await app.history.refresh()
+            row = next((row for row in native_rows(app)
+                        if row['nativeIdentity'] == 'internal-job'), None)
+            if row is not None and row['sessionKind'] == expected:
+                return row
+        assert row is not None and row['sessionKind'] == expected
+
+    app = create()
+    row = await refresh_kind(app, 'root')
     assert row['sessionKind'] == 'root'  # Unclassified legacy histories remain visible.
     saved = json.loads((directory / 'metadata.json').read_text())
     saved.update(session_visibility='internal', session_purpose='memory.suggestion')
     (directory / 'metadata.json').write_text(json.dumps(saved))
     before = files_snapshot(directory)
-    await app.history.refresh()
+    await refresh_kind(app, 'internal')
     row = app._session(row['id'])
     assert row['sessionKind'] == 'internal'
     assert row['sessionPurpose'] == 'memory.suggestion'
@@ -1147,11 +1167,13 @@ async def test_internal_classification_refresh_preserves_history_and_diagnostic_
     assert row['messages'][0]['text'] == 'Saved CLI question'
     assert 'read-only' in row['historyReadOnlyReason']
     await app.close()
-    restored = app_factory()
-    await restored.history.refresh()
+    restored = create()
+    await refresh_kind(restored, 'internal')
     assert restored._session(row['id'])['sessionKind'] == 'internal'
     assert restored._session(row['id'])['sessionPurpose'] == 'memory.suggestion'
     assert files_snapshot(directory) == before
+    assert not app.runtime.started and not app.runtime.sent
+    assert not restored.runtime.started and not restored.runtime.sent
 
 async def test_structured_service_observation_is_retained_without_attribution_to_user(tmp_path,app_factory):
     from amplifier_web.automatic_history import display_message

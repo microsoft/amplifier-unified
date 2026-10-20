@@ -1,7 +1,10 @@
 """Authenticated browser partition signal; the navigation trail stays off-host."""
 import json
+import copy
+import secrets
 
 from amplifier_web.auth import SESSION_COOKIE, _signed, new_session
+from amplifier_web.device_pairing import challenge
 from amplifier_web.server import create_app
 from test_service import Runtime
 
@@ -52,3 +55,51 @@ async def test_control_authenticated_browser_gets_noncredential_partition(authen
     # An opaque scope cannot be used as the bearer credential.
     client.session.headers['Authorization'] = 'Bearer ' + result['historyScope']
     assert (await client.get('/api/state')).status == 401
+
+
+async def test_history_scope_does_not_bypass_companion_ownership_or_revocation(authenticated_client, tmp_path):
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    client.session.headers.pop('Authorization')
+    cookie = {'Cookie': f"{SESSION_COOKIE}={new_session(app['session_secret'])}"}
+    response = await client.post('/api/clients/attach', json={'clientId': 'history-web'}, headers=cookie)
+    assert response.status == 200
+    scope = (await response.json())['historyScope']
+    devices, pairings = app['terminal_setup'].devices, app['device_pairing']
+
+    def paired(name):
+        verifier = secrets.token_urlsafe(32)
+        issued = pairings.start(name, challenge(verifier))
+        pairings.decide(issued['id'], True)
+        return pairings.poll(issued['id'], verifier)
+
+    device, other = paired('History companion'), paired('Other companion')
+    mixed = {**cookie, 'Authorization': 'Bearer ' + device['token']}
+    response = await client.post('/api/clients/attach', headers=mixed,
+                                 json={'clientId': 'history-native', 'kind': 'native', 'protocolVersion': 1, 'includeState': True})
+    assert response.status == 200
+    body = await response.json()
+    assert 'state' not in body and 'historyScope' not in body
+    assert 'X-Amplifier-History-Scope' not in response.headers
+    assert app['service'].clients.records['history-native']['deviceOwner'] == device['deviceID']
+    response = await client.post('/api/clients/attach',
+                                 headers={**cookie, 'Authorization': 'Bearer ' + other['token']},
+                                 json={'clientId': 'other-native', 'kind': 'native', 'protocolVersion': 1})
+    assert response.status == 200
+    before = copy.deepcopy(app['service'].clients.records)
+    for payload in ({'clientId': 'history-web', 'kind': 'native'},
+                    {'clientId': 'stolen-resume', 'kind': 'native', 'resumeClientId': 'history-web'},
+                    {'clientId': 'other-native', 'kind': 'native'}):
+        response = await client.post('/api/clients/attach', headers=mixed, json={**payload, 'protocolVersion': 1})
+        assert response.status == 403
+        assert 'X-Amplifier-History-Scope' not in response.headers
+        assert app['service'].clients.records == before
+    devices.revoke(device['deviceID'])
+    response = await client.get('/api/companion', headers={**mixed, 'X-Amplifier-Client': 'history-native'})
+    assert response.status == 401
+    assert 'X-Amplifier-History-Scope' not in response.headers
+    response = await client.get('/api/state', headers={**cookie, 'X-Amplifier-Client': 'history-web'})
+    assert response.status == 200
+    assert (await response.json())['client']['historyScope'] == scope
+    assert 'historyScope' not in json.dumps(app['service'].clients.records)

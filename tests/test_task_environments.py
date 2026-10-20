@@ -27,14 +27,18 @@ def scope(app):
 def backend(monkeypatch):
     config = {'python': '/managed/python', 'dockerHost': 'unix:///owned/docker.sock', 'image': owner.APPROVED_IMAGE}
     monkeypatch.setattr(owner, 'configuration', lambda app: (config, 'ready', 'Qualified test backend'))
+    monkeypatch.setattr(owner.setup, 'read', AsyncMock(return_value={'status': 'ready', 'backends': [], 'operation': None}))
     calls = []
     def invoke(config, home, row, action, args):
         calls.append((action, dict(args)))
-        return {'ok': True, 'universeId': 'owned-universe',
+        value = {'ok': True, 'universeId': 'owned-universe',
                 'backendIdentity': {'backend': 'docker', 'daemon': 'owned-daemon'},
                 'snapshot': {'snapshot_commit': 'snapshot', 'archive_sha256': 'archive'},
                 'status': {'start': 'running', 'read': row.get('environmentState', 'running'), 'stop': 'stopped', 'remove': 'removed'}.get(action, 'running'),
                 'result': {'stdout': 'check passed\n', 'stderr': '', 'exit_code': 0}}
+        if args.get('durableJob') or action in {'job_read', 'job_cancel'}:
+            value['job'] = {'version': 1, 'id': args['requestId'], 'state': 'passed', 'terminal': True}
+        return value
     monkeypatch.setattr(owner, 'invoke', invoke)
     return calls
 
@@ -88,22 +92,114 @@ async def test_one_environment_per_root_and_no_storage_retirement_bypass(app, ba
     assert len(backend) == 2
 
 
-async def test_agent_requires_scoped_approval_and_peer_never_borrows_owner(app, backend):
+async def test_artifact_recovery_is_separate_from_removal_and_never_replays(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    original = owner.invoke
+    def export(config, home, current, action, args):
+        if action == 'exportArtifacts':
+            backend.append((action, dict(args)))
+            return {'ok': True, 'status': 'stopped', 'universeId': 'owned-universe',
+                    'artifactExport': {'verified': True, 'selection': ['/artifacts'], 'archiveBytes': 100}}
+        return original(config, home, current, action, args)
+    monkeypatch.setattr(owner, 'invoke', export)
+    result = await act(app, 'exportArtifacts', row, 'recover-artifacts')
+    assert result['request']['state'] == 'completed'
+    recovered = result['resource']
+    assert recovered['status'] == 'stopped'
+    assert recovered['lastOperation'] == row['lastOperation']
+    assert recovered['artifactExport']['requestId'] == 'recover-artifacts'
+    assert 'accounting' not in recovered['retention']
+    held = owner.get(app.data_dir, scope(app)['sessionId'], row['id'])
+    assert held['status'] != 'retired' and not held.get('guestRemoved')
+    assert (await act(app, 'exportArtifacts', row, 'recover-artifacts'))['request'] == result['request']
+    assert sum(action == 'exportArtifacts' for action, _ in backend) == 1
+    with pytest.raises(AppError, match='already owns'):
+        await start(app, 'not-a-new-slot')
+
+
+async def test_artifact_recovery_requires_stopped_state_before_backend(app, backend):
+    row = (await start(app))['resource']
+    result = await act(app, 'exportArtifacts', row, 'running-export')
+    assert result['request']['state'] == 'failed'
+    assert not any(action == 'exportArtifacts' for action, _ in backend)
+
+
+async def test_artifact_recovery_requires_owner_and_revision_without_extra_approval(app, backend):
+    source, peer = app.state['sessions']
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    args = {**scope(app), 'id': row['id'], 'expectedRevision': row['revision'], 'requestId': 'protected-export'}
+    with pytest.raises(AppError, match='calling conversation'):
+        await agent(app, source, 'workspace.environments.exportArtifacts', {**args, 'sessionId': peer['id']}, 'peer')
+    with pytest.raises(AppError, match='environment changed'):
+        await act(app, 'exportArtifacts', {**row, 'revision': row['revision'] - 1}, 'stale')
+    await agent(app, source, 'workspace.environments.exportArtifacts', args, 'owned-export')
+    assert any(action == 'exportArtifacts' for action, _ in backend)
+    assert not source['approvals']
+
+
+async def test_unknown_artifact_export_keeps_old_operation_and_never_replays(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    def lost(*args):
+        raise TimeoutError('export acknowledgement lost')
+    monkeypatch.setattr(owner, 'invoke', lost)
+    result = await act(app, 'exportArtifacts', row, 'lost-export')
+    assert result['request']['state'] == 'outcome_unknown'
+    assert result['resource']['lastOperation'] == row['lastOperation']
+    assert result['resource']['status'] == 'stopped'
+    monkeypatch.setattr(owner, 'invoke', lambda *args: pytest.fail('export replayed'))
+    assert (await act(app, 'exportArtifacts', row, 'lost-export'))['request'] == result['request']
+
+
+@pytest.mark.parametrize('lost_read', [False, True])
+async def test_committed_artifact_receipt_repairs_metadata_without_export(app, backend, monkeypatch, lost_read):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'stop'))['resource']
+    invoke, save, read = owner.invoke, owner.save, app.operations.requests.read
+    rereads = []
+    def transient_read(sid, identity):
+        if identity == 'committed-export' and lost_read and not rereads:
+            rereads.append(identity)
+            raise OSError('journal read temporarily unavailable')
+        return read(sid, identity)
+    def export(config, home, resource, action, args):
+        if action == 'exportArtifacts':
+            backend.append((action, args))
+            return {'ok': True, 'status': 'stopped', 'artifactExport': {'verified': True, 'selection': ['/artifacts']}}
+        return invoke(config, home, resource, action, args)
+    def fail_projection(home, resource, **changes):
+        if changes.get('lastArtifactExport'):
+            raise OSError('metadata unavailable')
+        return save(home, resource, **changes)
+    monkeypatch.setattr(owner, 'invoke', export)
+    monkeypatch.setattr(owner, 'save', fail_projection)
+    monkeypatch.setattr(app.operations.requests, 'read', transient_read)
+    result = await act(app, 'exportArtifacts', row, 'committed-export')
+    assert result['request']['state'] == 'completed'
+    monkeypatch.setattr(app.operations.requests, 'read', read)
+    assert read(scope(app)['sessionId'], 'committed-export')['state'] == 'completed'
+    monkeypatch.setattr(owner, 'save', save)
+    page = (await app.dispatch('workspace.environments.read', scope(app)))['result']
+    recovered = next(item for item in page['items'] if item['id'] == row['id'])
+    assert recovered['artifactExport']['requestId'] == 'committed-export'
+    assert recovered['lastOperation'] == row['lastOperation']
+    assert sum(action == 'exportArtifacts' for action, _ in backend) == 1
+
+
+async def test_agent_tests_need_no_extra_approval_and_peer_never_borrows_owner(app, backend):
     source, peer = app.state['sessions']
     args = {**scope(app), 'profileId': owner.PROFILE, 'requestId': 'agent-start'}
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.start', args, 'agent-start')
-    authority = await grant(app, ['test_environments'], ['session'])
     result = await agent(app, source, 'workspace.environments.start', args, 'agent-start')
     assert result['result']['resource']['status'] == 'running'
     with pytest.raises(AppError, match='calling conversation'):
         await agent(app, source, 'workspace.environments.read', {**scope(app), 'sessionId': peer['id']}, 'peer-read')
     row = result['result']['resource']
-    await revoke(app, authority)
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.stop', {**scope(app), 'id': row['id'],
-            'expectedRevision': row['revision'], 'requestId': 'unauthorized-stop'}, 'stop')
-    assert [action for action, _ in backend] == ['prepare', 'start']
+    await agent(app, source, 'workspace.environments.stop', {**scope(app), 'id': row['id'],
+        'expectedRevision': row['revision'], 'requestId': 'owned-stop'}, 'stop')
+    assert [action for action, _ in backend] == ['prepare', 'start', 'stop']
+    assert not source['approvals']
 
 
 async def test_timeout_is_retained_unknown_and_same_request_never_runs_again(app, backend, monkeypatch):
@@ -242,9 +338,8 @@ async def test_managed_uninstall_preserves_backend_until_all_resources_retired(a
     assert not directory.exists()
 
 
-async def test_stop_or_revocation_while_waiting_prevents_backend_start(app, backend, monkeypatch):
+async def test_stop_while_waiting_prevents_backend_start(app, backend, monkeypatch):
     source = app.state['sessions'][0]
-    authority = await grant(app, ['test_environments'], ['session'])
     entered, release = threading.Event(), threading.Event()
     original = storage.allocate
     def waiting(*args):
@@ -255,7 +350,7 @@ async def test_stop_or_revocation_while_waiting_prevents_backend_start(app, back
     args = {**scope(app), 'profileId': owner.PROFILE, 'requestId': 'delayed'}
     task = asyncio.create_task(agent(app, source, 'workspace.environments.start', args, 'delayed'))
     assert await asyncio.to_thread(entered.wait, 5)
-    await revoke(app, authority)
+    await app.dispatch('conversation.stop', {'sessionId': source['id']})
     release.set()
     result = await task
     assert result['result']['request']['state'] == 'failed' and backend == []

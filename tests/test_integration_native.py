@@ -61,3 +61,32 @@ def test_authenticated_loop_checkout_must_be_clean_canonical_and_named(tmp_path)
     git("remote", "set-url", "origin", "https://example.invalid/other-owner")
     with pytest.raises(ValueError, match="canonical"):
         project(ROOT, loop_source=tmp_path)
+
+
+def test_native_search_dependencies_are_present_before_pytest_can_skip():
+    from scripts.integration_native import REQUIRED_MODULES
+    dependencies = tomllib.loads(project(ROOT))['project']['dependencies']
+    for package in ('filesystem', 'search'):
+        assert any(item.startswith(f'amplifier-module-tool-{package} @ git+https://github.com/microsoft/')
+                   for item in dependencies)
+    assert {'amplifier_module_tool_filesystem', 'amplifier_module_tool_search.grep',
+            'amplifier_module_tool_search.glob'} <= set(REQUIRED_MODULES)
+
+
+def test_missing_actual_ripgrep_fails_preflight_without_installing(monkeypatch):
+    from scripts import integration_native
+    monkeypatch.setattr(integration_native.shutil, 'which', lambda _: None)
+    monkeypatch.setattr(integration_native.subprocess, 'check_output',
+                        lambda *a, **k: pytest.fail('must reject before launching a process'))
+    with pytest.raises(ValueError, match='requires ripgrep'):
+        integration_native.ripgrep_identity()
+
+
+def test_native_ripgrep_receipt_uses_the_resolved_executable(monkeypatch):
+    from scripts import integration_native
+    monkeypatch.setattr(integration_native.shutil, 'which', lambda _: '/owned/bin/rg')
+    def version(command, **kwargs):
+        assert command == ['/owned/bin/rg', '--version']
+        return 'ripgrep 14.1.1\n'
+    monkeypatch.setattr(integration_native.subprocess, 'check_output', version)
+    assert integration_native.ripgrep_identity() == {'path': '/owned/bin/rg', 'version': 'ripgrep 14.1.1'}

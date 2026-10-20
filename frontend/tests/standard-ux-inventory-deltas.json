@@ -1162,6 +1162,271 @@
         "frontend/tests/standard-ux-queued-checks-browser.mjs": "3216406530c60eef67622701cc0a7f7ef92d339cfbbfb605fe120b22e1defab4",
         "tests/fixtures/test_environments_ui_server.py": "f9f87421437eba772e1a2b7ba1c20b304ce6e5604071b8a63f1bdfb505125ae5"
       }
+    },
+    {
+      "id": "delta.294-review",
+      "sourceCommit": "9a32727ae86a60867cedb5d23f35a3f6b3cd09c8",
+      "reason": "Add explicit owner-bound feedback change comparison; original replacement remains unresolved. Earlier later-file attachment delivery is retained, not counted as new.",
+      "workflowsAdded": [
+        {
+          "id": "support.review-changes",
+          "family": "support",
+          "title": "Review proposed feedback changes before explicit correction or GitHub handoff",
+          "scope": "standard-path",
+          "entryPath": [
+            "App options",
+            "Send feedback",
+            "Submitted report",
+            "Refresh report",
+            "Draft a correction"
+          ],
+          "prerequisites": [
+            "Synthetic owner-verified submitted report; intercepted GitHub API",
+            "Independent attached clients and a simulated maintainer edit"
+          ],
+          "steps": [
+            "Save a proposed title/description and reload",
+            "Review changes against original, earlier read, latest report and proposal",
+            "Inspect changed-report notice and canonical Open on GitHub destination",
+            "Confirm correction explicitly, publish once and retry same request",
+            "Verify original maintainer text and unrelated draft remain unchanged",
+            "Use separate existing file review for any later attachments"
+          ],
+          "expectedResults": [
+            "No write during draft or review; review is private to its canonical client.",
+            "Changed proposed text requires fresh review and confirmation.",
+            "A correction is a comment, never original title/body replacement.",
+            "Failed/unknown receipt survives restart; same request never repeats a write.",
+            "New files retain separate manifest and visibility consent."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/feedback-edits.jsx",
+              "line": 1
+            },
+            {
+              "path": "amplifier_web/feedback_edits.py",
+              "line": 1
+            }
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/feedback-followup-browser.mjs",
+              "relation": "real HTTP/SSE comparison and correction, intercepted GitHub"
+            },
+            {
+              "path": "tests/test_feedback_edits.py",
+              "relation": "scope, exact intent, conflict, restart and no-replay"
+            },
+            {
+              "path": "frontend/tests/feedback-edits.test.mjs",
+              "relation": "confirmation and durable-intent acknowledgement fences"
+            }
+          ],
+          "limits": [
+            "Does not complete issue294 protected original replacement.",
+            "No live GitHub write or native device claim.",
+            "Separate attachment review remains covered by existing attachment tests."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/feedback-review294-20261016.json"
+    },
+    {
+      "id": "delta.172-peer-reactions-metrics",
+      "reason": "User-approved peer exchanges, assistant reactions and independent metrics add ordinary controls after the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "chat.peer-exchange",
+          "family": "chat",
+          "title": "Expand and copy a compact incoming peer message",
+          "scope": "standard-path",
+          "entryPath": [
+            "Conversation"
+          ],
+          "prerequisites": [
+            "Synthetic canonical host events in the owned DTU; real browser client"
+          ],
+          "steps": [
+            "Open a chat with incoming peer messages",
+            "Expand with keyboard or pointer",
+            "Read full long text only on request",
+            "Copy exact Markdown",
+            "Follow a saved message reference",
+            "Reload at narrow width and 200% zoom"
+          ],
+          "expectedResults": [
+            "Collapsed messages mount no body or full-text request.",
+            "Trusted attribution remains visible; unverified peer text stays neutral.",
+            "Exact Unicode/Markdown copy, focused reveal and preserved unrelated drafts."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "keyboard",
+            "narrow-layout"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/peer-attribution-browser.mjs",
+              "relation": "registered extended browser owner; real HTTP and built client"
+            }
+          ],
+          "limits": [
+            "No paid provider or physical native clipboard/device acceptance.",
+            "Synthetic timing is a regression baseline, not a populated production performance claim."
+          ]
+        },
+        {
+          "id": "chat.assistant-reaction",
+          "family": "chat",
+          "title": "Distinguish assistant acknowledgement from personal reactions",
+          "scope": "standard-path",
+          "entryPath": [
+            "Conversation"
+          ],
+          "prerequisites": [
+            "Synthetic canonical host events in the owned DTU; real browser client"
+          ],
+          "steps": [
+            "Assistant reacts to a human message",
+            "User adds the same emoji",
+            "Remove only the user reaction",
+            "Reload and repeat an identical assistant request"
+          ],
+          "expectedResults": [
+            "Amplifier attribution is visible outside hover controls.",
+            "Independent channels persist; retries do not duplicate state or start runtime work.",
+            "Nonhuman targets and caller-supplied actor identities are rejected."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "keyboard",
+            "narrow-layout"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/peer-attribution-browser.mjs",
+              "relation": "registered extended browser owner; real HTTP and built client"
+            }
+          ],
+          "limits": [
+            "No paid provider or physical native clipboard/device acceptance.",
+            "Synthetic timing is a regression baseline, not a populated production performance claim."
+          ]
+        },
+        {
+          "id": "settings.execution-metrics",
+          "family": "settings",
+          "title": "Select independent execution scopes and export metrics",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings"
+          ],
+          "prerequisites": [
+            "Synthetic canonical host events in the owned DTU; real browser client"
+          ],
+          "steps": [
+            "Appearance: open Execution metrics",
+            "Choose step, Work and conversation visibility independently",
+            "Choose individual metrics and reload",
+            "Enable optional status and explicitly read usage",
+            "Copy and download selected values",
+            "Switch chat while a read is pending"
+          ],
+          "expectedResults": [
+            "Choices persist through canonical actions.",
+            "Hidden/optional status performs no eager usage read or polling.",
+            "Export contains selected canonical measurements, timestamp and coverage; unknown values stay unknown.",
+            "Old chat results do not appear in a newly selected chat."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "keyboard",
+            "narrow-layout"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/execution-observability-browser.mjs",
+              "relation": "registered extended browser owner; real HTTP and built client"
+            }
+          ],
+          "limits": [
+            "No paid provider or physical native clipboard/device acceptance.",
+            "Synthetic timing is a regression baseline, not a populated production performance claim."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/release172-qualification.md"
+    },
+    {
+      "id": "delta.860",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/860",
+      "reason": "Adaptive Home adds a standard arrival/browse surface; retain the frozen inventory and add one focused regression owner.",
+      "workflowsAdded": [
+        {
+          "id": "home.adaptive-work",
+          "family": "navigation",
+          "title": "Arrive at Home and retain work across views, scopes and chats",
+          "scope": "standard-path",
+          "entryPath": [
+            "Fresh browser",
+            "Home breadcrumb"
+          ],
+          "prerequisites": [
+            "Production built client and empty-host fixture with synthetic runtime in an owned DTU",
+            "Private browser contexts and disposable project folders; no live account or user history"
+          ],
+          "steps": [
+            "Open a fresh client at Home and switch to Studio",
+            "Choose a project, type search and immediately start a chat",
+            "Hold the real Home query worker; open the project and start a project chat while results are pending",
+            "Hold a project draft command, change its registered path, then require refusal without draft loss or new work",
+            "Return Home and open a saved chat with a private draft and Canvas output",
+            "Reload that chat; open an independent fresh client",
+            "Pin Chats to each project, attempt another requested scope, and pin an unavailable project",
+            "At phone width open Browse, choose the pinned chat, interact with its retained Canvas and return Home"
+          ],
+          "expectedResults": [
+            "Home choices and pending search persist; project creation uses its confirmed folder.",
+            "Project controls use current context independently of pending rows; creation revalidates registration ID and path at acceptance.",
+            "A resumed client retains chat/draft/Canvas; an independent client starts at Home.",
+            "Effective pinned scope settles and controls agree; missing pinned projects cannot widen or create elsewhere.",
+            "Phone drawer cleanup leaves Canvas interactive and retains the private draft.",
+            "The fixture and browser retire cleanly; failures retain a report and screenshot."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "fresh-client",
+            "resumed-client",
+            "pinned-project",
+            "unavailable-project"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/adaptive-work-browser.mjs",
+              "relation": "Extended browser checks owner; focused local smoke on affected Home/navigation changes"
+            },
+            {
+              "path": "tests/test_adaptive_work.py",
+              "relation": "Scope, cache identity, bounded query, client state and no-hydration contracts"
+            },
+            {
+              "path": "frontend/tests/adaptive-work.test.mjs",
+              "relation": "Current-page identity, view preferences and retained navigation choices"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime proves host/browser interaction, not live-provider performance or real-history scale.",
+            "This additive smoke does not make the unrelated existing browser census a release gate."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#adaptive-home-october-19"
     }
   ]
 }

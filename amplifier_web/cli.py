@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import os
 import sys
 from pathlib import Path
@@ -212,19 +213,49 @@ def _serve_unlocked(args, data_dir: Path) -> None:
     from .tls import ssl_context
     secure = ssl_context(data_dir, config)
     scheme = "https" if secure else "http"
+    browser_host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(config['bind'][0], config['bind'][0])
+    if ':' in browser_host:
+        browser_host = f'[{browser_host}]'
     url = (config["public_origins"][0] if config["public_origins"] else
-           f"{scheme}://127.0.0.1:{config['port']}")
-    print(f"Amplifier Unified · {url}\nWorkspace: {args.workspace}\nState: {data_dir}")
+           f"{scheme}://{browser_host}:{config['port']}")
     timer = None
-    if not args.no_open:
-        timer = threading.Timer(1.5, lambda: webbrowser.open(url))
-        timer.daemon = True
-        timer.start()
+    listener_ready = False
+
+    def listening(_message):
+        # aiohttp calls this only after every configured socket has bound.
+        # Application startup signals run earlier and cannot establish this.
+        nonlocal timer, listener_ready
+        listener_ready = True
+        print(f"Amplifier Unified · listening on {', '.join(config['bind'])}, port {config['port']} ({scheme})\n"
+              f"Workspace: {args.workspace}\nState: {data_dir}")
+        if config['public_origins']:
+            for origin in config['public_origins']:
+                print(f"Configured public address (not checked): {origin}")
+        else:
+            print(f"Open: {url}")
+        if not args.no_open:
+            timer = threading.Timer(1.5, lambda: webbrowser.open(url))
+            timer.daemon = True
+            timer.start()
+
     from .mcp_oauth import SafeAccessLogger
     from amplifier_publishing import PublishingError
     try:
         web.run_app(create_app(data_dir, workspace=args.workspace, server_config=config),
-                    host=config["bind"], port=config["port"], ssl_context=secure, print=None, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
+                    host=config["bind"], port=config["port"], ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
+    except OSError as exc:
+        guidance = {
+            errno.EADDRINUSE: 'The address or port is already in use. Check the existing service with amplifier-unified service status, or choose another port with --port.',
+            errno.EADDRNOTAVAIL: 'The configured bind address is not available on this computer. Check its current network addresses and your bind setting.',
+            errno.EACCES: 'Permission was denied. Check permission to use the configured address and port; choose an allowed port with --port if needed.',
+        }.get(exc.errno)
+        # A filesystem error during application startup is not a bind failure.
+        if listener_ready or guidance is None or exc.filename is not None:
+            raise
+        raise SystemExit(
+            f"Could not start Amplifier on {', '.join(config['bind'])}, port {config['port']}.\n"
+            f"{guidance}\nNo running process was stopped or replaced."
+        ) from None
     except PublishingError as exc:
         # The same library error can also mean unsupported OS locking. Only an
         # actual held-lock conflict establishes that another process owns it.
@@ -321,7 +352,9 @@ def _open_background_service(args, data_dir):
         if not result['ok']:
             raise SystemExit(1)
         if not args.no_open and result.get('url'):
-            webbrowser.open(result['url'])
+            # Preserve the user's chosen browser address. The status report
+            # explicitly separates it from the verified host listener.
+            webbrowser.open((result.get('publicUrls') or [result['url']])[0])
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         raise SystemExit(f'Background setup did not complete: {exc}\nRun amplifier-unified serve to run in this terminal.') from None
 

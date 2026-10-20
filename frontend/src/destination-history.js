@@ -9,7 +9,8 @@ const sameRoute=(a,b)=>a===null&&b===null||sameDestination(a,b)&&(a.tab||null)==
 
 export function destination(state){
   const view=state?.view||{},surface=view.workSurface||'chat';
-  if(surface==='workspaces')return {kind:'workspaces',label:'Workspaces'};
+  if(surface==='home')return {kind:'home',label:'Home'};
+  if(surface==='workspaces')return {kind:'workspaces',label:'All projects'};
   if(surface==='chats')return {kind:'chats',label:'Search chats'};
   if(surface==='workspace'){
     const identity=id(view.workWorkspaceId);if(!identity)return null;
@@ -29,7 +30,7 @@ export function destinationCommand(entry){
 }
 
 function cleanEntry(row){
-  if(!row||!id(row.key)||!['chat','workspace','workspaces','chats'].includes(row.kind))return null;
+  if(!row||!id(row.key)||!['home','chat','workspace','workspaces','chats'].includes(row.kind))return null;
   if(['chat','workspace'].includes(row.kind)&&!id(row.id))return null;
   if(row.kind==='workspace'&&!tabs.has(row.tab))return null;
   return {key:row.key,kind:row.kind,...(['chat','workspace'].includes(row.kind)?{id:row.id}:{}),...(row.kind==='workspace'?{tab:row.tab}:{}),label:text(row.label),...(row.kind==='chat'?{workspaceLabel:text(row.workspaceLabel)}:{})};

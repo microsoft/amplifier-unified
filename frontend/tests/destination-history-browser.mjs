@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const out=process.env.AMPLIFIER_TEST_OUTPUT;
 if(!out)throw Error('Set AMPLIFIER_TEST_OUTPUT to an owned evidence directory.');
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls','--navigation-history'],{stdio:['ignore','pipe','inherit']});
 let browser,page,scenarioFailure;
 const pendingGates=new Set();
 function gate(){
@@ -52,7 +52,8 @@ try{
  const forward=page.getByRole('button',{name:'Forward in navigation history',exact:true});
  const menu=page.getByRole('button',{name:'Navigation history',exact:true});
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
- await page.goto(url);await composer.waitFor();
+ await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
+ await expect(menu).toBeEnabled();
  const home=path.dirname((await state()).workspaceDefaults.root),folder=path.join(home,'History project');await mkdir(folder);await writeFile(path.join(folder,'preview.txt'),'Synthetic preview');
  await action('workspace.add',{path:folder,name:'History project'});
  const workspace=(await action('workspace.list',{query:'History project'})).result.items.find(row=>row.path===folder);assert.ok(workspace);
@@ -81,6 +82,40 @@ try{
  const alpha=await saved();await action('session.draft',{});await expect.poll(async()=>(await state()).selectedSessionId).toBeNull();
  assert.equal((await saved()).entries.length,alpha.entries.length);await back.click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(a);
  await expect(composer).toHaveText('Unsent Alpha draft');
+ // Home is a destination, not a visit for every view/filter or reading change.
+ await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true}).click();
+ await expect.poll(async()=>(await saved()).entries.at(-1).kind).toBe('home');
+ const homeTrail=await saved();
+ await action('view.update',{patch:{workHomeView:'focus',workHomeFilter:'working'}});
+ assert.deepEqual(await saved(),homeTrail);
+ await action('session.select',{id:a});await back.click();
+ await expect.poll(async()=>(await saved()).cursor).toBe(homeTrail.cursor);
+ assert.equal((await state()).view.workSurface,'home');
+ assert.equal((await state()).view.workHomeView,'focus');assert.equal((await state()).view.workHomeFilter,'working');
+ await forward.click();await expect.poll(async()=>(await saved()).cursor).toBe(homeTrail.cursor+1);
+ await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+ assert.equal((await state()).selectedSessionId,a);
+ await expect(composer).toHaveText('Unsent Alpha draft');
+ // A real canonical chat card records an accepted destination, not its command.
+ const messageResponse=await page.request.post(url+'/fixture/history-message',{data:{sessionId:a}});
+ assert.ok(messageResponse.ok());const {messageId}=await messageResponse.json();
+ const attached=await action('outputs.attachChatReference',{sessionId:a,messageId,targetSessionId:b});
+ assert.equal(attached.accepted,true);
+ const card=page.locator(`[data-message-id="${messageId}"]`).getByRole('button',{name:/^Open chat.*Beta/});
+ const beforeCard=await saved();await card.click();
+ await expect.poll(async()=>(await saved()).entries.at(-1).id).toBe(b);
+ await back.click();await expect.poll(async()=>(await saved()).cursor).toBe(beforeCard.cursor);
+ await expect(card).toBeVisible();await expect(composer).toHaveText('Unsent Alpha draft');
+ // A rejected card leaves its source mounted and cannot add a phantom visit.
+ const cardTrail=await saved();
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='session.select'&&body.args.chatReference)await route.fulfill({status:409,contentType:'application/json',body:'{"error":"Synthetic card rejection"}'});
+  else await route.continue();
+ });
+ await card.click();await expect(page.getByRole('alert').filter({hasText:'Synthetic card rejection'})).toBeVisible();
+ assert.deepEqual(await saved(),cardTrail);assert.equal((await state()).selectedSessionId,a);
+ await page.unroute('**/api/actions');
  // Browsing retains chat identity but creates a workspace destination; tabs update it.
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace.id,workWorkspaceTab:'chats'}});
  const workspaceVisit=await saved();await action('view.update',{patch:{workWorkspaceTab:'files'}});
@@ -92,7 +127,8 @@ try{
  assert.equal((await state()).view.workWorkspaceTab,'files');
  // Reload retains the exact trail but does not navigate or append on bootstrap.
  const preReload=await saved();await page.reload();await expect(menu).toBeEnabled();
- await expect.poll(async()=>JSON.stringify(await saved())).toBe(JSON.stringify(preReload));
+ await expect.poll(saved).toEqual(preReload);
+ assert.equal((await state()).view.workSurface,'workspace');
  // Explicit traversal rejection leaves cursor and entries unchanged; no missing-target fallback.
  const preReject=await saved();let rejected=false;
  await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(!rejected&&body?.action==='session.select'){rejected=true;await route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Synthetic destination unavailable'})})}else await route.continue()});
@@ -106,6 +142,7 @@ try{
  const newer=action('view.update',{patch:{workSurface:'chats'}});selectionGate.release();await newer;await page.unroute('**/api/actions');
  await expect.poll(async()=>(await state()).view.workSurface).toBe('chats');
  await expect.poll(async()=>(await saved()).entries.at(-1).kind).toBe('chats');
+ assert.equal((await saved()).entries.at(-2).id,b,'Back must commit before the newer browse replaces Forward');
  // Optimistic selections are not visits, even during unrelated state publication.
  await action('session.select',{id:c});const beforeOptimistic=await saved(),optimisticGate=gate();let optimisticHeld=false;
  await page.route('**/api/actions',async route=>{
@@ -191,17 +228,19 @@ try{
  await page.getByRole('button',{name:'Discard changes',exact:true}).click();
  await action('canvas.visibility',{open:false});
  // Narrow target dimensions and no reintroduced remembered-chat strip.
- for(const width of [1440,390]){
+ for(const width of [1440,390,360]){
   await page.setViewportSize({width,height:900});await menu.click();await expect(page.getByRole('menu')).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-  if(width===390)for(const control of [back,forward,menu]){const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44)}
+  if(width<=390)for(const control of [back,forward,menu]){const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44)}
   await page.screenshot({path:path.join(out,`history-${width}.png`)});await page.keyboard.press('Escape');
  }
  await expect(page.getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
  const captured=await state();assert.equal(Object.hasOwn(captured,'destinationHistory'),false);
+ const runtime=await (await page.request.get(url+'/fixture')).json();
+ assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);
  const serialized=JSON.stringify(await saved());assert.doesNotMatch(serialized,/Unsent Alpha draft|Synthetic preview|cHJlc2VydmU=/);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390 layout'],pageErrors:errors}));
+ console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','Home filters','canonical card acceptance and rejection','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390/360 layout','no runtime start or input'],pageErrors:errors}));
 }catch(error){scenarioFailure=error;throw error}finally{
  for(const release of pendingGates)release();
  // Start fixture termination even if browser cleanup itself stalls. Keep the

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 // Packaged UI + real scoped HTTP/WebSocket; synthetic progress only, no model calls.
 import {spawn} from 'node:child_process';
@@ -7,6 +8,7 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const fixture=process.env.AMPLIFIER_HUMAN_POST_ONLY?null:spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 let browser;
+const launchBrowser=()=>chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
 async function settleHumanFixture(child){
  if(child.exitCode!==null||child.signalCode!==null){
   assert.equal(child.exitCode,0);assert.equal(child.signalCode,null);return;
@@ -46,14 +48,20 @@ async function humanPostRecency(){
   };
   const control=async data=>{const r=await page.request.post(url+'/fixture/control',{data});assert.equal(r.status(),200);return r.json()};
   const dispatch=(p,action,args)=>p.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+  const showChat=async target=>{
+   if(await target.locator('.a-settings-experience').isVisible())await target.getByRole('button',{name:'Close panel',exact:true}).click();
+   await expect(target.locator('[data-part="overlay"]')).toHaveCount(0);
+  };
   const order=()=>page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
-  await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
+  await page.goto(url);await showFixtureConversation(page,{navPinned:true});await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
   await expect(page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]')).toHaveCount(20);
+  await showChat(page);
   const initial=await metrics(),target=initial.target;
   assert.equal(initial.sessions.length,24);
   await expect(page.locator('.a-quiet-sidebar')).toBeVisible();
   const before=await order();assert.equal(before.length,20);assert.ok(!before.includes(target));
-  await other.goto(url);await other.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+  await other.goto(url);await showFixtureConversation(other,{navPinned:true});await other.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+  await showChat(other);
   await dispatch(other,'session.select',{id:initial.sessions[1]});
   await other.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep other-client draft');
   await expectDraft(other,'Keep other-client draft');
@@ -79,16 +87,20 @@ async function humanPostRecency(){
   await control({running:true,history:true});
   await expect.poll(async()=>(await metrics()).ticks).toBeGreaterThan(3);
   // Drain the initial working presentation before measuring steady progress.
-  // Continuous 200 ms fixture events otherwise keep postponing the 300 ms
-  // view-report debounce, letting its first report land inside the measurement.
+  // The fixture leaves gaps longer than the report debounce, so repeated
+  // elapsed-label changes cannot hide behind continuous event traffic.
   await control({running:false});
   await page.waitForTimeout(1000);
   const key=await page.evaluate(()=>window.amplifier.getState().shellDataKey);
+  const workLabel=page.locator('.a-execution-turn-line .a-execution-label');
+  await expect(page.locator('[data-part="overlay"]')).toHaveCount(0);await expect(workLabel).toBeVisible();
+  const elapsedBefore=await workLabel.innerText();assert.match(elapsedBefore,/^Working · /);
   traffic.length=0;measuring=true;
   await control({running:true});
   await page.waitForTimeout(2200);measuring=false;
   assert.deepEqual(await order(),promotedOrder);
   assert.equal(await page.evaluate(()=>window.amplifier.getState().shellDataKey),key);
+  assert.notEqual(await workLabel.innerText(),elapsedBefore,'Visible elapsed time must keep advancing without reporting it back');
   assert.deepEqual(traffic,[],'posted progress must not cause steady shell/view refetches');
   assert.equal((await metrics()).navigationActivityAt,stable);
   await expectDraft(other,'Keep other-client draft');
@@ -104,6 +116,7 @@ async function humanPostRecency(){
   await control({attention:true});
   await expect.poll(async()=>(await metrics()).navigationActivityAt).toBeGreaterThan(ready);
   await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
+  await showChat(page);
   await expect.poll(order).toEqual(promotedOrder);
   await expectDraft(page,'Explicit human post');
   assert.equal((await metrics()).posts[0].navigationPost.fence,admitted.posts[0].navigationPost.fence);
@@ -121,7 +134,7 @@ async function humanPostRecency(){
  }
 }
 try{
- browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
+ browser=await launchBrowser();
  if(process.env.AMPLIFIER_HUMAN_POST_ONLY){
   const result=await humanPostRecency();
   if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');
@@ -149,6 +162,9 @@ try{
  const before=await order();
  // Progress in a different selected conversation must not reshuffle the sidebar.
  await dispatch('session.select',{id:sessions[1]});await api('/fixture/progress',{running:true});await wait(1500);
+ // Cold navigation may still be enabling its paging control. Observe that
+ // legitimate initial report before measuring steady, unchanged progress.
+ await expect.poll(()=>{const last=reports.at(-1);return last?.sessionId===sessions[1]&&last.controls?.some(control=>control.label==='Load older chats'&&!control.disabled)}).toBe(true);
  measuring=true;await wait(4000);measuring=false;
  assert.deepEqual(await order(),before);assert.deepEqual(traffic,[],'steady streaming must not refetch shell or echo conversation text');
  await api('/fixture/progress',{running:false});await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.recentNavigation?.items[0]?.id===id,sessions[0]);
@@ -214,9 +230,13 @@ try{
  assert.deepEqual((await shell()).pinnedSessionIds,[sessions[1],sessions[0]]);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this private draft');
  assert.deepEqual(errors,[]);
+ if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await page.screenshot({path:process.env.AMPLIFIER_SIDEBAR_EVIDENCE+'.png'});
+ // These are independent fixture hosts. Finish the scale browser before the
+ // two-client post journey, avoiding cross-context lifetime coupling on ARM.
+ await browser.close();browser=await launchBrowser();
  const humanPost=await humanPostRecency();
  const result={steadyStreamRequests:0,activityOrderStable:true,sortChoices:true,dragAndKeyboardPins:true,reloadPersistence:true,privateDraftRetained:true,customContentObserved:true,hiddenReportingDeferred:true,reconnectBaselineWithoutCatalogRead:true,lateReorderKeepsNewFocus:true,...humanPost,modelCalls:0};
- if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE){await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');await page.screenshot({path:process.env.AMPLIFIER_SIDEBAR_EVIDENCE+'.png'})}
+ if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');
  console.log(JSON.stringify(result,null,2));
  }
 }finally{try{await browser?.close()}finally{fixture?.kill('SIGTERM')}}

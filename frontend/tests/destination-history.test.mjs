@@ -40,6 +40,24 @@ test('browse destination differs from retained selected chat; tabs replace the c
  assert.deepEqual(destinationCommand(history.snapshot().entries[1]),['view.update',{patch:{workSurface:'workspace',workWorkspaceId:'project',workWorkspaceTab:'files',navExpanded:false}}]);
 });
 
+test('Home is one reloadable destination; filters and reading state do not become visits',()=>{
+ const {history,store}=harness();history.observe(frame('a'));
+ const home=frame('a',2,{surface:'home'});history.observe(home);
+ const first=history.snapshot();
+ for(let revision=3;revision<=5;revision++)history.observe({...home,revision,
+  view:{...home.view,workHomeView:'focus',workHomeFilter:'working',workHomeQuery:'PRIVATE QUERY',workHomePages:{working:revision}}});
+ assert.deepEqual(history.snapshot(),first);
+ history.observe(frame('b',6));const attempt=history.begin(history.snapshot().backKey);
+ assert.equal(attempt.kind,'home');
+ assert.deepEqual(destinationCommand(attempt),['view.update',{patch:{workSurface:'home',navExpanded:false}}]);
+ history.observe({...home,revision:7});assert.equal(history.finish(receipt(7)),true);
+ assert.equal(history.snapshot().cursor,1);
+ const reloaded=harness(store).history;reloaded.observe({...home,revision:8},{baseline:true});
+ assert.deepEqual(reloaded.snapshot().entries,history.snapshot().entries);
+ assert.equal(reloaded.snapshot().cursor,1);assert.equal(reloaded.snapshot().detached,false);
+ assert.ok(reloaded.snapshot().forwardKey);assert.doesNotMatch(store.getItem(STORAGE),/PRIVATE QUERY|workHome/);
+});
+
 test('cursor commits only for accepted receipt plus matching host, revision and destination',()=>{
  for(const failure of ['rejected','old-revision','wrong-host','wrong-route','unknown']){
   const {history}=trail();const target=history.begin(history.snapshot().backKey);

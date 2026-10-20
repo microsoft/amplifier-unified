@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -9,7 +10,7 @@ page.on('pageerror',error=>errors.push(error.message));
 const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const picker=()=>page.getByLabel('Registered root bundles',{exact:true});
 try{
- await page.goto('http://127.0.0.1:8963');await page.getByRole('button',{name:'Conversation bundle',exact:true}).waitFor();const source=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ await page.goto('http://127.0.0.1:8963');await showFixtureConversation(page);await page.getByRole('button',{name:'Conversation bundle',exact:true}).waitFor();const source=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.getByRole('button',{name:'Conversation bundle',exact:true}).click();
  await expect.poll(()=>picker().locator('option').evaluateAll(rows=>rows.map(row=>row.value))).toEqual(['anchors','anchors-amp-dev','work','work-amp-dev','anchors-work','broken']);
  assert.equal(await picker().locator('option[value="work-amp-dev"]').innerText(),'Work · Amplifier development');
@@ -35,5 +36,5 @@ try{
  await workspaceDefault.locator('select').selectOption('work-amp-dev');await page.waitForFunction(()=>window.amplifier.getState().bundleDefaults.effective==='work-amp-dev');
  await workspaceDefault.getByRole('button',{name:'Use inherited workspace default',exact:true}).click();await page.waitForFunction(()=>window.amplifier.getState().bundleDefaults.effective==='work');
  await action('view.update',{patch:{workSurface:'chat'}});await action('session.draft',{});assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),null);await action('session.create',{});await page.waitForFunction(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId)?.bundle==='work');await page.reload();await page.getByRole('button',{name:'Conversation bundle',exact:true}).waitFor();assert.match(await page.getByRole('button',{name:'Conversation bundle',exact:true}).innerText(),/Work/);
- await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.getByRole('button',{name:'Chat options',exact:true}).click();await page.getByRole('region',{name:'Choose conversation bundle'}).waitFor();assert.ok(await page.evaluate(()=>{const menu=document.querySelector('.a-compact-popover').getBoundingClientRect(),chat=document.querySelector('.a-conversation').getBoundingClientRect();return menu.left>=0&&menu.right<=innerWidth&&menu.top>=0&&menu.bottom<=innerHeight}));await page.screenshot({path:'/tmp/amplifier-bundle-mobile.png'});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);console.log('Bundle browser passed: optional preview, direct switch, rollback, fork/history/artifact preservation, scoped defaults, reload and narrow layout.');
+ await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.getByRole('button',{name:'Chat options',exact:true}).click();await page.getByRole('region',{name:'Choose conversation bundle'}).waitFor();assert.ok(await page.evaluate(()=>{const menu=document.querySelector('.a-compact-popover').getBoundingClientRect(),chat=document.querySelector('.a-conversation').getBoundingClientRect();return menu.left>=0&&menu.right<=innerWidth&&menu.top>=0&&menu.bottom<=innerHeight}));await page.screenshot({path:process.env.AMPLIFIER_BUNDLE_SCREENSHOT||'/tmp/amplifier-bundle-mobile.png'});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);console.log('Bundle browser passed: optional preview, direct switch, rollback, fork/history/artifact preservation, scoped defaults, reload and narrow layout.');
 }finally{await browser.close();fixture.kill()}

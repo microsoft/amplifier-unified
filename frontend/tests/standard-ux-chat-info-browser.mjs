@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -15,7 +16,7 @@ try{
  await control({op:'patch',sessions:{[alpha]:{execution:{turns:[],nodes}}}});
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers}),errors=[],requests=[];
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private information inspection draft');
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private information inspection draft');
  const original=await control({op:'inspect'}),originalMessages=original.state.sessions.find(row=>row.id===alpha).messages;
  page.on('request',request=>requests.push(new URL(request.url()).pathname));
  await page.getByRole('button',{name:'Chat',exact:true}).click();await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}).click();
@@ -23,8 +24,8 @@ try{
  const usage=info.getByRole('region',{name:'Conversation usage',exact:true});await expect(usage).toContainText('1 recorded model call');
  await expect(usage).toContainText('Cumulative tokens are not the current context-window size.');
  await expect(usage).toContainText('Historical calls without telemetry and provider-internal retries may be missing. Unavailable values are not zero.');
- const totals=usage.getByRole('region',{name:'Conversation totals',exact:true});await expect(totals).toContainText('10');await expect(totals.getByText('Session cost (USD)',{exact:true})).toHaveCount(0);
- await usage.getByText('Usage data',{exact:true}).click();const exported=JSON.parse(await usage.locator('pre').innerText());assert.ok(JSON.stringify(exported).includes('observed'));
+ const totals=usage.getByRole('region',{name:'Conversation totals',exact:true});await expect(totals).toContainText('10');await expect(totals.locator('.a-usage-grid>div').filter({has:page.getByText('Session cost (USD)',{exact:true})}).locator('dd')).toHaveText('Unavailable');
+ await usage.getByText('Usage data',{exact:true}).click();const exported=JSON.parse(await usage.locator('pre').innerText());assert.equal(exported.schema,'execution-metrics-v1');assert.equal(exported.identity.sessionId,alpha);assert.equal(exported.metrics.grossTotalTokens.value,10);assert.equal(exported.metrics.costUsd.value,null);
  const read=await control({op:'inspect'});assert.equal(read.runtimeStarts,original.runtimeStarts);assert.equal(read.runtimeSends,0);assert.equal(read.retainedSessions,original.retainedSessions);assert.deepEqual(read.runtimeControls,[]);
  assert.equal(requests.some(path=>/^\/api\/conversation\/(detail|text|work)/.test(path)),false,'Opening information must not read more transcript or Work pages');
  await info.getByRole('button',{name:'Inspect current model context',exact:true}).click();

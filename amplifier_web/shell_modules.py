@@ -66,7 +66,14 @@ COMPOSITION = {'type': 'object', 'additionalProperties': False, 'required': ['in
     'presentation': {'type': 'object', 'additionalProperties': False, 'properties': {
         'scheme': {'enum': ['light', 'dark', 'system']}, 'layout': {'enum': ['balanced', 'conversation', 'work']},
         'executionDetail': {'enum': ['minimal', 'standard', 'detailed']},
+        'executionVisibility': {'type': 'object', 'additionalProperties': False, 'properties': {
+            scope: {'type': 'boolean'} for scope in ('step', 'turn', 'conversation')}},
+        'executionMetrics': {'type': 'array', 'uniqueItems': True, 'maxItems': 9, 'items': {'enum': [
+            'elapsedSeconds', 'grossInputTokens', 'outputTokens', 'grossTotalTokens',
+            'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'costUsd', 'calls']}},
+        'conversationStatus': {'type': 'boolean'},
         'interfaceDetail': {'enum': ['minimal', 'standard', 'detailed']},
+        'workStartView': {'enum': ['appearance', 'focus', 'brief', 'studio']},
         'collapseInterimReplies': {'type': 'boolean'},
         'planPlacement': {'enum': ['composer', 'inline', 'active', 'overview']},
         'decorations': {'type': 'boolean'},
@@ -346,6 +353,9 @@ class ShellModules:
         state = self.service.state
         view = dict(client.get('baselineView', {}))
         view.update(client['views'].get(instance['id'], {}).get('view', {}))
+        from .adaptive_work import WORK_QUERY_FIELDS
+        view.update({key: state.get('view', {}).get(key) for key in WORK_QUERY_FIELDS})
+        view['navStatusPages'] = state.get('view', {}).get('navStatusPages', {})
         view.setdefault('navWorkspaceMode', 'recent')
         scope = instance.get('scope', {})
         workspace_id = scope.get('workspaceId') if scope.get('mode') == 'pinned' else state.get('selectedWorkspaceId')
@@ -410,15 +420,24 @@ class ShellModules:
         search = projections.chats({**scoped, 'view': recent_view}, section='search') if wants('sidebarSearch') else None
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace') if wants('sidebarWorkspace') else None
         recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts') if wants('recentNavigation') else None
+        from .adaptive_work import work_home, work_home_context, work_status, STATUS_RESOURCES
+        work = work_home(self.service, scoped, pinned_workspace_id=workspace_id if pinned_scope else None) if wants('workHome') and instance['package'] in BUILTINS else None
+        # Bundled Status pages are explicit demand, not additions to third-party
+        # full snapshots. Identical Home queries reuse the projection cache.
+        status_pages = {name: work_status(self.service, scoped, status,
+                                         pinned_workspace_id=workspace_id if pinned_scope else None)
+                        for name, status in STATUS_RESOURCES.items()
+                        if requested is not None and wants(name)}
         if recent_navigation is not None:
             # Identity is not part of the shared projection cache. Copy its scope,
             # so one client's fence cannot contaminate another's cached rows.
             recent_navigation = {**recent_navigation, 'scope': {**recent_navigation['scope'], **recent_scope}}
             recent_shortcuts = recent_navigation['items']
         pinned_navigation = projections.pinned_navigation({**scoped, 'view': sidebar_home}) if wants('pinnedNavigation') else None
-        visible_ids = {row['id'] for page in (chat_page, home, pins, recent, search, workspace_chats)
+        visible_ids = {row['id'] for page in (chat_page, home, pins, recent, search, workspace_chats, work)
                        if page is not None for row in page['items']} | {row['id'] for row in (recent_navigation['items'] if recent_navigation is not None else [])}
         visible_ids.update(item['row']['id'] for item in (pinned_navigation['items'] if pinned_navigation is not None else []) if item['kind'] == 'session')
+        visible_ids.update(row['id'] for page in status_pages.values() for row in page['items'])
         # A context-only refresh observes the rows in retained active pages,
         # without rebuilding those pages just to recover their identities.
         if context_visible_ids is not None:
@@ -450,6 +469,8 @@ class ShellModules:
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
                 'recentScope': recent_scope,
+                'workHomePinnedScope': workspace_id if pinned_scope else None,
+                'workHomeContext': work_home_context(scoped, pinned_workspace_id=workspace_id if pinned_scope else None),
                 'navigationActivityById': activity_by_id,
                 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
@@ -462,10 +483,13 @@ class ShellModules:
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error', 'issues', 'issueCount']},
                 'attention': {'sessions': {sid: scoped['attention'].get('sessions', {}).get(sid, 0) for sid in visible_ids},
                               'items': error_receipts},
+                'workHomeAttention': [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
+                    for item in scoped.get('attention', {}).get('items', ())
+                    if item.get('sessionId') in visible_ids and item['id'] == 'completion:' + item['sessionId']],
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
                 'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
 
-        pages = {'chatNavigation': chat_page, 'homeNavigation': home,
+        pages = {**status_pages, 'chatNavigation': chat_page, 'homeNavigation': home, 'workHome': work,
                  'pinnedNavigation': pinned_navigation, 'workspaceOverview': overview}
         result.update({key: value for key, value in pages.items() if value is not None})
         sidebar = {'recentView': {key: recent_view[key] for key in recent_view if key in SIDEBAR_FILTER_KEYS}}

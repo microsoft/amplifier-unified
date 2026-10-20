@@ -6,6 +6,8 @@ import logging
 import time
 import uuid
 
+from .task_binding import continuation_epoch
+
 
 def definitions(schema, string):
     sid = {"sessionId": string(200)}
@@ -72,13 +74,19 @@ class TaskController:
         if persist:
             self.controls.persist(task_only=True)
 
-    async def continuation_allowed(self):
+    async def continuation_allowed(self, *, resume=False):
         self.apply()
         task = self.record()
         capacity = getattr(self.controls, "capacity", None)
-        if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
+        # A saved denial blocks automatic continuation, not a fresh
+        # host-verified human recovery input. Every provider call still asks
+        # the host to evaluate current conversation AND assignment limits.
+        if not resume and capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
             return False
-        return task is None or (task["status"] == "active" and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
+        # Explicit human-backed input can discuss a completed task too. This
+        # never reactivates that objective or enables its automatic continuation.
+        allowed = {"active", "paused", "blocked", "completed"} if resume else {"active"}
+        return task is None or (task["status"] in allowed and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
     async def yield_to_peer(self, event, data):
         """Supersede this goal execution, not the goal, before an automatic turn."""
@@ -194,6 +202,12 @@ class TaskController:
             raise ValueError("Unknown task operation")
         if task["status"] == "active" and not self.coordinator.get_capability("live.continuation_guard_supported"):
             raise ValueError("This orchestrator needs durable task continuation guard support")
+        # Reports about this objective remain useful while its progress and
+        # constraints evolve. Ending/replacing/suspending the objective fences
+        # old automatic continuations, including a pause followed by resume.
+        task['continuationEpoch'] = (revision + 1 if operation != 'task.update'
+            or task.get('objective') != (previous or {}).get('objective')
+            else continuation_epoch(previous))
         task.update(revision=revision + 1, updatedAt=time.time())
         old_goal = copy.deepcopy(self.coordinator.session_state.get("goal"))
         old_history = copy.deepcopy(self.history)

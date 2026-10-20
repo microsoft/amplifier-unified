@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Read-only standard Privacy links and recovery/capture explanations, in four input contexts.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -22,7 +23,7 @@ for(const [id,width,height,mode] of variants){
   page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
   await page.route('**/*',route=>{const url=new URL(route.request().url());if(['http:','https:'].includes(url.protocol)&&url.hostname!=='127.0.0.1'){external.push(url.origin);return route.abort()}return route.continue()});
   const activate=async control=>{await expect(control).toBeVisible();await expect(control).toBeEnabled();if(mode==='keyboard'){await control.focus();await expect(control).toBeFocused();await control.press('Enter')}else if(mode==='touch')await control.tap();else await control.click()};
-  await page.goto(boot.url);await page.waitForSelector('#amp-one');
+  await page.goto(boot.url);await showFixtureConversation(page,{navPinned:true});await page.waitForSelector('#amp-one');
   const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep this unsent privacy draft');
   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view?.draft)).toBe('Keep this unsent privacy draft');
   const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
