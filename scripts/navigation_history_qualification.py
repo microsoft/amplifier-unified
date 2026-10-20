@@ -96,6 +96,7 @@ def main():
             shutil.copytree(ROOT / "frontend/tests", harness / "frontend/tests")
             (harness / "frontend/node_modules").symlink_to(ROOT / "frontend/node_modules", target_is_directory=True)
             env = {**os.environ, "AMPLIFIER_TEST_PYTHON": sys.executable,
+                   "AMPLIFIER_SHELL_NODE_MODULES": str(ROOT / "frontend/node_modules"),
                    "AMPLIFIER_TEST_OUTPUT": str(OUTPUT / "installed-browser")}
             env.pop("PYTHONPATH", None)
             origin = run("wheel-origin", [sys.executable, "-c",
