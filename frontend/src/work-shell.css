@@ -111,6 +111,7 @@
  #amp-one.a-approachable-shell{padding:0}
  #amp-one.a-approachable-shell .a-work-header{min-height:56px;padding:6px 8px;gap:4px}
  #amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb),#amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb)+svg,#amp-one.a-approachable-shell .a-work-brand{display:none}
+ #amp-one.a-approachable-shell[data-work-surface=home] .a-work-brand{display:flex;border:0;padding-right:0}
  /* Keep Home and the chat title usable without spending phone width on a separator. */
  #amp-one.a-approachable-shell .a-work-home-crumb+svg{display:none}
  #amp-one.a-approachable-shell .a-work-browser{padding:24px 16px}

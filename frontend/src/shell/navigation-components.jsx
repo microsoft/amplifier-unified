@@ -1,7 +1,7 @@
 import {WorkspacePlans,WorkspacePlan} from '../workspace-plans';
 import {revealNavigationTitles} from '../navigation-title';
 import {useChatTitle} from '../use-chat-title';
-import {WorkNavigationContext} from '../work-navigation';
+import {WorkNavigationContext,workSurface} from '../work-navigation';
 import {ArchiveButton} from '../archive-feedback.jsx';
 import React,{useEffect,useLayoutEffect,useRef,useState,useContext,useId} from 'react';
 import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Folder,MoreHorizontal,ArrowUp,ArrowDown,Plus} from 'lucide-react';
@@ -160,8 +160,9 @@ function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
  const preview=useChatTitle(chat);
  chat={...chat,title:preview.title,titlePreviewSource:preview.source};
  const {state,choose}=model,title=chat.title,activity=activityFor(chat,state);
- const content=<>{handle}<button className="a-nav-chat-select" type="button" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref} data-scroll-title className="a-nav-chat-title"><span>{title}</span></span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
- const className='a-nav-chat '+(chat.id===state.selectedSessionId?'is-selected':'');
+ const selected=workSurface(state)==='chat'&&chat.id===state.selectedSessionId;
+ const content=<>{handle}<button className="a-nav-chat-select" type="button" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action="session.select" aria-current={selected?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref} data-scroll-title className="a-nav-chat-title"><span>{title}</span></span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
+ const className='a-nav-chat '+(selected?'is-selected':'');
  // The drag preview uses the exact same contents without interactive flyouts.
  if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
  return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-session-id={chat.id} label={title} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>{content}<ChatShortcutBadge id={chat.id}/></NavigationRow>;
