@@ -936,4 +936,40 @@ change. Preparation tests cover one saved waiting/build deadline and independent
 dependency recipe identity. This adds no duplicate browser scenario or broad
 publication gate and does not claim physical-runner deployment acceptance.
 
+
+## Registered test machines (October 20)
+
+PR #922 extends the existing `testing-settings-browser.mjs` owner with global
+approved-machine setup and per-target limits. The frozen inventory and browser
+registry remain unchanged. `settings.registered-test-machines` records the additive
+workflow in the delta inventory.
+
+The mounted built-client/AppService fixture covers named unsaved drafts,
+registration and target-policy acknowledgement loss with one write/readback,
+stale policy revisions, zero limits, pause plus controller refresh, narrow layout
+and cold reopen. Remote transport is a bounded fixture and changes no live policy.
+Focused origin/controller tests cover target identity, pre-effect binding,
+cancellation, unknown recovery, archive containment and original-package cleanup.
+
+Separate native Linux evidence includes source/check/export/cleanup on two
+approved machines, a bounded serial-versus-concurrent workload and an actual
+AppService/TestQueue route with the first target's observed capacity saturated.
+See [Registered test machines](../registered-test-machines.md) for timings,
+evidence boundaries and remaining platform setup work.
+
 Integrated model-capacity, testing settings and existing-chat adoption coverage totals 102 registered scenarios and 145 distinct readiness/extended scripts (144 excluding attachment consumption), preserving the frozen 65-scenario baseline.
+
+
+### Per-chat test queue (October 20)
+
+PR #925 extends the existing `testing-settings-browser.mjs` owner with the global
+Maximum pending checks per chat field. The production service and built client
+passed saved-value readback after a lost acknowledgement, stale-writer refusal
+with retained edits, desktop/narrow controls and cold reopen. The default remains
+1; higher values queue FIFO work behind the chat's single owned environment.
+
+Focused real-dispatch tests cover full counts beyond a displayed page, local and
+remote cleanup boundaries, concurrent scheduler passes, restart and the exact
+initial-allocation cancellation gap. Unknown or advanced owners remain held. This
+is controlled-backend and rendered-client evidence, not live runner deployment.
+No new broad test lane or publication gate is added.

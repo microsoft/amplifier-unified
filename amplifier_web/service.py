@@ -363,6 +363,8 @@ from .task_environments import definitions as environment_definitions
 ACTION_DEFINITIONS.update(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
 ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+from .registered_test_runners import definitions as test_runner_definitions
+ACTION_DEFINITIONS.update(test_runner_definitions(schema, string))
 from .test_execution_settings import definitions as test_execution_definitions
 ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
@@ -442,6 +444,7 @@ for _access, _actions in {
         *environment_definitions(schema, string),
         *test_queue_definitions(schema, string),
         *test_capacity_definitions(schema, string),
+        *test_runner_definitions(schema, string),
         *assignment_definitions(schema, string),
         *handoff_definitions(schema, string),
     },
@@ -1938,6 +1941,9 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in test_runner_definitions(schema, string):
+            from .registered_test_runners import dispatch as test_runner_dispatch
+            return await test_runner_dispatch(self, action, args, configuration_authority)
         if action in test_capacity_definitions(schema, string):
             from .test_capacity_settings import dispatch as test_capacity_dispatch
             return await test_capacity_dispatch(self, action, args, configuration_authority)

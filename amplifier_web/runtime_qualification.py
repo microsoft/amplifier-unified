@@ -284,6 +284,10 @@ async def freeze(manager, generation, project):
     # Filesystem scans and payload hashing must not stall the serving event
     # loop while existing conversations continue on their pinned generation.
     graph = await asyncio.to_thread(installed_graph, project)
+    from .runtime_registry_updates import verify_candidate, RECEIPT as registry_receipt
+    registry_path = receipt / registry_receipt
+    if registry_path.exists():
+        verify_candidate(project, json.loads(registry_path.read_text()), graph=graph)
     policies = environments.shared_build_policies(manager.home, generation, graph)
     for row in graph:
         vcs = row.get('directUrl', {}).get('vcs_info', {})
@@ -305,10 +309,22 @@ async def freeze(manager, generation, project):
     installed = environments.installed_sources(project, graph=graph, tracked=checked)
     for name, policy in checked.items():
         source = installed.get(name, {})
-        if (source.get('override') or source.get('current') != policy['revision']
-                or source.get('url') != policy['url']
-                or source.get('subdirectory', '') != policy.get('subdirectory', '')):
-            raise ValueError('The installed worker differs from its checked source policy.')
+        mismatches = []
+        if not source or source.get('override'):
+            mismatches.append('source')
+        for field, actual, expected in (
+                ('repository', source.get('url'), policy['url']),
+                ('revision', source.get('current'), policy['revision']),
+                ('subdirectory', source.get('subdirectory', ''), policy.get('subdirectory', ''))):
+            if actual != expected:
+                mismatches.append(field)
+        if mismatches:
+            error = ValueError('The installed worker differs from its checked source policy.')
+            error.diagnostic_facts = {
+                'reason': 'runtime-installed-source-mismatch', 'package': name,
+                'resolutionMismatches': mismatches,
+            }
+            raise error
         policies[name] = policy
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')

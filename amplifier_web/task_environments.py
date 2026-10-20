@@ -33,9 +33,16 @@ from . import test_host_resources as host_resources
 from . import test_environment_recovery as recovery
 from . import test_environment_setup as setup
 from . import test_capacity_settings as capacity_settings
+from . import registered_test_runners as registered_runners
 
 REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe'
-DTU_COMMIT = '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04'
+DTU_COMMIT = '5235833098d9a630791452a46558d92f58af0389'
+# New setup selects DTU_COMMIT. Existing owners retain their exact installation
+# so qualifying a new snapshot never strands its predecessor's cleanup.
+QUALIFIED_DTU_COMMITS = frozenset({
+    '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04',
+    DTU_COMMIT,
+})
 APPROVED_IMAGE = 'docker.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f'
 KIND = 'test-environment'
 PROFILE = 'linux-python'
@@ -95,11 +102,12 @@ def validate_configuration_value(app, value):
         raise ValueError('The operator configuration contains unsupported settings.')
     if 'retentionMode' in value and value['retentionMode'] not in {'files', 'full'}:
         raise ValueError('Choose files or full environment retention.')
-    if not DTU_COMMIT or value.get('commit') != DTU_COMMIT:
+    commit = value.get('commit')
+    if not isinstance(commit, str) or commit not in QUALIFIED_DTU_COMMITS:
         raise ValueError('The managed backend is not pinned to this app’s qualified revision.')
     manager = getattr(app, 'smart_tools', None)
     installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
-    if not installation or installation.get('status') != 'installed' or installation.get('commit') != DTU_COMMIT or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
+    if not installation or installation.get('status') != 'installed' or installation.get('commit') != commit or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
         raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
     identity = installation['id']
     if not re.fullmatch(r'[a-f0-9]{24}', identity):
@@ -143,6 +151,7 @@ def resolve_configuration(app, row, active):
 def public(home, row):
     return {key: value for key, value in {
         'id': row['id'], 'sessionId': row['sessionId'], 'workspaceId': row['workspaceId'],
+        'testMachine': row.get('testMachine'),
         'revision': row['revision'], 'profileId': row['profileId'],
         'resourceRequest': row.get('resourceRequest'), 'timingRequest': row.get('timingRequest'),
         'machineResources': {key: value for key, value in row.get('hostReservation', {}).items() if key not in {'binding', 'version', 'phase'}},
@@ -221,6 +230,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
                'resourceRequest': resource_request, 'timingRequest': timing_request, 'preparationRequired': profile['preparationRequired'],
                'backendInstallation': installation,
                'backendConfigRetained': backend_config is not None,
+               'testMachine': ({key: backend_config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if backend_config and backend_config.get('remoteRunner') else None),
                **({'retentionMode': backend_config.get('retentionMode', 'files'),
                    'backendType': backend_config.get('backend', 'docker')} if backend_config is not None else {}),
                'status': 'prepared', 'environmentState': 'preparing', 'revision': 1,
@@ -250,9 +260,11 @@ def invoke(config, home, row, action, args):
                'admissionRevision': args.get('expectedRevision'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
                'jobId': args.get('jobId', args.get('requestId')),
-               'profileId': row.get('profileId', PROFILE), 'resourceRequest': row.get('resourceRequest'),
+               'profileId': row.get('profileId', PROFILE), 'resourceRequest': row.get('resourceRequest'), 'timingRequest': row.get('timingRequest'),
                'timeoutSeconds': args.get('timeoutSeconds', 60),
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
+    if config.get('remoteRunner'):
+        return registered_runners.invoke(config, folder, payload)
     helper = Path(__file__).with_name('test_environment_worker.py')
     if config.get('backend') == 'incus':
         helper = Path(__file__).with_name('incus_environment_worker.py')
@@ -312,7 +324,19 @@ def invoke(config, home, row, action, args):
 def capacity(app, config):
     try:
         result = invoke(capacity_settings.apply(app, config), app.data_dir, {}, 'capacity', {})
-        return result['capacity'] if result.get('ok') else {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
+        if not result.get('ok'):
+            return {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
+        observed = result['capacity']
+        if result.get('machineResources'):
+            observed = {**observed, 'machineResources': result['machineResources']}
+        elif config.get('backend') == 'incus':
+            from . import incus_environment_worker as incus_worker
+            target = incus_worker.host_target(config['incus'], incus_worker.environment(config['incus'], app.data_dir))
+            if target.get('supported'):
+                observed = {**observed, 'machineResources': host_resources.snapshot()}
+        elif host_resources.local_target(config.get('dockerHost'), {'dockerd'}).get('supported'):
+            observed = {**observed, 'machineResources': host_resources.snapshot()}
+        return observed
     except (OSError, ValueError, TimeoutError):
         return {'available': False, 'blockers': [{'code': 'capacity_unknown'}]}
 
@@ -429,9 +453,13 @@ def project_result(home, row, request):
 
 def cleanup_preparation(home, row, config):
     try:
-        result = dependencies.cleanup(config, storage.directory(home, row))
+        if config.get('remoteRunner'):
+            result = invoke(config, home, row, 'cleanupDependencies', {'requestId': str(row.get('pendingRequest') or row['launchOperationId']) + ':dependencies'})
+        else:
+            result = dependencies.cleanup(config, storage.directory(home, row))
     except (OSError, ValueError, KeyError, TypeError, TimeoutError):
         result = {'complete': False, 'status': 'unknown', 'reason': 'The owned preparation cleanup could not be verified.'}
+    result = {**result, 'complete': result.get('complete') is True}
     row = save(home, row, preparationCleanup=result, preparationPending=not result['complete'])
     return row, result
 
@@ -608,9 +636,23 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                     if profiles.resources(row['profileId'], row.get('resourceRequest'))['preparationRequired']:
                         # Persist ownership before the networked builder can exist.
                         row = save(home, row, preparationPending=True)
-                        prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
-                            row['snapshot'], row['profileId'], request['requestId'],
-                            resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'))
+                        if config.get('remoteRunner'):
+                            prepared_result = invoke(config, home, row, 'prepareDependencies', args)
+                            if prepared_result.get('admissionDenied'):
+                                row, cleanup = cleanup_preparation(home, row, config)
+                                result = {**prepared_result, 'preparationCleanup': cleanup}
+                                if not cleanup.get('complete'):
+                                    result.update(admissionDenied=False, effectAdmitted=True, status='unknown')
+                                request = app.operations.requests.finish(request, 'failed' if cleanup.get('complete') else 'outcome_unknown', resourceId=row['id'], result=result, message=result.get('message'))
+                                row = project_result(home, row, request)
+                                return {'resource': public(home, row), 'request': request}
+                            if not prepared_result.get('ok'):
+                                raise ValueError(prepared_result.get('message', 'The target preparation is unconfirmed.'))
+                            prepared_dependencies = prepared_result['preparedDependencies']
+                        else:
+                            prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
+                                row['snapshot'], row['profileId'], request['requestId'],
+                                resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'))
                         row = save(home, row, preparedDependencies=prepared_dependencies)
                         host_resources.settle(row, phase='launching')
                     if policy_admit:
@@ -785,6 +827,9 @@ def cancel_preparation(app, row):
         return
     if storage.observe(app.data_dir, row)['observation'] != 'present':
         return  # Admission checks the saved queue cancellation before allocation.
+    if row.get('testMachine'):
+        config = resolve_configuration(app, row, None)
+        return invoke(config, app.data_dir, row, 'cancelPreparation', {'requestId': row['launchOperationId'] + ':cancel-preparation'})
     folder = storage.directory(app.data_dir, row) / 'preparation'
     folder.mkdir(mode=0o700, exist_ok=True)
     descriptor = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

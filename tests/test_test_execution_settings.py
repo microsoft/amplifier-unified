@@ -22,7 +22,7 @@ async def save(app, queue=None, profiles=None):
 async def test_passive_private_global_policy_and_stale_writer(app, monkeypatch):
     monkeypatch.setattr(environments, 'capacity', lambda *a: pytest.fail('not an admission'))
     first = (await app.dispatch('testing.execution.read', {}))['result']
-    assert first['effectiveQueue'] == {'maxPending': 64, 'defaultWaitSeconds': 3600}
+    assert first['effectiveQueue'] == {'maxPending': 64, 'maxPendingPerChat': 1, 'defaultWaitSeconds': 3600}
     result = await save(app, {'maxPending': 100, 'defaultWaitSeconds': 0}, {'linux-python': {'cpus': 3}})
     assert result['effectiveProfiles'][0]['cpus'] == 3
     assert (app.data_dir / 'test-execution.json').stat().st_mode & 0o777 == 0o600
@@ -109,7 +109,7 @@ async def test_zero_wait_still_obeys_stop_and_explicit_wait_limit(app, queue, ba
     assert 0 < record(queue, app, 'bounded')['job']['expiresAt'] - time.time() <= 20
 
 @pytest.mark.parametrize('value', [
-    {'queue': {'maxPending': 0}}, {'queue': {'defaultWaitSeconds': -1}},
+    {'queue': {'maxPending': 0}}, {'queue': {'maxPendingPerChat': 0}}, {'queue': {'maxPendingPerChat': True}}, {'queue': {'defaultWaitSeconds': -1}},
     {'profiles': {'linux-python': {'cpus': True}}}, {'profiles': {'browser-test': {'memoryMiB': 0}}},
     {'profiles': {'python-project': {'defaultTimeoutSeconds': 9000, 'maxTimeoutSeconds': 100}}},
 ])
