@@ -1539,6 +1539,63 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#shared-machine-test-resources-october-20"
+    },
+    {
+      "id": "delta.908",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/908",
+      "reason": "An authorized manager can add an existing chat; retain the frozen inventory and add the new browser owner.",
+      "workflowsAdded": [
+        {
+          "id": "workspace.assignment-adoption",
+          "family": "workspace",
+          "title": "Add an existing chat to shared work without losing drafts or repeating requests",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat overview",
+            "Tasks and workers",
+            "Shared tasks and assignment",
+            "Add an existing chat"
+          ],
+          "prerequisites": [
+            "Built production client and isolated production-service fixture with synthetic runtime",
+            "Existing manager assignment and independent stopped chat"
+          ],
+          "steps": [
+            "Keep an unsent manager draft and open the existing-chat picker",
+            "Change the target Stop revision before Add chat; refresh the rejected review",
+            "Drop the acknowledgement after a committed adoption, then check the same change",
+            "Reload and inspect at desktop and phone widths"
+          ],
+          "expectedResults": [
+            "Stale review cannot add the chat and refresh is available",
+            "Unknown response retries the same request identity and binds exactly one member",
+            "No conversation input, Stop clear, history edit, navigation or draft loss occurs",
+            "The confirmed assignment survives reload with no horizontal overflow"
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "stale-review",
+            "lost-acknowledgement",
+            "cold-reopen"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/assignment-adoption-browser.mjs",
+              "relation": "Extended browser checks owner and focused affected-flow smoke"
+            },
+            {
+              "path": "tests/test_assignment_adoption.py",
+              "relation": "Authority, Stop, ownership, native settlement, concurrency and restart contracts"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime proves service/browser interaction, not paid-provider execution or installed-host adoption.",
+            "Adding a chat does not itself continue work or change its execution folder."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#existing-chat-adoption-october-20"
     }
   ]
 }

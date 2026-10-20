@@ -722,7 +722,8 @@ def execute_call(payload):
             if not source_ready(root, identity, snapshot):
                 return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                         'message': 'Source preparation is not confirmed for this exact snapshot. No check was started and source was not installed again.'}
-            result = lib.execute(identity, payload['command'], workdir='/workspace',
+            command = jobs.command({**payload, 'jobEnvironment': selected_profile(payload)['environment']})
+            result = lib.execute(identity, command, workdir='/workspace',
                 timeout_seconds=payload['timeoutSeconds'], max_output_bytes=32768, config=config)
             return {'ok': True, 'universeId': identity, 'result': serialize(result)}
         if action == 'stop':
