@@ -59,11 +59,13 @@ async def install(app, runtime, *, manifest_path=None):
             if target is None:
                 continue
             original = getattr(target, name)
-            async def guarded(*args, _original=original, _name=name, **kwargs):
+            def guarded(*args, _original=original, _name=name, **kwargs):
                 if active_read.get():
                     cold_calls.append(_name)
                     raise AssertionError('Cold Work read hydrated or started a worker: ' + _name)
-                return await _original(*args, **kwargs)
+                # Preserve each original call shape: hydrate/ensure_runtime
+                # are synchronous, while ensure_loaded returns an awaitable.
+                return _original(*args, **kwargs)
             setattr(target, name, guarded)
 
     async def inspect(request):
