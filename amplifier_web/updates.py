@@ -1011,6 +1011,9 @@ class UpdateManager:
             await self.diagnostics.run('ecosystem-runtime-prepare', process, shutil.which('uv'), 'sync', '--locked',
                 '--project', str(project), '--python', '3.13', timeout=900)
         shared = store_environment(self.home) if worker_supports_shared(project) else {}
+        if fresh:
+            from .runtime_source_alignment import align_checked_sources
+            await self.diagnostics.run('ecosystem-source-preflight', align_checked_sources, self, stage)
         if fresh and shared:
             await self.diagnostics.run('ecosystem-source-sharing', adopt_clean_sources, self, stage)
         env={**os.environ,**shared,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':'','AMPLIFIER_INSTALL_PREPARATION':uuid.uuid4().hex}
