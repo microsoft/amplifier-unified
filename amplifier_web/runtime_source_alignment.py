@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 
-from .staged_sources import owned_path as _owned, owned_git_checkout, retarget_registry
+from .staged_sources import owned_path as _owned, owned_git_checkout, retarget_registry, require_exclusive_registry_owner
 
 
 async def align_checked_sources(manager, stage):
@@ -59,6 +59,7 @@ async def align_checked_sources(manager, stage):
         if dirty or current != data.get('commit'):
             raise ValueError('A staged managed source changed before preparation.')
         if current != policy['revision']:
+            require_exclusive_registry_owner(base / 'registry.json', data['git_url'], data.get('ref') or 'HEAD', root)
             rows.append({
                 'path': str(root.relative_to(base)), 'url': data['git_url'],
                 'ref': data.get('ref') or 'HEAD', 'current': current,

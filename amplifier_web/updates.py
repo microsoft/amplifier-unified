@@ -953,9 +953,12 @@ class UpdateManager:
                         self.diagnostics.record('ecosystem-source-preflight', 'failed', **exception_facts(error))
                     raise
         async def prepare(row):
-            from .staged_sources import owned_git_checkout, owned_path
+            from .staged_sources import owned_git_checkout, owned_path, require_exclusive_registry_owner
             target=stage/'foundation'/row['path']
-            await owned_git_checkout(target, stage/'foundation')
+            async def guard():
+                await owned_git_checkout(target, stage/'foundation')
+                require_exclusive_registry_owner(stage/'foundation/registry.json', row['url'], row['ref'], target)
+            await guard()
             phase='ecosystem-source-preflight'
             current=await self.diagnostics.run(phase,process,'git','rev-parse','HEAD',cwd=target)
             dirty,artifacts=await self.diagnostics.run(phase,cache_changes,target)
@@ -967,12 +970,12 @@ class UpdateManager:
             if artifacts:
                 # Restore only verified tracked artifacts in this copy.
                 # Rechecking here also protects edits made after check.
-                await owned_git_checkout(target, stage/'foundation')
+                await guard()
                 await self.diagnostics.run(phase,process,'git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
             await self.publish(detail='Downloading '+row['label']+'…')
-            await owned_git_checkout(target, stage/'foundation')
+            await guard()
             await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
-            await owned_git_checkout(target, stage/'foundation')
+            await guard()
             await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
             data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
             owned_path(meta, stage/'foundation').write_text(json.dumps(data))

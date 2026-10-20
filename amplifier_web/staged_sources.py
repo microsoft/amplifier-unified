@@ -87,14 +87,42 @@ def _references(value, root):
     return _suffix(value, root) is not None
 
 
+def _matches_source(row, url, ref):
+    from .update_sequence import git_source
+    from .updates import source_key
+    if not isinstance(row, dict):
+        return False
+    try:
+        source = git_source(row.get('uri'))
+        return source is not None and source_key(source['url'], source['ref']) == source_key(url, ref)
+    except ValueError:
+        return False
+
+
+def require_exclusive_registry_owner(registry, url, ref, root):
+    """In-place checkout must not change bytes used by another registration."""
+    registry = Path(registry)
+    if not registry.exists():
+        return
+    owned_path(registry, registry.parent)
+    data = json.loads(registry.read_text())
+    rows = data.get('bundles') if isinstance(data, dict) else None
+    if isinstance(rows, dict):
+        for row in rows.values():
+            if _matches_source(row, url, ref):
+                # Only the recognized convenience receipt is authorized by the
+                # authored moving source. Unknown/local references stay protected.
+                row.pop('local_path', None)
+    if _references(data, Path(root)):
+        raise ValueError('A staged source is shared with a pinned, local, or unrecognized registration.')
+
+
 def retarget_registry(registry, url, ref, old, new):
     """Retarget matching authored Git registrations; return any retained uses.
 
     local_path is only a receipt. Shared old paths do not authorize changes to
     another ref, an explicit local URI, arbitrary metadata, or unknown shapes.
     """
-    from .update_sequence import git_source
-    from .updates import source_key
     registry, old, new = Path(registry), Path(old), Path(new)
     if not registry.exists():
         return False
@@ -106,12 +134,7 @@ def retarget_registry(registry, url, ref, old, new):
         for row in rows.values():
             if not isinstance(row, dict):
                 continue
-            try:
-                source = git_source(row.get('uri'))
-                matches = source is not None and source_key(source['url'], source['ref']) == source_key(url, ref)
-            except ValueError:
-                matches = False
-            if not matches:
+            if not _matches_source(row, url, ref):
                 continue
             suffix = _suffix(row.get('local_path'), old)
             if suffix is not None:

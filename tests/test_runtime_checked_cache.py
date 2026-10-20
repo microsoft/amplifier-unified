@@ -464,3 +464,72 @@ async def test_git_ownership_is_rechecked_before_each_mutation(candidate, tmp_pa
     assert (external / 'bundle.md').read_text() == 'old'
     assert git(root, 'rev-parse', 'HEAD') == c.old
     assert len(c.fetches) == (1 if boundary == 'fetch' else 0)
+
+
+@pytest.mark.parametrize('route', ['align', 'direct'])
+@pytest.mark.parametrize('owner', ['pinned', 'local', 'other-ref', 'unknown'])
+async def test_legacy_cache_shared_with_other_registry_owners_is_preserved(candidate, route, owner):
+    c = candidate; root = c.copy()
+    uri = {'pinned': 'git+' + URL + '@' + c.old,
+           'local': (root / 'bundle.md').as_uri(),
+           'other-ref': 'git+' + URL + '@release', 'unknown': 'unrecognized-source'}[owner]
+    registry = c.stage / 'foundation/registry.json'
+    registry.write_text(json.dumps({'bundles': {
+        'moving': {'uri': 'git+' + URL + '@main', 'local_path': str(root)},
+        'protected': {'uri': uri, 'local_path': str(root)},
+    }}))
+    before = registry.read_bytes()
+    with pytest.raises(ValueError, match='shared'):
+        if route == 'align':
+            await alignment.align_checked_sources(c.manager, c.stage)
+        else:
+            await c.manager.stage_cache_sources(c.stage, [{'path': str(root.relative_to(c.stage / 'foundation')),
+                'url': URL, 'ref': 'main', 'current': c.old, 'latest': c.new, 'label': 'fixture'}])
+    assert (root / 'bundle.md').read_text() == 'old'
+    assert git(root, 'rev-parse', 'HEAD') == c.old and not c.fetches
+    assert registry.read_bytes() == before
+
+
+async def test_exclusive_moving_legacy_registration_remains_updatable(candidate):
+    c = candidate; root = c.copy()
+    registry = c.stage / 'foundation/registry.json'
+    registry.write_text(json.dumps({'bundles': {'moving': {
+        'uri': 'git+' + URL + '@main', 'local_path': str(root)}}}))
+    before = registry.read_bytes()
+    await alignment.align_checked_sources(c.manager, c.stage)
+    assert (root / 'bundle.md').read_text() == 'new'
+    assert registry.read_bytes() == before
+
+
+async def test_mixed_legacy_owner_preflight_protects_all_copies(candidate):
+    c = candidate; clean = c.copy('a-clean'); shared = c.copy('z-shared')
+    (c.stage / 'foundation/registry.json').write_text(json.dumps({'bundles': {
+        'local': {'uri': (shared / 'bundle.md').as_uri(), 'local_path': str(shared)}}}))
+    with pytest.raises(ValueError, match='shared'):
+        await alignment.align_checked_sources(c.manager, c.stage)
+    assert all(git(root, 'rev-parse', 'HEAD') == c.old for root in (clean, shared))
+    assert not c.fetches
+
+
+async def test_new_registry_owner_before_checkout_is_rechecked(candidate, monkeypatch):
+    c = candidate; root = c.copy()
+    original = updates.process
+    async def process(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        if 'fetch' in args:
+            (c.stage / 'foundation/registry.json').write_text(json.dumps({'bundles': {
+                'local': {'uri': (root / 'bundle.md').as_uri(), 'local_path': str(root)}}}))
+        return result
+    monkeypatch.setattr(updates, 'process', process)
+    with pytest.raises(ValueError, match='shared'):
+        await alignment.align_checked_sources(c.manager, c.stage)
+    assert (root / 'bundle.md').read_text() == 'old'
+    assert git(root, 'rev-parse', 'HEAD') == c.old
+
+
+async def test_already_aligned_mixed_registry_does_not_block_noop(candidate):
+    c = candidate; root = c.copy(revision=c.new)
+    (c.stage / 'foundation/registry.json').write_text(json.dumps({'bundles': {
+        'local': {'uri': (root / 'bundle.md').as_uri(), 'local_path': str(root)}}}))
+    await alignment.align_checked_sources(c.manager, c.stage)
+    assert git(root, 'rev-parse', 'HEAD') == c.new and not c.fetches
