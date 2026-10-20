@@ -219,6 +219,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        "assignment-adoption": {},
         'diagram-navigation': {'DIAGRAM_EVIDENCE': '{root}/output/browser-checks/diagram-navigation/report.json'},
         'chat-shortcuts': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/chat-shortcuts'},
         'automation-hub': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/automation-hub'},
@@ -268,7 +269,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 99
+    assert len(original) == 65 and len(rows) == 100
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},

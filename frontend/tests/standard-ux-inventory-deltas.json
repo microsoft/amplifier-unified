@@ -263,8 +263,8 @@
           "title": "Archive with truthful progress, guarded navigation, and Undo",
           "scope": "standard-path",
           "entryPath": [
-            "Chat \u2192 Archive",
-            "Row Details \u2192 Archive"
+            "Chat → Archive",
+            "Row Details → Archive"
           ],
           "prerequisites": [
             "Synthetic isolated archive fixture; no real user files or runtime execution"
@@ -284,7 +284,7 @@
             "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
             "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
             "Undo is available after archive confirmation even while the following navigation is stalled.",
-            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
+            "A newer navigation intention, including A→B→A, prevents the old archive from redirecting.",
             "Archiving a different row or invoking the raw public action does not navigate the current view.",
             "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
             "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
@@ -1427,6 +1427,63 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#adaptive-home-october-19"
+    },
+    {
+      "id": "delta.908",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/908",
+      "reason": "An authorized manager can add an existing chat; retain the frozen inventory and add the new browser owner.",
+      "workflowsAdded": [
+        {
+          "id": "workspace.assignment-adoption",
+          "family": "workspace",
+          "title": "Add an existing chat to shared work without losing drafts or repeating requests",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat overview",
+            "Tasks and workers",
+            "Shared tasks and assignment",
+            "Add an existing chat"
+          ],
+          "prerequisites": [
+            "Built production client and isolated production-service fixture with synthetic runtime",
+            "Existing manager assignment and independent stopped chat"
+          ],
+          "steps": [
+            "Keep an unsent manager draft and open the existing-chat picker",
+            "Change the target Stop revision before Add chat; refresh the rejected review",
+            "Drop the acknowledgement after a committed adoption, then check the same change",
+            "Reload and inspect at desktop and phone widths"
+          ],
+          "expectedResults": [
+            "Stale review cannot add the chat and refresh is available",
+            "Unknown response retries the same request identity and binds exactly one member",
+            "No conversation input, Stop clear, history edit, navigation or draft loss occurs",
+            "The confirmed assignment survives reload with no horizontal overflow"
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "stale-review",
+            "lost-acknowledgement",
+            "cold-reopen"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/assignment-adoption-browser.mjs",
+              "relation": "Extended browser checks owner and focused affected-flow smoke"
+            },
+            {
+              "path": "tests/test_assignment_adoption.py",
+              "relation": "Authority, Stop, ownership, native settlement, concurrency and restart contracts"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime proves service/browser interaction, not paid-provider execution or installed-host adoption.",
+            "Adding a chat does not itself continue work or change its execution folder."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#existing-chat-adoption-october-20"
     }
   ]
 }
