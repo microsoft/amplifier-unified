@@ -31,7 +31,7 @@ static_hashes = {str(path.relative_to(static)): hashlib.sha256(path.read_bytes()
 assert 'build.json' in static_hashes
 source_path = root / 'frontend/tests/mcp-recovery-browser.mjs'
 source = source_path.read_text()
-assert hashlib.sha256(source_path.read_bytes()).hexdigest() == '3030b649eb22c9d3e8786ab668c7b5e1cda67aa42931a3bbe0328ae0a1b2cf9b'
+assert hashlib.sha256(source_path.read_bytes()).hexdigest() == '26a2ea23c94fb3f38377a8054d5806f9bd321a1c695c4bf74d1e860a9f7cba8a'
 positive = []
 for number in range(1, 4):
     name = f'mcp-recovery-repeat-{number}'

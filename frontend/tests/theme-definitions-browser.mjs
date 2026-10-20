@@ -21,7 +21,7 @@ try{
  const tokens=['bg','surface','soft','ink','muted','line','accent','tint','green','danger'];
  const definition={version:1,palette:{light:Object.fromEntries(tokens.map(key=>[key,key==='bg'?'#eef8f6':'#245b53'])),dark:Object.fromEntries(tokens.map(key=>[key,key==='bg'?'#102c28':'#b4e4d8']))},background:{light:'linear-gradient(135deg, #b4e4d8, #eef8f6)',dark:'radial-gradient(ellipse at top, #245b53, #102c28)'}};
  const css=()=>page.locator('#amp-one').evaluate(el=>{const s=getComputedStyle(el);return {background:s.backgroundImage,color:s.backgroundColor,scheme:s.colorScheme}});
- await page.goto(url);await showFixtureConversation(page);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:false});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  await action('session.create');
  const draft='Preserve this unsent draft\nwith eight\nsaved\nlines\nthat need\nroom\nto stay\nreadable';
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);

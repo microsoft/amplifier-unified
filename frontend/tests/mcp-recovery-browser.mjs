@@ -34,14 +34,34 @@ const built=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcef
 await writeFile(htmlPath,`<!doctype html><h1>Original saved document</h1><output id="count"></output><output id="recovered"></output><button id="add">Add one</button><input aria-label="Unfinished tool input"><p id="error"></p><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script>`);
 let fixture,browser,secondBrowser;
 async function start(port=0){
- fixture=spawn(python,[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{stdio:['ignore','pipe','inherit'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
+ fixture=spawn(python,[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{detached:process.platform!=='win32',stdio:['ignore','pipe','inherit'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
  return new Promise((resolve,reject)=>{
   let output='';const timeout=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
   fixture.once('exit',code=>{clearTimeout(timeout);reject(Error('Fixture exited '+code))});
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const value=JSON.parse(line);if(value.url){clearTimeout(timeout);resolve(value.url)}}catch{}}});
  });
 }
-async function stop(){if(fixture&&fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');await exited}fixture=null}
+async function stop(){
+ if(!fixture)return;
+ const child=fixture;fixture=null;
+ if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited}
+ if(process.platform==='win32')return;
+ // The host may finish while a cancelled bundle download still has an owned
+ // child writing this fixture's cache. Close that private process group before
+ // removing the directory; a recursive delete retry would conceal the leak.
+ const signal=kind=>{try{process.kill(-child.pid,kind);return true}catch(error){if(error.code==='ESRCH')return false;throw error}};
+ if(!signal('SIGTERM'))return;
+ for(let attempt=0;attempt<100;attempt++){
+  if(!signal(0))return;
+  await new Promise(resolve=>setTimeout(resolve,50));
+ }
+ signal('SIGKILL');
+ for(let attempt=0;attempt<100;attempt++){
+  if(!signal(0))return;
+  await new Promise(resolve=>setTimeout(resolve,50));
+ }
+ throw Error('Owned MCP fixture process group did not close before cache cleanup');
+}
 const mutations=async()=>((await readFile(callsPath,'utf8')).trim().split('\n').filter(Boolean)).length;
 const unwrap=raw=>raw?.action==='shell.command'?(raw.args.command||raw.args):raw;
 async function dismissFixtureSetup(page,boundary){
