@@ -1,3 +1,4 @@
+import {finishFixture} from './fixture-lifecycle.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -32,16 +33,47 @@ window.fixtureCall=name=>app.callServerTool({name,arguments:{}});
 await app.connect();document.body.dataset.booted='true';`;
 const built=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcefile:'recovery.js'},bundle:true,write:false,format:'esm'});
 await writeFile(htmlPath,`<!doctype html><h1>Original saved document</h1><output id="count"></output><output id="recovered"></output><button id="add">Add one</button><input aria-label="Unfinished tool input"><p id="error"></p><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script>`);
-let fixture,browser,secondBrowser;
+let fixture,browser,secondBrowser,originalError,cleanupComplete=false;
 async function start(port=0){
- fixture=spawn(python,[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{stdio:['ignore','pipe','inherit'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
+ fixture=spawn(python,[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{detached:process.platform!=='win32',stdio:['ignore','pipe','inherit'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
  return new Promise((resolve,reject)=>{
   let output='';const timeout=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
   fixture.once('exit',code=>{clearTimeout(timeout);reject(Error('Fixture exited '+code))});
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const value=JSON.parse(line);if(value.url){clearTimeout(timeout);resolve(value.url)}}catch{}}});
  });
 }
-async function stop(){if(fixture&&fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');await exited}fixture=null}
+async function stop(){
+ if(!fixture)return;
+ const child=fixture;fixture=null;let shutdownError,timer;
+ if(child.exitCode===null&&child.signalCode===null){
+  const exited=once(child,'exit');child.kill('SIGTERM');
+  try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('MCP fixture did not finish graceful shutdown')),10000)})])}
+  catch(error){shutdownError=error}
+  finally{clearTimeout(timer)}
+ }
+ if(process.platform==='win32'){
+  if(shutdownError)child.kill('SIGKILL');
+  if(shutdownError)throw shutdownError;
+  return;
+ }
+ // A cancelled bundle download may still write after the host exits. Retire
+ // only this fixture's private group, even when parent shutdown timed out.
+ const signal=kind=>{try{process.kill(-child.pid,kind);return true}catch(error){if(error.code==='ESRCH')return false;throw error}};
+ const waitForGroup=async()=>{
+  for(let attempt=0;attempt<100;attempt++){
+   if(!signal(0))return true;
+   await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  return false;
+ };
+ if(signal('SIGTERM')&&!await waitForGroup()){
+  signal('SIGKILL');
+  if(!await waitForGroup())throw Error('Owned MCP fixture group remained alive after forced cleanup',{cause:shutdownError});
+  throw Error('Owned MCP fixture group required forced cleanup',{cause:shutdownError});
+ }
+ if(shutdownError)throw shutdownError;
+}
+
 const mutations=async()=>((await readFile(callsPath,'utf8')).trim().split('\n').filter(Boolean)).length;
 const unwrap=raw=>raw?.action==='shell.command'?(raw.args.command||raw.args):raw;
 async function dismissFixtureSetup(page,boundary){
@@ -224,4 +256,12 @@ try{
  await page.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT||join(directory,'mcp-recovery.png')});
  assert.deepEqual(errors,[]);
  console.log('MCP recovery browser passed: actual MCP SDK, disconnect and host restart, same artifact/source hash, historical launch receipt, explicit unchanged-contract rebind without frame/input replacement, single SDK recovery notification and safe read, explicit history/Latest selection, no replayed mutations, changed schema denied until exact review, current-HTML adoption with no launch replay, new tools ungranted, second-client saved iframe/input preserved and read-only, composer preserved.');
-}finally{await secondBrowser?.close();await browser?.close();await stop();await rm(directory,{recursive:true,force:true})}
+}catch(error){originalError=error;throw error}finally{
+ try{
+  await finishFixture({label:'MCP recovery fixture',close:[
+   ['second browser',async()=>{await secondBrowser?.close()}],
+   ['browser',async()=>{await browser?.close()}],
+  ],stop:async()=>{await stop();await rm(directory,{recursive:true,force:true})}});
+  cleanupComplete=true;
+ }catch(error){if(originalError)console.error(error);else throw error}
+}

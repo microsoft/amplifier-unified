@@ -26,6 +26,9 @@ export async function openChatAdvancedPage(page,title){
  // the main panel's Close button. Only dismiss the actual mounted panel.
  const dialog=page.locator('[data-part="dialog"]:visible');
  if(await dialog.count())await dialog.getByRole('button',{name:/^Close (panel|settings)$/i}).click();
+ // Settings can be opened from Home. Advanced controls belong to the selected
+ // conversation; enter it without changing selection or sidebar preference.
+ await showFixtureConversation(page,{navPinned:await page.evaluate(()=>window.amplifier.getState().view.navPinned)});
  await page.getByRole('button',{name:'Chat',exact:true}).click();
  await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Advanced',exact:true}).click();
  await page.getByRole('navigation',{name:'Advanced chat options'}).getByRole('button',{name:new RegExp('^'+title.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'))}).click();

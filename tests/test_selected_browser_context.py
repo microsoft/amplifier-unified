@@ -69,7 +69,7 @@ async def test_ordinary_web_publication_never_constructs_hidden_pages(app_factor
     ({'panel': 'chat-work'}, {}, True),
     ({'panel': 'runtime', 'runtimeDraft': {'tab': 'direction'}}, {}, True),
     ({'panel': 'runtime', 'runtimeDraft': {'tab': 'tools'}}, {}, False),
-    ({'panel': None}, {'open': True, 'placeholder': True}, True),
+    ({'panel': None, 'workSurface': 'chat'}, {'open': True, 'placeholder': True}, True),
     ({'panel': None}, {'open': False}, False),
     ({'panel': None, 'settingsCanvas': True}, {'open': True}, False),
     ({'panel': None, 'workSurface': 'workspace'}, {'open': True}, False),

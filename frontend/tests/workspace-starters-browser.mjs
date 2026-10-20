@@ -90,9 +90,9 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Retain this draft through starter setup');
  await action('attachment.add',{sessionId:null,name:'notes.txt',base64:'aGVsbG8='});
  await page.getByRole('button',{name:'Choose project',exact:true}).click();
- await page.getByRole('button',{name:'New project',exact:true}).click();
+ await page.getByRole('dialog',{name:'Choose a project',exact:true}).getByRole('button',{name:'New project',exact:true}).click();
  let form=page.getByRole('form',{name:'Create project'});
- await form.getByLabel('Workspace name',{exact:true}).fill('Team project');
+ await form.getByLabel('Project name',{exact:true}).fill('Team project');
  await expect(form.getByLabel('Start from…',{exact:true}).locator('option').filter({hasText:'My team starter'})).toHaveCount(1);
  await form.getByLabel('Start from…',{exact:true}).selectOption({label:'My team starter'});
  await page.screenshot({path:out+'/start-from.png'});
