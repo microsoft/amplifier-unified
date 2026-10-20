@@ -728,9 +728,9 @@ class UpdateManager:
                 rows = await self.inventory_sources(indexed=True)
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
                 remote_tasks = {}
-                from .update_checks import git_revision
-                async def remote(url, ref):
-                    return await git_revision(url, ref, process)
+                from .update_checks import git_revision, ref_policy
+                async def remote(url, ref, prove_kind):
+                    return await ref_policy(url, ref, process) if prove_kind else await git_revision(url, ref, process)
                 async def check_row(row):
                     if not row.get('eligible') or row.get('kind') == 'runtime environment': return
                     if row.get('registryManaged'):
@@ -740,12 +740,36 @@ class UpdateManager:
                         except (ValueError, RuntimeError, TimeoutError):
                             row['status'] = 'check_failed'
                         return
-                    key = (row['url'],row['ref'])
+                    origin = row.get('policyOrigin') or {}
+                    typed_policy = (origin.get('kind') in {'prepared-manifest', 'selected-declaration',
+                                                          'verified-cache-branch', 'checked-source'}
+                                    and all(origin.get(key, '') == row.get(key, '')
+                                            for key in ('url', 'ref', 'subdirectory'))
+                                    and origin.get('revision') == row.get('current'))
+                    # PEP 610 requested_revision has no ref kind. Legacy/raw
+                    # installed Git rows need the same proof as cache URIs;
+                    # retain an exact already-qualified authored policy.
+                    prove_kind = bool(row.get('cacheManaged') or row.get('sharedSource')
+                        or row.get('kind') == 'bundle / module'
+                        or row.get('kind') == 'runtime dependency' and not typed_policy)
+                    key = (row['url'], row['ref'], prove_kind)
                     task = remote_tasks.setdefault(key, None)
                     if task is None:
                         task = remote_tasks[key] = asyncio.create_task(remote(*key))
                     try:
-                        row['latest'] = await task
+                        result = await task
+                        if prove_kind:
+                            if result['kind'] == 'unresolved':
+                                row.update(status='check_failed', detail='This source reference could not be verified. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            if result['kind'] != 'branch':
+                                row.update(status='pinned', eligible=False,
+                                    detail='This source reference is not an unambiguous branch. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            result = result['revision']
+                        row['latest'] = result
                         row['status'] = 'update' if row['latest'] != row.get('current') else 'current'
                         if (row.get('kind') == 'smart tool' and row['status'] == 'update'
                                 and state.get('skippedSmartTools', {}).get(row.get('installationId')) == row['latest']):

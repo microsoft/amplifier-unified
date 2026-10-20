@@ -30,7 +30,7 @@ def carried_origin(policy, previous=None):
     valid = (isinstance(old, dict) and old.get('kind') and
              all(old.get(key, '') == policy.get(key, '') for key in ('url', 'ref', 'subdirectory')))
     return origin(policy, old['kind'] if valid else 'checked-source',
-                  **({key: old[key] for key in ('manifestSha256', 'originalRef') if key in old} if valid else {}))
+                  **({key: old[key] for key in ('manifestSha256', 'originalRef', 'resolution') if key in old} if valid else {}))
 
 
 def declarations(content):
@@ -203,4 +203,54 @@ def freeze_policies(home, generation, project, graph):
                         if not re.fullmatch('[a-f0-9]{40}', declaration['ref']):
                             kind, evidence = 'unresolved-reference', {'originalRef': declaration['ref']}
         policies[name] = with_origin(policy, kind, **evidence)
+    return policies
+
+
+async def qualify_cache_policies(policies, checked, runner):
+    """Prove newly inferred cache refs without changing any checked policy.
+
+    The installed revision remains the payload authority. A remote branch proves
+    update intent only at that same commit; a moved ref is not an install result.
+    """
+    import asyncio
+    from .update_checks import GIT_CHECK_CONCURRENCY, ref_policy
+    semaphore = asyncio.Semaphore(GIT_CHECK_CONCURRENCY)
+    async def read(url, ref):
+        async with semaphore:
+            return await ref_policy(url, ref, runner)
+    pending = {}
+    for name, policy in policies.items():
+        if name in checked or (policy.get('policyOrigin') or {}).get('kind') not in {
+                'owned-cache-declaration', 'owned-shared-binding'}:
+            continue
+        if re.fullmatch('[a-f0-9]{40}', policy['ref']):
+            continue
+        key = (policy['url'], policy['ref'])
+        if key not in pending:
+            pending[key] = asyncio.create_task(read(*key))
+    try:
+        outcomes = dict(zip(pending, await asyncio.gather(*pending.values(), return_exceptions=True)))
+    finally:
+        for task in pending.values():
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending.values(), return_exceptions=True)
+    for name, policy in list(policies.items()):
+        if name in checked or (policy.get('policyOrigin') or {}).get('kind') not in {
+                'owned-cache-declaration', 'owned-shared-binding'}:
+            continue
+        key = (policy['url'], policy['ref'])
+        if key not in outcomes:
+            continue
+        result = outcomes[key]
+        if isinstance(result, BaseException) and not isinstance(result, (OSError, ValueError, RuntimeError, TimeoutError)):
+            raise result
+        if not isinstance(result, BaseException) and result.get('kind') == 'branch' and result.get('revision') == policy['revision']:
+            policies[name] = with_origin(policy, 'verified-cache-branch')
+        else:
+            reason = ('unavailable' if isinstance(result, BaseException) else
+                      'changed-revision' if result.get('kind') == 'branch' else result['kind'])
+            policies[name] = with_origin({**policy, 'ref': policy['revision']},
+                'tag-reference' if reason == 'tag' else 'unresolved-reference',
+                originalRef=policy['ref'], resolution=reason)
     return policies

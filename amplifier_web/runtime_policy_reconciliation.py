@@ -254,19 +254,9 @@ def authored_constraints(content):
 
 
 async def moving_revision(url, ref, process):
-    """URI refs are ambiguous: accept only a branch with no same-named tag."""
-    if ref == 'HEAD':
-        from .update_checks import git_revision
-        return await git_revision(url, ref, process)
-    branch = 'refs/heads/' + ref.removeprefix('refs/heads/')
-    tag = 'refs/tags/' + ref.removeprefix('refs/heads/')
-    output = await process('git', 'ls-remote', url, branch, tag, timeout=35)
-    found = {}
-    for line in output.splitlines():
-        pair = line.split()
-        if len(pair) == 2 and re.fullmatch('[a-f0-9]{40}', pair[0]):
-            found[pair[1]] = pair[0]
-    return found.get(branch) if tag not in found else None
+    """Use the shared, access-scoped reference-kind proof."""
+    from .update_checks import moving_revision as checked_revision
+    return await checked_revision(url, ref, process)
 
 
 def selected_policies(candidates, report):
