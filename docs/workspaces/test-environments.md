@@ -158,3 +158,43 @@ For newly queued checks, that known pre-teardown failure admits one separately
 journaled cleanup continuation automatically. An unknown guest removal cannot
 be replayed manually or automatically under a new identity. The workspace's **Preserve files and finish cleanup**
 control and agents use the same action and authority boundary.
+
+
+## Global queue and execution settings
+
+Settings → Testing & resources → Test execution limits provides advanced defaults
+for every workspace on this installation. These settings do not change other
+installations' queues or replace shared machine admission budgets.
+
+- Maximum pending checks defaults to 64 and counts all queued, starting, checking,
+  stopping and removing jobs. Larger queues use rotating bounded cursor pages,
+  with complete journal counts; old waiting jobs cannot hide later jobs.
+- Default queue wait is 3,600 seconds. Zero keeps a request queued until Stop,
+  cancellation, or its existing authority/source/backend binding no longer holds.
+  Per-request `waitSeconds` may override this default, including zero.
+- Each profile has CPU cores, total memory, process limit, default/maximum check
+  time and dependency preparation time. Temporary-space and shared-memory sizing
+  apply to Docker only. Incus currently uses operating-system mounts within its
+  total memory limit; separate Incus tmpfs enforcement is not implemented here.
+- Check and preparation durations must be positive. The default check duration
+  cannot exceed its maximum. Dependency admission waiting and building share the
+  saved preparation budget; metadata probes retain their short observation bounds.
+
+Only newly accepted requests use changed resource and timing values. Each queued
+job and environment saves its exact resource and timing snapshot; recovery and
+cleanup retain the original backend and owner. Lowering queue depth never cancels
+accepted work. Queue `expiresAt: null` means no waiting expiry; existing numeric
+expiry receipts remain valid. Snapshot timing is separate from resource identity
+and dependency recipe/cache identity, so a duration change does not invalidate a
+prepared dependency recipe.
+
+`testing.execution.read` is passive. `testing.execution.save` requires the global
+`host_defaults` configuration authority and the current settings revision. Ordinary
+workspace tests retain their existing task authority. Settings use a private,
+atomic store; stale writes preserve the form draft, and an unknown save response
+is reconciled by readback without repeating the mutation.
+
+Numeric encoding bounds and existing metadata/archive/export protection remain
+fixed. These controls do not delete retained source, evidence, or user data and do
+not add automatic retention cleanup. One active owned environment per root and
+physical backend admission still apply.
