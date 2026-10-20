@@ -358,3 +358,11 @@ def test_incus_local_target_accepts_both_single_endpoint_formats(monkeypatch):
     assert worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']
     endpoint['Addrs'].append('https://another-machine')
     assert not worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']
+    endpoint['Addr'] = 'unix://'
+    assert not worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']
+    endpoint['Addrs'] = ['https://another-machine']
+    assert not worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']
+    endpoint['Addrs'] = ['unix://']
+    assert worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']
+    endpoint['addr'] = 'https://another-machine'
+    assert not worker.host_target({'incusExecutable': '/usr/bin/incus'}, {})['supported']

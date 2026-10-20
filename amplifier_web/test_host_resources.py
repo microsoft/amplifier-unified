@@ -218,6 +218,7 @@ def snapshot():
                 'limits': saved['limits'], 'effective': effective(saved, observation), 'observed': observation,
                 'reserved': {'cpus': sum(r['resources']['cpus'] for r in reservations),
                              'memoryMiB': sum(r['resources']['memoryMiB'] for r in reservations),
+                             'pendingMemoryMiB': sum(r['resources']['memoryMiB'] for r in reservations if r['phase'] != 'running'),
                              'preparing': sum(r['phase'] == 'preparing' for r in reservations), 'count': len(reservations)},
                 'scope': 'Native local runners using this OS account, across Amplifier installations and Docker / Incus. Remote runners, other accounts and older clients are not governed.'}
 

@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {useSettingsDraft} from './settings-drafts';
 import {SettingsActions} from './settings-layout';
+import {TestRunnerSettings} from './test-runner-settings';
 import {ExecutionLimits} from './testing-execution-settings';
 
 const gib=1024**3;
@@ -85,18 +86,20 @@ export function TestingSettings({act,navigate}){
    </details>
    <SettingsActions><button className="a-primary" disabled={busy||!dirty} onClick={save}>Save testing limits</button><button className="a-soft" disabled={busy} onClick={refresh}>{dirty?'Discard changes and reload':'Refresh settings'}</button></SettingsActions>
   </>}
-  <MachineResources act={act} navigate={navigate}/><ExecutionLimits act={act} navigate={navigate}/>
+  <MachineResources act={act} navigate={navigate}/>
+  <TestRunnerSettings act={act} navigate={navigate}/>
+  <ExecutionLimits act={act} navigate={navigate}/>
  </section>;
 }
 
 const machineFields=[['maxReservedCpu','Reserved CPU cores',1],['maxReservedMemoryMiB','Reserved memory (GiB)',1024],['minAvailableMemoryMiB','Keep memory available (GiB)',1024],['minFreeBytes','Keep home disk space free (GiB)',gib],['maxLoadPercent','Maximum CPU load (%)',1],['maxPreparing','Concurrent dependency builds',1]];
 const machineInputs=value=>Object.fromEntries(machineFields.map(([key,,unit])=>[key,value[key]===undefined?'':String(value[key]/unit)]));
-function MachineResources({act,navigate}){
+export function MachineResources({act,navigate,draftId='testing-machine',title='This machine’s test resources'}){
  const [data,setData]=useState(null),[draft,setDraft]=useState(machineInputs({})),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState('');
  const pending=useRef(false),action=useRef(act);action.current=act;
  const dirty=!!data?.supported&&JSON.stringify(draft)!==JSON.stringify(machineInputs(data.limits));
  function accept(current){setData(current);if(current.supported)setDraft(machineInputs(current.limits))}
- useSettingsDraft('testing-machine',{label:'Machine test resources',dirty,review:()=>navigate('testing'),discard:()=>{if(data)accept(data)}});
+ useSettingsDraft(draftId,{label:'Machine test resources',dirty,review:()=>navigate('testing'),discard:()=>{if(data)accept(data)}});
  async function load(){const response=await action.current('testing.machine.read',{});if(!response?.accepted||!response.result)throw Error(response?.error||'Machine resources could not be read.');return response.result}
  useEffect(()=>{let live=true;load().then(current=>{if(live)accept(current)}).catch(e=>{if(live)setError(e.message)});return()=>{live=false}},[]);
  async function refresh(){if(pending.current)return;pending.current=true;setBusy(true);setError('');try{accept(await load())}catch(e){setError(e.message)}finally{pending.current=false;setBusy(false)}}
@@ -110,7 +113,7 @@ function MachineResources({act,navigate}){
   }catch(e){let confirmed=false;if(intended)try{const current=await load();if(current.supported&&same(current.limits,intended.limits)){accept(current);setMessage('Current machine limits match your changes. No settings were replayed.');confirmed=true}}catch{}if(!confirmed)setError(e.message+' Your edits are kept.');}
   finally{pending.current=false;setBusy(false)}
  }
- return <section aria-label="Shared machine resources"><h4>This machine’s test resources</h4>
+ return <section aria-label="Shared machine resources"><h4>{title}</h4>
   {error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
   {data?.supported?<><p>{data.scope}</p><p>Reserved: {data.reserved.cpus} CPU cores and {(data.reserved.memoryMiB/1024).toFixed(1)} GiB memory across {data.reserved.count} checks. {data.reserved.preparing} dependency builds are admitted.</p>
    <p>Currently available: {(data.observed.availableMemoryMiB/1024).toFixed(1)} GiB memory and {(data.observed.freeBytes/gib).toFixed(1)} GiB disk space. These observations can change as other apps work.</p>
