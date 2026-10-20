@@ -162,7 +162,7 @@ def source_snapshot(app, path):
     if status != 'ready' or not config:
         raise RunnerUpdateError()
     directory = path.parent / (path.stem + '-source')
-    source = qualification.source(directory)
+    source = qualification.source(directory / 'checkout')
     snapshot = runners.export_source(config, directory, source)
     content = (directory / 'source.tar').read_bytes()
     if len(content) > runners.CHUNK:

@@ -116,3 +116,25 @@ def test_distinct_app_homes_and_target_config_paths_have_distinct_stable_intents
     assert updates.intent_id(first) != updates.intent_id(second)
     assert updates.intent_id(first) != updates.intent_id({**first, 'runnerConfigPath': '/another/app/config.json'})
     assert not (app.data_dir / 'managed-incus-updates').exists()
+
+
+def test_snapshot_archive_is_outside_fixed_source_checkout(app, monkeypatch):
+    from amplifier_web import task_environments as environments
+    monkeypatch.setattr(environments, 'configuration', lambda app: ({'python': sys.executable}, 'ready', None))
+    calls = []
+    def export(config, destination, source):
+        checkout = Path(source)
+        assert (checkout / 'input.txt').read_text() == 'runner-input-v1'
+        assert (checkout / 'uncommitted.txt').read_text() == 'working-tree-v1'
+        archive = destination / 'source.tar'
+        assert not archive.is_relative_to(checkout), 'DTU rejects destination inside source'
+        archive.write_bytes(b'checked snapshot')
+        calls.append((source, str(archive)))
+        return {'archive_sha256': 'fixed'}
+    monkeypatch.setattr(updates.runners, 'export_source', export)
+    path = updates.path_for(app, 'd' * 32)
+    snapshot, content = updates.source_snapshot(app, path)
+    import base64
+    assert snapshot == {'archive_sha256': 'fixed'}
+    assert base64.b64decode(content) == b'checked snapshot'
+    assert len(calls) == 1
