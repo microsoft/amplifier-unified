@@ -1373,3 +1373,17 @@ Explicit provider/tool safety failures block peer resumption even after ordinary
 Unknown assignment Stop receipts retain their original outcomes. A later durable recovery receipt can settle only its explicitly listed session/Stop pairs, using the native ownership proof held through that recovery commit. Further recovery consumes this historical evidence instead of reacquiring a detached former member's new independent writer. Current bound members must still settle, and any new or unproved unknown Stop still needs native ownership proof.
 
 Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. The input must be newer than the cached denial and belong to the observed active generation. Peer input additionally needs its actual admitted human-resume receipt; a caller-supplied flag or message text is insufficient. Only successful durable host admission clears the worker's old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a no-op settings edit in every worker, including workers with enabled local budgets. A still-exhausted or uncertain local allowance remains blocked by its current policy.
+
+
+#### Retained terminal evidence for older failed members
+
+Some older workers saved a generic unknown failure without its generation ID.
+Guarded peer recovery may retain separate terminal evidence instead of changing
+that failure: the latest root event must be a failed generation, its input IDs
+must exactly match the host-observed delivered inputs, and every input must have
+its accepted peer receipt for that member. The generic failure must follow that
+terminal. A fresh owner human request and native stopped-owner proof are still
+required. Later input, terminal, Stop or configuration changes invalidate the
+prepared recovery. A retained explicit safety terminal blocks recovery even if
+an older projection hid it. This admits one new reconciliation request; no old
+input, operation or provider call is replayed and no failure cause is inferred.
