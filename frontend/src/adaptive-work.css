@@ -70,6 +70,10 @@
 #amp-one .is-hero .a-work-card-open h3{font-family:Georgia,'Times New Roman',serif;font-size:calc(var(--a-text-base,14px)*2.15);font-weight:400;letter-spacing:-.6px}
 #amp-one .is-hero .a-work-card-open p{-webkit-line-clamp:5;max-width:600px;margin-bottom:22px}
 #amp-one .a-focus-other{margin-top:24px}
+#amp-one .a-focus-navigation{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;font-size:var(--a-text-sm,13px);color:var(--a-muted)}
+#amp-one .a-focus-navigation>span{font-variant-numeric:tabular-nums;text-align:center}
+#amp-one .a-focus-navigation button{display:flex;align-items:center;gap:8px;min-height:40px;border:1px solid var(--a-line);border-radius:var(--a-radius,8px);background:var(--a-surface);color:var(--a-ink);padding:7px 12px}
+#amp-one .a-focus-navigation button:disabled{opacity:.45;cursor:default}
 #amp-one .a-focus-other>span{display:block;color:var(--a-muted);font-size:var(--a-text-xs,12px);margin-bottom:6px}
 #amp-one .a-focus-other .a-home-filters{margin:0}
 #amp-one .a-home-filtered .a-work-group-items{grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))}

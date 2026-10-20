@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {startingWorkView,homePatch,currentWorkPage,currentWorkContext} from '../src/adaptive-work.js';
+import {startingWorkView,homePatch,currentWorkPage,currentWorkContext,focusPosition,stepFocus,readFocusCursor,saveFocusCursor} from '../src/adaptive-work.js';
 test('appearance chooses arrival only; explicit starting preference wins',()=>{
  assert.equal(startingWorkView({interfaceDetail:'minimal'}),'focus');
  assert.equal(startingWorkView({interfaceDetail:'standard'}),'brief');
@@ -61,4 +61,40 @@ test('returning Home retains choices across chat/project visits and appearance c
  const reset={...choices,...homePatch({interfaceDetail:'minimal'},{workHomeView:'focus',workHomeFilter:'all'},choices)};
  assert.equal(reset.workHomeView,'focus');assert.equal(reset.workHomeFilter,'all');
  assert.equal(reset.workHomeScope,'project-a');assert.equal(reset.workHomeQuery,'launch');
+});
+
+test('Focus follows identity through live reorder and advances safely when an item leaves',()=>{
+ const page={index:0,start:0,total:3,pages:1,items:[{id:'a'},{id:'b'},{id:'c'}]};
+ const cursor=focusPosition(page,null);
+ assert.deepEqual(cursor,{page:0,index:0,id:'a'});
+ const second=stepFocus(page,cursor,1);
+ assert.equal(second.id,'b');
+ assert.equal(focusPosition({...page,items:[{id:'b'},{id:'a'},{id:'c'}]},second).index,0);
+ assert.equal(focusPosition({...page,items:[{id:'a'},{id:'c'}]},second).id,'c');
+ assert.equal(focusPosition({...page,items:[{id:'a'}]},second).id,'a');
+ assert.equal(focusPosition({...page,items:[]},second),null);
+ assert.equal(stepFocus(page,cursor,-1),null);
+ assert.equal(stepFocus(page,focusPosition(page,{page:0,index:2,id:'c'}),1),null);
+ assert.deepEqual(page.items,[{id:'a'},{id:'b'},{id:'c'}]);
+});
+
+test('Focus crosses bounded pages in both directions without assuming a page size',()=>{
+ const page={index:0,start:0,total:5,pages:2,items:[{id:'a'},{id:'b'}]};
+ const next=stepFocus(page,{page:0,index:1,id:'b'},1);
+ assert.deepEqual(next,{page:1,index:0,id:null});
+ const following={index:1,start:2,total:5,pages:2,items:[{id:'c'},{id:'d'},{id:'e'}]};
+ assert.equal(focusPosition(following,next).id,'c');
+ const back=stepFocus(following,focusPosition(following,next),-1);
+ assert.deepEqual(back,{page:0,index:-1,id:null});
+ assert.equal(focusPosition(page,back).id,'b');
+ assert.equal(focusPosition(page,{page:8,index:4,id:'old'}).id,'a','A clamped page starts safely');
+});
+
+test('Focus retains only a tab-local cursor and tolerates unavailable or invalid storage',()=>{
+ const values=new Map(),browser={sessionStorage:{getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)}};
+ const cursor={key:'scope/query',kind:'attention',page:2,index:0,id:'chat-a'};
+ saveFocusCursor(browser,cursor);assert.deepEqual(readFocusCursor(browser),cursor);
+ saveFocusCursor(browser,{...cursor,index:'wrong'});assert.equal(readFocusCursor(browser),null);
+ const blocked={get sessionStorage(){throw Error('Storage unavailable')}};
+ assert.equal(readFocusCursor(blocked),null);assert.doesNotThrow(()=>saveFocusCursor(blocked,cursor));
 });

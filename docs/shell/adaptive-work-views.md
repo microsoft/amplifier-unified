@@ -78,8 +78,8 @@ screen. Keep the warm typography and independent Appearance/view choices.
 - The header uses the existing shell navigation, breadcrumbs and chat controls.
   The trial-added Resume and Home back links have been removed at the user’s
   request. Home is now the first breadcrumb in the header, followed by the project
-  and chat when applicable. It stays visible on phones; the current Home page is
-  shown once, without a redundant link. The shell owns opening/closing Browse.
+  and chat when applicable. It stays visible on phones when away from Home;
+  Home itself shows only app identity. The shell owns opening/closing Browse.
 - Navigation labels say Projects. Folder-backed workspace ownership, creation,
   permissions and history contracts are unchanged; this is not logical regrouping.
 - Returning Home preserves the last view and an explicitly opened or closed
@@ -122,3 +122,33 @@ chat/draft/Canvas state. Phone headers keep Home visible while the existing
 project breadcrumb remains compacted. Removed the old sidebar entry and styles.
 
 Home project controls use current context independently of asynchronous search pages. The context carries requested/effective scope and the current available registration; scope, pin, availability, and path changes invalidate old identity. Pending search rows never count as current results. Project New chat submits both registration ID and path to the canonical draft owner, which revalidates them at acceptance.
+
+## Focus passes and visible location — 2026-10-20
+
+The user's live-data review requested temporary next-item browsing, removal of
+the Home label while already on Home, and correction of a retained chat highlight.
+
+- Focus offers Previous, an item counter, and Next within its current status
+  group. The last item offers Start again. Status filters keep one card in Focus;
+  See all explicitly opens that group's list in Brief.
+- The pass stores one small cursor in this browser tab's session storage. It
+  survives chat/project visits and reload, uses chat identity across loaded-page
+  reorder, and resets on a different search or scope. If the item leaves its
+  group, the nearest remaining item is shown. Next does not mark read, dismiss,
+  snooze, approve, archive, select a chat, or start work.
+- Paging uses the existing bounded query. Moving within a loaded page needs no
+  catalog query; crossing a page requests only the next/previous bounded page.
+  Keyboard focus returns to the paging control after that page settles. An
+  in-progress pass keeps its group when unrelated new attention arrives.
+- The header omits its breadcrumb on Home; compact Home headers keep the app
+  identity visible. Other surfaces retain Home as the first breadcrumb.
+  Sidebar selection and document title describe the visible surface. Retaining
+  a chat for draft/Canvas continuity does not highlight it while browsing.
+- Conversation-specific error/recovery/status banners stay on the conversation.
+  Global connectivity, update, runtime and active voice indicators retain their
+  existing owners and visibility.
+
+`focus-navigation-browser.mjs` exercises real catalog pages, unchanged attention
+and runtime state while stepping, chat/draft continuity, error-banner ownership,
+scope/search resets, restart, and narrow/forced-color layouts. The live review
+is qualitative product evidence, not a measured usability or accessibility study.

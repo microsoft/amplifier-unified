@@ -36,9 +36,10 @@ try{
  const home=async()=>{await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await page.goto(url);await ready();
- await expect(page.locator('.a-work-heading')).toHaveText('Home');
+ await expect(page.locator('.a-work-heading')).toHaveCount(0);
+ await expect(page).toHaveTitle('Amplifier');
  await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toHaveCount(0);
- check('Fresh clients arrive at Home; Home has one header entry and no sidebar entry');
+ check('Fresh clients arrive at Home with app identity, no redundant header label and no sidebar entry');
 
  const fixtureHome=dirname((await state()).workspaceDefaults.root),projects=[],chats=[];
  for(const [name,title] of [['Launch','Home launch notes'],['Offsite','Other project chat']]){

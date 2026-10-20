@@ -1,5 +1,5 @@
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {ArrowRight,Search,Plus,SlidersHorizontal,CheckCircle2,Inbox,Folder,X} from 'lucide-react';
+import {ArrowLeft,ArrowRight,Search,Plus,SlidersHorizontal,CheckCircle2,Inbox,Folder,X} from 'lucide-react';
 import {WorkNavigationContext} from './work-navigation';
 import {useNavigationController} from './shell/navigation-components';
 import {NavigationResourceStatus} from './shell/navigation-resource-status';
@@ -8,7 +8,7 @@ import {useChatTitle} from './use-chat-title';
 import {useActivityClock} from './navigation-details';
 import {readItems} from './attention';
 import {relativeActivity,activityFor} from './navigation-presentation';
-import {startingWorkView,currentWorkPage,currentWorkContext,workViews,workReadingKey,rememberHomeScroll} from './adaptive-work.js';
+import {startingWorkView,currentWorkPage,currentWorkContext,workViews,workReadingKey,rememberHomeScroll,readFocusCursor,saveFocusCursor,focusPosition,stepFocus} from './adaptive-work.js';
 import './adaptive-work.css';
 
 const groups={
@@ -45,6 +45,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  const scope=pinnedScope||view.workHomeScope||'all',filter=view.workHomeFilter||'all',query=view.workHomeQuery||'';
  const context=currentWorkContext(model.state.workHomeContext,view,pinnedScope),workspace=context?.workspace;
  const [search,setSearch]=useState(query),timer=useRef(null),pendingSearch=useRef(null),flush=useRef(null),searchInput=useRef(null),settingsButton=useRef(null),[settingsOpen,setSettingsOpen]=useState(false),pane=useRef(null);
+ const [focusCursor,setFocusCursor]=useState(()=>readFocusCursor(window)),focusPending=useRef(null),focusRestore=useRef(null);
  useEffect(()=>{setSearch(query)},[query]);useEffect(()=>()=>flush.current?.(),[]);
  const patch=values=>act('view.update',{patch:values});
  const readingKey=workReadingKey({...view,workHomeScope:scope},mode);
@@ -72,8 +73,32 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
    {!limit&&page.pages>1&&<div className="a-work-pagination"><button type="button" disabled={!page.index} onClick={()=>patch({workHomePages:{...view.workHomePages,[kind]:page.index-1}})}>Previous</button><span>{page.start+1}–{page.end} of {page.total}</span><button type="button" disabled={page.index+1>=page.pages} onClick={()=>patch({workHomePages:{...view.workHomePages,[kind]:page.index+1}})}>Next</button></div>}
   </section>;
  }
- const focusKind=['attention','unread','working','idle'].find(key=>pages[key]?.items.length);
- const focusOverview=mode==='focus'&&filter==='all';
+ const focusKey=JSON.stringify([scope,view.workHomeScope||'all',query]);
+ const savedFocus=focusCursor?.key===focusKey?focusCursor:null;
+ const focusKind=filter!=='all'?filter:pages[savedFocus?.kind]?.items.length?savedFocus.kind:['attention','unread','working','idle'].find(key=>pages[key]?.items.length);
+ const focusPage=pages[focusKind],focus=focusPosition(focusPage,savedFocus?.kind===focusKind?savedFocus:null),focusChat=focus&&focusPage.items[focus.index];
+ const focusMode=mode==='focus';
+ const rememberFocus=value=>{setFocusCursor(value);saveFocusCursor(window,value)};
+ useLayoutEffect(()=>{
+  if(!ready||!focusMode||!focus)return;
+  // Do not overwrite the destination cursor while a page request is settling.
+  if(focusPending.current?.key!==focusKey)focusRestore.current=null;
+  if(focusPending.current?.key===focusKey&&focusPending.current.page!==(view.workHomePages?.[focusKind]||0))return;
+  focusPending.current=null;
+  const next={key:focusKey,kind:focusKind,...focus};
+  if(JSON.stringify(next)!==JSON.stringify(focusCursor))rememberFocus(next);
+  if(focusRestore.current){pane.current?.querySelector(`[data-focus-move="${focusRestore.current}"]`)?.focus();focusRestore.current=null}
+ },[ready,focusMode,focusKey,focusKind,focus?.page,focus?.index,focus?.id]);
+ const moveFocus=(direction,restart=false)=>{
+  const next=restart?{page:0,index:0,id:focusPage.index===0?focusPage.items[0]?.id:null}:stepFocus(focusPage,focus,direction);
+  if(!next)return;
+  rememberFocus({key:focusKey,kind:focusKind,...next});
+  if(next.page!==focusPage.index){
+   focusPending.current={key:focusKey,page:next.page};focusRestore.current=direction>0?'next':'previous';
+   patch({workHomePages:{...view.workHomePages,[focusKind]:next.page}});
+  }
+ };
+ const lastFocus=focus&&focusPage.start+focus.index+1===focusPage.total;
  const filters=ready&&<div className="a-home-filters" role="group" aria-label="Filter work">
   <button type="button" aria-pressed={filter==='all'} onClick={()=>setFilter('all')}>Overview</button>
   {Object.entries(groups).map(([key,group])=><button type="button" key={key} aria-pressed={filter===key} title={`${pages[key]?.total||0} ${group.meaning} in this scope`} onClick={()=>setFilter(key)}>{group.title}<span>{pages[key]?.total||0}</span></button>)}
@@ -102,13 +127,19 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
    <NavigationResourceStatus state={model.state} resource="workHome" label="your work" refresh={model.refreshResources}/>
    {!ready&&!model.state.navigationResourcePending?.workHome&&<p role="status">Loading your work…</p>}
    {ready&&value.unavailable?<p role="alert">This project is unavailable. {!pinnedScope&&<button type="button" onClick={()=>chooseScope('all')}>Show all work</button>}</p>:ready&&<>
-    {!focusOverview&&filters}
+    {!focusMode&&filters}
     {!total?<div className="a-home-welcome"><Inbox size={32}/><h2>{query?'No matching work.':'A fresh place to begin.'}</h2><p>{query?'Try another phrase or a different scope.':'Bring a question, an idea, or a project. You can organize it as it grows.'}</p><button type="button" className="a-primary" onClick={()=>query?changeSearch(''):newChat()}>{query?'Clear search':'Start a chat'}<ArrowRight/></button></div>:
+     focusMode?<div className="a-home-focus"><div className="a-focus-caption"><h2>{groups[focusKind].title}</h2>{focusPage.total>1&&<button type="button" onClick={()=>patch({workHomeView:'brief',workHomeFilter:focusKind})}>See all {focusPage.total}<ArrowRight size={15}/></button>}</div>{focusChat?<><WorkCard key={focusChat.id} chat={focusChat} kind={focusKind} state={stateForCards} act={act} hero/>
+      {focusPage.total>1&&<nav className="a-focus-navigation" aria-label="Browse Focus items">
+       <button type="button" data-focus-move="previous" aria-label="Previous Focus item" disabled={!focusPage.start&&!focus.index} onClick={()=>moveFocus(-1)}><ArrowLeft size={16}/>Previous</button>
+       <span role="status" aria-live="polite" aria-atomic="true"><span>{focusPage.start+focus.index+1} of {focusPage.total}</span><span className="a-sr-only"> · {focusChat.title}</span></span>
+       <button type="button" data-focus-move="next" aria-label={lastFocus?'Start Focus pass again':'Next Focus item'} title="Browse without marking read or changing the work" onClick={()=>moveFocus(1,lastFocus)}>{lastFocus?'Start again':'Next'}<ArrowRight size={16}/></button>
+      </nav>}</>:<p className="a-work-empty">{groups[focusKind].empty}</p>}
+     </div>:
      filter!=='all'?<div className="a-home-filtered">{pageGroup(filter)}</div>:
-     mode==='focus'?<div className="a-home-focus"><div className="a-focus-caption"><h2>{groups[focusKind].title}</h2>{pages[focusKind].total>1&&<button type="button" onClick={()=>setFilter(focusKind)}>See all {pages[focusKind].total}<ArrowRight size={15}/></button>}</div><WorkCard chat={pages[focusKind].items[0]} kind={focusKind} state={stateForCards} act={act} hero/></div>:
      mode==='brief'?<div className="a-home-brief"><div>{pages.attention.total>0&&pageGroup('attention',3)}{pageGroup('unread',3)}</div><div className="a-home-brief-side">{pageGroup('working',3)}{pageGroup('idle',3)}</div></div>:
      <div className="a-home-studio"><div>{pageGroup('attention',5)}{pageGroup('unread',5)}</div><div>{pageGroup('working',5)}</div><div>{pageGroup('idle',5)}</div></div>}
-    {focusOverview&&<div className="a-focus-other"><span>Explore your work</span>{filters}</div>}
+    {focusMode&&<div className="a-focus-other"><span>Explore your work</span>{filters}</div>}
    </>}
   </div>
  </div>;
