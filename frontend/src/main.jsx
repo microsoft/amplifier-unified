@@ -625,6 +625,7 @@ function App(){
  });
  const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
  const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,
+  sidebarView:view,updateSidebar:patch=>act('view.update',{patch}),
   home:(extra={})=>act('view.update',{patch:homePatch(presentation,extra,view)}),
   setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:settingsState;

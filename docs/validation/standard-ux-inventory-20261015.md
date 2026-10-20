@@ -852,3 +852,9 @@ receipt to belong to the expected chat. During an unrelated transcript update,
 keep the same visible message and pixel offset through any preparation notice;
 after Work is current, also retain the original raw scroll-position tolerance.
 Synthetic signaling still does not qualify physical audio.
+
+October 20 Home/sidebar follow-up: `home-sidebar` covers the approved Browse /
+Status switch, independent Home/sidebar state and paging, visibility-scoped
+catalog demand, retained drafts, header toggle and mobile focus/navigation.
+It runs as an affected-flow smoke in the owned DTU and in Extended browser
+checks; it adds no broad publication gate.

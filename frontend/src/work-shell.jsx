@@ -15,7 +15,7 @@ import {WorkspaceReadiness,WorkspaceResources} from './workspace-starters';
 import {WorkspaceBundleDefault} from './bundle-controls';
 import {newChatSetup} from './new-chat';
 import {useActivityClock,CopyDetail} from './navigation-details';
-import {useModalFocus,useNarrowScreen} from './responsive-navigation';
+import {useModalFocus,useNarrowScreen,navigationExpanded} from './responsive-navigation';
 import {ShellSlot} from './shell/runtime';
 import {CanvasToggle} from './shell-panels';
 import {AttentionBadge} from './attention';
@@ -58,10 +58,17 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
  const setup=!session&&!browsing?newChatSetup(state):null;
  const workspace=state.workspaces?.find(row=>setup?setup.location?.kind!=='managed'&&row.path===setup.workspace:row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
  const navigationNarrow=useNarrowScreen('(max-width: 900px)');
+ const navOpen=navigationExpanded(state.view,navigationNarrow),header=useRef(null);
+ useLayoutEffect(()=>{
+  const node=header.current;if(!node)return;
+  const measure=()=>node.closest('#amp-one')?.style.setProperty('--a-navigation-top',`${node.getBoundingClientRect().bottom}px`);
+  measure();const observer=new ResizeObserver(measure);observer.observe(node);window.addEventListener('resize',measure);
+  return()=>{observer.disconnect();window.removeEventListener('resize',measure)};
+ },[]);
  const title=surface==='home'?'Home':surface==='workspaces'?'All projects':surface==='chats'?'Search chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
- return <header className="a-work-header" data-part="header" inert={!!state.view?.panel}>
+ return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel}>
   <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
-  {(navigationNarrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!navigationNarrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
+  <button id="navigation-toggle" type="button" className="a-icon a-work-nav-toggle" aria-label={navOpen?'Close navigation':'Open navigation'} aria-expanded={navOpen} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:!navOpen,...(!navigationNarrow?{navPinned:!navOpen}:{}),toolbarMenuOpen:false}})}><PanelLeft/>{!navOpen&&<AttentionBadge state={state}/>}</button>
   <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb"><button type="button" className="a-work-crumb a-work-home-crumb" onClick={()=>nav.home({navExpanded:false})}>Home</button><ChevronRight aria-hidden="true"/>{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page">{title}</strong></nav>}</ShellSlot>
   <div className="a-work-header-actions">
    {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>

@@ -1,6 +1,10 @@
 """Bounded arrival views over the canonical chat catalog; no runtime hydration."""
 
 WORK_QUERY_FIELDS = ('workHomeScope', 'workHomeQuery', 'workHomePages')
+STATUS_RESOURCES = {
+    'workStatusAttention': 'attention', 'workStatusUnread': 'unread',
+    'workStatusWorking': 'working', 'workStatusIdle': 'idle',
+}
 
 
 def work_home_context(state, *, pinned_workspace_id=None):
@@ -18,25 +22,37 @@ def work_home_context(state, *, pinned_workspace_id=None):
             'unavailable': unavailable}
 
 
+def status_page(service, state, context, status, *, query='', index=0):
+    """One existing catalog page, shared by Home and the independent sidebar."""
+    scope, workspace = context['scope'], context['workspace']
+    filters = {'navChatScope': 'workspace' if scope not in ('all', 'managed') else 'all',
+               'navLocationFilter': 'managed' if scope == 'managed' else 'all',
+               'navFilter': query, 'navArchive': 'active', 'navSort': 'activity',
+               'navShowAgentCreated': True, 'navStatusFilter': status}
+    scoped = {**state, 'selectedWorkspaceId': workspace['id'] if workspace else None}
+    page = service.projections.chats({**scoped, 'view': filters}, section='recent')
+    if index:
+        filters['navChatPage'] = {**page['scope'], 'index': index}
+        page = service.projections.chats({**scoped, 'view': filters}, section='recent')
+    return page
+
+
+def work_status(service, state, status, *, pinned_workspace_id=None):
+    # Home search/scope and Browse filters never enter this independent query.
+    context = work_home_context({**state, 'view': {}}, pinned_workspace_id=pinned_workspace_id)
+    index = (state.get('view', {}).get('navStatusPages') or {}).get(status, 0)
+    return {**status_page(service, state, context, status, index=index),
+            'workScope': context['scope'], 'unavailable': context['unavailable'],
+            'requestedIndex': index}
+
+
 def work_home(service, state, *, pinned_workspace_id=None):
     context = work_home_context(state, pinned_workspace_id=pinned_workspace_id)
-    scope, workspace = context['scope'], context['workspace']
     view = state.get('view', {})
     query = view.get('workHomeQuery') or ''
-    base = {'navChatScope': 'workspace' if scope not in ('all', 'managed') else 'all',
-            'navLocationFilter': 'managed' if scope == 'managed' else 'all',
-            'navFilter': query, 'navArchive': 'active', 'navSort': 'activity',
-            'navShowAgentCreated': True}
-    scoped = {**state, 'selectedWorkspaceId': workspace['id'] if workspace else None}
-    pages = {}
-    for status in ('attention', 'unread', 'working', 'idle'):
-        filters = {**base, 'navStatusFilter': status}
-        page = service.projections.chats({**scoped, 'view': filters}, section='recent')
-        index = (view.get('workHomePages') or {}).get(status, 0)
-        if index:
-            filters['navChatPage'] = {**page['scope'], 'index': index}
-            page = service.projections.chats({**scoped, 'view': filters}, section='recent')
-        pages[status] = page
+    pages = {status: status_page(service, state, context, status, query=query,
+                                index=(view.get('workHomePages') or {}).get(status, 0))
+             for status in STATUS_RESOURCES.values()}
     return {**context,
             'query': query, 'requestedPages': view.get('workHomePages') or {},
             'groups': pages,

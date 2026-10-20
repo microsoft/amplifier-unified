@@ -10,27 +10,22 @@ import {readItems} from './attention';
 import {relativeActivity,activityFor} from './navigation-presentation';
 import {startingWorkView,currentWorkPage,currentWorkContext,workViews,workReadingKey,rememberHomeScroll,readFocusCursor,saveFocusCursor,focusPosition,stepFocus} from './adaptive-work.js';
 import './adaptive-work.css';
+import {workGroups as groups,workAction} from './work-status';
 
-const groups={
- attention:{title:'Needs you',empty:'No decisions waiting.',verb:'Review request',meaning:'chats needing your attention'},
- unread:{title:'Ready for you',empty:'No unread responses.',verb:'Read response',meaning:'chats with unread responses'},
- working:{title:'Working',empty:'Nothing running right now.',verb:'View progress',meaning:'chats currently running'},
- idle:{title:'Pick up again',empty:'Your saved chats will appear here.',verb:'Continue chat',meaning:'other saved chats'}
-};
 
 export function WorkViewSwitcher({value,onChange,quiet=false}){
  return quiet?<label className="a-work-view-quiet"><span>View</span><select aria-label="Work view" value={value} onChange={event=>onChange(event.target.value)}>{workViews.map(key=><option key={key} value={key}>{key[0].toUpperCase()+key.slice(1)}</option>)}</select></label>:
   <div className="a-work-view-switch" role="group" aria-label="Work view">{workViews.map(key=><button key={key} type="button" aria-pressed={value===key} onClick={()=>onChange(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div>;
 }
 
-function WorkCard({chat,kind,state,act,hero=false}){
+function WorkCard({chat,kind,state,act,hero=false,compact=false}){
  const title=useChatTitle(chat).title,activity=activityFor(chat,state),now=useActivityClock();
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
  const receipt=(state.attention?.items||[]).find(item=>item.sessionId===chat.id&&!item.read&&item.id==='completion:'+chat.id);
  const at=chat.recentActivityAt||chat.navigationActivityAt||chat.createdAt,time=relativeActivity(at,now);
- const verb=kind==='attention'&&activity.label==='Answer requested'?'Review options':groups[kind].verb;
+ const verb=workAction(kind,activity);
  async function review(){if(!receipt||busy)return;setBusy(true);setError('');try{await readItems(act,[receipt])}catch(error){setError(error.message)}finally{setBusy(false)}}
- return <article className={'a-work-card'+(hero?' is-hero':'')} data-session-id={chat.id} data-kind={kind}>
+ return <article className={'a-work-card'+(hero?' is-hero':'')+(compact?' is-compact':'')} data-session-id={chat.id} data-kind={kind}>
   <div className="a-work-card-meta"><span>{chat.location?.kind==='managed'?'On its own':chat.workspaceName||'Project'}</span>{at>0&&<time dateTime={new Date(at*1000).toISOString()} title={'Last activity: '+time.long}>Updated {time.short==='now'?'just now':time.short+' ago'}</time>}</div>
   <button className="a-work-card-open" type="button" onClick={()=>act('session.select',{id:chat.id})} data-action="session.select"><h3>{title}</h3>{chat.description&&<p>{chat.description}</p>}<span className={'a-work-card-cta'+(hero?' a-primary':'')}>{verb}<ArrowRight size={16}/></span></button>
   <div className="a-work-card-foot"><span className="a-work-status" data-kind={activity.kind}><i/>{activity.kind==='idle'?'Saved conversation':activity.label}</span>{receipt&&<button type="button" disabled={busy} aria-label={'Mark response reviewed: '+title} onClick={review}>{busy?'Saving…':'Mark read'}<CheckCircle2 size={14}/></button>}</div>
@@ -64,11 +59,11 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  // Creation needs the confirmed project, not a matching page of search results.
  const canStart=!!context&&!context.unavailable&&(scope==='all'||scope==='managed'||!!workspace?.path);
  const newChat=()=>{if(canStart)return nav.newChat(scope==='all'||scope==='managed'?{location:{kind:'managed'}}:{workspaceId:workspace.id,workspace:workspace.path,location:{kind:'workspace'}})};
- function pageGroup(kind,limit){
+ function pageGroup(kind,limit,{featured=false,compact=false}={}){
   const page=pages[kind];if(!page)return null;
   const items=limit?page.items.slice(0,limit):page.items;
-  return <section className="a-work-group" key={kind} aria-label={groups[kind].title}><div className="a-work-group-heading"><h2>{groups[kind].title}</h2><span>{page.total}</span>{limit&&page.total>limit&&<button type="button" onClick={()=>setFilter(kind)}>See all<ArrowRight size={14}/></button>}</div>
-   <div className="a-work-group-items">{items.map(chat=><WorkCard key={chat.id} chat={chat} kind={kind} state={stateForCards} act={act}/>)}</div>
+  return <section className="a-work-group" key={kind} data-group={kind} aria-label={groups[kind].title}><div className="a-work-group-heading"><h2>{groups[kind].title}</h2>{kind!=='idle'&&<span>{page.total}</span>}{limit&&page.total>limit&&<button type="button" aria-label={'See all '+groups[kind].title.toLowerCase()} onClick={()=>setFilter(kind)}>{kind==='idle'?'Browse saved chats':'See all'}<ArrowRight size={14}/></button>}</div>
+   <div className="a-work-group-items">{items.map((chat,index)=><WorkCard key={chat.id} chat={chat} kind={kind} state={stateForCards} act={act} compact={compact||featured&&index>0}/>)}</div>
    {!page.total&&<p className="a-work-empty">{groups[kind].empty}</p>}
    {!limit&&page.pages>1&&<div className="a-work-pagination"><button type="button" disabled={!page.index} onClick={()=>patch({workHomePages:{...view.workHomePages,[kind]:page.index-1}})}>Previous</button><span>{page.start+1}–{page.end} of {page.total}</span><button type="button" disabled={page.index+1>=page.pages} onClick={()=>patch({workHomePages:{...view.workHomePages,[kind]:page.index+1}})}>Next</button></div>}
   </section>;
@@ -106,7 +101,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  const lastFocus=focus&&focusPage.start+focus.index+1===focusPage.total;
  const filters=ready&&<div className="a-home-filters" role="group" aria-label="Filter work">
   <button type="button" aria-pressed={filter==='all'} onClick={()=>setFilter('all')}>Overview</button>
-  {Object.entries(groups).map(([key,group])=><button type="button" key={key} aria-pressed={filter===key} title={`${pages[key]?.total||0} ${group.meaning} in this scope`} onClick={()=>setFilter(key)}>{group.title}<span>{pages[key]?.total||0}</span></button>)}
+  {Object.entries(groups).map(([key,group])=><button type="button" key={key} aria-pressed={filter===key} title={`${pages[key]?.total||0} ${group.meaning} in this scope`} onClick={()=>setFilter(key)}>{group.title}{key!=='idle'&&<span>{pages[key]?.total||0}</span>}</button>)}
  </div>;
  return <div ref={pane} className="a-adaptive-home" data-view={mode} data-level={level} data-part="work-browser">
   <div className="a-home-content">
@@ -142,8 +137,12 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
       </nav>}</>:<p className="a-work-empty">{groups[focusKind].empty}</p>}
      </div>:
      filter!=='all'?<div className="a-home-filtered">{pageGroup(filter)}</div>:
-     mode==='brief'?<div className="a-home-brief"><div>{pages.attention.total>0&&pageGroup('attention',3)}{pageGroup('unread',3)}</div><div className="a-home-brief-side">{pageGroup('working',3)}{pageGroup('idle',3)}</div></div>:
-     <div className="a-home-studio"><div>{pageGroup('attention',5)}{pageGroup('unread',5)}</div><div>{pageGroup('working',5)}</div><div>{pageGroup('idle',5)}</div></div>}
+     <>{mode==='brief'&&!pages.attention.total&&!pages.unread.total?<div className="a-home-clear"><CheckCircle2/><div><h2>You’re up to date.</h2><p>Nothing needs your attention, and there are no unread responses.</p></div></div>:<div className={mode==='brief'?'a-home-brief':'a-home-studio'}>
+      {pageGroup('attention',mode==='brief'?3:4,{featured:mode==='brief'})}
+      {pageGroup('unread',mode==='brief'?3:4,{featured:mode==='brief'})}
+      {mode==='studio'&&pageGroup('working',4)}
+     </div>}{mode==='brief'&&pages.working.total>0&&<div className="a-home-running">{pageGroup('working',3,{compact:true})}</div>}
+     <div className="a-home-recent">{pageGroup('idle',mode==='brief'?4:6,{compact:true})}</div></>}
     {focusMode&&<div className="a-focus-other"><span>Explore your work</span>{filters}</div>}
    </>}
   </div>
