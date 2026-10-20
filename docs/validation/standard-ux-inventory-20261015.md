@@ -745,6 +745,12 @@ draft are different owners. Preserve the acknowledged chat-draft save, return
 from connection setup, provider/privacy checks, and all 120 settings layouts.
 Screenshots belong to the run's `AMPLIFIER_TEST_OUTPUT` evidence directory.
 
+The image connection journey also retains fresh Home underneath Settings. Its
+single ordinary image-choice assertion belongs to the image-generation Settings
+surface; Home's workspace choice is a separate control. Keep the four supported
+choices, advanced model selection, persistence, failed-save retry, optional
+connection inspection, and absence of model/image submission checks intact.
+
 ### Home breadcrumb on narrow chat headers (October 19)
 
 The existing `mobile-navigation` owner also requires a visible Home control with
@@ -815,3 +821,28 @@ races, validation failure/retry, offline use, stale metadata, and exact feature,
 handoff, and force-confirmation exclusions. The target is one validated newest
 known candidate and one restart after work is idle, with zero input replay.
 Network availability and live installation are not claimed by these fixtures.
+
+### Readiness fixture ownership and Home prerequisites (October 20)
+
+The existing `block-copy` journey starts from Home, creates a chat explicitly,
+and requires the composer after creation and reload. `workspace-switching`
+checks the exact project title separately from the visible Home breadcrumb;
+its draft, attachment, delayed-preview and workspace-selection assertions remain.
+
+The `pwa` journey must wait for its own child to bind. An unrelated healthy
+listener on the fixture port must fail startup without receiving browser requests.
+Keep its installability, offline recovery, draft, no-replay and authentication
+assertions. Bound browser and fixture cleanup and preserve original failures.
+
+When running these readiness journeys in the retained development DTU, give each
+scenario private network and mount namespaces, an owned `/tmp`, and private
+state directories. Record namespace identities, listener owners, source hashes
+and residual processes. Existing previews and their evidence are never valid
+substitutes for a test-owned fixture. This is a local isolation adapter, not an
+additional CI gate or a change to the frozen scenario inventory.
+
+The `voice-follow-latest` journey requires the selected pane and accepted Work
+receipt to belong to the expected chat. During an unrelated transcript update,
+keep the same visible message and pixel offset through any preparation notice;
+after Work is current, also retain the original raw scroll-position tolerance.
+Synthetic signaling still does not qualify physical audio.
