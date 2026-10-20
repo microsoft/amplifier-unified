@@ -251,3 +251,28 @@ async def test_live_policy_timeout_edit_wakes_an_existing_unlimited_wait(app, pr
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(b, 2)
     assert second.control.capacity.last_denial is None and not second.called
+
+
+async def test_wait_deadline_is_rechecked_after_policy_wins_contended_admission_lock(app, providers):
+    await app.dispatch('modelCapacity.set', {'expectedRevision': 0, 'waitTimeoutSeconds': 1,
+                                           'maxWaitingCalls': 256}, command_id='finite-lock-wait')
+    source, target, first, second, a, b = await waiting_pair(app, providers)
+    async with app.lock:
+        changed = asyncio.create_task(limits(app, source, maxConcurrentCalls=2))
+        await asyncio.sleep(0)  # Policy update joins the lock queue before the waiter.
+        app.coordination.notify()
+        await asyncio.sleep(1.1)  # Deadline passes while host admission cannot hold the lock.
+    await changed
+    try:
+        with pytest.raises(TimeoutError, match='No provider request was sent'):
+            await asyncio.wait_for(asyncio.shield(b), .5)
+        assert not second.called and second.control.capacity.last_denial is None
+        assert app._model_admission_waiters == []
+        assert app.assignments.usage(app.assignments.current(source))['calls'] == 1
+        second.release.set()
+        await second.start('new-call-after-expiry')
+        assert second.called == ['new-call-after-expiry']
+        assert app.assignments.usage(app.assignments.current(source))['calls'] == 2
+    finally:
+        first.release.set(); second.release.set()
+        await asyncio.gather(a, b, return_exceptions=True)

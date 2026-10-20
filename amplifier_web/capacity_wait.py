@@ -80,11 +80,18 @@ async def admit(service, sid, args):
         queue.append(ticket)
 
     started = asyncio.get_running_loop().time()
+
+    def deadline():
+        timeout = policy(service)['waitTimeoutSeconds']
+        if timeout and asyncio.get_running_loop().time() >= started + timeout:
+            return {'allowed': False, 'state': 'wait_expired',
+                    'reasons': ['Waiting for model capacity timed out. No provider request was sent; saved results and budgets are unchanged.']}
+
     visible = False
     try:
         while True:
             event = service.coordination.signal.event
-            result = await admission(service, sid, args, guard=guard, queue_turn=turn, on_wait=enqueue)
+            result = await admission(service, sid, args, guard=guard, queue_turn=turn, on_wait=enqueue, before_reserve=deadline)
             if result.get('state') != 'waiting':
                 return result
             timeout = policy(service)['waitTimeoutSeconds']

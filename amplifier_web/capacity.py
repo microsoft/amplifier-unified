@@ -341,7 +341,7 @@ def fresh_human_input(service, session, row, denial):
         and receipt.get('delivery') in {'accepted', 'applied', 'submitting'})
 
 
-async def admission(service, session_id, args, *, guard=None, queue_turn=None, on_wait=None):
+async def admission(service, session_id, args, *, guard=None, queue_turn=None, on_wait=None, before_reserve=None):
     """Private worker-to-host gate; model actions cannot supply accounting data."""
     from .service import AppError
     async with service.lock:
@@ -390,6 +390,10 @@ async def admission(service, session_id, args, *, guard=None, queue_turn=None, o
         if result.get('state') == 'waiting' and on_wait and (refusal := on_wait(session)):
             return refusal
         if result['allowed']:
+            # The lock may have been contended beyond a finite waiting deadline.
+            # Recheck at the reservation boundary; never alter an admitted call.
+            if before_reserve and (refusal := before_reserve()):
+                return refusal
             # Persist intent using the existing execution ID before any provider
             # request. A crash leaves pending/unknown evidence, never a replay.
             from .execution import ingest
