@@ -48,8 +48,8 @@ def catalog():
     return [get(identity) for identity in _PROFILES]
 
 
-def validate_timeout(profile_id, seconds):
-    profile = get(profile_id)
+def validate_timeout(profile_id, seconds, timing_request=None):
+    profile = timing(profile_id, timing_request)
     seconds = profile['defaultTimeoutSeconds'] if seconds is None else seconds
     if type(seconds) is not int or not 1 <= seconds <= profile['maxTimeoutSeconds']:
         raise ValueError('The check duration exceeds this test profile’s supported limit.')
@@ -58,8 +58,8 @@ def validate_timeout(profile_id, seconds):
 
 RESOURCE_FIELDS = ('cpus', 'memoryMiB', 'pids', 'tmpMiB', 'shmMiB')
 
-def freeze(profile_id):
-    profile = get(profile_id)
+def freeze(profile_id, overrides=None):
+    profile = {**get(profile_id), **(overrides or {})}
     value = {'profileId': profile_id, **{key: profile[key] for key in RESOURCE_FIELDS}}
     return {**value, 'sha256': hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()}
 
@@ -73,3 +73,29 @@ def resources(profile_id, request=None):
             or request['sha256'] != hashlib.sha256(json.dumps({key: value for key, value in request.items() if key != 'sha256'}, sort_keys=True).encode()).hexdigest()):
         raise ValueError('The admitted test resource request changed.')
     return {**profile, **{key: request[key] for key in RESOURCE_FIELDS}}
+
+
+# Serialization bounds, not the operator's workload budget.
+MAX_SECONDS = 2147483647
+TIMING_FIELDS = ('defaultTimeoutSeconds', 'maxTimeoutSeconds', 'preparationTimeoutSeconds')
+
+
+def freeze_timing(profile_id, overrides=None):
+    profile = {**get(profile_id), 'preparationTimeoutSeconds': 1800, **(overrides or {})}
+    value = {'profileId': profile_id, **{key: profile[key] for key in TIMING_FIELDS}}
+    request = {**value, 'sha256': hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()}
+    timing(profile_id, request)
+    return request
+
+
+def timing(profile_id, request=None):
+    profile = {**get(profile_id), 'preparationTimeoutSeconds': 1800}
+    if request is None:  # Historical work keeps the pre-settings defaults.
+        return profile
+    if (not isinstance(request, dict) or set(request) != {'profileId', 'sha256', *TIMING_FIELDS}
+            or request['profileId'] != profile_id
+            or any(type(request[key]) is not int or not 1 <= request[key] <= MAX_SECONDS for key in TIMING_FIELDS)
+            or request['defaultTimeoutSeconds'] > request['maxTimeoutSeconds']
+            or request['sha256'] != hashlib.sha256(json.dumps({key: value for key, value in request.items() if key != 'sha256'}, sort_keys=True).encode()).hexdigest()):
+        raise ValueError('The admitted test timing policy changed.')
+    return {**profile, **{key: request[key] for key in TIMING_FIELDS}}

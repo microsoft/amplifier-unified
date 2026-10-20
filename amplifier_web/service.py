@@ -363,6 +363,8 @@ from .task_environments import definitions as environment_definitions
 ACTION_DEFINITIONS.update(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
 ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+from .test_execution_settings import definitions as test_execution_definitions
+ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
 ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
@@ -1939,6 +1941,9 @@ class AppService:
         if action in test_capacity_definitions(schema, string):
             from .test_capacity_settings import dispatch as test_capacity_dispatch
             return await test_capacity_dispatch(self, action, args, configuration_authority)
+        if action in test_execution_definitions(schema, string):
+            from .test_execution_settings import dispatch as test_execution_dispatch
+            return await test_execution_dispatch(self, action, args, configuration_authority)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
         if action in environment_definitions(schema, string):

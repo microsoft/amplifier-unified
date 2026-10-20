@@ -1661,6 +1661,75 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#existing-chat-adoption-october-20"
+    },
+    {
+      "id": "delta.916",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/916",
+      "reason": "Extend the existing testing-settings browser owner with global future-job queue and profile execution limits; preserve the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "settings.test-execution-limits",
+          "family": "settings",
+          "title": "Adjust global queue and test profile execution limits",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Testing & resources",
+            "Test execution limits"
+          ],
+          "prerequisites": [
+            "Private settings fixture with synthetic runtime and machine authority; no production policy writes"
+          ],
+          "steps": [
+            "Set queue depth and zero queue waiting expiry",
+            "Set per-profile CPU and default/maximum check durations",
+            "Reconcile a lost save acknowledgement without replay",
+            "Race a newer settings writer and preserve the dirty form",
+            "At narrow width, close Settings and keep unsaved execution edits",
+            "Save and reopen the settings"
+          ],
+          "expectedResults": [
+            "Global future-job scope and Docker-only temporary/shared-memory limits are explicit.",
+            "Zero means waiting until Stop or cancellation.",
+            "Effective profile values and saved overrides are visible.",
+            "Unknown acknowledgement causes one mutation and exact readback.",
+            "Stale edits cannot overwrite a newer revision.",
+            "Dirty-close names the execution settings and preserves the edited values.",
+            "Narrow layouts and cold reopen remain usable."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer",
+            "dirty-close"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/testing-settings-browser.mjs",
+              "relation": "Existing registered Extended browser owner; no added broad publication gate"
+            },
+            {
+              "path": "tests/test_test_execution_settings.py",
+              "relation": "Global authority, full queue counts, pagination, accepted policy freezing, historical defaults and validation"
+            },
+            {
+              "path": "tests/test_durable_test_queue.py",
+              "relation": "Restart and cancellation preserve exact admitted resource and timing policy"
+            },
+            {
+              "path": "tests/test_environment_preparation.py",
+              "relation": "Saved preparation budget spans waiting/building without changing recipe identity"
+            }
+          ],
+          "limits": [
+            "Browser/runtime fixtures do not establish production deployment or physical runner qualification.",
+            "No automatic retention deletion or Incus temporary/shared-memory mount enforcement is introduced."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md#test-execution-limits-october-20"
     }
   ]
 }

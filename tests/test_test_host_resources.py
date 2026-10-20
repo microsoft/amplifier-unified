@@ -300,10 +300,11 @@ async def test_agent_machine_policy_changes_require_global_authority(app, machin
 
 
 async def test_machine_reservation_is_retained_before_dependency_builder(app, native_backend, monkeypatch):
-    def prepare(config, root, snapshot, profile_id, request_id, *, resource_request, host_reservation):
+    def prepare(config, root, snapshot, profile_id, request_id, *, resource_request, host_reservation, timing_request):
         assert host_reservation['admitted'] and host_reservation['phase'] == 'preparing'
         assert host.snapshot()['reserved']['preparing'] == 1
         assert profiles.resources(profile_id, resource_request)['memoryMiB'] == 6144
+        assert profiles.timing(profile_id, timing_request)['preparationTimeoutSeconds'] > 0
         return {'fixture': 'prepared'}
     monkeypatch.setattr(environments.dependencies, 'prepare', prepare)
     result = (await app.dispatch('workspace.environments.start', {**scope(app), 'profileId': 'browser-test', 'requestId': 'prepared'}, command_id='outer-prepared'))['result']

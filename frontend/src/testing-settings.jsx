@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {useSettingsDraft} from './settings-drafts';
 import {SettingsActions} from './settings-layout';
+import {ExecutionLimits} from './testing-execution-settings';
 
 const gib=1024**3;
 const fields=[['maxRunning','Running test environments',1],['maxInstances','Running and retained environments',1],['minFreeBytes','Minimum free disk space (GiB)',gib]];
@@ -80,11 +81,11 @@ export function TestingSettings({act,navigate}){
      <p>Optional values for this configured connection only. Empty fields use the global defaults. A different connection, including an alias, has its own override; these are not machine-wide settings.</p>
      <Limits label="Runner overrides" draft={overrides} setDraft={setOverrides} disabled={busy}/>
     </details>}
-    <p className="a-caption">{data.limitsScope} Machine resource budgets are shown below. Automatic machine selection and queue limits are not controlled here.</p>
+    <p className="a-caption">{data.limitsScope} Machine resource budgets are shown below. Queue and profile limits are available in Test execution limits.</p>
    </details>
    <SettingsActions><button className="a-primary" disabled={busy||!dirty} onClick={save}>Save testing limits</button><button className="a-soft" disabled={busy} onClick={refresh}>{dirty?'Discard changes and reload':'Refresh settings'}</button></SettingsActions>
   </>}
-  <MachineResources act={act} navigate={navigate}/>
+  <MachineResources act={act} navigate={navigate}/><ExecutionLimits act={act} navigate={navigate}/>
  </section>;
 }
 
