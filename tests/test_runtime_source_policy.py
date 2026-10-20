@@ -192,3 +192,24 @@ def test_marked_requirement_participates_in_conflict_detection():
     assert 'fixture' not in policy.declarations(content)
     content = ('[project]\nname="worker"\nversion="1"\ndependencies=' + json.dumps([branch + ' ; python_version >= "3.13"'])).encode()
     assert policy.declarations(content)['fixture']['ref'] == 'main'
+
+
+@pytest.mark.parametrize('alternate', [
+    '[{git="https://example.invalid/fixture",rev="' + REVISION + '",marker="python_version >= \'3.13\'"}]',
+    '[{git="https://example.invalid/fixture",rev="main"},{git="https://example.invalid/fixture",tag="v1.0"}]',
+    '[{path="../local"}]', '[]', '["unsupported"]', '{path="../local"}',
+])
+def test_marker_source_arrays_and_unknown_overrides_do_not_hide_a_pin(alternate):
+    content = ('[project]\nname="worker"\nversion="1"\ndependencies=["fixture @ git+https://example.invalid/fixture@main"]\n'
+               '[tool.uv.sources]\nfixture=' + alternate + '\n').encode()
+    assert 'fixture' not in policy.declarations(content)
+
+
+def test_unambiguous_marker_source_array_preserves_the_authored_branch():
+    content = b'''[project]
+name="worker"
+version="1"
+[tool.uv.sources]
+fixture=[{git="https://example.invalid/fixture",rev="main",marker="python_version >= '3.13'"}]
+'''
+    assert policy.declarations(content)['fixture']['ref'] == 'main'
