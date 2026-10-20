@@ -13,7 +13,7 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-checks/adaptive-work');
 await mkdir(output,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python'),
- [join(root,'tests/fixtures/empty_host_ui_server.py'),'--chat-controls'],{stdio:['ignore','pipe','pipe']});
+ [join(root,'tests/fixtures/empty_host_ui_server.py'),'--chat-controls','--scoped-query-control'],{stdio:['ignore','pipe','pipe']});
 let stderr='',browser,page,failure;
 fixture.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-12000)});
 const report={checks:[],errors:[],runtime:'synthetic',liveProvider:false};
@@ -28,6 +28,8 @@ try{
  browser=await chromium.launch({headless:true,args:JSON.parse(process.env.AMPLIFIER_CHROMIUM_ARGS||'[]')});
  const context=await browser.newContext({viewport:{width:1440,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>report.errors.push(error.message));
+ const draftRequests=[];
+ page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const body=request.postDataJSON();if(body?.action==='session.draft')draftRequests.push(body.args)}});
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const ready=async()=>{await expect(page.locator('.a-home-filters')).toBeVisible();await expect(page.locator('.a-adaptive-home')).not.toContainText('Loading your work…')};
@@ -60,10 +62,67 @@ try{
  await page.getByRole('button',{name:'New chat',exact:true}).click();await expect(composer).toBeVisible();
  await expect.poll(async()=>(await state()).view.workHomeQuery).toBe('launch');
  assert.equal((await state()).view.newSessionDraft.workspace,projects[0].path);
+ assert.equal(draftRequests.at(-1).workspaceId,projects[0].id);
  await home();await expect(page.getByLabel('Search your work',{exact:true})).toHaveValue('launch');
  await expect(page.getByLabel('Work scope',{exact:true})).toHaveValue(projects[0].id);
  await expect(page.locator('.a-adaptive-home')).toHaveAttribute('data-view','studio');
  check('Immediate search departure is saved; new chat uses the confirmed project; Home restores its choices');
+
+ // Exercise the actual host PendingQuery envelope, which drops an obsolete
+ // result page. Project controls must use current context, not retained rows.
+ const queryControl=async mode=>{
+  const response=await page.request.post(url+'/fixture/scoped-query',{data:{mode,resource:'workHome',clientId:(await state()).client.id}});
+  assert.equal(response.status(),200);return response.json();
+ };
+ for(const destination of ['Open project','New chat']){
+  await queryControl('hold');
+  try{
+   const projectButton=await page.getByRole('button',{name:'Open project',exact:true}).elementHandle();
+   await page.getByLabel('Search your work',{exact:true}).fill('held '+destination);
+   await page.getByLabel('Search your work',{exact:true}).press('Tab');
+   await page.waitForFunction(()=>window.amplifier.getShellState()?.snapshots?.chats?.navigationResourcePending?.workHome);
+   const snapshot=await page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
+   assert.equal(snapshot.workHome,undefined,'Changed-query rows are not current coverage');
+   assert.equal(snapshot.workHomeContext.workspace.id,projects[0].id);
+   assert.equal(await projectButton.evaluate(node=>node.isConnected),true,'Project button stays mounted');
+   await expect(page.getByRole('button',{name:'New chat',exact:true})).toBeEnabled();
+   await page.getByRole('button',{name:destination,exact:true}).click();
+   if(destination==='New chat'){
+    await expect(composer).toBeVisible();assert.equal(draftRequests.at(-1).workspaceId,projects[0].id);
+    assert.equal((await state()).view.newSessionDraft.workspace,projects[0].path);
+   }else await expect(page.getByRole('group',{name:'Workspace view',exact:true})).toBeVisible();
+  }finally{await queryControl('release')}
+  await home();
+ }
+ await page.getByLabel('Search your work',{exact:true}).fill('launch');
+ await page.getByLabel('Search your work',{exact:true}).press('Tab');await ready();
+ check('Actual pending search envelopes keep project buttons mounted and enabled without exposing stale rows');
+
+ // Both old and replacement folders exist. Only the registration/path binding
+ // can reject this late command; plain path validation would accept the old one.
+ await page.locator('.a-work-card-open').click();await expect(composer).toBeVisible();
+ await composer.fill('Keep my draft if the project changes');
+ await expect.poll(async()=>(await state()).view.draft).toBe('Keep my draft if the project changes');await home();
+ const replacement=join(fixtureHome,'home-replacement');await mkdir(replacement);
+ const moveProject=async path=>{const response=await page.request.post(url+'/fixture/project-path',{data:{workspaceId:projects[0].id,path}});assert.equal(response.status(),200)};
+ let releaseCommand,commandSeen;
+ const held=new Promise(resolve=>{releaseCommand=resolve}),seen=new Promise(resolve=>{commandSeen=resolve});
+ const hold=async route=>{if(route.request().method()==='POST'&&route.request().postDataJSON()?.action==='session.draft'){commandSeen();await held}await route.continue()};
+ await page.route('**/api/actions',hold);
+ const before=await state(),beforeRuntime=await (await page.request.get(url+'/fixture')).json();
+ try{
+  const refusal=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/actions'&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='session.draft');
+  await page.getByRole('button',{name:'New chat',exact:true}).click();await seen;
+  assert.deepEqual(draftRequests.at(-1),{workspaceId:projects[0].id,workspace:projects[0].path,location:{kind:'workspace'}});
+  await moveProject(replacement);releaseCommand();
+  const response=await refusal;assert.equal(response.status(),409);assert.match(await response.text(),/unavailable/);
+  const after=await state(),afterRuntime=await (await page.request.get(url+'/fixture')).json();
+  assert.equal(after.selectedSessionId,before.selectedSessionId);assert.equal(after.view.draft,before.view.draft);
+  assert.deepEqual(after.view.newSessionDraft,before.view.newSessionDraft);
+  assert.deepEqual(afterRuntime.started,beforeRuntime.started);assert.deepEqual(afterRuntime.sent,beforeRuntime.sent);
+ }finally{releaseCommand();await page.unroute('**/api/actions',hold);await moveProject(projects[0].path)}
+ await ready();
+ check('A held draft command rejects a changed registration path and preserves the existing draft without starting work');
 
  await page.locator('.a-work-card-open').click();await expect(composer).toBeVisible();
  await composer.fill('Keep this Home draft');

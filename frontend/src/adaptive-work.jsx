@@ -8,7 +8,7 @@ import {useChatTitle} from './use-chat-title';
 import {useActivityClock} from './navigation-details';
 import {readItems} from './attention';
 import {relativeActivity,activityFor} from './navigation-presentation';
-import {startingWorkView,currentWorkPage,workViews,workReadingKey,rememberHomeScroll} from './adaptive-work.js';
+import {startingWorkView,currentWorkPage,currentWorkContext,workViews,workReadingKey,rememberHomeScroll} from './adaptive-work.js';
 import './adaptive-work.css';
 
 const groups={
@@ -43,6 +43,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  const pinnedScope=model.state.workHomePinnedScope,value=model.state.workHome,ready=hasNavigationResource(model.state,'workHome')&&currentWorkPage(value,view,pinnedScope);
  const level=presentation.interfaceDetail||presentation.executionDetail||'standard',mode=view.workHomeView||startingWorkView(presentation);
  const scope=pinnedScope||view.workHomeScope||'all',filter=view.workHomeFilter||'all',query=view.workHomeQuery||'';
+ const context=currentWorkContext(model.state.workHomeContext,view,pinnedScope),workspace=context?.workspace;
  const [search,setSearch]=useState(query),timer=useRef(null),pendingSearch=useRef(null),flush=useRef(null),searchInput=useRef(null),settingsButton=useRef(null),[settingsOpen,setSettingsOpen]=useState(false),pane=useRef(null);
  useEffect(()=>{setSearch(query)},[query]);useEffect(()=>()=>flush.current?.(),[]);
  const patch=values=>act('view.update',{patch:values});
@@ -56,12 +57,12 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  const closeSettings=()=>{setSettingsOpen(false);settingsButton.current?.focus()};
  const pages=ready?value.groups:{},total=Object.values(pages).reduce((sum,page)=>sum+page.total,0);
  const stateForCards={...model.state,attention:{...model.state.attention,items:model.state.workHomeAttention||[]}};
- const projects=[...new Map([...(model.state.workspaceShortcuts||[]).map(row=>({...row,id:row.workspaceId||row.id,name:row.customName||row.name})),...(value?.workspace?[value.workspace]:[])].filter(row=>row.id&&row.name).map(row=>[row.id,row])).values()];
+ const projects=[...new Map([...(model.state.workspaceShortcuts||[]).map(row=>({...row,id:row.workspaceId||row.id,name:row.customName||row.name})),...(workspace?[workspace]:[])].filter(row=>row.id&&row.name).map(row=>[row.id,row])).values()];
  const setFilter=key=>patch({workHomeFilter:key});
  // Search/page loading must not disable a click as the search field blurs.
  // Creation needs the confirmed project, not a matching page of search results.
- const canStart=Object.hasOwn(model.state,'workHomePinnedScope')&&(scope==='all'||scope==='managed'||(value?.scope===scope&&!value.unavailable&&!!value.workspace?.path));
- const newChat=()=>nav.newChat(scope==='all'||scope==='managed'?{location:{kind:'managed'}}:value.workspace.path);
+ const canStart=!!context&&!context.unavailable&&(scope==='all'||scope==='managed'||!!workspace?.path);
+ const newChat=()=>{if(canStart)return nav.newChat(scope==='all'||scope==='managed'?{location:{kind:'managed'}}:{workspaceId:workspace.id,workspace:workspace.path,location:{kind:'workspace'}})};
  function pageGroup(kind,limit){
   const page=pages[kind];if(!page)return null;
   const items=limit?page.items.slice(0,limit):page.items;
@@ -97,7 +98,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
     <label className="a-home-search"><Search size={18}/><input ref={searchInput} type="search" aria-label="Search your work" placeholder="Find your work…" maxLength={500} value={search} onChange={event=>changeSearch(event.target.value)} onBlur={flushSearch}/>{search&&<button type="button" className="a-icon" aria-label="Clear work search" onClick={()=>{changeSearch('');searchInput.current?.focus()}}><X size={16}/></button>}</label>
     <select aria-label="Work scope" value={scope} disabled={!!pinnedScope} onChange={event=>chooseScope(event.target.value)}>{pinnedScope?<option value={scope}>{projects.find(row=>row.id===scope)?.name||'Unavailable project'}</option>:<><option value="all">All work</option><option value="managed">On its own</option>{projects.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</>}</select>
    </div>
-   {scope!=='all'&&scope!=='managed'&&value?.scope===scope&&!value.unavailable&&value.workspace&&<div className="a-home-project"><Folder/><strong>{value.workspace.name}</strong><button type="button" onClick={()=>nav.browse('workspace',value.workspace.id)}>Open project<ArrowRight/></button></div>}
+   {workspace&&!context.unavailable&&<div className="a-home-project"><Folder/><strong>{workspace.name}</strong><button type="button" onClick={()=>nav.browse('workspace',workspace.id)}>Open project<ArrowRight/></button></div>}
    <NavigationResourceStatus state={model.state} resource="workHome" label="your work" refresh={model.refreshResources}/>
    {!ready&&!model.state.navigationResourcePending?.workHome&&<p role="status">Loading your work…</p>}
    {ready&&value.unavailable?<p role="alert">This project is unavailable. {!pinnedScope&&<button type="button" onClick={()=>chooseScope('all')}>Show all work</button>}</p>:ready&&<>

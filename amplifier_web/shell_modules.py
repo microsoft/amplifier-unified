@@ -419,7 +419,7 @@ class ShellModules:
         search = projections.chats({**scoped, 'view': recent_view}, section='search') if wants('sidebarSearch') else None
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace') if wants('sidebarWorkspace') else None
         recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts') if wants('recentNavigation') else None
-        from .adaptive_work import work_home
+        from .adaptive_work import work_home, work_home_context
         work = work_home(self.service, scoped, pinned_workspace_id=workspace_id if pinned_scope else None) if wants('workHome') and instance['package'] in BUILTINS else None
         if recent_navigation is not None:
             # Identity is not part of the shared projection cache. Copy its scope,
@@ -462,6 +462,7 @@ class ShellModules:
         result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
                 'recentScope': recent_scope,
                 'workHomePinnedScope': workspace_id if pinned_scope else None,
+                'workHomeContext': work_home_context(scoped, pinned_workspace_id=workspace_id if pinned_scope else None),
                 'navigationActivityById': activity_by_id,
                 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],

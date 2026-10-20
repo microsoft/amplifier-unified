@@ -77,6 +77,32 @@ async def test_pinned_home_request_identity_and_unavailable_scope_never_widen(se
     assert page['scope'] == 'two' and page['unavailable'] and not page['items']
 
 
+async def test_current_home_project_context_does_not_depend_on_result_pages(service, monkeypatch):
+    monkeypatch.setattr(service.projections, 'chats', lambda *a, **k: pytest.fail('Context queried chat rows'))
+    monkeypatch.setattr(service, '_session', lambda *a, **k: pytest.fail('Context hydrated a session'))
+    client = service.shell.client('home-context')
+    instance = {'id': 'chats', 'package': 'builtin.chats', 'slot': 'navigation'}
+    service.state['view'].update(workHomeScope='two', workHomeQuery='pending-search')
+    def context():
+        snapshot = service.shell.navigation(client, instance, navigation_resources=frozenset())
+        assert 'workHome' not in snapshot
+        return snapshot['workHomeContext']
+    expected = context()
+    assert expected['scope'] == expected['requestedScope'] == 'two'
+    assert expected['workspace']['id'] == 'two'
+    service.state['view'].update(workHomeQuery='another-search', workHomePages={'idle': 2})
+    assert context() == expected
+    row = next(row for row in service.state['workspaces'] if row['id'] == 'two')
+    row['path'] = '/new/current/path'
+    assert context()['workspace']['path'] == row['path']
+    row['available'] = False
+    assert context()['unavailable'] and context()['workspace'] is None
+    instance['scope'] = {'mode': 'pinned', 'workspaceId': 'one'}
+    assert context()['scope'] == 'one' and context()['requestedScope'] == 'two'
+    instance['scope']['workspaceId'] = 'missing'
+    assert context()['unavailable'] and context()['workspace'] is None
+
+
 async def test_new_web_arrival_and_resume_preserve_chat_and_private_draft(service):
     service.state['view']['workHomeView']='studio'
     record=service.clients.attach('fresh-home',kind='web')

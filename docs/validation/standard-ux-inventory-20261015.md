@@ -724,7 +724,8 @@ This expands existing focused checks; no new frozen browser lane is claimed.
 locally when changing Home, its scoped resource, or navigation/Canvas continuity.
 It covers fresh Home versus resumed chat, immediate search departure and return,
 confirmed project creation scope, private draft and saved Canvas retention,
-pinned/unavailable project constraints, and phone drawer → chat → Canvas → Home.
+pinned/unavailable project constraints, actual pending-query envelopes, stale-registration
+command refusal, and phone drawer → chat → Canvas → Home.
 Use the existing empty-host fixture with private contexts and disposable folders.
 It exercises the production host and built client with a synthetic runtime;
 live-provider behavior and populated-history performance remain separate.

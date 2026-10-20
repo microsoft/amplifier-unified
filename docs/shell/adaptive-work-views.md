@@ -120,3 +120,5 @@ At the user’s request, Home moved from the sidebar to the start of the header
 breadcrumb. The link uses the same remembered Home navigation and preserves
 chat/draft/Canvas state. Phone headers keep Home visible while the existing
 project breadcrumb remains compacted. Removed the old sidebar entry and styles.
+
+Home project controls use current context independently of asynchronous search pages. The context carries requested/effective scope and the current available registration; scope, pin, availability, and path changes invalidate old identity. Pending search rows never count as current results. Project New chat submits both registration ID and path to the canonical draft owner, which revalidates them at acceptance.

@@ -1383,6 +1383,8 @@
           "steps": [
             "Open a fresh client at Home and switch to Studio",
             "Choose a project, type search and immediately start a chat",
+            "Hold the real Home query worker; open the project and start a project chat while results are pending",
+            "Hold a project draft command, change its registered path, then require refusal without draft loss or new work",
             "Return Home and open a saved chat with a private draft and Canvas output",
             "Reload that chat; open an independent fresh client",
             "Pin Chats to each project, attempt another requested scope, and pin an unavailable project",
@@ -1390,6 +1392,7 @@
           ],
           "expectedResults": [
             "Home choices and pending search persist; project creation uses its confirmed folder.",
+            "Project controls use current context independently of pending rows; creation revalidates registration ID and path at acceptance.",
             "A resumed client retains chat/draft/Canvas; an independent client starts at Home.",
             "Effective pinned scope settles and controls agree; missing pinned projects cannot widen or create elsewhere.",
             "Phone drawer cleanup leaves Canvas interactive and retains the private draft.",

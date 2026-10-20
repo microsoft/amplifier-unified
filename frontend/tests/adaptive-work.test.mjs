@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {startingWorkView,homePatch,currentWorkPage} from '../src/adaptive-work.js';
+import {startingWorkView,homePatch,currentWorkPage,currentWorkContext} from '../src/adaptive-work.js';
 test('appearance chooses arrival only; explicit starting preference wins',()=>{
  assert.equal(startingWorkView({interfaceDetail:'minimal'}),'focus');
  assert.equal(startingWorkView({interfaceDetail:'standard'}),'brief');
@@ -25,6 +25,18 @@ test('pinned Home accepts its effective project while fencing request and pin ch
  assert.equal(currentWorkPage(data,{workHomeScope:'managed'},'two'),false);
  assert.equal(currentWorkPage({...data,requestedScope:'managed'},{workHomeScope:'managed'},'two'),true);
  assert.equal(currentWorkPage({...data,scope:'missing',unavailable:true},{},'missing'),true);
+});
+
+test('project context survives result refresh while fencing scope, pin and availability changes',()=>{
+ const context={scope:'one',requestedScope:'one',workspace:{id:'one',path:'/one'},unavailable:false};
+ assert.equal(currentWorkContext(context,{workHomeScope:'one',workHomeQuery:'new',workHomePages:{idle:2}}),context);
+ assert.equal(currentWorkContext(context,{workHomeScope:'two'}),null);
+ assert.equal(currentWorkContext(context,{workHomeScope:'one'},'two'),null);
+ const pinned={...context,requestedScope:'all'};
+ assert.equal(currentWorkContext(pinned,{},'one'),pinned);
+ const unavailable={...pinned,workspace:null,unavailable:true};
+ assert.equal(currentWorkContext(unavailable,{},'one'),unavailable);
+ assert.equal(currentWorkContext(undefined,{}),null);
 });
 
 test('Home preserves an explicitly opened or closed sidebar independently of appearance',()=>{
