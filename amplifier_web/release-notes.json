@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.182",
+      "title": "A Home for your work",
+      "changes": [
+        "Start at Home with Focus, Brief, or Studio views of work that needs you, unread responses, running chats, and saved conversations. Returning browsers retain their previous surface.",
+        "Home remembers your view, filters, project scope, search, pages, and reading position. Appearance chooses initial defaults without replacing your independent view choices.",
+        "Reach Home from the first header breadcrumb, including on phones. Projects and On its own clarify navigation while preserving existing workspace folders and chat ownership.",
+        "Project actions remain usable while searches load. New chats recheck the selected project before opening a draft, and unavailable pinned projects cannot silently switch destinations.",
+        "Preserve chat drafts and saved Canvas content across Home navigation, and release mobile navigation focus correctly when reopening Canvas.",
+        "Protect committed Settings drafts before chat-reference navigation can read them."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.181",
       "title": "Recover configuration changes and open related chats",
       "changes": [
