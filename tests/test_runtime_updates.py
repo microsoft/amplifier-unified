@@ -346,7 +346,9 @@ async def test_freeze_captures_post_preparation_graph_and_protects_untyped_polic
     assert child['current'] == old and child['ref'] == old and not child['eligible']
     assert child['policyOrigin']['kind'] == 'unresolved-reference'
     assert child['policyOrigin']['originalRef'] == 'main'
-    assert not any(row['kind'] == 'runtime environment' for row in environments.inventory(manager.home))
+    refresh = next(row for row in environments.inventory(manager.home) if row['kind'] == 'runtime environment')
+    assert refresh['current'] == 'legacy-policy' and refresh['eligible']
+    assert refresh['label'] == 'Refresh included components'
     frozen = (receipt / 'runtime.lock').read_bytes()
     await environments.stage(manager, generation, [{**child, 'latest': new}])
     assert (receipt / 'runtime.lock').read_bytes() == frozen
