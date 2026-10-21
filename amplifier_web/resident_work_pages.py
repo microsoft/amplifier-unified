@@ -23,6 +23,8 @@ class ResidentWorkPages:
         self.windows = windows
         self.groups = OrderedDict()
         self.interests = set()
+        from .open_work_fields import OpenWorkFields
+        self.open_fields = OpenWorkFields(self)
 
     def _client(self):
         clients = getattr(self.windows.service, 'clients', None)
@@ -91,7 +93,7 @@ class ResidentWorkPages:
         item.update(anchorMessageId=anchor, detailVersion=str(detail_version(row)))
         for key, value in item.items():
             if (key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes'
-                    and not str(value.get('windowKey', '')).startswith(('event-window:', 'tool-window:'))):
+                    and not str(value.get('windowKey', '')).startswith(('event-window:', 'tool-window:', 'open-work:'))):
                 item[key] = {**value, 'windowKey': entry['key']}
         if row.get('kind') == 'llm':
             # These references belong to the accepted canonical window, not
@@ -121,7 +123,9 @@ class ResidentWorkPages:
             result = dict(header)
             exchange = result.get('exchange')
             if isinstance(exchange, dict) and (ref := reference(exchange.get('id'))):
-                result['exchange'] = {**exchange, 'toolDetail': ref}
+                original = nodes[entry['positions'][exchange['id']]]
+                result['exchange'] = self.open_fields.retain(session, entry, original,
+                    {**exchange, 'toolDetail': ref})
             if isinstance(result.get('ancestors'), list):
                 result['ancestors'] = [exchange_refs(value, depth+1) for value in result['ancestors'][:20]]
             return result
@@ -130,7 +134,7 @@ class ResidentWorkPages:
         item = exchange_refs(item)
         if 'delegate' in item:
             item['delegate'] = exchange_refs(item['delegate'])
-        return item
+        return self.open_fields.retain(session, entry, row, item)
 
     def read(self, session, group, before=None, revision=None):
         if not isinstance(group, str) or not 0 < len(group) <= 1024:
@@ -258,6 +262,9 @@ class ResidentWorkPages:
         if len(selected) > MAX_STEPS or len(ranges) > MAX_RANGES:
             raise ValueError('This open Work window reached its page limit. Close and reopen its steps to release it.')
         entry['ids'], entry['ranges'], entry['positions'] = ids, ranges, current_positions
+        for key in tuple(entry.get('fields', {})):
+            if key[0] not in ids:
+                del entry['fields'][key]
         entry['stamp'] = self._stamp(session)
         entry['revision'] = (latest_segment or segment or {}).get('detailRevision', entry['revision'])
         older = self._cursor(session, group, entry)

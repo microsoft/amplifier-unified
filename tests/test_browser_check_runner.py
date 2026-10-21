@@ -271,6 +271,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'attachment-consumption': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
         'home-sidebar': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/home-sidebar'},
         'tool-details': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/tool-details'},
+        'tool-previews': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/tool-previews'},
         'shared-landing': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-landing'},
         'focus-navigation': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/focus-navigation'},
         'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
@@ -291,7 +292,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 107
+    assert len(original) == 65 and len(rows) == 108
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -383,10 +384,11 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     assert steps.index(build) < steps.index(static)
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
     # Ordered normal critical run blocks from reviewed a99ab643, before the
-    # independent diagnostic job was merged. Eight pytest calls / 98 targets.
+    # independent diagnostic job was merged, plus host helper recovery coverage.
+    # Eight pytest calls / 99 targets; all previous targets and ordering retained.
     assert_readiness_python_coverage(
-        readiness, targets=98,
-        run_blocks_sha256='6ef8aeac76d06c287441679f17ee8ffe95d1dbf1cef0dbafd2fadc898c7e91e6',
+        readiness, targets=99,
+        run_blocks_sha256='a965ab7dd574127e46823a19e23a97932416aa5114a6558c60ec042588edbdf5',
     )
 
 
@@ -475,8 +477,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     tool_details = 'tests/tool-details-browser.mjs'
     assert tool_details in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', tool_details] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details}) == 146
-    assert len(readiness_scripts | extended_scripts) == 150
+    tool_previews = 'tests/tool-previews-browser.mjs'
+    assert tool_previews in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', tool_previews] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews}) == 146
+    assert len(readiness_scripts | extended_scripts) == 151
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

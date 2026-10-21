@@ -301,9 +301,8 @@ class RuntimeManager:
         if self.command:
             return list(self.command)
         worker = Path(__file__).with_name("runtime_worker.py")
-        uv = shutil.which("uv")
-        if not uv:
-            raise RuntimeError("Install uv to prepare the Amplifier runtime.")
+        from .host_dependencies import require_uv
+        uv = require_uv()
         # The packaged manifest is copied to a writable cache: installed package
         # directories may be read-only and uv creates its lock and .venv there.
         from .updates import active_release
@@ -749,6 +748,14 @@ class RuntimeManager:
                         await self._emit_progress(sid, row)
                 elif data.get("type") == "runtime.ready":
                     if not row["ready"].done():
+                        # uv is the managed launcher, not necessarily the Python
+                        # worker. Bind configuration effects to the identity on
+                        # this worker's own pipe, scoped to the started session.
+                        identity = data.get("workerIdentity")
+                        if (isinstance(identity, dict)
+                                and identity.get("sessionId") == row.get("runtime_id")
+                                and type(identity.get("pid")) is int and identity["pid"] > 0):
+                            row["native_worker_pid"] = identity["pid"]
                         row["ready"].set_result(data.get("report", {}))
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),

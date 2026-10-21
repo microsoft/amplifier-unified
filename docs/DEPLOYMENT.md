@@ -110,7 +110,31 @@ use the same policy. Older units using `control-group` can signal workers before
 the host begins cleanup and record a false worker failure during a restart;
 updating the package alone does not replace those unit definitions.
 
-The service installation captures the current shell's `PATH` so Unified can find `uv`. If the location of `uv` changes, rerun installation with `--replace` from a shell where `uv --version` works, preserving any original `--data-dir` and `--workspace` options.
+The installer supplies the selected `uv` and app executable directories to the
+launcher before service registration. The service captures that `PATH` and
+supplements it with the user's standard helper directories (`~/.local/bin` and
+`~/.cargo/bin`; also Homebrew locations on macOS). Startup applies the same rule
+to older service definitions, including after reset, without changing their
+workspace, data directory, or custom configuration. Existing PATH precedence and
+dispatcher symlinks are preserved. No shell startup scripts are evaluated.
+
+If `uv` lives in a custom directory and works in a terminal but not in the app,
+run `amplifier-unified service install --replace` from that terminal, preserving
+any original `--data-dir` and `--workspace` options. This backs up the definition
+and restarts the service; saved chats and settings remain. Confirm with
+`amplifier-unified service status --wait 60`, then refresh the browser and retry
+the connection. A reboot or reinstall alone does not change an older service's
+captured custom PATH. `amplifier-unified doctor` checks helper discovery as well
+as application settings; it does not claim provider sign-in succeeded.
+
+Installation acceptance must include a fresh Linux user with no curl/Git/uv,
+OS-correct grouped prerequisite guidance, installer-provisioned uv absent from
+the original PATH, service startup with that environment, and later helper
+discovery with a stale service PATH. Missing helpers during ChatGPT sign-in
+must produce an actionable setup error, while arbitrary provider errors stay
+redacted. These are covered by `test_installer_script.py`,
+`test_host_dependencies.py`, and `test_deployment_service.py`; retain them in
+the onboarding smoke checks when changing installation or service ownership.
 
 For WSL, enable systemd in `/etc/wsl.conf`, restart WSL with `wsl --shutdown`
 from Windows PowerShell, then run the Linux installation commands above.

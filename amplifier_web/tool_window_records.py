@@ -22,7 +22,7 @@ def _fields(page, row):
             result['_eventFields'][field] = deepcopy(row['_eventFields'][field])
             result[field + 'Detail'] = {**deepcopy(row[field + 'Detail']),
                 'sessionId': page['sessionId'], 'windowKey': page['group']}
-    for key in ('inputSummary', 'outcomeSummary'):
+    for key in ('inputSummary', 'outcomeSummary', 'inputPreview', 'actionPath'):
         if key in row:
             result[key] = deepcopy(row[key])
     return result
