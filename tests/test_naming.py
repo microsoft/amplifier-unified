@@ -53,8 +53,9 @@ async def test_live_naming_schedule_dedupes_service_turns_resumes_and_updates(mo
     monkeypatch.setitem(sys.modules,'amplifier_module_hooks_session_naming',SimpleNamespace(SessionNamingHook=Hook,SessionNamingConfig=Config))
     coordinator=SimpleNamespace(config={'hooks':[{'module':'hooks-session-naming','config':{'initial_trigger_turn':2}}]},session_id='s',hooks=SimpleNamespace(register=lambda *a,**k:None),register_cleanup=lambda *a:None)
     namer=LiveSessionNaming(coordinator,tmp_path,lambda e:None)
-    namer.store.save('s', [], {})
+    namer.store.save('s', [{'role':'user','content':'Build a viewer'}], {})
     async def turn(n):
+        namer.store.save('s',[{'role':'user','content':f'Build viewer feature {n}'}],{})
         namer.observe({'type':'input.delivered','input_id':str(n),'source':'user'})
         event={'type':'generation.finished','input_ids':[str(n)]}
         namer.observe(event);namer.observe(event)
@@ -106,6 +107,7 @@ async def test_instrumented_background_naming_keeps_its_own_lifecycle(monkeypatc
         monkeypatch.setitem(sys.modules,'amplifier_module_hooks_session_naming',SimpleNamespace(SessionNamingHook=Hook,SessionNamingConfig=Config))
         coordinator=SimpleNamespace(config={'project_dir':str(tmp_path),'hooks':[{'module':'hooks-session-naming'}]},session_id=sid,hooks=SimpleNamespace(register=lambda *a,**k:None),register_cleanup=lambda *a:None)
         namer=LiveSessionNaming(coordinator,tmp_path,events.append)
+        namer.store.save(sid,[{'role':'user','content':'Build an orbit viewer'}],{})
         async def flush():
             while events:
                 event=normalize_event(events.pop(0),sid)
@@ -168,8 +170,7 @@ async def test_cached_old_hook_cannot_replace_newer_native_rename(tmp_path, monk
         {'session_id':'existing', 'name':'Late name', 'description':'Late description'})
     assert store.read()['name'] == 'New CLI choice'
     assert store.read()['unrelated'] == 'keep'
-    assert events == [{'type':'session.naming', 'name':'New CLI choice',
-                      'description':'New description', 'nameRevision':1}]
+    assert events == []  # Rejected candidates do not publish a false title change.
 
 
 @pytest.mark.parametrize('source', ['manual', None])

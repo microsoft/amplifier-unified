@@ -50,17 +50,17 @@ async def run():
             namer.observe({'type':'input.delivered','input_id':str(i),'source':'user'})
             namer.observe({'type':'generation.finished','input_ids':[str(i)]})
             if namer.pending:await namer.pending
-        assert len(calls)==2,len(calls)
+        assert len(calls)==3,len(calls)
         assert calls[0].max_output_tokens==256
         metadata=SessionStore.for_app(home,Path.cwd()).load('fixture')[1]
         assert metadata['name']=='Build an orbit explorer'
         rows=[e['event'] for e in events if e.get('type')=='execution.event' and e['event'].get('phase')=='completed']
-        assert len(rows)==2 and all(r['label']=='Session naming' and r['usage']['totalTokens']==65 for r in rows),rows
-        assert [r['turnId'] for r in rows]==['1','5']
+        assert len(rows)==3 and all(r['label']=='Session naming' and r['usage']['totalTokens']==65 for r in rows),rows
+        assert [r['turnId'] for r in rows]==['1','2','5']
         before=SessionStore.for_app(home,Path.cwd()).load('fixture')
         assert (await namer.suggest())['name']=='Build an orbit explorer'
-        assert len(calls)==3
+        assert len(calls)==4
         assert SessionStore.for_app(home,Path.cwd()).load('fixture')==before
         await namer.close()
-    print('Real Foundation hook verified: first name after turn 1, title and description refresh at turn 5, configured provider, bounded request, durable metadata, attributed background usage, explicit suggestion from a hook-free bundle; no network calls.')
+    print('Real Foundation hook verified: first name at turn 1, early refinement at turn 2, periodic review at turn 5, configured provider, bounded request, durable metadata, attributed background usage, explicit suggestion; no network calls.')
 asyncio.run(run())
