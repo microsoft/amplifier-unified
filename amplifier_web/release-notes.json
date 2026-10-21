@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.200",
+      "title": "Clearer update outcomes and worker diagnostics",
+      "changes": [
+        "Keep a verified successful application update visible when a later component update fails, with separate recovery guidance and affected component names.",
+        "Preserve specific worker communication and exit failure labels in feedback diagnostics while keeping private runtime details out of reports."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.199",
       "title": "Qualified Incus engine updates",
       "changes": [
