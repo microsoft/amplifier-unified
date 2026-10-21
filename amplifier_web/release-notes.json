@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.206",
+      "title": "Keep open Work details available as activity arrives",
+      "changes": [
+        "Keep expanded tool, delegate and model details readable as newer activity moves the recent-event window forward, without rereading unchanged fields. Retention stays bounded and tied to the exact saved source.",
+        "Catch up on high-impact guidance for earlier releases in What\u2019s new, including Home and workspace layouts, access choices, task creation and managed-component cleanup.",
+        "Improve smoke-test coverage for saved detail previews and exact Copy behavior."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.205",
       "title": "Clearer tool details and more useful chat names",
       "changes": [
