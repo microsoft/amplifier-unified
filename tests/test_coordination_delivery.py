@@ -694,7 +694,8 @@ async def test_interleaved_complete_calls_bind_own_content_not_last_request(app)
     assert covered['requirementCount'] == required['requirementCount']
 
 
-async def test_call_id_reuse_and_uncertain_completion_do_not_reuse_origin(app):
+@pytest.mark.parametrize('unbound', [False, True])
+async def test_call_id_reuse_and_uncertain_completion_do_not_reuse_origin(app, unbound):
     from types import SimpleNamespace
     adapter, _, required = await installed_work_adapter(app)
     await adapter.fill(required)
@@ -708,8 +709,19 @@ async def test_call_id_reuse_and_uncertain_completion_do_not_reuse_origin(app):
     event = {'tool_call_id': 'reused', 'tool_name': 'write_file', 'tool_input': {'path': 'same'}}
     await wrapped.complete(adapter.request())
     assert adapter.delivery.effect_coverage(event)['complete'] is True
+    # A failed current projection cannot reuse an earlier complete certificate.
+    owner = adapter.delivery.begin_work.__self__
+    original_bridge = owner.bridge
+    if unbound:
+        async def failed_projection(operation, args):
+            if operation == 'coordination.current':
+                raise ConnectionError('Synthetic unavailable current projection')
+            return await original_bridge(operation, args)
+        owner.bridge = failed_projection
     await wrapped.complete(adapter.request())  # Same ID/args, different actual request.
+    owner.bridge = original_bridge
     assert adapter.delivery.effect_coverage(event)['complete'] is False
+    assert (await adapter.capabilities['web.work_effect_coverage'](event))['complete'] is False
     with pytest.raises(ConnectionError):
         await wrapped.complete(adapter.request(), fail=True)
     assert adapter.delivery.effect_coverage(event)['complete'] is False
@@ -742,3 +754,57 @@ async def test_native_callback_observations_never_promote_pre_send_trace_to_gran
     assert all(row['effectAuthorized'] is False for row in checked)
     # Controlled callback fixture only, not a provider-wire/native acceptance claim.
     assert WORK_ATTEMPT.get() is None
+
+
+async def test_budget_only_and_cancelled_request_never_certify_a_tool(app):
+    import asyncio
+    from amplifier_web.coordination_delivery import WORK_ATTEMPT
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    started = asyncio.Event()
+    class Provider:
+        async def request_budget(self, value, **kwargs):
+            return {'tokens': 100}
+        async def complete(self, value, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    original = adapter.request()
+    await wrapped.request_budget(original)
+    assert not adapter.delivery.attempts
+    assert not adapter.delivery.calls
+    sending = asyncio.create_task(wrapped.complete(original))
+    try:
+        await started.wait()
+        sending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+    finally:
+        sending.cancel()
+        await asyncio.gather(sending, return_exceptions=True)
+    assert not adapter.delivery.calls
+    assert all(a['status'] == 'unknown' for a in adapter.delivery.attempts.values())
+    assert WORK_ATTEMPT.get() is None
+
+
+async def test_effect_observation_rechecks_stop_without_grant_or_replay(app):
+    adapter, child, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    class Provider:
+        async def complete(self, value, **kwargs):
+            return SimpleNamespace(model_dump=lambda: {'content': [{
+                'type': 'tool_call', 'id': 'bound-write', 'name': 'write_file', 'input': {'path': 'owned'}}]})
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    await wrapped.complete(adapter.request())
+    event = {'tool_call_id': 'bound-write', 'tool_name': 'write_file', 'tool_input': {'path': 'owned'}}
+    owner = adapter.delivery.begin_work.__self__
+    original_bridge = owner.bridge
+    async def changed_during_check(operation, args):
+        if operation == 'work.invocation.revalidate':
+            child['status'] = 'stopped'
+            child['interruptionRevision'] = child.get('interruptionRevision', 0) + 1
+        return await original_bridge(operation, args)
+    owner.bridge = changed_during_check
+    value = await adapter.capabilities['web.work_effect_coverage'](event)
+    assert value['complete'] is False and value['effectAuthorized'] is False
+    assert len(adapter.delivery.attempts) == 1  # No reread, regrant, or provider retry.

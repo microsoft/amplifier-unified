@@ -517,7 +517,8 @@ async def test_saved_task_get_is_cold_and_does_not_return_the_app_snapshot(
 
 @pytest.mark.parametrize('action', ['task.get', 'task.history', 'task.detail', 'task.receipt'])
 @pytest.mark.parametrize('alias', [False, True])
-async def test_registered_task_reads_leave_dormant_owner_cold(tmp_path, monkeypatch, action, alias):
+@pytest.mark.parametrize('via', ['ui', 'agent'])
+async def test_registered_task_reads_leave_dormant_owner_cold(tmp_path, monkeypatch, action, alias, via):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     app = AppService(tmp_path / 'app', None, workspace=tmp_path)
     worker = None
@@ -544,8 +545,21 @@ async def test_registered_task_reads_leave_dormant_owner_cold(tmp_path, monkeypa
         }[action]
         arguments = ({'sessionId': sid, 'operation': action, 'args': values} if alias
                      else {'sessionId': sid, **values})
-        result = await app.dispatch('runtime.control' if alias else action, arguments, include_state=True)
+        if via == 'agent':
+            result = await app.app_bridge('dispatch', {
+                'action': 'runtime.control' if alias else action, 'args': arguments}, sid)
+        else:
+            result = await app.dispatch('runtime.control' if alias else action, arguments, include_state=True)
         assert result['accepted'] is True and 'state' not in result
+        value = result['result']
+        if action == 'task.get':
+            assert value['status'] == 'available' and value['task']['objective'] == task['objective']
+        elif action == 'task.history':
+            assert value['items'][0]['id'] == task['id']
+        elif action == 'task.detail':
+            assert value['text'] == task['objective']
+        else:
+            assert value['receipt']['taskId'] == task['id'] and value['receipt']['revision'] == 1
         assert app.state['sessions'] == before
         assert encoded_size(result) <= TASK_CONTEXT_BYTES
     finally:

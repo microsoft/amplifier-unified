@@ -4732,6 +4732,15 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'] in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
+                    args['action'] == 'runtime.control' and action_args.get('operation') in
+                    {'task.get', 'task.history', 'task.detail', 'task.receipt'}):
+                # Caller ownership was checked above. Avoid the later
+                # _session(nativeProject), pending-progress flush and full
+                # agent snapshot, which would turn this into an active read.
+                return await self.dispatch(args['action'], action_args, origin='agent',
+                    command_id=args.get('id'), expected_revision=args.get('expectedRevision'),
+                    include_state=False, caller_session_id=session_id)
             if args['action'].startswith('worktree.') or (args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)

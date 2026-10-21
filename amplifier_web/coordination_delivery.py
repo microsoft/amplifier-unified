@@ -270,6 +270,17 @@ class CoordinationDelivery:
 
     def finish_work(self, attempt, response=None, *, failed=False, streaming=False):
         if attempt is None:
+            # Unbound/failed-projection calls still consume their output IDs.
+            # They must not inherit an earlier covered call with the same ID.
+            value = response.model_dump() if hasattr(response, 'model_dump') else response
+            for block in (value.get('content') or []) if isinstance(value, dict) else []:
+                if isinstance(block, dict) and block.get('type') == 'tool_call' and _text(block.get('id')):
+                    self.calls.pop(block['id'], None)
+                    if len(self.seen_calls) < 4096:
+                        self.seen_calls.add(block['id'])
+                    else:
+                        self.binding_overflow = True
+                        self.calls.clear()
             return
         if failed:
             attempt['status'] = 'unknown'

@@ -239,7 +239,7 @@ class SurfaceProvider:
         token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
         try:
             response = await self.original.complete(request, **kwargs)
-            if attempt:
+            if hasattr(self.delivery, 'finish_work'):
                 self.delivery.finish_work(attempt, response)
             return response
         except BaseException:
