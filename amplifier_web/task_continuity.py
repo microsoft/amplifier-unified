@@ -594,8 +594,11 @@ def _load_control(service, session):
         if saved.get("goal") is not None and not isinstance(saved["goal"], dict):
             raise ValueError("Saved goal state is malformed")
         return saved
-    except (OSError, ValueError, UnicodeError) as exc:
-        raise ValueError("Saved task state unavailable; no worker was started: " + str(exc)) from None
+    except (OSError, ValueError, UnicodeError):
+        # Exception details belong to private host diagnostics, not UI/model
+        # projections: filesystem errors can include the control file's path.
+        logging.getLogger(__name__).warning("Saved task state unavailable during cold read", exc_info=True)
+        raise ValueError("Saved task state unavailable; no worker was started.") from None
 
 
 def _public_unavailable(reason):

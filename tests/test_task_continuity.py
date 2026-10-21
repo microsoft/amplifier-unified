@@ -892,9 +892,10 @@ async def test_public_get_alias_is_bounded_and_does_not_change_canonical_cache(
             await worker.close()
 
 
-@pytest.mark.parametrize('fault', ['missing', 'malformed', 'oversized'])
-@pytest.mark.parametrize('via', ['ui', 'agent'])
-async def test_cold_saved_control_failure_is_unavailable_not_empty(tmp_path, monkeypatch, fault, via):
+@pytest.mark.parametrize('fault', ['missing', 'unreadable', 'malformed', 'oversized'])
+@pytest.mark.parametrize('via', ['ui', 'agent', 'agent_alias'])
+async def test_cold_saved_control_failure_is_unavailable_not_empty(
+        tmp_path, monkeypatch, caplog, fault, via):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     app = AppService(tmp_path / 'app', None, workspace=tmp_path)
     try:
@@ -904,23 +905,79 @@ async def test_cold_saved_control_failure_is_unavailable_not_empty(tmp_path, mon
         if fault != 'missing':
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('{' if fault == 'malformed' else ' ' * 300)
+        before = None if fault == 'missing' else path.read_bytes()
         if fault == 'oversized':
             monkeypatch.setattr('amplifier_web.task_continuity.CONTROL_BYTES', 256)
+        original_open = type(path).open
+        if fault == 'unreadable':
+            # A deterministic read failure also works when tests run as root.
+            def deny_control_open(target, *args, **kwargs):
+                if target == path:
+                    raise PermissionError(13, 'Synthetic private read failure', str(path))
+                return original_open(target, *args, **kwargs)
+            monkeypatch.setattr(type(path), 'open', deny_control_open)
+        app._save_full(reason='Synthetic cold unavailable fixture')
+        app.state['sessions'] = [row for row in app.state['sessions'] if row['id'] != sid]
+        app.projections.invalidate()
+        sessions_before = copy.deepcopy(app.state['sessions'])
+        app.runtime = SimpleNamespace(
+            control=AsyncMock(side_effect=AssertionError('No runtime control')), close=AsyncMock())
+        app.management = SimpleNamespace(
+            ensure_runtime=AsyncMock(side_effect=AssertionError('No worker warming')), close=AsyncMock())
         monkeypatch.setattr(app.history, 'ensure_loaded',
                             AsyncMock(side_effect=AssertionError('No transcript recovery')))
+        monkeypatch.setattr(app.history, 'refresh',
+                            AsyncMock(side_effect=AssertionError('No transcript refresh')))
         def no_admission(*args, **kwargs):
             pytest.fail('Passive failure must not admit a worker or publish state')
         monkeypatch.setattr(app, '_admit_session', no_admission)
         monkeypatch.setattr(app, '_publish_changes', no_admission)
-        if via == 'agent':
-            result = await app.app_bridge('dispatch', {'action': 'task.get', 'args': {'sessionId': sid}}, sid)
+        monkeypatch.setattr(app, 'browser_state', no_admission)
+        caplog.clear()
+        for action, values in {
+            'task.get': {}, 'task.history': {},
+            'task.detail': {'taskId': 'synthetic-task', 'expectedRevision': 1, 'field': 'objective'},
+            'task.receipt': {'commandId': 'synthetic-command'},
+        }.items():
+            args = {'sessionId': sid, **values}
+            if via == 'agent_alias':
+                args = {'sessionId': sid, 'operation': action, 'args': values}
+                action = 'runtime.control'
+            if via == 'ui':
+                result = await app.dispatch(action, args, include_state=True)
+            else:
+                result = await app.app_bridge('dispatch', {'action': action, 'args': args}, sid)
+            assert result['accepted'] is True and 'state' not in result
+            assert result['result'] == {
+                'status': 'unavailable', 'task': None, 'coverage': 'unknown',
+                'detailRequired': True,
+                'reason': 'Saved task state unavailable; no worker was started.',
+                'authority': 'Missing saved state is not an empty task or permission to continue.',
+            }
+            public = json.dumps(result)
+            for private in (str(path), str(app.data_dir), 'control-state.json',
+                            'Synthetic private read failure', '[Errno', 'line 1 column',
+                            'bounded read limit'):
+                assert private not in public
+            assert encoded_size(result) <= TASK_CONTEXT_BYTES
+        diagnostics = [row for row in caplog.records if row.name == 'amplifier_web.task_continuity']
+        assert len(diagnostics) == 4
+        expected_error = {'missing': FileNotFoundError, 'unreadable': PermissionError,
+                          'malformed': json.JSONDecodeError, 'oversized': ValueError}[fault]
+        assert all(row.getMessage() == 'Saved task state unavailable during cold read'
+                   and isinstance(row.exc_info[1], expected_error) for row in diagnostics)
+        if fault in {'missing', 'unreadable'}:
+            assert all(row.exc_info[1].filename == str(path) for row in diagnostics)
+        assert app.state['sessions'] == sessions_before
+        app.runtime.control.assert_not_called()
+        app.management.ensure_runtime.assert_not_called()
+        if before is None:
+            assert not path.exists()
         else:
-            result = await app.dispatch('task.get', {'sessionId': sid})
-        assert result['result']['status'] == 'unavailable'
-        assert result['result']['coverage'] == 'unknown'
-        assert result['result']['detailRequired'] is True
-        assert encoded_size(result) <= TASK_CONTEXT_BYTES
+            with original_open(path, 'rb') as stream:
+                assert stream.read() == before
     finally:
+        app.management = None
         await app.close()
 
 
