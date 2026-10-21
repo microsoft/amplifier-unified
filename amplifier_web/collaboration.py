@@ -883,9 +883,14 @@ class Collaboration:
                             result = {"accepted": False, "delivery": "not_sent",
                                       "reason": "Preparation cancelled before input admission."}
                             phase = "not_sent"
-                        receipt.update(delivery=phase, detail=result["reason"], admission=result)
-                        self.observe_admission(receipt)
-                        self.service.db.commit()
+                        async with self.service.lock:
+                            # Cancellation, replies and subscriptions can commit
+                            # while transport is awaited. Reconcile only admission
+                            # against the durable owner, never the pre-await copy.
+                            receipt = self.receipt(identity)
+                            receipt.update(delivery=phase, detail=result["reason"], admission=result)
+                            self.observe_admission(receipt)
+                            self.service.db.commit()
                         raise
                 async with self.service.lock:
                     receipt = self.receipt(identity)
@@ -941,9 +946,13 @@ class Collaboration:
         except BaseException as exc:
             result, phase = {"reason": "Steering outcome unknown; no replay."}, "unknown"
             if isinstance(exc, asyncio.CancelledError):
-                receipt.update(delivery=phase, admission=result)
-                self.save(identity, receipt)
-                self.service.db.commit()
+                async with self.service.lock:
+                    receipt = self.receipt(identity)
+                    # Native applied/held evidence can beat the acknowledgement.
+                    receipt.update(delivery=receipt.get("delivery") if receipt.get("delivery") in {"applied", "held", "unknown"} else phase,
+                                   admission=result)
+                    self.save(identity, receipt)
+                    self.service.db.commit()
                 raise
         async with self.service.lock:
             receipt = self.receipt(identity)

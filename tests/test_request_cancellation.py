@@ -99,6 +99,48 @@ async def test_unknown_admission_never_claims_stopped_or_replays(app):
     assert len(app.runtime.inputs) == 1
 
 
+@pytest.mark.parametrize('mode', ['queue', 'steer'])
+async def test_shutdown_during_admission_keeps_committed_cancellation_and_closed_wait(app, mode):
+    entered = asyncio.Event()
+    async def held(*args):
+        entered.set()
+        await asyncio.Event().wait()
+    source, target = app.state['sessions']
+    if mode == 'steer':
+        await generation(app, target, 'target-generation', ['unrelated-input'])
+        app.runtime.collaboration_steer = held
+    else:
+        app.runtime.collaboration_input = held
+    dispatch = asyncio.create_task(send(app, mode=mode))
+    await asyncio.wait_for(entered.wait(), 5)
+    await agent_action(app, source, 'coordination.subscribe',
+        {'sessionId': source['id'], 'requestId': 'request-1'}, 'wait-before-shutdown')
+    accepted = await cancel(app, reason='Stop only this request')
+    saved = copy.deepcopy(app.collaboration.receipt('request-1'))
+    assert saved['subscription']['open'] is False
+    # queue dispatch is service-owned; steer is held by the transport caller.
+    dispatch.cancel()
+    await asyncio.gather(dispatch, return_exceptions=True)
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        current = reopened.collaboration.receipt('request-1')
+        assert current['delivery'] == 'unknown'
+        assert current['cancellation'] == saved['cancellation']
+        assert current['subscription'] == saved['subscription']
+        retry = await reopened.dispatch('coordination.cancel',
+            {'sessionId': source['id'], 'requestId': 'request-1', 'reason': 'Stop only this request'},
+            origin='agent', caller_session_id=source['id'], command_id='cancel-1')
+        assert retry['duplicate'] and retry['result'] == accepted['result']
+        assert current['cancellation']['operationId'] == retry['result']['operationId']
+        reopened._session(target['id'])['status'] = 'idle'
+        await reopened.collaboration.drain(target['id'])
+        assert not reopened.runtime.inputs
+    finally:
+        await reopened.close()
+
+
 async def test_next_provider_boundary_receives_current_cancellation_without_a_new_turn(app):
     from amplifier_web.coordination_delivery import CoordinationDelivery
     from test_coordination_delivery import Previous, request
