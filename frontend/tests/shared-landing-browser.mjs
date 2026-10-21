@@ -39,14 +39,24 @@ try{
  const allWorkspaces=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Browse',exact:true}).click();await sidebar.getByRole('button',{name:'All workspaces',exact:true}).click();await expect(landing).toHaveAttribute('data-landing','workspaces');await settled()};
  const focusRow=()=>landing.locator('.a-landing-chat[data-session-id]');
  const pickUpAgain=()=>landing.getByRole('group',{name:'Filter work'}).getByRole('button',{name:/^Pick up again/});
- const checkIdle=async section=>{
+ const checkIdle=async(section,filter='')=>{
   await expect(pickUpAgain()).toHaveAttribute('aria-pressed','true');await settled();
-  await expect.poll(async()=>(await shell()).sidebarNavigation[section]?.scope?.statusFilter).toBe('idle');
-  const result=(await shell()).sidebarNavigation[section];
-  assert.ok(result.total>0);assert.equal(result.total,result.activityCounts.idle);
-  assert.ok(result.items.every(row=>row.activity.kind==='idle'));
-  assert.ok(result.items.every(row=>!['alpha-200','alpha-199','alpha-198','alpha-197'].includes(row.id)));
-  assert.deepEqual(await landing.locator('.a-landing-chat').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId)),result.items.map(row=>row.id));
+  await expect(async()=>{
+   // Capture coverage and rendered rows together; a new search can omit pending results.
+   const observed=await page.evaluate(section=>{
+    const snapshot=window.amplifier.getShellState().snapshots.chats;
+    return {result:snapshot.sidebarNavigation[section],
+     pending:Object.keys(snapshot.navigationResourcePending||{}),
+     ids:[...document.querySelectorAll('.a-adaptive-home .a-landing-chat')].map(row=>row.dataset.sessionId)};
+   },section);
+   const result=observed.result;
+   assert.equal(observed.pending.length,0);assert.ok(result);
+   assert.equal(result.scope.statusFilter,'idle');assert.equal(result.scope.filter,filter);
+   assert.ok(result.total>0);assert.equal(result.total,result.activityCounts.idle);
+   assert.ok(result.items.every(row=>row.activity.kind==='idle'));
+   assert.ok(result.items.every(row=>!['alpha-200','alpha-199','alpha-198','alpha-197'].includes(row.id)));
+   assert.deepEqual(observed.ids,result.items.map(row=>row.id));
+  }).toPass({timeout:15000});
  };
  await page.goto(`http://127.0.0.1:${port}`);await expect(landing).toHaveAttribute('data-landing','home');await settled();
  const initial=await info();
@@ -112,7 +122,7 @@ try{
  await pickUpAgain().click();await checkIdle('search');
  await home();await allChats();await checkIdle('search');
  await page.reload();await expect(landing).toHaveAttribute('data-landing','chats');await checkIdle('search');
- await landing.getByRole('searchbox',{name:'Search chats',exact:true}).fill('Beta');await checkIdle('search');
+ await landing.getByRole('searchbox',{name:'Search chats',exact:true}).fill('Beta');await checkIdle('search','Beta');
  await expect(landing.locator('.a-landing-chat')).toHaveCount(3);
  await landing.getByRole('button',{name:'Clear status filter'}).click();await settled();
  await expect(landing.getByRole('searchbox',{name:'Search chats',exact:true})).toHaveValue('Beta');

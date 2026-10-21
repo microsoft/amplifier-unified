@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.203",
+      "title": "Consistent Home, chat and workspace browsing",
+      "changes": [
+        "Use Focus, Brief and Studio layouts across Home, All chats, All workspaces and individual workspaces, with remembered layouts, reading positions and Focus items.",
+        "Find Home in the sidebar alongside Browse and Status, and use clearer Home navigation from other pages.",
+        "Keep active filters visible, use Pick up again for quiet read chats, and clear status filters without losing your search. Existing chat and workspace actions remain available."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.202",
       "title": "Reliable checkout handoff",
       "changes": [
