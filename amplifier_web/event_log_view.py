@@ -420,7 +420,7 @@ class EventIndex:
             from .tool_observations import input_hints, outcome_summary
             input_key = next((name for name in ('tool_input', 'arguments', 'input') if name in data), None)
             if input_key is not None or name == 'tool:pre':
-                node.update(input_hints(data.get('tool_name') or data.get('tool'),
+                node.update(input_hints(data.get('tool_name') or data.get('tool') or node.get('label'),
                     data.get(input_key), present=input_key is not None))
             node['outcomeSummary'] = outcome_summary(name, data)
             self.field(node, 'input', data, ('tool_input', 'arguments', 'input'), reference)

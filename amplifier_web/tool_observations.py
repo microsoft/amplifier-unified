@@ -93,7 +93,15 @@ def input_preview(value):
     return bounded(render(value))
 
 
+def compact_image_tool(*names):
+    return any(isinstance(name, str) and name in {'image_generate', 'nano-banana'} for name in names)
+
+
 def input_hints(tool, value, *, present=True):
+    # Image lifecycle observations admit status metadata, not prompts or paths.
+    # Original event fields remain available through explicit saved inspection.
+    if compact_image_tool(tool):
+        return {'inputSummary': {}, 'inputPreview': '', 'actionPath': ''}
     result = {'inputSummary': input_summary(value),
               'inputPreview': input_preview(value) if present else '', 'actionPath': ''}
     if tool == 'app_control' and isinstance(value, dict) and value.get('operation') == 'dispatch':
@@ -124,6 +132,10 @@ def metadata(event):
     token = identity(event.get('toolObservationId'))
     if token:
         result['toolObservationId'] = token
+    if compact_image_tool(tool, event.get('label')):
+        # Also clear supplied/previous hints at each normalization boundary.
+        return {**result, **input_hints(tool if compact_image_tool(tool) else event['label'], None),
+                'outcomeSummary': {}}
     for key in ('inputPreview', 'actionPath'):
         if isinstance(event.get(key), str):
             result[key] = bounded(event[key])

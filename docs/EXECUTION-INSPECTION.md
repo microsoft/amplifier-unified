@@ -43,8 +43,11 @@ JSONL records are retried after the next append. Inspection never executes tools
 
 Collapsed tool rows retain the tool name and a bounded command, code, file, or
 action preview, plus an available error and exit status. These are display hints,
-not complete arguments or execution evidence. Tools without a specialized display
-also carry `inputPreview`, a deterministic JSON-shaped request hint of at most
+not complete arguments or execution evidence. Image-tool lifecycle hints (`image_generate` and
+`nano-banana`, including analysis) omit prompt/path and result-text hints; the
+shared normalizer also clears previously supplied hints. Their original saved
+arguments/results remain available through explicit, scoped detail inspection.
+Other tools without a specialized display also carry `inputPreview`, a deterministic JSON-shaped request hint of at most
 180 characters. It visits at most four entries per container, two container
 levels and 24 values; shortened values end in an ellipsis. Known credential-named
 fields are redacted in this hint. This is not a secret scanner for arbitrary
