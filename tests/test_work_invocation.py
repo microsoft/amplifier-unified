@@ -741,3 +741,44 @@ async def test_association_link_corruption_fails_without_replay(app):
     assert required['status'] == 'unavailable' and required['version'] is None
     assert required['coverage']['complete'] is False and required['effectAuthorized'] is False
     assert len(app.runtime.inputs) == 1
+
+
+async def test_managed_chat_preserves_coordination_when_work_is_unavailable(app):
+    created = await app.dispatch('session.create', {'location': {'kind': 'managed'}})
+    actor = app._session(created['sessionId'])
+    assert actor['location']['kind'] == 'managed'
+    assert actor['workspace'] not in {row['path'] for row in app.state['workspaces']}
+    await generation(app, actor, 'managed-work-observation', ['managed-input'])
+    before = retained_bytes(app)
+    inputs = copy.deepcopy(app.runtime.inputs)
+    expected = app.collaboration.current(actor['id'])
+    observed = await app.app_bridge('coordination.current', transport(actor), actor['id'])
+    assert observed['sessionId'] == actor['id']
+    assert observed['requests'] == expected['requests'] and observed['grants'] == expected['grants']
+    assert observed['awareness']['actor']['rootSessionId'] == actor['id']
+    assert observed['assignment'] == app.assignments.summary(actor)
+    assert observed['work']['available'] is False
+    assert observed['work']['required']['status'] == 'unavailable'
+    assert observed['work']['required']['effectAuthorized'] is False
+    assert retained_bytes(app) == before and app.runtime.inputs == inputs
+
+
+async def test_oversized_work_projection_preserves_other_coordination(app, monkeypatch):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'oversized-projection')
+    _, child = await commissioned(app, owner, item)
+    assert (await current_work(app, child))['required']['status'] == 'available'
+    original = app.workspace_work.listing
+
+    def oversized(*args, **kwargs):
+        return {**original(*args, **kwargs), 'detail': 'x' * (12 * 1024)}
+
+    monkeypatch.setattr(app.workspace_work, 'listing', oversized)
+    before = retained_bytes(app)
+    observed = await app.app_bridge('coordination.current', transport(child), child['id'])
+    assert observed['awareness']['actor']['rootSessionId'] == child['id']
+    assert 'requests' in observed and 'assignment' in observed
+    assert observed['work']['available'] is False
+    assert 'byte bound' in observed['work']['required']['reason']
+    assert observed['work']['required']['effectAuthorized'] is False
+    assert retained_bytes(app) == before and len(app.runtime.inputs) == 1

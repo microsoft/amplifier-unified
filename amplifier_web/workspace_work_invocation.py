@@ -359,21 +359,24 @@ class WorkInvocation:
         from .service import AppError
         try:
             target = self.bound_root(sid)
+            required, _ = self.required(sid)
+            workspace = self.work.workspace({'sessionId': sid}, 'agent', sid)
+            limit = 20
+            while True:
+                discovery = self.work.listing(workspace, {'limit': limit}, owner=target['id'], context=True)
+                packet = {'available': True, 'discovery': discovery, 'required': required}
+                if len(json.dumps(packet, ensure_ascii=False).encode()) <= CONTEXT_BYTES:
+                    return packet
+                if limit <= 1:
+                    self.work.error('Work current projection exceeds its byte bound.', 413)
+                limit -= 1
         except AppError as exc:
+            # Work is an optional projection of coordination, not a prerequisite
+            # for managed-location chats or other host coordination observations.
+            # Unavailable/oversized Work must not erase unrelated reference data.
             return {'available': False, 'discovery': {'status': 'unavailable', 'reason': str(exc)},
                     'required': {'status': 'unavailable', 'reason': str(exc), 'version': None,
                                  'coverage': {'complete': False}, 'effectAuthorized': False}}
-        required, _ = self.required(sid)
-        workspace = self.work.workspace({'sessionId': sid}, 'agent', sid)
-        limit = 20
-        while True:
-            discovery = self.work.listing(workspace, {'limit': limit}, owner=target['id'], context=True)
-            packet = {'available': True, 'discovery': discovery, 'required': required}
-            if len(json.dumps(packet, ensure_ascii=False).encode()) <= CONTEXT_BYTES:
-                return packet
-            if limit <= 1:
-                self.work.error('Work current projection exceeds its byte bound.', 413)
-            limit -= 1
 
     def manifest(self, sid, args):
         self.bound_root(sid, require_generation=True)
