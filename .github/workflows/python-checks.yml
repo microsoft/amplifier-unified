@@ -149,7 +149,25 @@ jobs:
           mapfile -t targets < output/python-checks/targets.txt
           test "${#targets[@]}" -gt 0
           set -o pipefail
+          if [ "$CHECK_SUITE" = manager-exception-boundary ]; then
+            mkdir -p output/python-checks/original
+            git archive 8a326ee890e43fa30b59ca8f4654d1ca598c0af2 amplifier_web amplifier_operations amplifier_kernels amplifier_scheduling amplifier_recall amplifier_outputs amplifier_worktrees amplifier_publishing amplifier_portability | tar -x -C output/python-checks/original
+            set +e
+            (cd output/python-checks/original && "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest \
+              -c /dev/null -o asyncio_mode=auto --import-mode=importlib -v --tb=short \
+              "$GITHUB_WORKSPACE/tests/test_manager_exception_boundary.py::test_real_post_provider_manager_exception_reaches_public_inspection") \
+              2>&1 | tee output/python-checks/original-red.log
+            red=${PIPESTATUS[0]}
+            set -e
+            test "$red" -eq 1
+            grep -q 'chain = failure.get' output/python-checks/original-red.log || grep -q 'assert any' output/python-checks/original-red.log
+          fi
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml "${targets[@]}" 2>&1 | tee output/python-checks/pytest.log
+      - name: Build the exact manager-boundary candidate wheel
+        if: ${{ env.CHECK_SUITE == 'manager-exception-boundary' }}
+        run: |
+          uv build --wheel --out-dir output/python-checks/dist
+          sha256sum output/python-checks/dist/*.whl > output/python-checks/wheel-sha256.txt
       - name: Retain complete and partial Python results
         if: always()
         uses: actions/upload-artifact@v4

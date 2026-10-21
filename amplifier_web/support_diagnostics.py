@@ -37,6 +37,50 @@ def exception_chain(error):
     return chain
 
 
+def public_exception_chain(value):
+    """Revalidate the existing frame-only format; never accept text or locals."""
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value[:5]:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get('errorType')
+        if not isinstance(kind, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind):
+            continue
+        frames = item.get('frames')
+        safe = []
+        for frame in (frames[-12:] if isinstance(frames, list) else []):
+            if not isinstance(frame, dict):
+                continue
+            file, function, line = frame.get('file'), frame.get('function'), frame.get('line')
+            if (isinstance(file, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,160}', file)
+                    and isinstance(function, str) and re.fullmatch(r'[A-Za-z0-9_.<>]{1,160}', function)
+                    and type(line) is int and 0 < line <= 10_000_000):
+                safe.append({'file': file, 'function': function, 'line': line})
+        result.append({'errorType': kind, 'frames': safe})
+    return result
+
+
+def terminal_exception_capture(value):
+    """Only correlated generic manager failures may carry supplemental frames."""
+    if not isinstance(value, dict):
+        return None
+    def identity(raw):
+        return isinstance(raw, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', raw)
+    inputs = value.get('inputIds')
+    generation = value.get('generationId')
+    kind = value.get('errorType')
+    chain = public_exception_chain(value.get('exceptionChain'))
+    if (not identity(generation) or not isinstance(inputs, list) or not 1 <= len(inputs) <= 128
+            or not all(identity(item) for item in inputs)
+            or not isinstance(kind, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind)
+            or not chain or not any(item['errorType'] == kind for item in chain)):
+        return None
+    return {'generationId': generation, 'inputIds': list(inputs),
+            'errorType': kind, 'exceptionChain': chain}
+
+
 def event_detail(row):
     result = {}
     for key in ('event', 'timestamp', 'ts', 'at', 'generation_id', 'session_id', 'sessionId',

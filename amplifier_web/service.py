@@ -4312,6 +4312,12 @@ class AppService:
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
+                if 'terminalFailure' in payload:
+                    from .session_health import terminal_exception_failure
+                    enriched = terminal_exception_failure(session, payload['terminalFailure'])
+                    if enriched is None:
+                        return
+                    session['failure'] = enriched
                 settle_stream(session)
                 session["status"] = "error"
                 finish_execution(session,"error")
