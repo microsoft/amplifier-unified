@@ -7,7 +7,7 @@ const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'c
 test.after(()=>vite.close());
 const {overviewSectionOpen,overviewSectionPatch,CanvasOverviewSection}=await vite.ssrLoadModule('/src/canvas-overview-state.jsx');
 const {ChatOverview}=await vite.ssrLoadModule('/src/work-overview.jsx');
-const {CanvasTabs}=await vite.ssrLoadModule('/src/canvas-library.jsx');
+const {CanvasTabs,closeCanvasDialog}=await vite.ssrLoadModule('/src/canvas-library.jsx');
 const state={selectedSessionId:'chat-a',selectedWorkspaceId:'workspace-a',view:{canvasDraft:{filter:'retained'}},canvas:{open:true,placeholder:true},canvasArtifacts:[],sessions:[{id:'chat-a',status:'idle',messages:[{attachments:[{id:'source',name:'Source.txt'}]}],workers:[{id:'worker',status:'error',name:'Source check'}]}],workspaces:[{id:'workspace-a',name:'Ideas',path:'/example/ideas',available:true}],recentNavigation:{items:[],total:0}};
 test('section choices preserve the draft shape, sibling choices and search',()=>{
  assert.equal(overviewSectionOpen(state.view.canvasDraft,'outputs'),true);
@@ -37,4 +37,19 @@ test('one pinned overview and explicit document list affordance even without ope
  assert.match(html,/aria-label="Open documents, 0 open"/);
  assert.match(html,/a-canvas-document-tabs/);
  assert.doesNotMatch(html,/Back to chat|Open views and view actions/);
+});
+test('accepted document selection closes native modality before scheduling tab focus',()=>{
+ const previous=globalThis.requestAnimationFrame,frames=[],events=[];
+ globalThis.requestAnimationFrame=callback=>{events.push('schedule');frames.push(callback);return frames.length};
+ try{
+  const dialog={open:true,close(){events.push('close');this.open=false}};
+  closeCanvasDialog(dialog,()=>{assert.equal(dialog.open,false,'Focus must not target the modal-inert background');events.push('focus')});
+  assert.deepEqual(events,['close','schedule']);
+  frames.shift()();
+  assert.deepEqual(events,['close','schedule','focus']);
+  // Deliberate old sequence: focus runs before the passive native close.
+  dialog.open=true;
+  const oldPath=()=>{globalThis.requestAnimationFrame(()=>assert.equal(dialog.open,false,'modal-inert'));};
+  oldPath();assert.throws(()=>frames.shift()(),/modal-inert/);
+ }finally{if(previous===undefined)delete globalThis.requestAnimationFrame;else globalThis.requestAnimationFrame=previous}
 });

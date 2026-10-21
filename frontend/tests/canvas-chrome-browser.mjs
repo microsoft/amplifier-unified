@@ -315,8 +315,19 @@ try{
   await expect(dialog.locator('li')).toHaveCount(12);await expect(dialog).toContainText('12 open · 30 saved outputs');
   const search=dialog.getByRole('searchbox',{name:'Find an open document'});
   await search.fill('Document 19');await expect(dialog.locator('li')).toHaveCount(1);
+  // Observe actual application ordering without moving focus from the test.
+  await dialog.evaluate((element,id)=>{
+   const events=[],nativeClose=element.close;
+   window.canvasFocusOrder={events,restore:()=>{element.close=nativeClose;document.removeEventListener('focusin',focused)}};
+   const focused=event=>{if(event.target.dataset?.artifactId===id)events.push({event:'selected-tab-focus',modal:element.matches(':modal')})};
+   element.close=function(...args){const result=nativeClose.apply(this,args);events.push({event:'native-close',modal:this.matches(':modal')});return result};
+   document.addEventListener('focusin',focused);
+  },ids[18]);
   await dialog.locator('li').getByRole('button',{name:titles[18]+' markdown',exact:true}).click();
   await expect(dialog).not.toBeVisible();await expect(strip.getByRole('tab',{name:titles[18],exact:true})).toBeFocused();
+  const order=await page.evaluate(()=>{const value=window.canvasFocusOrder;value.restore();delete window.canvasFocusOrder;return value.events});
+  assert.deepEqual(order.slice(0,2),[{event:'native-close',modal:false},{event:'selected-tab-focus',modal:false}]);
+  report.focusOrder=order;
   assert.equal((await state()).canvas.id,ids[18]);
   await documents().click();await search.fill('');await page.keyboard.press('Escape');await expect(documents()).toBeFocused();
   // Close the selected tab through the native dialog; the other 29 saved bodies remain.

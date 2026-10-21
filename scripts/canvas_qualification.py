@@ -93,6 +93,13 @@ def prepare_installed():
     (harness / 'frontend/node_modules').symlink_to(ROOT / 'frontend/node_modules', target_is_directory=True)
     (harness / '.venv').symlink_to(venv, target_is_directory=True)
     assert not (harness / 'amplifier_web').exists()
+    verify_installed()
+
+
+def verify_installed():
+    wheel, = sorted((OUT / 'dist').glob('*.whl'))
+    venv = OUT / 'installed-venv'
+    harness = OUT / 'installed-harness'
     probe = '''import amplifier_web,hashlib,json,pathlib,sys,zipfile
 package=pathlib.Path(amplifier_web.__file__).resolve().parent
 assert package.is_relative_to(pathlib.Path(sys.prefix).resolve())
@@ -105,7 +112,12 @@ with zipfile.ZipFile(wheel) as z:
   count+=1
 print(json.dumps({'package':str(package),'python':sys.version,'wheelSha256':hashlib.sha256(wheel.read_bytes()).hexdigest(),'payloadFilesChecked':count}))'''
     identity = json.loads(checked(str(venv / 'bin/python'), '-I', '-c', probe, str(wheel), cwd=harness))
-    write(OUT / 'installed-identity.json', identity)
+    path = OUT / 'installed-identity.json'
+    if path.exists():
+        assert identity == json.loads(path.read_text()), 'Installed payload changed during journeys'
+        write(OUT / 'installed-final-identity.json', identity)
+    else:
+        write(path, identity)
     write(OUT / 'wheel.json', {'name': wheel.name, 'sha256': sha(wheel), 'bytes': wheel.stat().st_size})
     with zipfile.ZipFile(wheel) as archive:
         static = {name.removeprefix('amplifier_web/static/'): hashlib.sha256(archive.read(name)).hexdigest()
@@ -157,7 +169,9 @@ def run():
             label = 'installed-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], root=harness, seconds=240,
                   env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'),
-                       'AMPLIFIER_TEST_PYTHON': str(OUT / 'installed-venv/bin/python'), 'PYTHONPATH': ''})
+                       'AMPLIFIER_TEST_PYTHON': str(OUT / 'installed-venv/bin/python'), 'PYTHONPATH': '',
+                       'AMPLIFIER_SHELL_NODE_MODULES': str(harness / 'frontend/node_modules')})
+        stage('installed-final-identity', [python, str(Path(__file__).resolve()), 'verify-installed'], seconds=30)
         assert payload(ROOT / 'amplifier_web/static') == json.loads((OUT / 'static.json').read_text())
         assert all(sha(ROOT / name) == value for name, value in identity['sourceSha256'].items())
         record['status'] = 'passed' if all(row['status'] == 'passed' for row in record['stages']) else 'failed'
@@ -197,6 +211,6 @@ def retain():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['initialize', 'imports', 'prepare-installed', 'run', 'retain'])
+    parser.add_argument('operation', choices=['initialize', 'imports', 'prepare-installed', 'verify-installed', 'run', 'retain'])
     args = parser.parse_args()
     raise SystemExit(globals()[args.operation.replace('-', '_')]() or 0)

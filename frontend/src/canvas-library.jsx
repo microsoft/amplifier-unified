@@ -5,6 +5,12 @@ import {filterList} from './list-filter';
 import {useCanvasReading} from './canvas-overview-state';
 const inChat=(state,row)=>row.sessionId===state.selectedSessionId&&row.workspaceId===state.selectedWorkspaceId;
 export function chatArtifacts(state){return (state.canvasArtifacts||[]).filter(r=>inChat(state,r))}
+// Native close removes modal inertness and restores its previous focus first.
+// A React state update alone does neither until the passive effect has run.
+export function closeCanvasDialog(dialog,focus){
+ if(dialog?.open)dialog.close();
+ requestAnimationFrame(focus);
+}
 export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  const rows=chatArtifacts(state).filter(r=>r.tabOpen),strip=useRef(null),tabs=useRef(null),dialog=useRef(null),trigger=useRef(null);
  const [scrolled,setScrolled]=useState(false),[open,setOpen]=useState(false),[query,setQuery]=useState(''),[error,setError]=useState(''),[pending,setPending]=useState(false);
@@ -18,14 +24,18 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  useLayoutEffect(()=>{if(strip.current)setScrolled(strip.current.scrollLeft>4)},[state.selectedSessionId,state.canvas?.open]);
  useEffect(()=>{if(open&&!dialog.current?.open)dialog.current?.showModal();else if(!open&&dialog.current?.open)dialog.current.close()},[open]);
  useEffect(()=>{setOpen(false);setQuery('');setError('')},[state.selectedSessionId]);
- const close=()=>{setOpen(false);requestAnimationFrame(()=>trigger.current?.focus({preventScroll:true}))};
+ const close=()=>{setOpen(false);closeCanvasDialog(dialog.current,()=>trigger.current?.focus({preventScroll:true}))};
  async function choose(row){
   if(pending)return;setPending(true);setError('');const sessionId=state.selectedSessionId;
   try{
    const result=await dispatch('canvas.select',{id:row.id,...(row.id===state.canvas?.id&&state.canvas.selectedVersion!=null?{version:state.canvas.selectedVersion}:{})});
    if(current.current.selectedSessionId!==sessionId)return;
    if(!result?.accepted){setError(String(result?.error?.message||result?.error||'The document was not changed. Your current view was kept.'));return}
-   setOpen(false);requestAnimationFrame(()=>{reveal(row.id);[...(strip.current?.querySelectorAll('[role=tab]')||[])].find(el=>el.dataset.artifactId===row.id)?.focus({preventScroll:true})});
+   setOpen(false);closeCanvasDialog(dialog.current,()=>{
+    const latest=current.current;
+    if(latest.selectedSessionId!==sessionId||latest.canvas?.id!==row.id||!latest.canvas.open)return;
+    reveal(row.id);[...(strip.current?.querySelectorAll('[role=tab]')||[])].find(el=>el.dataset.artifactId===row.id)?.focus({preventScroll:true});
+   });
   }catch(err){setError(err.message)}finally{setPending(false)}
  }
  async function remove(row){
