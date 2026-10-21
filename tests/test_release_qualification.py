@@ -672,3 +672,33 @@ def test_recipe_probe_installs_its_declared_module_before_freezing_runtime(workf
     assert commands.index('uv sync --project') < commands.index('WARM_RECIPES_PATH=')
     # Dependencies stay owned by the checked-out module, not a stale hand list.
     assert 'tree-sitter' not in commands
+
+
+def test_coordination_prepares_real_loop_before_first_contract_suite():
+    workflow = yaml.load((ROOT / '.github/workflows/coordination.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert set(workflow['on']) == {'pull_request'}
+    steps = workflow['jobs']['contracts']['steps']
+    resolve = next(i for i, s in enumerate(steps) if s.get('id') == 'runtime-dependency')
+    checkout = next(i for i, s in enumerate(steps)
+                    if s.get('with', {}).get('repository') == 'microsoft/amplifier-module-loop-live')
+    install = next(i for i, s in enumerate(steps) if s.get('name') == 'Prepare the declared runtime for mounted coordination tests')
+    verify = next(i for i, s in enumerate(steps) if s.get('name') == 'Verify and retain coordination runtime readiness')
+    contracts = next(i for i, s in enumerate(steps) if 'tests/test_coordination_delivery.py' in s.get('run', ''))
+    assert resolve < checkout < install < verify < contracts
+    assert 'runtime_deps/pyproject.toml' in steps[resolve]['run']
+    assert steps[checkout]['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live',
+        'ref': '${{ steps.runtime-dependency.outputs.revision }}',
+        'path': '.ci/loop-live', 'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}',
+        'persist-credentials': 'false'}
+    assert '--python .venv/bin/python' in steps[install]['run'] and '.ci/loop-live' in steps[install]['run']
+    assert 'amplifier-module-context-simple' in steps[install]['run']
+    assert 'BundleLiveOrchestrator' in steps[verify]['run'] and 'selectedLoopRevision' in steps[verify]['run']
+    assert 'importorskip' not in steps[verify]['run']
+    assert not any('continue-on-error' in s for s in steps)
+    assert any(s.get('name') == 'Verify mounted child identity and file boundaries' for s in steps[contracts + 1:])
+    assert any(s.get('run') == 'node tests/coordination-browser.mjs' for s in steps)
+    assert steps[-1]['if'] == 'always()'
+    assert '${{ runner.temp }}/test-environments' in steps[-1]['with']['path']
+    assert 'output/coordination-runtime-readiness.json' in steps[-1]['with']['path']
