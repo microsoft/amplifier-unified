@@ -1,4 +1,5 @@
 """Host-owned UI tool and ephemeral guidance, shared by root and worker sessions."""
+import asyncio
 import json
 import re
 
@@ -171,8 +172,13 @@ async def install_app_access(coordinator, bridge):
                     return ToolResult(success=True, output=await delivery.read(input.get('args', {})))
                 if input['operation'] == 'context.focus':
                     return ToolResult(success=True, output=await delivery.interest(input.get('args', {})))
+                # The existing loop sets this per executing task, including
+                # nested dispatch. A body match or last-read order is not an
+                # execution identity; calls without that seam stay unbound.
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
+                execution_id = dispatch.get('tool_call_id')
                 result = await bridge(input['operation'], input.get('args', {}))
-                result = delivery.remember_work(result, input)
+                result = delivery.remember_work(result, input, execution_id=execution_id)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') in {'voice.visual.capture', 'computer.visual.capture'}:
                     result = delivery.remember(result)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') == 'outputs.image':

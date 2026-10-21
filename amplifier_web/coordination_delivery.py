@@ -164,11 +164,13 @@ class CoordinationDelivery:
         self.attempts, self.calls, self.seen_calls = {}, {}, set()
         self.binding_generation = None
         self.binding_overflow = False
+        self.stream_epoch = 0
+        self.active_streams = 0
 
     def __getattr__(self, name):
         return getattr(self.previous, name)
 
-    def remember_work(self, receipt, tool_input):
+    def remember_work(self, receipt, tool_input, *, execution_id=None):
         """Only the actual AppControl bridge result may enter this ledger."""
         args = tool_input.get('args', {})
         if tool_input.get('operation') != 'dispatch' or args.get('action') not in WORK_READS:
@@ -188,10 +190,10 @@ class CoordinationDelivery:
         if args['action'] == 'workspace.work.source' and type(source.get('capturedAt')) is float:
             source['capturedAt'] = repr(source['capturedAt'])
         size = len(json.dumps(receipt, ensure_ascii=False).encode())
-        if size > WORK_BYTES:
+        if size > WORK_BYTES or not _text(execution_id):
             return receipt  # Unbounded/raw output cannot establish delivery.
         self.reads.append({'receipt': copy.deepcopy(receipt), 'input': copy.deepcopy(tool_input),
-                           'tool_call_id': None, 'bytes': size})
+                           'execution_id': execution_id, 'tool_call_id': None, 'bytes': size})
         while len(self.reads) > MAX_READS or sum(row['bytes'] for row in self.reads) > READ_BYTES:
             self.reads.pop(0)
         return receipt
@@ -200,10 +202,12 @@ class CoordinationDelivery:
         from .output_image_delivery import successful_output
         # Nested execution success alone does not prove that tool_exec printed
         # the page. It also cannot authorize an effect inside that same batch.
-        if (data.get('tool_name') != 'app_control' or not data.get('tool_call_id')
-                or data.get('parent_tool_call_id') or data.get('dispatch_source')):
+        if data.get('tool_name') != 'app_control' or not data.get('tool_call_id'):
             return
-        matches = [row for row in self.reads if row['tool_call_id'] is None
+        if data.get('parent_tool_call_id') or data.get('dispatch_source'):
+            self.reads = [row for row in self.reads if row['execution_id'] != data['tool_call_id']]
+            return
+        matches = [row for row in self.reads if row['execution_id'] == data['tool_call_id']
                    and row['input'] == data.get('tool_input')
                    and row['receipt'] == successful_output(data.get('result'))]
         if len(matches) == 1:
@@ -221,7 +225,10 @@ class CoordinationDelivery:
     def work_request(self, request):
         return self._request(request)
 
-    def begin_work(self, request):
+    def discard_work(self, binding):
+        self.requests = {key: row for key, row in self.requests.items() if row is not binding}
+
+    def begin_work(self, request, *, streaming=False):
         saved = self._request(request)
         required = saved['required'] if saved else _unavailable_work()['required']
         available = required['status'] == 'available'
@@ -232,11 +239,21 @@ class CoordinationDelivery:
             self.seen_calls.clear()
             self.binding_overflow = False
             self.binding_generation = generation
+        if streaming:
+            # Stream tool origins are not qualified. Invalidate before the
+            # first outward yield, not merely at its terminal response. No
+            # consumer-side ContextVar is needed or allowed to span that yield.
+            self.stream_epoch += 1
+            self.active_streams += 1
+            self.calls.clear()
         identity = uuid.uuid4().hex
         attempt = {'id': identity, 'required': copy.deepcopy(required),
                    'coverage': self.request_coverage(request), 'status': 'sending',
                    'requestSha256': hashlib.sha256(request.model_dump_json().encode()).hexdigest(),
-                   'transport': 'host_complete_boundary', 'responses': set(), 'native': False}
+                   'transport': 'streaming_origin_unavailable' if streaming else 'host_complete_boundary',
+                   'streaming': streaming, 'stream_epoch': self.stream_epoch,
+                   'overlapped_stream': bool(self.active_streams), 'stream_closed': False,
+                   'responses': set(), 'native': False}
         self.attempts[identity] = attempt
         while len(self.attempts) > 8:
             expired = next(iter(self.attempts))
@@ -295,6 +312,10 @@ class CoordinationDelivery:
             if streaming:
                 attempt['transport'] = 'streaming_origin_unavailable'
             return
+        if (attempt['overlapped_stream'] or self.active_streams
+                or attempt['stream_epoch'] != self.stream_epoch):
+            self.finish_work(None, response)
+            return
         value = response.model_dump() if hasattr(response, 'model_dump') else response
         if not isinstance(value, dict):
             return
@@ -343,6 +364,8 @@ class CoordinationDelivery:
         Nested provenance is not qualified by this direct-call implementation.
         """
         unavailable = {'complete': False, 'effectAuthorized': False, 'status': 'unavailable'}
+        if self.active_streams:
+            return {**unavailable, 'reason': 'An unqualified stream can emit tool calls; origin is unavailable.'}
         active = WORK_ATTEMPT.get()
         if active and active[1] and active[1]['status'] != 'returned':
             # Early native/stream calls need their own proven transport origin.
@@ -361,6 +384,7 @@ class CoordinationDelivery:
             return {**unavailable, 'reason': 'Tool arguments are not exact JSON.'}
         if (not attempt or attempt['status'] != 'returned'
                 or row['argsSha256'] != fingerprint or attempt['native']
+                or attempt['overlapped_stream'] or attempt['stream_epoch'] != self.stream_epoch
                 or attempt['transport'] != 'host_complete_boundary'):
             return {**unavailable, 'reason': 'Origin, transport or exact tool arguments are unavailable.'}
         return {**copy.deepcopy(attempt['coverage']), 'attemptId': attempt['id'],
@@ -383,6 +407,11 @@ class CoordinationDelivery:
             return {'status': 'unavailable', 'complete': False, 'effectAuthorized': False,
                     'reason': 'Work currentness or originating request became unavailable.'}
         return before
+
+    def close_work_stream(self, attempt):
+        if attempt is not None and attempt.get('streaming') and not attempt['stream_closed']:
+            attempt['stream_closed'] = True
+            self.active_streams -= 1
 
     def request_coverage(self, request):
         """Inspect exact fitted host bytes; this is NOT native/effect authority.
