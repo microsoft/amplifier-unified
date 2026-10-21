@@ -143,3 +143,45 @@ async def test_older_lookup_never_claims_a_previous_same_call_is_the_exact_curre
     assert result['item']['contentAvailability']['status']=='unrecorded'
     assert 'inputDetail' not in result['item'] and 'savedObservations' not in result['item']
     await owner.close()
+
+@pytest.mark.asyncio
+async def test_nested_delegate_header_keeps_exact_admitted_parent_lookup(tmp_path,monkeypatch):
+    owner,session,path,_=fixture(tmp_path,monkeypatch,count=0)
+    parent=observed(session,path,name='delegate',arguments={'instruction':'Nested saved request'},
+        result={'success':True,'output':'Nested saved response'})
+    worker={'id':'worker:child:call','kind':'worker','sessionId':'child','parentId':parent['id'],
+        'turnId':'t','phase':'completed','label':'reviewer','startedAt':1,'endedAt':2,'liveObservation':True}
+    child={'id':'tool:child:nested','kind':'tool','tool':'bash','label':'bash',
+        'toolCallId':'nested','sessionId':'child','parentId':worker['id'],'turnId':'t',
+        'phase':'completed','startedAt':1,'endedAt':2,'liveObservation':True}
+    session['execution']['nodes']=[parent,worker,child]
+    rows=owner.live_pages.read(session,'t@user')['items']
+    nested=next(row for row in rows if row['id']==child['id'])
+    direct=next(row for row in rows if row['id']==worker['id'])
+    assert nested['delegate']['exchange']['toolDetail']==direct['exchange']['toolDetail']
+    result=await owner.read_tool('s',nested['delegate']['exchange']['toolDetail'])
+    assert result['item']['exchange']['delegateRequest']=='Nested saved request'
+    assert result['item']['exchange']['delegateResponse']=='Nested saved response'
+    await owner.close()
+
+@pytest.mark.asyncio
+async def test_existing_canonical_tool_keeps_its_own_saved_payloads_and_reader(tmp_path,monkeypatch):
+    from amplifier_web.event_log_view import EventIndex
+    owner,session,path,_=fixture(tmp_path,monkeypatch,count=0)
+    events=tool_records(arguments={'command':'legacy paired input '*80+'LEGACY-END'})
+    events[-1]['data'].pop('tool_input')  # Supported old producer: input only in pre.
+    write(path,events)
+    index=EventIndex(path,'s');index.refresh()
+    node=next(iter(index.nodes.values()))
+    assert node['canonicalHistory']
+    node.update(liveObservation=True,turnId='t')
+    session['execution'].update(nodes=[node],turns=[{'id':'t','anchorMessageId':'user','phase':'completed','startedAt':1,'endedAt':2}])
+    original=copy.deepcopy(session)
+    await owner.read('s')
+    row=owner.live_pages.read(session,'t@user')['items'][0]
+    assert row['input'].startswith('{')
+    assert row['inputDetail']['windowKey'].startswith('resident-work:')
+    assert 'LEGACY-END' in owner.live_pages.read_text(session,row['inputDetail'])['value']
+    assert 'toolDetail' not in row and 'savedObservations' not in row
+    assert session==original
+    await owner.close()

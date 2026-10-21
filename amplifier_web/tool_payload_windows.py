@@ -21,7 +21,7 @@ class ToolPayloadWindows:
         node = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
         if (node is None or node.get('id') != identity or node.get('kind') != 'tool'
                 or not node.get('toolCallId') or not node.get('sessionId')
-                or not (node.get('liveObservation') or not node.get('canonicalHistory') and not node.get('nativeHistory'))):
+                or node.get('canonicalHistory') or node.get('nativeHistory')):
             raise ValueError('This tool step moved. Reopen its Work steps.')
         admitted_range = entry['ids'].get(identity)
         if admitted_range is None:

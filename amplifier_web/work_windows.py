@@ -313,7 +313,7 @@ class WorkWindows:
         return source
 
     def live_node(self, session, node):
-        if node.get('kind') == 'tool':
+        if node.get('kind') == 'tool' and not node.get('canonicalHistory') and not node.get('nativeHistory'):
             from .tool_window_records import attach, linked
             page = self.pages.get(self.current.get(session['id']))
             fields = linked(page, session, node) if page and page['source'] == source_identity(session) else None

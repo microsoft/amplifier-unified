@@ -107,12 +107,29 @@ class ResidentWorkPages:
                         item.pop(field + suffix, None)
             item.update(recordings)
             item['detailVersion'] = str(detail_version([row, recordings]))
-        if row.get('kind') == 'tool' and row['id'] in entry['ids']:
-            item['toolDetail'] = {'sessionId': session['id'], 'part': 'tool', 'group': entry['group'], 'id': row['id']}
-        exchange = item.get('exchange')
-        if exchange and exchange.get('id') in entry['ids']:
-            item['exchange'] = {**exchange, 'toolDetail': {'sessionId': session['id'],
-                'part': 'tool', 'group': entry['group'], 'id': exchange['id']}}
+        nodes = raw(session).get('execution', {}).get('nodes', [])
+        def reference(identity):
+            position = entry['positions'].get(identity)
+            original = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
+            if (original is not None and original.get('id') == identity and original.get('kind') == 'tool'
+                    and not original.get('canonicalHistory') and not original.get('nativeHistory')):
+                return {'sessionId': session['id'], 'part': 'tool', 'group': entry['group'], 'id': identity}
+            return None
+        def exchange_refs(header, depth=0):
+            if not isinstance(header, dict) or depth > 20:
+                return header
+            result = dict(header)
+            exchange = result.get('exchange')
+            if isinstance(exchange, dict) and (ref := reference(exchange.get('id'))):
+                result['exchange'] = {**exchange, 'toolDetail': ref}
+            if isinstance(result.get('ancestors'), list):
+                result['ancestors'] = [exchange_refs(value, depth+1) for value in result['ancestors'][:20]]
+            return result
+        if row.get('kind') == 'tool' and (ref := reference(row['id'])):
+            item['toolDetail'] = ref
+        item = exchange_refs(item)
+        if 'delegate' in item:
+            item['delegate'] = exchange_refs(item['delegate'])
         return item
 
     def read(self, session, group, before=None, revision=None):
