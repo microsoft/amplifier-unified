@@ -1632,6 +1632,8 @@ class Collaboration:
             # evidence stays unknown and is never resolved/replayed by this cap.
             roots = [row for row in self.service.state["sessions"]
                      if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]]
+            from .test_execution_settings import concurrency
+            maximum = concurrency(self.service)['maxTaskChatsPerSource']
             outstanding = set()
             for row in roots:
                 active = row.get("collaborationGeneration") or {}
@@ -1653,7 +1655,7 @@ class Collaboration:
                     WHERE json_extract(c.receipt,'$.commandAction')='coordination.send'
                     AND json_extract(c.receipt,'$.target.sessionId')=d.id
                     AND json_extract(c.receipt,'$.delivery') IN ('queued','submitting','pending_steer')))
-                LIMIT 8""", (*bound, source['id'])))
+                LIMIT ?""", (*bound, source['id'], maximum)))
             pending = self.service.db.execute("""SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.create'
                 AND json_extract(receipt,'$.senderSessionId')=?
@@ -1661,8 +1663,8 @@ class Collaboration:
                 AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""",
                 (source["id"], PROTOCOL)).fetchall()
             outstanding.update(json.loads(row[0])["sessionId"] for row in pending)
-            if len(outstanding) >= 8:
-                self.error("At most eight outstanding task chats per source root.", 409)
+            if len(outstanding) >= maximum:
+                self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
             if not args['title'].strip() or not args['text'].strip():
                 self.error('Enter a task title and brief.', 400)
             self.require_causal_depth(self.causal_depth(source, lineage, origin))

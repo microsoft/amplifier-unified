@@ -19,8 +19,6 @@ import uuid
 from filelock import FileLock, Timeout as LockTimeout
 
 KINDS = ('scratch-directory', 'browser-profile', 'sqlite-database')
-MAX_ROOT = 32
-MAX_ACTIVE = 512
 IGNORE_CONTENT = b'# Local task storage is retained separately from source.\n*\n'
 
 
@@ -226,7 +224,9 @@ def prepare(home, workspace, sid, actor, args, command_id, execution_root=None):
                 raise ValueError('This resource command already belongs to different arguments or an owner.')
             return get(db, sid, json.loads(prior[1])['allocationId']), False
         total, owned = db.execute("SELECT count(*),coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
-        if total >= MAX_ACTIVE or owned >= MAX_ROOT:
+        from .test_execution_settings import concurrency
+        limits = concurrency(home)
+        if total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']:
             raise ValueError('Task resource capacity is full. Inspect and retire unused allocations first.')
         row = dict(id=str(uuid.uuid4()), workspaceId=workspace, sessionId=sid, owner=actor,
                    kind=args['kind'], label=args.get('label', '').strip(), status='prepared', revision=1,

@@ -8,7 +8,7 @@ const {base,stop}=await startSettingsFixture();
 let browser,page,failure;
 const errors=[];
 try{
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base+'/');await page.waitForSelector('#amp-one');
@@ -75,6 +75,9 @@ try{
  // Execution policy is independent, global, and recovers a lost save receipt.
  const execution=page.getByRole('region',{name:'Test execution limits',exact:true});
  await execution.getByText('Advanced execution limits',{exact:true}).click();
+ await execution.getByLabel('Outstanding task chats per manager',{exact:true}).fill('12');
+ await execution.getByLabel('Owned test environments per chat',{exact:true}).fill('3');
+ await execution.getByLabel('Owned resources across this installation',{exact:true}).fill('700');
  await execution.getByLabel('Maximum pending checks',{exact:true}).fill('128');
  await execution.getByLabel('Maximum pending checks per chat',{exact:true}).fill('3');
  await execution.getByLabel('Default queue wait (seconds)',{exact:true}).fill('0');
@@ -90,6 +93,8 @@ try{
  await execution.getByRole('button',{name:'Save execution limits'}).click();
  await expect(execution.getByRole('status')).toContainText('Current execution limits match');
  assert.equal(executionSaves,1);
+ const concurrency=(await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveConcurrency;
+ assert.equal(concurrency.maxTaskChatsPerSource,12);assert.equal(concurrency.maxEnvironmentsPerChat,3);assert.equal(concurrency.maxOwnedResources,700);
  assert.equal((await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveQueue.maxPendingPerChat,3);
  await page.unroute('**/api/actions',lostExecution);
  await expect(execution.getByText('Waiting checks stay queued until stopped or cancelled.',{exact:false})).toBeVisible();

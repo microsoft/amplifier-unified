@@ -4,8 +4,10 @@
 **Settings → Testing & resources → Advanced execution limits** controls both the
 total pending queue and **Maximum pending checks per chat** (default 1). These
 positive limits count all waiting and active checks, including those beyond the
-first displayed page. Raising the per-chat limit permits a sequence of checks;
-it does not permit overlapping environments for one chat. The
+first displayed page. Raising the per-chat pending limit admits more waiting requests. The global
+**Owned test environments per chat** limit (default 1) separately controls
+concurrency. A request with `independent: true` may overlap other independent
+checks in distinct owned environments; default requests preserve ordered work. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
 command once, stops the exact owned environment, exports source and artifacts,
@@ -53,12 +55,15 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   or changed owner becomes unknown and preserves the environment. Automatic
   stop/export/remove requires a recorded terminal guest result. Old queue
   receipts retain their original bounded-execute recovery behavior.
-- Checks from the same chat are admitted in submission order, one at a time,
-  across local and registered remote machines. A later check waits until the
-  earlier check and its owned environment cleanup settle. A terminal unknown
-  result does not free ownership; the retained allocation continues to block
-  later checks until exact cleanup or reconciliation confirms release. Waiting
-  reasons remain visible in the existing check list.
+- Checks use submission order across local and registered remote machines.
+  A standard request waits for earlier checks and owned cleanup; it also blocks
+  later independent requests until it settles. Consecutive explicitly independent
+  requests may overlap within the current per-chat environment ceiling. Each
+  request keeps its own source snapshot, resource ID, result and cleanup journal.
+  An unknown outcome never frees an owned slot, even after restart. Independent
+  work may use other free slots without retrying or resolving that unknown.
+  Manual environments count against the same per-chat ceiling. Waiting reasons
+  remain visible in the existing check list.
 - A host admits FIFO among its eligible roots. One physical capacity observation
   is shared by a batch; unavailable backends back off to at most one observation
   per minute. Local cleanup wakes the queue immediately. Physical backend
@@ -223,3 +228,25 @@ original receipt and unchanged owner/source/backend bindings, then finishes only
 dependency cleanup. It does not issue another guest removal or create another
 operation identity. Missing or changed qualification, another unresolved removal,
 and unverified guest removal remain held. Restart does not weaken these checks.
+
+## Work concurrency settings
+
+The same Advanced execution limits form exposes global limits for outstanding
+task chats per manager (default 8), owned test environments per chat (default 1),
+all non-retired resource owners (default 512), and resource owners per chat
+(default 32). These are positive whole numbers, not model-selected overrides.
+An empty setting restores the default. The host-defaults authority and exact
+settings revision protect changes through either the UI or agent actions.
+Machine CPU, memory, storage and backend limits remain additional admission gates;
+no workspace setting can make another machine's capacity count as local capacity.
+
+Concurrency is evaluated for new admission, including already waiting checks.
+Lowering a ceiling never cancels existing work, retires unknown ownership, changes
+a saved execution budget, or invalidates cleanup. Existing exact allocation
+recovery remains possible above the newly lowered cap. Raising a ceiling wakes
+the queue. The allocator counts all non-retired owners under its existing SQLite
+writer transaction, including the allocation-before-queue-link crash gap.
+
+Environment inspection is paged and every action names the exact resource and
+revision. Separate checks can be inspected, cancelled, and cleaned up without
+selecting or stopping another check from the same chat.

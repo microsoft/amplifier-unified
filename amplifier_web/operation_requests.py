@@ -37,7 +37,7 @@ class OperationRequests:
             return self.begin(sid, action, args, actor)[0]
         return None
 
-    def begin(self, sid, action, args, actor):
+    def begin(self, sid, action, args, actor, *, resource_id=None):
         identity = args["requestId"]
         signature = hashlib.sha256(
             json.dumps(
@@ -56,7 +56,10 @@ class OperationRequests:
                     raise ValueError(
                         "Request identity already belongs to different operation arguments or actor"
                     )
-                return json.loads(prior[1]), False
+                record = json.loads(prior[1])
+                if resource_id is not None and record.get('resourceId') not in (None, resource_id):
+                    raise ValueError('The operation belongs to another resource.')
+                return record, False
             record = {
                 "requestId": identity,
                 "sessionId": sid,
@@ -64,6 +67,7 @@ class OperationRequests:
                 "state": "admitting",
                 "createdAt": time.time(),
                 "updatedAt": time.time(),
+                **({"resourceId": resource_id} if resource_id is not None else {}),
             }
             self.journal.db.execute(
                 "INSERT INTO operation_requests VALUES (?,?,?,?)",
