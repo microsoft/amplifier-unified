@@ -179,7 +179,10 @@ test('A2UI button records exactly the declared action while text stays inert',as
 });
 
 test('canvas keyboard resize persists bounded width and header toggle hides through public action',async()=>{
+ const previousDocument=globalThis.document;
+ globalThis.document={addEventListener(){},removeEventListener(){}};
  const calls=[],state={selectedSessionId:'a',view:{canvasWidth:440},canvas:{open:true,kind:'text',content:'Document',title:'Preview'}},act=async(name,args)=>calls.push({name,args});let root;
+ try{
  await renderAct(async()=>{root=create(React.createElement(React.Fragment,null,React.createElement(CanvasToggle,{state,act}),React.createElement(AgentCanvas,{state,act})))});
  await renderAct(async()=>root.root.findByProps({role:'separator'}).props.onKeyDown({key:'ArrowLeft',preventDefault(){}}));
  assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{canvasWidth:460}}});
@@ -190,7 +193,10 @@ test('canvas keyboard resize persists bounded width and header toggle hides thro
  assert.equal(toggle.props['aria-expanded'],true);
  await renderAct(async()=>toggle.props.onClick());
  assert.deepEqual(calls.at(-1),{name:'canvas.visibility',args:{open:false}});
- await renderAct(async()=>root.unmount());
+ }finally{
+  if(root)await renderAct(async()=>root.unmount());
+  if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+ }
 });
 
 test('reopening the canvas keeps its saved snapshot without creating another artifact',async()=>{
