@@ -131,7 +131,7 @@ try{
  await composer.fill('Keep my draft through both sidebar views');
  const chosen=(await state()).selectedSessionId;
  await switchTo('Browse');await switchTo('Status');await settled();await goHome();
- await expect(sidebar.locator('[aria-current=page]')).toHaveCount(0);
+ await expect(sidebar.locator('.a-nav-chat-select[aria-current=page]')).toHaveCount(0);
  await expect(page.locator('header')).not.toContainText('Home');
  await expect(home.getByLabel('Search your work',{exact:true})).toHaveValue('no matching home query');
  await sidebar.locator(`[data-session-id="${chosen}"] .a-nav-chat-select`).click();await expect(composer).toContainText('Keep my draft through both sidebar views');

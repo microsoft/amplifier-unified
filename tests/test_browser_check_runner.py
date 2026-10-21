@@ -269,6 +269,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'adaptive-work': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/adaptive-work'},
         'attachment-consumption': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
         'home-sidebar': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/home-sidebar'},
+        'shared-landing': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-landing'},
         'focus-navigation': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/focus-navigation'},
         'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
         'storage-cleanup-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/storage-cleanup-settings'},
@@ -288,7 +289,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 104
+    assert len(original) == 65 and len(rows) == 105
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -429,8 +430,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     cancellation = 'tests/request-cancellation-browser.mjs'
     assert cancellation in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', cancellation] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation}) == 145
-    assert len(readiness_scripts | extended_scripts) == 147
+    shared_landing = 'tests/shared-landing-browser.mjs'
+    assert shared_landing in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', shared_landing] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing}) == 145
+    assert len(readiness_scripts | extended_scripts) == 148
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
