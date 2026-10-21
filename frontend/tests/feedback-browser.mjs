@@ -32,6 +32,7 @@ feedback.create_issue=create_issue
 async def main():
  with tempfile.TemporaryDirectory(prefix='amplifier-feedback-ui-') as home:
   app=await fixture.main(Path(home));service=app['service']
+  await service.on_runtime_event('runtime.error',{'sessionId':service._session()['id'],'errorType':'WorkerCommunicationError','error':'PRIVATE worker detail /synthetic/workspace'})
   service.state['updates'].update(application={'id':'application','kind':'app','label':'Amplifier Unified','current':'0.6.3','latest':'v0.6.4','status':'update','detail':'A newer application release is available; installation restarts the host when idle.'},appAvailable=True)
   async def inspect(request):return web.json_response({'calls':calls,'uploads':uploads})
   app.router.add_get('/api/fixture/feedback',inspect)
@@ -73,6 +74,9 @@ try{
  assert.equal(previewFacts.device.eventStream,'open','real SSE lifecycle is included');
  assert.ok(previewFacts.conversation&&previewFacts.library&&previewFacts.troubleshooting);
  assert.equal(previewFacts.troubleshooting.workerLoadedComponentGeneration,'unverified');
+ assert.equal(previewFacts.troubleshooting.recordedFailure.category,'worker_communication');
+ assert.equal(previewFacts.troubleshooting.recordedFailure.errorType,'WorkerCommunicationError');
+ assert.doesNotMatch(JSON.stringify(previewFacts),/PRIVATE|\/synthetic\/workspace/);
  assert.equal(diagnosticReads.length,1);
  await preview.locator('summary').click();await preview.locator('summary').click();
  await page.getByLabel('Title',{exact:true}).fill('Canvas feedback fixture revised');
@@ -142,7 +146,7 @@ try{
  await page.getByText('No diagnostics were saved with this submission.',{exact:true}).waitFor();
  assert.equal(diagnosticReads.at(-1).args.requestId,saved.requestId);
  assert.deepEqual(errors,[]);
- console.log('Feedback browser passed: on-demand complete preview, actual SSE status, no automatic collection on typing/state updates, opt-out saved receipt, picker, image paste, file drop, actual image preview, agent add/UI remove, local-only staging, exact selected uploads, header entry, mocked submit, green receipt/link, reopen/reload, exact shared-action retry, narrow layout. No live uploads or issue created.');
+ console.log('Feedback browser passed: on-demand complete preview, preserved worker failure classification without raw detail, actual SSE status, no automatic collection on typing/state updates, opt-out saved receipt, picker, image paste, file drop, actual image preview, agent add/UI remove, local-only staging, exact selected uploads, header entry, mocked submit, green receipt/link, reopen/reload, exact shared-action retry, narrow layout. No live uploads or issue created.');
 }finally{
  await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }

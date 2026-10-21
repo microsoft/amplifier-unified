@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-18",
+  "baseRevision": "ca44105a06bb41d89f82045fc517b1d4d2f720df",
+  "build": {
+    "version": "0.20.177",
+    "id": "ce18a0a69358b5ad"
+  },
+  "sourceSha256": {
+    "amplifier_web/attention.py": "7125bae99437fd8c2e644324df2242486d67f8e479e8a74cdf7653e60e426979",
+    "amplifier_web/event_window.py": "39a1f2e6ac1a3be4ca68765a814cbf7170e30cda351c28ff58ea4d6fc0903ffe",
+    "amplifier_web/provider_recording.py": "f9650147faaa87b07fbdc8721defad8bb60f1eedb6046e189c33c38b0881f9c0",
+    "amplifier_web/resident_work_pages.py": "0a8a20dbbac02333e8507f11a90672d89d3af71c72abaf61db9caa2c9c560757",
+    "amplifier_web/server.py": "8451dd14d02e3a1a6f18be32f081f7ee19484e08e3ce7f04a468ea1a256d00e8",
+    "amplifier_web/static/build.json": "2562b19cdeda028eeda133340fbbd39dedf74b811ea91dc8b2f63462200035a8",
+    "amplifier_web/static/index.html": "79627e263da4b70925f8565c09efa5d15d24474b19ed169b9b7e8814b55f1f75",
+    "amplifier_web/work_windows.py": "2faa231e6e45f577b7a109ec94f6bc2c6d341432dc35e3ce76bfa06dd889ef36",
+    "frontend/src/execution-content.jsx": "0eeda8611b5d8acd810c0ddf46d8d2363c08ede5ae1ee7b6a84fb45e4dd4311a",
+    "frontend/src/main.jsx": "edfbd32862810c0c0be300d4a79a79df38d1d38ea4d05a8cd050b76e6f771dff",
+    "frontend/src/timeline.jsx": "9064664107968a2372a8b5486f206ab475add1011f16f79ceb7e68cb8fbb8a4c",
+    "frontend/tests/canonical-work-browser.mjs": "3a31ccce5233d05a3658d0a11034a02dd2dbaa49070c3bf848650d69df55eb14",
+    "frontend/tests/provider-recording-browser.mjs": "46f5231f074cb4acb8a50d2f66ff9f2ebeb2b167de1d71dcfb7a2a74165fc32b",
+    "tests/fixtures/browser_detail_server.py": "c247cdd77491136054fbaaacf3ab9b23d44bf213baf728540515483322274030",
+    "tests/test_completion_attention.py": "00213ec9dac2dfa29e4377331b7ec918a9bdd2b534376c27162be9aba2a3540c",
+    "tests/test_provider_recording.py": "0aa2ee2ac82c18e319e15ecab735bd7fc3514e07c0f42697ea61f96e6e144880",
+    "tests/test_provider_window_records.py": "514297184bb20b791940a0e3964d05bd92676b3eba6799525f024831b9f94d23"
+  },
+  "approvedGitBlobs": {
+    "amplifier_web/work_windows.py": "969f4894b4a69affb7e6f83c2bf82514d532cbe0",
+    "amplifier_web/resident_work_pages.py": "5daa3ae604aa0732bf4201fd71c14f5f8fc82bd8",
+    "amplifier_web/server.py": "5f450ea603bc2e39a208093a9c5ecd511e79a24d",
+    "frontend/src/main.jsx": "2f987d9a217c7fb6bdc3fa9ba2d8d883208189b3"
+  },
+  "checks": [
+    {
+      "log": "negative.log",
+      "result": "3 expected failures on unchanged baseline"
+    },
+    {
+      "log": "focused-attempt4.log",
+      "result": "111 passed in 16.95s, before final accepted-page lifetime correction"
+    },
+    {
+      "log": "affected-final.log",
+      "result": "15 passed in 4.57s on final production source"
+    },
+    {
+      "log": "build-final.log",
+      "result": "built in 9.46s"
+    },
+    {
+      "log": "browser-final.log",
+      "result": "passed: delayed captures, bounded live/saved pages, full downloads, legacy navigation desktop/narrow"
+    },
+    {
+      "log": "canonical-browser-final.log",
+      "result": "passed: existing complete-projection Work scenario"
+    }
+  ],
+  "limits": [
+    "Synthetic Core/provider and browser fixtures, no live provider invocation",
+    "Diagnostic notice acknowledgement service/API-tested; unchanged visibility timer not newly browser-tested",
+    "Community canonical writer inspected, not deployed",
+    "No full suite, installed-release adoption or live installation changes"
+  ],
+  "evidenceRoot": "output/diagnostic-capture-20261018/",
+  "browserFlags": [
+    "--no-zygote",
+    "--single-process",
+    "--disable-gpu"
+  ]
+}

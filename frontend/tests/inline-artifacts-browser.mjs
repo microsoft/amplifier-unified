@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
@@ -12,7 +13,7 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS?['--single-process']:[]});
  page=await browser.newPage({viewport:{width:1400,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto('http://127.0.0.1:8958/login');await page.getByLabel('Username').fill('inline-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');
+ await page.goto('http://127.0.0.1:8958/login');await page.getByLabel('Username').fill('inline-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');await showFixtureConversation(page);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Create an interactive example and two image concepts.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  // Sending is asynchronous: the initial idle state can still be visible after

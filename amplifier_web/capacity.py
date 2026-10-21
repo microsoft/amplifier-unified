@@ -202,6 +202,18 @@ class CapacityController:
         if result['allowed']:
             row['budgetRevision'] = result['budgetRevision']
             row['admittedAt'] = result.get('admittedAt')
+            if self.last_denial:
+                # An assignment allowance may change without changing the
+                # local conversation policy revision. Clear stale denial only
+                # after authoritative admission, preserving limits and usage.
+                self.last_denial = None
+                self.controls.persist(task_only=True)
+        if not result['allowed'] and result.get('state') == 'cancelled':
+            raise asyncio.CancelledError('; '.join(result['reasons']))
+        if not result['allowed'] and result.get('state') == 'wait_expired':
+            # No provider call was made. A bounded queue expiry is not a saved
+            # cumulative budget pause and must not poison later continuation.
+            raise TimeoutError('; '.join(result['reasons']))
         if not result['allowed']:
             self.last_denial = {**result, 'at': time.time(), 'callId': row['id']}
             self.controls.persist(task_only=True)
@@ -303,12 +315,40 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         return {'accepted': True, 'result': result, **({'state': service.browser_state()} if include_state else {})}
 
 
-async def admission(service, session_id, args):
+def fresh_human_input(service, session, row, denial):
+    """Recheck a derived pause only for a new host-admitted human input."""
+    active = session.get('collaborationGeneration') or {}
+    identity = row.get('turnId')
+    if (not active.get('id') or active.get('terminal') or not identity
+            or identity not in active.get('inputIds', [])
+            or row.get('lifecycle') == 'background'
+            or row.get('sessionId') != session['id'] or not number(denial.get('at'))):
+        return False
+    message = next((m for m in reversed(session.get('messages', []))
+                    if m.get('inputId') == identity and m.get('role') == 'user'), None)
+    if (not message or message.get('questionId') or message.get('scheduledRunId')
+            or message.get('createdAt', 0) <= denial['at']):
+        return False
+    if message.get('inputOrigin') in {'ui', 'user', 'voice'}:
+        return True
+    saved = service.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
+    receipt = json.loads(saved[0]) if saved else {}
+    return bool(message.get('inputOrigin') == 'peer'
+        and receipt.get('commandAction') == 'coordination.send' and receipt.get('humanResume')
+        and receipt.get('accepted') is True and receipt.get('inputId') == identity
+        and receipt.get('target', {}).get('sessionId') == session['id']
+        and receipt.get('interruptionRevision') == session.get('interruptionRevision', 0)
+        and receipt.get('delivery') in {'accepted', 'applied', 'submitting'})
+
+
+async def admission(service, session_id, args, *, guard=None, queue_turn=None, on_wait=None, before_reserve=None):
     """Private worker-to-host gate; model actions cannot supply accounting data."""
     from .service import AppError
     async with service.lock:
         session = service._session(session_id)
         row = copy.deepcopy(args.get('call', {}))
+        if guard and (reason := guard(session)):
+            return {'allowed': False, 'state': 'cancelled', 'reasons': [reason]}
         if row.get('rootSessionId') != (session.get('runtimeSessionId') or session_id):
             raise AppError('Budget admission belongs to the calling root', 409)
         for key in ('rootSessionId', 'sessionId'):
@@ -330,13 +370,30 @@ async def admission(service, session_id, args):
             return {'allowed': False, 'state': 'paused', 'budgetRevision': policy['revision'],
                     'reasons': ['This model-call ID was already admitted; its outcome must not be replayed']}
         usage = usage_snapshot(session, admission_only=not policy.get('enabled'))
-        result = {**evaluate(policy, usage), 'budgetRevision': policy['revision']}
+        effective = policy
+        if policy.get('lastDenial') and fresh_human_input(service, session, row, policy['lastDenial']):
+            # Saved denials are observations, not deliberate budget edits.
+            # Both current policies still apply. The worker clears its cached
+            # denial only after this admission and its durable receipt succeed.
+            effective = {key: value for key, value in policy.items() if key != 'lastDenial'}
+        result = {**evaluate(effective, usage), 'budgetRevision': policy['revision']}
         for key in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
             row.pop(key, None)  # Assignment authority is selected by the host.
         assignment = service.assignments.admission(session, row)
         if not assignment['allowed']:
-            result.update(allowed=False, state='paused', reasons=result['reasons'] + assignment['reasons'])
+            waiting = result['allowed'] and assignment.get('waiting', False)
+            result.update(allowed=False, state='waiting' if waiting else 'paused',
+                          reasons=result['reasons'] + assignment['reasons'])
+        if result['allowed'] and queue_turn and not queue_turn():
+            result.update(allowed=False, state='waiting',
+                          reasons=['Earlier model requests are waiting for assignment capacity.'])
+        if result.get('state') == 'waiting' and on_wait and (refusal := on_wait(session)):
+            return refusal
         if result['allowed']:
+            # The lock may have been contended beyond a finite waiting deadline.
+            # Recheck at the reservation boundary; never alter an admitted call.
+            if before_reserve and (refusal := before_reserve()):
+                return refusal
             # Persist intent using the existing execution ID before any provider
             # request. A crash leaves pending/unknown evidence, never a replay.
             from .execution import ingest
@@ -375,3 +432,25 @@ async def admission(service, session_id, args):
                 refresh_usage(session['execution'])
                 raise
         return result
+
+
+async def abandoned(service, session_id, args):
+    """Private transport cancellation: preserve an admitted but unacknowledged call."""
+    from .collaboration import PRINCIPAL
+    from .execution import LIVE_PHASES, refresh_usage
+    async with service.lock:
+        session = service._session(session_id)
+        row = args.get('call') or {}
+        native = session.get('runtimeSessionId') or session_id
+        if PRINCIPAL.get() != native or row.get('rootSessionId') != native:
+            return {'retained': False}
+        node = next((n for n in session.get('execution', {}).get('nodes', [])
+                     if n.get('id') == row.get('id') and n.get('kind') == 'llm'
+                     and n.get('producerId') == row.get('producerId')
+                     and n.get('turnId') == row.get('turnId')), None)
+        if node and node.get('admittedAt') and not node.get('endedAt') and node.get('phase') in LIVE_PHASES:
+            node['phase'] = 'outcome_unknown'
+            refresh_usage(session['execution'])
+            service._publish_changes(sessions={session_id})
+            return {'retained': True}
+        return {'retained': False}

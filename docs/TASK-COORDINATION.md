@@ -76,7 +76,10 @@ qualification sections below describe their original revisions, not this change.
    600-second bound after preparation. Stop cancels pre-worker preparation and prevents input
    admission. Only a positively observed pre-admission failure becomes `not_sent`.
    Post-write/restart uncertainty remains `unknown`, never automatically replayed.
-   Creation is bounded to eight outstanding tasks per source, not completed history.
+   Creation uses the global **Outstanding task chats per manager** ceiling
+   (default eight) in Settings → Testing & resources → Advanced execution limits.
+   It counts outstanding tasks per source, not completed history. Changing that
+   setting affects new creation admission and never stops existing children.
    Outstanding means actual queued/preparing/running work, pending creation or an
    active saved task. An idle finished root without a task, or an unknown historical
    creation receipt with no outstanding root work, does not permanently consume a

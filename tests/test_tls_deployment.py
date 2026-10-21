@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from amplifier_web.cli import _doctor_details as _doctor, _setup_tls
+from amplifier_web.cli import _doctor_details, _setup_tls, main
 from cryptography.hazmat.primitives import hashes
 
 
@@ -25,10 +25,31 @@ def test_setup_local_ca_is_servable_has_ca_constraint_and_prints_ca_fingerprint(
         f"{byte:02X}" for byte in x509.load_pem_x509_certificate(certificate).fingerprint(hashes.SHA256())
     )
     assert ca_fingerprint(tmp_path) == expected_fingerprint
-    _doctor(tmp_path)
+    _doctor_details(tmp_path)
     assert f"CA SHA-256 fingerprint: {expected_fingerprint}" in capsys.readouterr().out
     _setup_tls(tmp_path, "status")
     assert f"CA SHA-256 fingerprint: {expected_fingerprint}" in capsys.readouterr().out
+
+
+def test_public_tls_status_command_prints_existing_ca_fingerprint_without_mutation(tmp_path, monkeypatch, capsys):
+    from cryptography import x509
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import setup_local_ca
+
+    setup_local_ca(tmp_path, load_server_config(tmp_path))
+    before = {path.relative_to(tmp_path): (path.read_bytes(), path.stat().st_mtime_ns)
+              for path in tmp_path.rglob('*') if path.is_file()}
+    certificate = x509.load_pem_x509_certificate((tmp_path / 'config/tls/ca.crt').read_bytes())
+    expected = ':'.join(f'{byte:02X}' for byte in certificate.fingerprint(hashes.SHA256()))
+    monkeypatch.setattr('sys.argv', ['amplifier-unified', '--data-dir', str(tmp_path), 'setup-tls', 'status'])
+
+    main()
+
+    output = capsys.readouterr().out
+    assert f'CA SHA-256 fingerprint: {expected}' in output
+    assert 'PRIVATE KEY' not in output
+    assert {path.relative_to(tmp_path): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in tmp_path.rglob('*') if path.is_file()} == before
 
 
 def test_setup_tls_reuses_leaf_until_force_is_requested(tmp_path):

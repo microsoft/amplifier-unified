@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Real file-backed native history and production UI; no model work permitted.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -12,7 +13,7 @@ try{
  const page=await browser.newPage({viewport:{width:1440,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-history-loading'}});
  const errors=[],navigationReads=[];page.on('pageerror',e=>errors.push(e.message));
  page.on('request',request=>{if(new URL(request.url()).pathname==='/api/conversation/navigation')navigationReads.push(new URL(request.url()))});
- const login=async reader=>{await reader.goto(url+'/login');await reader.getByLabel('Username').fill('history-fixture');await reader.getByLabel('Password').fill('fixture-password');await reader.getByRole('button',{name:'Sign in',exact:true}).click();await reader.waitForSelector('#amp-one')};
+ const login=async reader=>{await reader.goto(url+'/login');await reader.getByLabel('Username').fill('history-fixture');await reader.getByLabel('Password').fill('fixture-password');await reader.getByRole('button',{name:'Sign in',exact:true}).click();await reader.waitForSelector('#amp-one');await showFixtureConversation(reader);};
  await login(page);
  const metrics=async()=>(await page.request.get(url+'/api/fixture/history-metrics')).json();
  const initial=await metrics(),id=initial.cases[0].id;

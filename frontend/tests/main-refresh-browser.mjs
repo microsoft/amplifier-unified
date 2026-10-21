@@ -1,7 +1,9 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {settingsButton} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/main_refresh_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
@@ -13,7 +15,7 @@ try{
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const patch=values=>action('view.update',{patch:values});
  const panel=page.locator('#workspace-canvas'),overview=panel.getByRole('button',{name:'Chat overview',exact:true});
- await page.goto(url);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
  await page.mouse.move(700,20);await page.screenshot({path:'/tmp/main-refresh-conversation.png'});
  await page.getByRole('button',{name:'Open Website refresh brief in canvas',exact:true}).click();await expect(panel).toHaveAttribute('data-mode','artifact');
  await overview.click();await expect(panel).toHaveAttribute('data-mode','overview');
@@ -38,10 +40,10 @@ try{
  await page.getByRole('button',{name:'Focus canvas',exact:true}).click();await expect(panel).toHaveAttribute('data-focused','true');
  await page.keyboard.press('Escape');await expect(panel).toHaveAttribute('data-focused','false');
  await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await settingsButton(page).click();
  await expect(page.getByRole('button',{name:'Help me with settings',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
- await page.getByRole('button',{name:'Activity',exact:true}).click();
+ await page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}).click();
  await expect(page.getByRole('region',{name:'Activity to review',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  for(const scheme of ['light','dark']){

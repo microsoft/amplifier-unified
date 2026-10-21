@@ -455,6 +455,7 @@ class UpdateManager:
             if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
+        state['applicationCheckPending'] = False
         from .app_features import reconcile_requests
         reconcile_requests(state)
         state.setdefault('items', [])
@@ -504,7 +505,7 @@ class UpdateManager:
         async with self.service.lock:
             self.service.state['updates'].update(values)
             state = self.service.state['updates']
-            state['blockers'] = self.blockers() if any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools')) else []
+            state['blockers'] = self.blockers() if self.requires_idle(state) else []
             from .update_restart import target
             state['forceRestartTarget'] = target(self)
             self.service._publish_changes(globals={'updates','settings'})
@@ -517,6 +518,11 @@ class UpdateManager:
             # Work finishing is an event too. Do not add another timer wait
             # after the user has already waited for the idle safety gate.
             self.wakeup.set()
+
+    @staticmethod
+    def requires_idle(state):
+        return bool(state.get('pendingApp') or state.get('pendingRelease') or any(
+            not item.get('runnerSource') for item in state.get('pendingSmartTools', [])))
 
     def blockers(self):
         from .update_blockers import blockers
@@ -649,9 +655,15 @@ class UpdateManager:
             # tick(), rather than installing in parallel with another update.
             self.wakeup.set()
 
+    @staticmethod
+    def runners_only(state):
+        pending = state.get('pendingSmartTools') or []
+        return bool(pending) and all(row.get('runnerSource') for row in pending)
+
     async def check(self, *, tier='application', install=False, fresh=True):
         state = self.service.state['updates']
-        if self.closed or self.awaiting_restart() or state.get('pendingApp') or state.get('pendingRelease') or state.get('pendingSmartTools'):
+        if (self.closed or self.awaiting_restart() or state.get('pendingRelease') or (state.get('pendingSmartTools') and not self.runners_only(state))
+                or (state.get('pendingApp') or {}).get('featureSelection')):
             return  # A timing measurement must not change a pending handoff.
         if self.check_task and not self.check_task.done():
             # Join only an equivalent availability operation. A manual refresh
@@ -678,10 +690,20 @@ class UpdateManager:
         return await asyncio.shield(self.check_task)
 
     async def _check(self, *, tier='application', install=False):
-        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease') or self.service.state['updates'].get('pendingSmartTools'): return
+        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingRelease') or (self.service.state['updates'].get('pendingSmartTools') and not self.runners_only(self.service.state['updates'])): return
         from .update_sequence import summary
         async with self.lock:
             state = self.service.state['updates']
+            if self.runners_only(state):
+                # Availability stays observable while a runner waits. This
+                # never stages/activates an app or changes its retained attempt.
+                install = False
+                await self.publish(runnerAvailabilityCheck=True)
+            if state.get('pendingApp'):
+                if not state['pendingApp'].get('featureSelection'):
+                    from .app_updates import check_staged
+                    await check_staged(self)
+                return
             sequence = ({'stage': 'application', 'install': install,
                          'included': summary([], checked=False), 'other': summary([], checked=False)}
                         if tier == 'application' else {**state.get('sequence', {}), 'stage': tier, 'install': install})
@@ -721,20 +743,60 @@ class UpdateManager:
                 rows = await self.inventory_sources(indexed=True)
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
                 remote_tasks = {}
-                from .update_checks import git_revision
-                async def remote(url, ref):
-                    return await git_revision(url, ref, process)
+                from .update_checks import git_revision, ref_policy
+                async def remote(url, ref, prove_kind):
+                    return await ref_policy(url, ref, process) if prove_kind else await git_revision(url, ref, process)
                 async def check_row(row):
+                    from .managed_runner_backend import backend, skip_key
+                    if row.get('runnerKind'):
+                        inspector = getattr(backend(row['runnerKind']), 'check_source', None)
+                        if inspector is not None:
+                            try:
+                                await inspector(self.service, row)
+                            except (ValueError, RuntimeError, TimeoutError):
+                                row.update(status='check_failed', eligible=False)
+                                return
                     if not row.get('eligible') or row.get('kind') == 'runtime environment': return
-                    key = (row['url'],row['ref'])
+                    if row.get('registryManaged'):
+                        from .runtime_registry_updates import check as check_registry
+                        try:
+                            await check_registry(row)
+                        except (ValueError, RuntimeError, TimeoutError):
+                            row['status'] = 'check_failed'
+                        return
+                    origin = row.get('policyOrigin') or {}
+                    typed_policy = (origin.get('kind') in {'prepared-manifest', 'selected-declaration',
+                                                          'verified-cache-branch', 'checked-source'}
+                                    and all(origin.get(key, '') == row.get(key, '')
+                                            for key in ('url', 'ref', 'subdirectory'))
+                                    and origin.get('revision') == row.get('current'))
+                    # PEP 610 requested_revision has no ref kind. Legacy/raw
+                    # installed Git rows need the same proof as cache URIs;
+                    # retain an exact already-qualified authored policy.
+                    prove_kind = bool(row.get('cacheManaged') or row.get('sharedSource')
+                        or row.get('kind') == 'bundle / module'
+                        or row.get('kind') == 'runtime dependency' and not typed_policy)
+                    key = (row['url'], row['ref'], prove_kind)
                     task = remote_tasks.setdefault(key, None)
                     if task is None:
                         task = remote_tasks[key] = asyncio.create_task(remote(*key))
                     try:
-                        row['latest'] = await task
+                        result = await task
+                        if prove_kind:
+                            if result['kind'] == 'unresolved':
+                                row.update(status='check_failed', detail='This source reference could not be verified. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            if result['kind'] != 'branch':
+                                row.update(status='pinned', eligible=False,
+                                    detail='This source reference is not an unambiguous branch. Its installed version is preserved.')
+                                row.pop('latest', None)
+                                return
+                            result = result['revision']
+                        row['latest'] = result
                         row['status'] = 'update' if row['latest'] != row.get('current') else 'current'
                         if (row.get('kind') == 'smart tool' and row['status'] == 'update'
-                                and state.get('skippedSmartTools', {}).get(row.get('installationId')) == row['latest']):
+                                and state.get('skippedSmartTools', {}).get(skip_key(row)) == row['latest']):
                             row.update(status='skipped', detail='This Smart Tool revision was skipped. A newer revision can still be offered.')
                     except (ValueError, RuntimeError, TimeoutError): row['status']='check_failed'
                 checked = []
@@ -790,9 +852,19 @@ class UpdateManager:
 
     async def app(self):
         if self.lock.locked() or self.awaiting_restart():return
-        from .app_updates import stage,activate
+        from .app_updates import stage,activate,supersedes_staged
+        state = self.service.state['updates']
+        pending = state.get('pendingApp')
+        if (pending and not pending.get('featureSelection') and not self.busy()
+                and time.time() - (state.get('pendingAppCheckAt') or 0) >= 60):
+            # The idle window may arrive between scheduled checks. Refresh once
+            # before activation; a recent check also avoids duplicate requests.
+            await self.check(fresh=True)
         async with self.lock:
-            if not self.service.state['updates'].get('pendingApp'):
+            if self.closed or self.awaiting_restart():return
+            state = self.service.state['updates']
+            pending = state.get('pendingApp')
+            if not pending or supersedes_staged(state.get('application', {}), pending):
                 await stage(self)
         await activate(self)
 
@@ -808,13 +880,12 @@ class UpdateManager:
             pending = list(self.service.state['updates']['pendingSmartTools'])
             if all(item.get('failure') for item in pending):
                 for item in pending:
-                    await self.smartToolRetry(item['previous'])
+                    await self.smartToolRetry(item.get('resultId', item['previous']))
             else:
                 await self.activateSmartTools()
             return
         if self.service.state['updates'].get('pendingApp'):
-            from .app_updates import activate
-            await activate(self)
+            await self.app()
             return
         if self.service.state['updates'].get('pendingRelease'):
             await self.activate()
@@ -902,7 +973,7 @@ class UpdateManager:
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,detail='Update prepared; making it available to new conversation work.')
             except BaseException as error:
-                from .update_diagnostics import exception_facts
+                from .update_diagnostics import exception_facts, failure_guidance
                 interrupted=isinstance(error,asyncio.CancelledError)
                 status='interrupted' if interrupted else 'failed'
                 failure=self.diagnostics.state.get('lastFailure',{})
@@ -911,7 +982,7 @@ class UpdateManager:
                 failure=self.diagnostics.state['lastFailure']
                 self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
                 await self.publish(phase='interrupted' if interrupted else 'error',pendingRelease=None,
-                    error='Ecosystem update '+('interrupted' if interrupted else 'failed')+' during '+failure['phase'].replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
+                    error=failure_guidance(failure) or 'Ecosystem update '+('interrupted' if interrupted else 'failed')+' during '+failure['phase'].replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
                 if not isinstance(error,Exception):raise
                 return
         await self.activate()
@@ -937,25 +1008,32 @@ class UpdateManager:
                         self.diagnostics.record('ecosystem-source-preflight', 'failed', **exception_facts(error))
                     raise
         async def prepare(row):
+            from .staged_sources import owned_git_checkout, owned_path, require_exclusive_registry_owner
             target=stage/'foundation'/row['path']
-            if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
+            async def guard():
+                await owned_git_checkout(target, stage/'foundation')
+                require_exclusive_registry_owner(stage/'foundation/registry.json', row['url'], row['ref'], target)
+            await guard()
             phase='ecosystem-source-preflight'
             current=await self.diagnostics.run(phase,process,'git','rev-parse','HEAD',cwd=target)
             dirty,artifacts=await self.diagnostics.run(phase,cache_changes,target)
             if dirty or current!=row['current']: raise ValueError('Source changed since check')
-            meta=target/'.amplifier_cache_meta.json'
+            meta=owned_path(target/'.amplifier_cache_meta.json', stage/'foundation')
             data=json.loads(meta.read_text())
             if source_key(data['git_url'], data.get('ref') or 'HEAD') != source_key(row['url'], row['ref']):
                 raise ValueError('Source identity changed since check')
             if artifacts:
                 # Restore only verified tracked artifacts in this copy.
                 # Rechecking here also protects edits made after check.
+                await guard()
                 await self.diagnostics.run(phase,process,'git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
             await self.publish(detail='Downloading '+row['label']+'…')
+            await guard()
             await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
+            await guard()
             await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
             data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
-            meta.write_text(json.dumps(data))
+            owned_path(meta, stage/'foundation').write_text(json.dumps(data))
         tasks = [asyncio.create_task(stage_one(row)) for row in rows]
         try:
             await asyncio.gather(*tasks)
@@ -995,6 +1073,9 @@ class UpdateManager:
             await self.diagnostics.run('ecosystem-runtime-prepare', process, shutil.which('uv'), 'sync', '--locked',
                 '--project', str(project), '--python', '3.13', timeout=900)
         shared = store_environment(self.home) if worker_supports_shared(project) else {}
+        if fresh:
+            from .runtime_source_alignment import align_checked_sources
+            await self.diagnostics.run('ecosystem-source-preflight', align_checked_sources, self, stage)
         if fresh and shared:
             await self.diagnostics.run('ecosystem-source-sharing', adopt_clean_sources, self, stage)
         env={**os.environ,**shared,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':'','AMPLIFIER_INSTALL_PREPARATION':uuid.uuid4().hex}
@@ -1041,6 +1122,20 @@ class UpdateManager:
                     if not task.done(): task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         if fresh:
+            from .runtime_policy_reconciliation import reconcile, legacy_candidates, RECEIPT
+            async def collect_source_policy():
+                target = stage / 'selected-source-declarations.json'
+                overrides = await self.diagnostics.run('ecosystem-runtime-policy', prepare_overrides,
+                    project, receipt / 'runtime-install-overrides.txt')
+                command = [shutil.which('uv'), 'run', '--locked', '--no-sync', '--project', str(project),
+                           '--python', '3.13', 'python', str(Path(__file__).with_name('update_probe.py'))]
+                await self.diagnostics.run('ecosystem-source-policy', process, *command, str(workspace), profiles[0],
+                    '--install-overrides', str(overrides), '--global-only', '--profiles', str(profiles_file),
+                    '--source-policy-only', str(target), env=env, timeout=900)
+                return json.loads(target.read_text())
+            previous = receipt_directory(self.home, active_release(self.home).get('current'))
+            if legacy_candidates(self.inventory) or (previous / RECEIPT).exists():
+                await self.diagnostics.run('ecosystem-source-policy', reconcile, self, stage, project, collect_source_policy)
             await self.publish(detail='Preparing changed dependencies in an isolated runtime…')
             # The refresh activator dies with each short-lived probe process.
             # Capture after dynamic module installation, then recreate an
@@ -1202,6 +1297,13 @@ class UpdateManager:
             pending = list(state.get('pendingSmartTools', []))
             if any(state.get(key) for key in ('pendingApp', 'pendingRelease')) or any(not item.get('failure') for item in pending):
                 raise ValueError('Finish or inspect the pending update before restoring a tool.')
+            from .managed_runner_updates import rollback as runner_rollback
+            if await asyncio.to_thread(runner_rollback, self.service, identity):
+                async with self.service.lock:
+                    self.service.state['settings']['updates']['autoInstall'] = False
+                await self.publish(phase='installed', error=None, detail='The previous test runner is selected for future checks. Existing checks keep their exact runner.')
+                self.inventory = []
+                return
             row = next((item for item in self.service.smart_tools.state['installations'] if item['id'] == identity), {})
             previous = row.get('previousInstallationId')
             if not previous: raise ValueError('No previous Smart Tool revision is available.')
@@ -1218,6 +1320,10 @@ class UpdateManager:
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
         if self.awaiting_restart():return
+        if (getattr(self, '_storage_policy_due', False) or time.time() - getattr(self, '_storage_last_pass', 0) >= 3600) and (not self.cleanup_task or self.cleanup_task.done()):
+            self._storage_policy_due = False
+            self._storage_last_pass = time.time()
+            self.cleanup_task = asyncio.create_task(self.retire_storage())
         usage = getattr(self.service.runtime, 'generation_usage', lambda: [])()
         adoption = {'activeWorkers': len(usage), 'pendingWorkers': sum(row['updatePending'] for row in usage)}
         if state.get('adoption') != adoption:
@@ -1225,15 +1331,23 @@ class UpdateManager:
                 if not self.cleanup_task or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
             await self.publish(adoption=adoption)
-        blockers = self.blockers() if any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools')) else []
+        blockers = self.blockers() if self.requires_idle(state) else []
         if state.get('blockers', []) != blockers:
             await self.publish(blockers=blockers)
         if state.get('pendingSmartTools'):
-            if state.get('phase') not in {'error', 'interrupted'}: await self.activateSmartTools()
+            if (state.get('phase') not in {'error', 'interrupted'} or any(
+                    row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):
+                await self.activateSmartTools()
+            if (self.runners_only(state) and settings.get('autoCheck', True)
+                    and time.time() - max(state.get('lastCheck') or 0, state.get('lastAttempt') or 0)
+                    >= settings.get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600):
+                await self.check(fresh=False)
             return
         if state.get('pendingApp'):
-            from .app_updates import activate
-            await activate(self)
+            if state.get('phase') in {'error', 'interrupted'}:return
+            if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
+                await self.check(fresh=True)
+            await self.app()
             return
         if state.get('pendingRelease'):
             await self.activate()
@@ -1293,8 +1407,8 @@ class UpdateManager:
             return
         started = time.monotonic()
         try:
-            from .update_retention import reclaim
-            storage = await reclaim(self)
+            from .storage_cleanup import run
+            storage = await run(self.service, uuid.uuid4().hex, automatic=True)
             await self.publish(storage={**storage, 'durationMs': round((time.monotonic() - started) * 1000)})
         except Exception:
             await self.publish(storage={'reason': 'Storage reclamation was deferred; existing files were kept.'})

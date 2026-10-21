@@ -109,12 +109,11 @@ async def test_expiry_while_waiting_admission_does_not_start(app, queue, backend
     assert record(queue, app)['job']['status'] not in PENDING and not backend
 
 
-async def test_revoked_authority_does_not_kill_queue(app, queue, backend):
+async def test_stop_cancels_owned_check_without_killing_queue(app, queue, backend):
     source = app.state['sessions'][0]
-    authority = await grant(app, ['test_environments'], ['session'])
     args = {**scope(app), 'requestId': 'check', 'profileId': environments.PROFILE, 'command': 'true', 'notify': False}
     await agent(app, source, 'workspace.tests.submit', args, 'agent-submit')
-    await revoke(app, authority)
+    await app.dispatch('conversation.stop', {'sessionId': source['id']})
     await drive(queue)
     assert record(queue, app)['job']['status'] == 'cancelled' and not backend
     await submit(app, 'user-check')
@@ -122,21 +121,24 @@ async def test_revoked_authority_does_not_kill_queue(app, queue, backend):
     assert record(queue, app, 'user-check')['job']['status'] == 'passed'
 
 
-async def test_uncertain_command_is_not_repeated_and_cleanup_preserves_evidence(app, queue, backend, monkeypatch):
+async def test_uncertain_command_is_not_repeated_and_environment_is_preserved(app, queue, backend, monkeypatch):
     invoke = environments.invoke
     def uncertain(config, home, row, action, args):
         if action == 'execute':
             backend.append((action, args))
             raise TimeoutError('command acknowledgement lost')
+        if action == 'job_read':
+            backend.append((action, args))
+            return {'ok': True, 'job': {'id': args['requestId'], 'state': 'unknown', 'terminal': False}}
         return invoke(config, home, row, action, args)
     monkeypatch.setattr(environments, 'invoke', uncertain)
     await submit(app)
     await drive(queue)
     assert record(queue, app)['job']['status'] == 'unknown'
-    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'job_read']
     await submit(app)
     await drive(queue)
-    assert len(backend) == 5
+    assert len(backend) == 4
 
 
 async def test_capacity_race_known_refusal_can_retry_without_orphan(app, queue, backend, monkeypatch):
@@ -196,7 +198,7 @@ async def test_restart_after_check_uses_journal_and_only_cleans_up(app, queue, b
     await drive(recovered)
     assert record(recovered, app)['job']['status'] == 'passed'
     assert [action for action, _ in backend].count('execute') == 1
-    assert [action for action, _ in backend][-3:] == ['read', 'stop', 'remove']
+    assert [action for action, _ in backend][-2:] == ['stop', 'remove']
 
 
 async def test_cleanup_failure_never_claims_removal_or_replays_check(app, queue, backend, monkeypatch):
@@ -351,3 +353,46 @@ async def test_pending_completed_removal_repairs_before_next_queue_check(app, qu
     await drive(queue)
     assert record(queue, app, 'after-repair')['job']['status'] == 'passed'
     assert [action for action, _ in backend].count('execute') == 2
+
+
+async def test_known_preservation_failure_uses_separate_cleanup_without_repeating_check(app, queue, backend, monkeypatch):
+    original = environments.invoke
+    def invoke(config, home, row, action, args):
+        if action in {'remove','finishCleanup'}:
+            backend.append((action, dict(args)))
+            if action == 'remove':
+                return {'ok': False, 'status': 'stopped', 'effectAdmitted': False,
+                        'phase': 'verifying', 'code': 'archive_verification_failed'}
+            return {'ok': True, 'status': 'removed'}
+        return original(config, home, row, action, args)
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    await submit(app)
+    await drive(queue)
+    receipt = record(queue, app)
+    assert receipt['job']['status'] == 'passed'
+    assert receipt['job']['previousRemoval']['state'] == 'failed'
+    assert [action for action, _ in backend] == ['prepare','start','execute','stop','remove','finishCleanup']
+    assert backend[-1][1]['previousRequestId'].endswith(':remove')
+    await submit(app, 'next')
+    await drive(queue)
+    assert record(queue, app, 'next')['job']['status'] == 'passed'
+
+
+@pytest.mark.parametrize('phase,code', [
+    ('rechecking', 'ownership_conflict'), ('verifying', 'owner_unverified'),
+    ('verifying', 'retention_storage'), ('verifying', 'unrecognized_failure'),
+    ('verifying', None),
+])
+async def test_owner_recheck_failure_does_not_admit_cleanup_continuation(app, queue, backend, monkeypatch, phase, code):
+    original = environments.invoke
+    def invoke(config, home, row, action, args):
+        if action == 'remove':
+            backend.append((action, dict(args)))
+            return {'ok': False, 'status': 'unknown', 'effectAdmitted': False,
+                    'phase': phase, 'code': code}
+        return original(config, home, row, action, args)
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    await submit(app)
+    await drive(queue)
+    assert record(queue, app)['job']['status'] == 'unknown'
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']

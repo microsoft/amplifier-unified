@@ -47,14 +47,42 @@ async def main(home, port, backend='docker'):
     workspace.mkdir()
     (workspace / 'check.py').write_text("print('workspace check passed')\n")
     calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True,
-                                 'backendAvailable': True, 'longOutput': False, 'executeFailure': False}
+                                 'backendAvailable': True, 'longOutput': False, 'executeFailure': False,
+                                 'setupRequired': False, 'artifactTimeout': False,
+                                 'removeUnknown': False, 'removeFailure': False}
+    setup_calls = []
+    probes = Counter()
     lock = threading.Lock()
     config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
     if backend == 'incus':
         config = {'python': '/fixture/managed/python', 'backend': 'incus',
                   'incus': {'project': 'fixture-project', 'daemonFingerprint': 'a' * 64}}
-    environments.configuration = lambda app: (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
-    environments.validate_configuration_value = lambda app, value: ({**value, 'python': config['python']}, 'ready', 'Retained controlled fixture backend.')
+    # The controlled transport models a qualified Linux backend on every test host.
+    environments.SUPPORTED_HOST = True
+    def configuration(app):
+        probes['configuration'] += 1
+        return (None, 'disabled', 'Set up the controlled test runner.') if mode['setupRequired'] else (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
+    environments.configuration = configuration
+    async def setup_read(app):
+        probes['setupRead'] += 1
+        return {'status': 'disabled' if mode['setupRequired'] else 'ready',
+                'reason': 'Controlled fixture; no backend installation.', 'operation': None,
+                'backends': [{'id': 'docker', 'label': 'Docker', 'available': True, 'reason': 'Controlled fixture'}]}
+    async def setup_request(app, args, actor, guard=None):
+        if guard:
+            await guard()
+        setup_calls.append(dict(args))
+        mode['setupRequired'] = False
+        return {'operation': {'state': 'completed'}}
+    environments.setup.read = setup_read
+    environments.setup.request = setup_request
+    environments.dependencies.prepare = lambda config, root, snapshot, profile_id, request_id: {
+        'status': 'ready', 'profileId': profile_id, 'sourceSha256': snapshot['archive_sha256']}
+    environments.dependencies.cleanup = lambda *args: {'complete': True, 'status': 'removed'}
+    def validate_configuration(app, value):
+        probes['retainedConfiguration'] += 1
+        return {**value, 'python': config['python']}, 'ready', 'Retained controlled fixture backend.'
+    environments.validate_configuration_value = validate_configuration
     backend_identity = ({'backend': 'incus', 'daemon': 'a' * 64, 'project': 'fixture-project'}
                         if backend == 'incus' else {'backend': 'docker', 'daemon': 'fixture-daemon'})
     def invoke(config, home, row, action, args):
@@ -73,7 +101,12 @@ async def main(home, port, backend='docker'):
                 states[row['id']] = 'running'
             elif action == 'stop':
                 states[row['id']] = 'stopped'
-            elif action == 'remove':
+            elif action == 'remove' and mode['removeUnknown']:
+                return {'ok': False, 'status': 'unknown', 'universeId': identity,
+                        'message': 'Synthetic removal outcome unknown; no retry is implied.'}
+            elif action == 'remove' and mode['removeFailure']:
+                return {'ok': False, 'status': 'stopped', 'effectAdmitted': False, 'phase': 'verifying', 'code': 'archive_verification_failed'}
+            elif action in {'remove', 'finishCleanup'}:
                 states[row['id']] = 'removed'
             elif action == 'execute' and mode['executeTimeout']:
                 return {'ok': False, 'status': 'unknown', 'universeId': identity,
@@ -85,18 +118,32 @@ async def main(home, port, backend='docker'):
                 value['result'] = {'exit_code': 1 if mode['executeFailure'] else 0,
                     'stdout': output, 'stderr': 'fixture check failed\n' if mode['executeFailure'] else '',
                     'stdout_truncated': False, 'stderr_truncated': False}
+                if args.get('durableJob'):
+                    value['job'] = {'id': args['requestId'], 'version': 1,
+                                    'state': 'failed' if mode['executeFailure'] else 'passed', 'terminal': True}
+            elif action == 'job_read':
+                value.update(ok=False, job={'id': args['requestId'], 'version': 1, 'state': 'unknown', 'terminal': False})
             if action == 'reconcile':
                 value['observation'] = {'backendIdentity': backend_identity, 'rootOwner': row['sessionId'],
                     'operationId': row['launchOperationId'], 'universeId': identity, 'ownership': 'matched', 'absenceConfirmed': False}
-            if action == 'remove':
+            if action == 'exportArtifacts':
+                if mode['artifactTimeout']:
+                    return {'ok': False, 'status': 'unknown', 'message': 'Artifact export acknowledgement lost.'}
+                value['artifactExport'] = {'verified': True, 'selection': ['/artifacts'],
+                    'archiveBytes': 1024, 'logicalBytes': 24, 'format': 'tar'}
+                value['archives'] = []  # Controlled transport: no real archive claim.
+            if action in {'remove', 'finishCleanup'}:
                 value['retention'] = {'verified': True, 'sourceBytes': 23, 'archiveBytes': 2025,
-                    'totalBytes': 2048, 'format': 'tar',
+                    'totalBytes': 2048, 'format': 'tar', 'archiveOnly': action == 'finishCleanup',
                     'policy': args.get('retentionMode', config.get('retentionMode', 'files'))}
             return value
     environments.invoke = invoke
-    environments.capacity = lambda app, config: {'available': mode['capacityAvailable'],
-        'counts': {'active': 0 if mode['capacityAvailable'] else 1}, 'limits': {'max_running': 1},
-        'blockers': [] if mode['capacityAvailable'] else [{'code': 'execution_capacity'}]}
+    def capacity(app, config):
+        probes['capacity'] += 1
+        return {'available': mode['capacityAvailable'],
+            'counts': {'active': 0 if mode['capacityAvailable'] else 1}, 'limits': {'max_running': 1},
+            'blockers': [] if mode['capacityAvailable'] else [{'code': 'execution_capacity'}]}
+    environments.capacity = capacity
     runtime = Runtime()
     app = await create_app(home, workspace=workspace, runtime=runtime, voice=False, background_updates=False)
     app['control_token'] = TOKEN
@@ -111,9 +158,11 @@ async def main(home, port, backend='docker'):
         authorize(request)
         sid = service.state['selectedSessionId']
         with lock:
-            observed = {'calls': list(calls), 'callCounts': dict(Counter(call['action'] for call in calls)), 'states': dict(states), 'mode': dict(mode)}
+            observed = {'calls': list(calls), 'setupCalls': list(setup_calls), 'callCounts': dict(Counter(call['action'] for call in calls)), 'states': dict(states), 'mode': dict(mode),
+                        'probeCounts': dict(probes)}
         observed['resources'] = [{key: row.get(key) for key in ('id', 'sessionId', 'workspaceId',
-            'revision', 'backendKey', 'backendType', 'retentionMode', 'environmentState')}
+            'revision', 'backendKey', 'backendType', 'retentionMode', 'environmentState',
+            'lastOperation', 'lastArtifactExport', 'artifactExport')}
             for identity in dict.fromkeys(call['resourceId'] for call in observed['calls'])
             for row in [environments.get(home, sid, identity)]]
         observed['requests'] = service.operations.requests.list(sid)
@@ -132,7 +181,7 @@ async def main(home, port, backend='docker'):
                 mode['capacityAvailable'] = bool(value['capacityAvailable'])
             if 'backendAvailable' in value:
                 mode['backendAvailable'] = bool(value['backendAvailable'])
-            for key in ('longOutput', 'executeFailure'):
+            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout', 'removeUnknown', 'removeFailure'):
                 if key in value:
                     if type(value[key]) is not bool:
                         raise web.HTTPBadRequest(text=key + ' must be boolean')

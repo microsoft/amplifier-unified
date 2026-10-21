@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import './composer-test-helpers.mjs';
 // Real host, production assets and filesystem; synthetic runtime only.
@@ -15,7 +16,7 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  assert.equal((await (await page.request.get(url+'/fixture')).json()).foundationCachePresent,false);
  await action('view.update',{patch:{panel:'settings',settingsExpanded:['workspaces']}});
  const settings=page.getByRole('region',{name:'Settings content'});
@@ -31,7 +32,19 @@ try{
  await expect(initialEditor.getByLabel('Initialize local workspace Git',{exact:true})).toBeDisabled();
  await starters.locator('[data-collection-id=\"development\"] button').click();
  const editor=settings.getByRole('form',{name:'Starter editor'});
+ // A click starts duplication; the old built-in editor remains until its
+ // receipt arrives. Exercise that boundary before opening the new disclosure.
+ let releaseDuplicate,duplicateStarted=false;
+ const duplicateGate=new Promise(resolve=>releaseDuplicate=resolve);
+ const holdDuplicate=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='workspace.starters.duplicate'){duplicateStarted=true;await duplicateGate}await route.continue()};
+ await page.route('**/api/actions',holdDuplicate);
  await editor.getByRole('button',{name:'Duplicate',exact:true}).click();
+ await expect.poll(()=>duplicateStarted).toBe(true);
+ await expect(editor.getByLabel('Starter name',{exact:true})).toBeDisabled();
+ releaseDuplicate();
+ await expect(editor.getByText('Copy created. Customize it below.',{exact:true})).toBeVisible();
+ await expect(editor.getByLabel('Starter name',{exact:true})).toBeEnabled();
+ await page.unroute('**/api/actions',holdDuplicate);
  await editor.locator('summary').filter({hasText:'Local workspace Git'}).click();
  await expect(editor.getByLabel('Initialize local workspace Git',{exact:true})).not.toBeChecked();
  await editor.getByLabel('Initialize local workspace Git',{exact:true}).check();
@@ -77,9 +90,9 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Retain this draft through starter setup');
  await action('attachment.add',{sessionId:null,name:'notes.txt',base64:'aGVsbG8='});
  await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
- await page.getByRole('button',{name:'New workspace',exact:true}).click();
+ await page.getByRole('dialog',{name:'Choose a workspace',exact:true}).getByRole('button',{name:'New workspace',exact:true}).click();
  let form=page.getByRole('form',{name:'Create workspace'});
- await form.getByLabel('Workspace name',{exact:true}).fill('Team project');
+ await form.getByLabel('Project name',{exact:true}).fill('Team project');
  await expect(form.getByLabel('Start from…',{exact:true}).locator('option').filter({hasText:'My team starter'})).toHaveCount(1);
  await form.getByLabel('Start from…',{exact:true}).selectOption({label:'My team starter'});
  await page.screenshot({path:out+'/start-from.png'});

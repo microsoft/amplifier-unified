@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public storage inventory controls; all inspected files belong to this fixture.
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
@@ -20,7 +21,7 @@ try{
  page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/actions')calls.push(unwrap(r.postDataJSON()))});
  page.on('response',async response=>{if(response.request().method()!=='POST'||new URL(response.url()).pathname!=='/api/actions')return;const body=unwrap(response.request().postDataJSON());if(body?.action!=='storage.inspect')return;try{const value=await response.json();if(value.accepted&&value.result)reads.push({args:body.args||{},result:value.result})}catch{}});
  const state=()=>page.evaluate(()=>window.amplifier.getState()),info=async()=>(await page.request.get(url+'/api/fixture/readiness')).json();
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private storage inspection draft');const initial=await state(),sid=initial.selectedSessionId,chat=initial.sessions.find(r=>r.id===sid),before=await info(),file=before.workspace+'/notes.txt',contents=await readFile(file,'utf8');
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Private storage inspection draft');const initial=await state(),sid=initial.selectedSessionId,chat=initial.sessions.find(r=>r.id===sid),before=await info(),file=before.workspace+'/notes.txt',contents=await readFile(file,'utf8');
  await openSettingsPage(page,'storage');const storage=page.getByRole('region',{name:'Storage usage',exact:true});await expect(storage.locator('.a-storage-categories li')).toHaveCount(6);
  await expect.poll(()=>reads.some(r=>!r.args.category&&!r.args.rootId&&!r.result.scanning)).toBe(true);const overview=reads.findLast(r=>!r.args.category&&!r.args.rootId&&!r.result.scanning).result;
  assert.deepEqual(overview.rows.map(r=>r.id).sort(),['backups','cache','other','runtime','sessions','workspaces']);assert.equal(await storage.locator('.a-storage-items').count(),0);

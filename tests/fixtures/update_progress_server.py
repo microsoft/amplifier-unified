@@ -68,6 +68,33 @@ async def main(home):
         elif stage=='failed':
             diagnostics.record('ecosystem-prepare','failed',errorType='BundleNotFoundError')
             await manager.publish(phase='error',error='Synthetic activation failure; active generation preserved.')
+        elif stage=='source-mismatch':
+            from amplifier_web.update_diagnostics import failure_guidance
+            failure=diagnostics.record('ecosystem-validation','failed',errorType='ValueError',
+                reason='runtime-installed-source-mismatch',package='amplifier-foundation',
+                resolutionMismatches=['revision'])
+            await manager.publish(phase='error',error=failure_guidance(failure))
+        elif stage=='application-confirmed':
+            # Browser presentation fixture only. The real readiness proof and
+            # persisted receipt are exercised by test_update_readiness.py.
+            application={**service.state['updates']['application'], 'status':'current', 'runningRevision':'c'*40}
+            result={'attemptId':'d'*32,'phase':'restart-ack','version':application['current'],
+                    'revision':application['runningRevision'],'verifiedAt':time.time()}
+            await manager.publish(application=application,applicationResult=result,phase='installed',
+                pendingApp=None,pendingRestart=None,pendingReplacement=None,pendingRelease=None,error=None,
+                sequence={'stage':'included','install':False},lastAttempt=None)
+        elif stage=='component-source-changed':
+            diagnostics.begin('ecosystem','e'*32,tier='other',components=['amplifier-foundation'])
+            diagnostics.record('ecosystem-validation','failed',errorType='ValueError',reason='runtime-source-changed')
+            await manager.publish(phase='error',sequence={'stage':'other','install':False},
+                error='Worker sources changed while checking. Check for updates again.')
+        elif stage=='app-result-stale':
+            await manager.publish(application={**service.state['updates']['application'],'runningRevision':'f'*40})
+        elif stage=='unconfirmed-restart':
+            await manager.publish(pendingRestart={'requestStatus':'uncertain'},phase='activating',error=None)
+        elif stage=='clear-app-result':
+            await manager.publish(applicationResult=None,pendingRestart=None,phase='installed',error=None,
+                sequence={'stage':'complete','install':False})
         elif stage=='compatibility':
             await manager.publish(probeProgress={'attemptId':attempt,'phase':'compatibility','completed':12,'total':37,'startedAt':time.time()})
         else:raise web.HTTPBadRequest()

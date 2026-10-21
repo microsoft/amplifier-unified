@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
@@ -17,7 +18,7 @@ try{
  vite=await createServer({configFile:false,root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
  page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST')calls.push(request.postDataJSON())});
- await page.goto(vite.resolvedUrls.local[0]);
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);
  await control({op:'patch',sessions:{[alpha]:{status:'error',error:'Saved worker message',errorAt:1791582278,failure:{category:'unknown',errorType:'str',summary:'Legacy summary',guidance:'A recovery copy can help',recordedAt:1791582278}}}});
  await page.reload();
  await page.getByRole('button',{name:'View error details',exact:true}).click();

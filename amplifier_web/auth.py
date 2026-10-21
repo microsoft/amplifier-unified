@@ -158,7 +158,7 @@ def is_entry_navigation(request: web.Request) -> bool:
     """
     return (
         request.method in {"GET", "HEAD"}
-        and request.path in {"/", "/login", "/setup", "/oauth/mcp/callback", "/oauth/mcp/complete"}
+        and request.path in {"/", "/login", "/setup", "/oauth/mcp/callback", "/oauth/mcp/complete", "/devices/pair", "/devices"}
         and "Origin" not in request.headers
         and request.headers.get("Sec-Fetch-Mode") == "navigate"
         and (
@@ -187,7 +187,7 @@ async def auth_required(request: web.Request, handler):
     # and revocation on every request and serves escaped inert snapshot content.
     if request.method in {'GET', 'HEAD'} and re.fullmatch(r'/share/[A-Za-z0-9_-]{43}', request.path):
         return await handler(request)
-    if request.path == '/api/terminal/redeem' and request.method == 'POST':
+    if request.path in {'/api/terminal/redeem', '/api/devices/pair', '/api/devices/pair/token'} and request.method == 'POST':
         # This narrowly scoped endpoint verifies a short-lived, single-use setup
         # grant in its handler. It is never an alternate general API credential.
         return await handler(request)
@@ -201,12 +201,25 @@ async def auth_required(request: web.Request, handler):
     authorization = request.headers.get("Authorization", "")
     if authorization.lower().startswith("bearer ") and hmac.compare_digest(authorization[7:], request.app["control_token"]):
         return await handler(request)
-    if authorization.lower().startswith('bearer amt_'):
+    if authorization.lower().startswith(('bearer amt_', 'bearer amc_')):
         devices = request.app['terminal_setup'].devices
         identity = devices.identify(authorization[7:])
         if identity:
+            device = devices.read()['devices'].get(identity)
+            if device is None:
+                return web.json_response({'error': 'Device access was removed.'}, status=401)
+            # Observe revocation before any await, including the JSON body read.
             with devices.connection(identity):
+                scope = device.get('scope')
+                if scope is not None:
+                    request['companion_device'] = identity
+                    from .device_pairing import SCOPE, permits_companion
+                    if scope != SCOPE or not await permits_companion(request):
+                        return web.json_response({'error': 'This device is not permitted to perform that operation.'}, status=403)
+                if devices.identify(authorization[7:]) != identity:
+                    return web.json_response({'error': 'Device access was removed.'}, status=401)
                 return await handler(request)
+        return web.json_response({'error': 'Device access was removed or is invalid.'}, status=401)
     if _verified(request.app["session_secret"], request.cookies.get(SESSION_COOKIE), request.app["server_config"]["session_ttl_seconds"], "session"):
         return await handler(request)
     if is_api_request(request):

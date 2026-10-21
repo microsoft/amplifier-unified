@@ -4,7 +4,7 @@ export function durationHint(session,now=Date.now()){
  if(!hint||hint.version!==1||hint.basis!=='recent_similar_turns'||hint.scope!=='turn'||hint.sampleCount<5||
   ![hint.startedAt,hint.lowerSeconds,hint.upperSeconds].every(Number.isFinite)||
   !['working','running','busy'].includes(session.status)||
-  ['workers','waiting-workers','stopping','interrupted','approval','question'].includes(session.activity?.phase)||
+  ['capacity','workers','waiting-workers','stopping','interrupted','approval','question'].includes(session.activity?.phase)||
   session.workers?.some(row=>['running','working','pending','queued','starting','retrying'].includes(row.status))||
   session.approvals?.length||session.questions?.some(row=>row.status==='pending'))return null;
  const elapsed=now/1000-hint.startedAt;

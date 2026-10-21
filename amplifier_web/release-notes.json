@@ -2,6 +2,392 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.204",
+      "title": "Useful saved work details and steadier navigation",
+      "changes": [
+        "See useful command, code, action and failure hints in work steps, then expand saved tool and delegate arguments, results and errors. Older and child-session details load in bounded pages; uncertain historical matches remain clearly labeled.",
+        "Read unchanged saved model fields while other work appends to the same log, without false content-changed errors.",
+        "Keep navigation usable when queued catalog requests disappear while an earlier read is shutting down."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.203",
+      "title": "Consistent Home, chat and workspace browsing",
+      "changes": [
+        "Use Focus, Brief and Studio layouts across Home, All chats, All workspaces and individual workspaces, with remembered layouts, reading positions and Focus items.",
+        "Find Home in the sidebar alongside Browse and Status, and use clearer Home navigation from other pages.",
+        "Keep active filters visible, use Pick up again for quiet read chats, and clear status filters without losing your search. Existing chat and workspace actions remain available."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.202",
+      "title": "Reliable checkout handoff",
+      "changes": [
+        "Allow the turn arranging a checkout handoff to finish its pending model step without waiting on its own settings change, while preserving task limits and unrelated work guards.",
+        "Already-stopped or unresolved handoffs retain their recovery state; this update does not replay them automatically."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.201",
+      "title": "Safer task controls, test machines and storage cleanup",
+      "changes": [
+        "Cancel an exact queued task request or ask active work to stop cooperatively, preserving its receipt and keeping unrelated work running.",
+        "Configure task, environment and resource limits, with explicit independent checks allowed to overlap while ordinary checks keep their ordering and cleanup guarantees.",
+        "Use approved remote Linux test machines from macOS and Windows, preserving source snapshots, private connection authority and exact cleanup ownership.",
+        "Review unused managed components and runner copies in Storage, with automatic cleanup honoring the global preference and retention period while protecting active work, user changes and rollback copies."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.200",
+      "title": "Clearer update outcomes and worker diagnostics",
+      "changes": [
+        "Keep a verified successful application update visible when a later component update fails, with separate recovery guidance and affected component names.",
+        "Preserve specific worker communication and exit failure labels in feedback diagnostics while keeping private runtime details out of reports."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.199",
+      "title": "Qualified Incus engine updates",
+      "changes": [
+        "Check and update the managed Incus engine separately from the test runner, qualifying a private candidate before selecting it for future tests.",
+        "Preserve existing jobs, explicit source pins, custom installations and the verified runner pairing across engine updates.",
+        "Recover completed qualification and observe uncertain operations without replaying tests or changing host setup."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.198",
+      "title": "Qualified updates for managed test runners",
+      "changes": [
+        "Update the managed test runner through the global update preference, qualifying each candidate in an owned offline environment before using it for new work.",
+        "Keep existing jobs on their original runner, preserve explicit pins and custom installations, and retain the current runner, a rollback and generations still owned by active work.",
+        "Show qualification waits and uncertain outcomes in Updates, with Retry and Skip controls that preserve the exact update identity."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.197",
+      "title": "Unblock updates after interrupted settings changes",
+      "changes": [
+        "Allow a fully idle chat with an older interrupted settings change to stop blocking staged Smart Tool and application updates.",
+        "Keep the affected chat blocked pending recovery, preserve its saved settings payload, and continue to defer updates while work is active or its status cannot be verified."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.196",
+      "title": "Reliable updates for selected components",
+      "changes": [
+        "Preserve selected component branch choices across preparation and later updates while protecting fixed versions, tags, local sources and custom indexes.",
+        "Offer Refresh included components to recover older generated pins in a fresh candidate, including verified dependencies of selected components. Existing workers and rollback versions remain unchanged.",
+        "Check the difference between Git branches and tags before offering cached or installed component updates, and keep ambiguous or unverifiable sources protected.",
+        "Update HTTP, package-management and Markdown parsing dependencies, and remove the compromised emSign certificate root from the application and test-environment trust bundles."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.195",
+      "title": "Reliable component preparation and Core updates",
+      "changes": [
+        "Prepare downloaded bundles at the exact source revision checked for the update, preventing stale cached sources from replacing the checked runtime during preparation.",
+        "Preserve local and pinned source choices during preparation, and reject copied Git checkouts that redirect writes outside the update candidate.",
+        "Check and update app-managed Core wheels from their recorded package registry while preserving explicit custom sources and index settings.",
+        "Use the newly qualified test-environment runner for new setups while retaining the original runner for existing environments and their cleanup.",
+        "Show clearer component-update failure guidance and restore affected preparation checks in post-release verification."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.194",
+      "title": "Approved test machines and ordered chat checks",
+      "changes": [
+        "Connect approved Linux test machines through saved SSH connections and route supported checks to available capacity. Each check retains its chosen machine and ownership through interruptions and recovery.",
+        "Configure how many checks a chat may queue. Checks run in order, with the next waiting until the previous test environment has finished and its cleanup is confirmed.",
+        "Manage remote machine limits and per-chat queue limits in Settings, with saved edits protected against lost acknowledgements and competing changes.",
+        "Improve browser verification by waiting for confirmed Canvas state and retaining bounded process-cleanup diagnostics."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.193",
+      "title": "Wait for model capacity and control test resources",
+      "changes": [
+        "Wait for temporary model capacity instead of saving a budget denial. Global queue and waiting-time controls respect cancellation, current limits and uncertain outcomes.",
+        "Share test-machine resource limits across cooperating local installations, with verified machine identity and reservations retained until owned cleanup is confirmed.",
+        "Adjust queued-test depth, waiting time, resource budgets and execution deadlines globally. Newly accepted work keeps its saved limits through recovery; edits do not change work already accepted.",
+        "Recover qualifying Incus creation results from exact recorded operations. Support current local address metadata and bounded shared-project inspection while preserving older controller ownership and uncertain outcomes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.192",
+      "title": "Recover coordinated work and manage test capacity",
+      "changes": [
+        "Let an authorized manager take responsibility for an existing chat in the same workspace while preserving its history, draft, Stop and working folder. Adding a chat does not start it.",
+        "Recover settled failed workers, including older failures with exact retained terminal evidence, and reconsider outdated budget denials after a fresh authorized request. Safety halts, current limits and completed work remain preserved.",
+        "Set global isolated-test capacity without cancelling queued work or interrupting tests already running.",
+        "Finish owned cleanup after qualifying legacy export-limit failures, including when guest removal succeeded but later cleanup needs another attempt."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.191",
+      "title": "Reliable component updates and managed test commands",
+      "changes": [
+        "Accept a checked component update when uv records its exact commit, while preserving the original branch policy so later updates are still discovered. Changed sources and ambiguous references remain rejected.",
+        "Run manually launched isolated tests with their selected prepared environment and restricted workload identity, matching queued tests while preserving command limits, ownership checks and uncertain-result handling."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.190",
+      "title": "Quiet navigation and consistent chat controls",
+      "changes": [
+        "Mark unread chats as read from Browse, Status or Home using the exact notice you saw. Newer responses stay unread, and approval decisions and error review remain separate.",
+        "Keep routine background refresh quiet over existing content so Home and sidebar rows stay in place. Initial loading, errors, Retry and explicit Refresh remain available.",
+        "Use the same chat controls, detail level and folder-path preferences in Browse and Status, including pinned project rows and drag previews."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.189",
+      "title": "Prepare coordinated checkouts and explain update failures",
+      "changes": [
+        "Let a manager inspect and prepare separate working checkouts for its directly commissioned idle chats, with current assignment, permission and configuration checks before changes are accepted.",
+        "Preserve completed parallel returns and retire obsolete waits so managers can continue coordinating work without replaying completed operations.",
+        "Include the affected component and source mismatch in safe update diagnostic receipts when ecosystem validation fails, while continuing to reject a changed dependency.",
+        "Restore post-release browser coverage for existing-folder creation, mobile navigation and settled chat shortcut layouts."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.188",
+      "title": "Browse work by status and recover coordinated chats",
+      "changes": [
+        "Switch the sidebar between Browse and Status independently of Home. New chat and Search remain available in both modes, with the sidebar toggle always in the header.",
+        "Read attention, ready and working chats in clearer Brief and Studio layouts while preserving project scope, Focus position, drafts and Canvas.",
+        "Keep rapidly returning sidebar queries from treating an intentionally canceled read as a catalog error, while preserving genuine Retry failures.",
+        "Connect computer-use approval choices to the current human conversation, preserving guidance and child-chat context.",
+        "Resume an assignment after an uncertain Stop only when native ownership proves its workers have settled. A fresh human request can recover a settled failed member without replaying old inputs or resetting limits and usage.",
+        "Apply increased assignment allowances to fresh authorized recovery inputs while continuing to enforce conversation and assignment limits.",
+        "Remove sent attachments from the composer as soon as delivery is accepted, including resumed browser copies, without consuming failed sends or newer uploads."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.187",
+      "title": "Move through Focus and keep Home in context",
+      "changes": [
+        "Browse Focus items with Previous, Next and Start again without dismissing work or changing chat status.",
+        "Keep your Focus position when visiting a chat or project and returning, including after a reload. Changing the search or project scope starts a new pass, even when it has no results.",
+        "Keep Home free of a redundant header label and stale selected-chat highlights. Window titles and chat recovery notices follow the page you are viewing."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.186",
+      "title": "Clearer access choices and reliable approval guidance",
+      "changes": [
+        "Choose the app-wide access default from Settings \u2192 Privacy & files \u2192 Access & approvals, even without a chat selected. Existing chat and project overrides remain in effect.",
+        "Run routine operations for task-owned test environments through their existing ownership controls without an extra approval prompt.",
+        "Clear obsolete approval cards after Stop, restart, workspace changes or expiration without starting or replaying work.",
+        "Add guidance when allowing or denying an approval. Overlapping replies deliver that guidance once to the paused conversation, including child conversations.",
+        "Steer an active conversation while a file-access change waits to apply, without starting a new turn under the previous access policy."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.185",
+      "title": "Resume member chats through their manager",
+      "changes": [
+        "A manager can relay your current instruction to resume a stopped member chat in the same assignment. The request must refer to that member\u2019s current Stop and preserves task limits and usage.",
+        "Keep later Stops, changed instructions and duplicate resume requests from starting more work. Completed objectives remain completed, and requests with an uncertain outcome are not replayed.",
+        "Restore post-release smoke coverage for Home arrival, stopped conversations, queued updates and appearance-preview navigation."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.184",
+      "title": "Keep waiting app updates current",
+      "changes": [
+        "Keep checking for newer app releases while an update waits for active work. Prepare and validate the newest known release before the ordinary idle restart.",
+        "Check for newer releases from Updates without replacing the prepared update. Offline checks keep that update available; failed preparation of a newer release requires an explicit retry.",
+        "Force restart confirmation names the exact prepared version and warns when a newer release is available."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.183",
+      "title": "Resume stopped assignments and improve phone navigation",
+      "changes": [
+        "Reopen a stopped assignment from its commissioning chat after its workers settle. Keep shared tasks, membership, budgets and usage; old queued messages stay stopped and nothing is sent automatically. Separately paused chat tasks and budgets retain their own recovery controls.",
+        "Sending to a stopped assignment now explains how to resume it before accepting a message or starting a worker.",
+        "Improve the space available for chat titles and touch targets in the phone header.",
+        "Restore smoke-test coverage for fresh Home arrivals, settings, saved media and MCP recovery, with bounded cleanup of test processes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.182",
+      "title": "A Home for your work",
+      "changes": [
+        "Start at Home with Focus, Brief, or Studio views of work that needs you, unread responses, running chats, and saved conversations. Returning browsers retain their previous surface.",
+        "Home remembers your view, filters, project scope, search, pages, and reading position. Appearance chooses initial defaults without replacing your independent view choices.",
+        "Reach Home from the first header breadcrumb, including on phones. Projects and On its own clarify navigation while preserving existing workspace folders and chat ownership.",
+        "Project actions remain usable while searches load. New chats recheck the selected project before opening a draft, and unavailable pinned projects cannot silently switch destinations.",
+        "Preserve chat drafts and saved Canvas content across Home navigation, and release mobile navigation focus correctly when reopening Canvas.",
+        "Protect committed Settings drafts before chat-reference navigation can read them."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.181",
+      "title": "Recover configuration changes and open related chats",
+      "changes": [
+        "Inspect an interrupted conversation configuration change and resume it when saved evidence confirms that nothing was written. Recovery preserves the original permissions and does not repeat uncertain or partially completed changes.",
+        "Assistant replies can include Open chat cards for existing conversations. Cards use the current chat title and workspace and preserve unsaved-work safeguards when opening the destination.",
+        "Repair apply-patch placement for a conversation\u2019s working checkout while preserving its other saved configuration and controls.",
+        "Inspect original test-environment removal requests without restarting work. Cleanup retains verified files, preserves uncertain outcomes, and can finish confirmed preparation cleanup without removing the guest again.",
+        "Delegated computer-use tools preserve inherited remote desktop restrictions, and approval cards fit more reliably in the conversation layout."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.180",
+      "title": "Keep idle chats ready for coordinated work",
+      "changes": [
+        "Idle chats stay available for new peer requests after their worker is retired to free resources or adopt an update. A fresh request can start a cold worker without requiring a manual Continue message.",
+        "Explicit Stops, failed turns, and uncertain operations keep their existing protections. Previously suppressed requests are not replayed."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.179",
+      "title": "Persistent access choices and more reliable coordinated work",
+      "changes": [
+        "Choose Full access for a chat, a workspace, or the app default in Chat info \u2192 Access & approvals. The choice persists until changed; narrower overrides and restoring restrictions remain available. Existing preferences are unchanged.",
+        "Coordination replies survive routine updates to the same task objective, and task boards show observed worker activity.",
+        "Recover owned test environments after artifact-preservation failures. Cleanup preserves artifacts, distinguishes known failures from uncertain effects, and releases ownership only after the environment is confirmed absent.",
+        "The accompanying context-managed component update supports compaction after unambiguous interrupted tool calls without replaying tools or rewriting saved history. Existing active workers adopt component changes when safely replaced."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.178",
+      "title": "Restore saved model recordings and improve everyday reliability",
+      "changes": [
+        "Saved model requests and responses are accessible from paged Work details. New captures link to their exact call, while older recordings remain available through Show saved recordings. Open calls refresh when saved recordings arrive, and full downloads retain their source ownership.",
+        "Reviewed diagnostic capture notices stay reviewed as healthy recording activity continues. New losses or capture errors still raise an alert.",
+        "Stopped test environments can export their recorded artifacts without restarting the environment or copying its entire workspace. The export keeps a separate receipt and leaves removal and retention decisions unchanged.",
+        "Active conversations reuse their navigation index during streaming. Browser updates prepare shared shell data once per frame, and background navigation queries reuse a bounded workspace summary until its source changes.",
+        "Workspace replacements refresh navigation even when the total number of workspaces stays the same."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.177",
+      "title": "Keep saved Work details and conversation responses current",
+      "changes": [
+        "Saved Work details now notify a newly connected browser when they become ready, including the interval before sidebar registration completes. This prevents a stale loading view after reconnecting or reloading a chat.",
+        "Internal completion checks keep their generated verification text out of the conversation response. Their recorded activity and usage remain available without adding a misleading interrupted reply."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.176",
+      "title": "Review tool changes and manage scheduled work",
+      "changes": [
+        "Saved interactive tool views can compare changed actions and explicitly adopt an updated document. Other open views keep their unfinished input and saved version.",
+        "Automation provides a paged overview of scheduled work and its owning chats. Review and resume future new-task runs after configuration changes while preserving uncertain earlier outcomes and Stop decisions.",
+        "Hold Alt+Shift to reveal numbered shortcuts for the first nine displayed chats, then press a number to switch through the existing draft and unsaved-view safeguards.",
+        "Diagrams expose fit, zoom and layout controls directly, improve default readability and keep authored source and styling intact.",
+        "A failed provider account no longer blocks an explicitly selected healthy account. Unavailable selections remain visible and are never silently replaced with another account.",
+        "An optional local status interface lets other tools observe active conversations, tools and plan progress without reading transcripts. Unified and an optional CLI hook share the same redacted, read-only format.",
+        "Navigation reuses unchanged, completed sidebar results during unrelated activity. Background history queries also encode their inputs in bounded batches, reducing repeated bookkeeping without changing saved content.",
+        "Recent Work details recover correctly when a refresh is superseded or a temporary source error clears, while preserving the receipt that identifies the displayed history.",
+        "Returning to the browser keeps explicitly closed connection settings closed while still refreshing available connections."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.175",
+      "title": "Keep Chat info controls steady while usage loads",
+      "changes": [
+        "Chat info keeps its controls in place while usage arrives or refreshes, so a late response cannot move a control out from under your click. Usage details remain available below the chat controls.",
+        "Browser checks now exercise delayed usage and workspace-starter responses, including clicks while usage is arriving.",
+        "Feedback corrections use reviewed comments and separately reviewed attachments, preserving the original report and later maintainer edits."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.174",
+      "title": "Start requested chats directly and keep question cards stable",
+      "changes": [
+        "An explicit request to create and start an independent chat in another existing workspace now runs directly, without another confirmation. Suggestions that have not been authorized still offer a review.",
+        "Direct starts preserve one saved chat and initial-message identity through lost responses, retries and reloads. Current selections, drafts and file permissions remain intact.",
+        "Fixed duplicate question cards after rerenders and reloads. Browser smoke coverage now checks question cards alongside chat handoffs, as well as direct-start recovery."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.173",
+      "title": "Review and start a chat in another workspace",
+      "changes": [
+        "Ask Amplifier to prepare an independent chat in an existing folder, review its destination and exact opening message, then choose Create and start. Your current chat and draft remain in place until you choose Open chat.",
+        "Reviewed chat handoffs preserve one saved creation and message identity across retries. Changed destinations or settings require a fresh review, and interrupted or uncertain work is inspected without automatic replay.",
+        "Visible Work timers no longer send redundant view reports to the host. Smoke coverage now includes the complete handoff journey, narrow screens, two independent clients and lost acknowledgements, plus Activity checks with both empty and populated inboxes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.172",
+      "title": "Keep conversations concise and make work easier to inspect",
+      "changes": [
+        "Incoming messages from other chats appear as compact expandable exchanges. Exact copying, source attribution and links to the message remain available.",
+        "Amplifier can acknowledge a human message with a clearly attributed reaction. Your reactions remain separate and can be changed independently.",
+        "Execution metrics have independent step, work-summary and conversation controls, selected-field copy and download, and an optional usage snapshot that refreshes only when requested. Unavailable telemetry stays explicitly unavailable.",
+        "Feedback corrections offer a private comparison of the original report, the previous read, the latest GitHub text and your proposed correction before confirmation. Corrections preserve original issue text and maintainer edits; original-text editing remains a GitHub handoff.",
+        "Isolated workspace checks can prepare locked Python and browser dependencies and keep durable job receipts through reconnects. Workspace controls verify available Docker or Incus setup and retain cancellation, recovery and cleanup evidence.",
+        "Expanded smoke coverage exercises compact peer messages, independent reactions, execution preferences and reviewed feedback. Post-release fixture fixes improve selectors, storage timing and handling of legitimate release notices."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.171",
+      "title": "Recover conversations and clarify setup",
+      "changes": [
+        "Changing a conversation bundle uses a fresh worker process, preserves saved history and model choices, and restores the previous configuration if the new bundle cannot start. Stopping the conversation prevents a queued configuration change from restarting it.",
+        "Media previews wait for conversation configuration to settle and recover automatically from temporary changes. Saved tool views report connection status accurately and receive verified reconnection updates without replaying work.",
+        "Bundle startup errors retain useful diagnostic categories. Setup and service status distinguish a responding host from an unverified public address; certificate guidance and expected listener errors are clearer.",
+        "Ordinary file searches follow the same read permissions as file reading, including inherited restrictions. Interrupted checkout handoffs retain their recovery state until the new execution folder is durably confirmed.",
+        "Computer Use, Context Intelligence and Model Routing join the ordinary default capabilities, preserving explicit opt-outs, source revisions and model choices. Desktop restrictions remain effective through nested and resumed workers; Context Intelligence forwarding requires explicit configuration.",
+        "Expanded smoke and integration coverage exercises bundle changes, media recovery, onboarding diagnostics, saved tool views, Stories workflows and capability permissions."
+      ],
+      "notices": [
+        {
+          "id": "ordinary-default-capabilities",
+          "title": "Additional capabilities for ordinary conversations",
+          "detail": "Ordinary conversations now include Computer Use, Context Intelligence and Model Routing unless explicitly disabled. Newly introduced Computer Use is read-only and targets the server computer. External Context Intelligence forwarding remains off until configured. Saved snapshot bundles retain their existing composition.",
+          "action": "Review or disable capabilities in Settings \u2192 Configured bundles. Existing explicit access settings and provider/model choices remain authoritative."
+        }
+      ]
+    },
+    {
+      "version": "0.20.170",
+      "title": "Approve and revoke companion connections",
+      "changes": [
+        "Approve compatible companion apps by confirming a matching code in the browser. Each approved device receives separate credentials with access limited to its permitted chat operations.",
+        "Manage approved devices at /devices. Revocation blocks queued operations before acceptance while allowing already accepted work to finish.",
+        "Companion identities and private client state remain isolated across devices and server restarts. Expanded security and browser checks cover approval, restricted access and revocation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.169",
       "title": "Reduce repeated updates and clarify saved worker permissions",
       "changes": [

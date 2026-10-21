@@ -1,10 +1,12 @@
-import React,{createContext,useCallback,useContext,useEffect,useMemo,useRef,useState} from 'react';
+import React,{createContext,useCallback,useContext,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 
 const DraftContext=createContext(null);
 export function useSettingsDraft(id,entry){
  const registry=useContext(DraftContext);
- useEffect(()=>{registry?.register(id,entry)});
- useEffect(()=>()=>registry?.remove(id),[registry,id]);
+ // Navigation can run as soon as the edited field is committed. Publish its
+ // guard before paint, rather than leaving a gap until passive effects run.
+ useLayoutEffect(()=>{registry?.register(id,entry)});
+ useLayoutEffect(()=>()=>registry?.remove(id),[registry,id]);
 }
 
 export function useSettingsDrafts(){

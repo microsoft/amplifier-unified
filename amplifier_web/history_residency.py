@@ -79,10 +79,6 @@ def retire(service):
             or service.cold_display.persisting or len(service._state['sessions']) <= RECENT):
         return set()
     protected_ids = protected(service)
-    # SessionIndex is the only projection that borrows mutable owner rows.
-    # Drop those aliases for the ownership proof without invalidating detached
-    # directory/navigation results when every candidate stays resident.
-    service.projections.values.pop(('session-index',), None)
     removed = set()
     rows = service._state['sessions']
     position = getattr(service, '_history_retire_cursor', 0) % len(rows)
@@ -106,7 +102,15 @@ def retire(service):
                 or any(item.get('status', 'pending') == 'pending' for item in row.get('approvals', []) + row.get('questions', []))
                 or any(item.get('status') in {'working','running','starting','queued','pending','stopping'}
                        or item.get('persistent') for item in row.get('workers', [])))
-            if identity in protected_ids or busy or not exclusive(row):
+            if identity in protected_ids or busy:
+                position += 1
+                continue
+            # Only eligible owners need an alias-free ownership proof. Active
+            # working sets must keep their index across streamed publications.
+            # Drop this borrowed projection before proving an idle owner is
+            # exclusive; detached directory/navigation results remain valid.
+            service.projections.values.pop(('session-index',), None)
+            if not exclusive(row):
                 position += 1
                 continue
             control = service._state.get('runtimeControl', {}).get(identity)

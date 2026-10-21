@@ -1,7 +1,6 @@
 """Root selection policy and reversible worker-side bundle replacement."""
 from __future__ import annotations
 
-import asyncio
 import copy
 import hashlib
 import json
@@ -190,10 +189,10 @@ class BundleTransaction:
         if state.exists(): write_private(state, json.dumps(reset_controls(json.loads(state.read_text()), reset_model=reset_model)))
 
 
-async def switch(worker, args):
-    """Called under the worker's command lock and Foundation writer ownership."""
+async def prepare_switch(worker, args):
+    """Checkpoint the old worker; mount the replacement in a new process."""
     worker.controls.require_idle()
-    checked, resolved_root = await inspect_bundle(worker.controls, worker.workspace, args['bundle'])
+    checked, _ = await inspect_bundle(worker.controls, worker.workspace, args['bundle'])
     expected = getattr(worker, 'bundle_preview', None)
     if args.get('previewId') and (not expected or expected['previewId'] != args['previewId'] or any(
             checked[key] != expected[key] for key in ('bundle', 'fingerprint', 'selection'))):
@@ -201,39 +200,8 @@ async def switch(worker, args):
     if not checked['modelCompatible'] and not args.get('resetModel'):
         worker.bundle_preview = {**checked, 'previewId': str(uuid.uuid4())}
         return {'requiresModelChoice': True, 'preview': worker.bundle_preview}
+    # Resolution can await external reads. Recheck immediately before saving and
+    # yielding this owner; no candidate modules are imported in this process.
+    worker.controls.require_idle()
     await worker.controls.checkpoint()
-    old_config = copy.deepcopy(worker.start_config)
-    journal = BundleTransaction(worker.home, worker.workspace, worker.runtime.session_id)
-    journal.begin()
-    worker.remounting = True
-    async def dispose():
-        ownership = getattr(worker, "ownership", None)
-        if ownership and ownership.registration:
-            await ownership.registration.close()
-            ownership.registration = None
-        if worker.execution and not worker.execution.done():
-            worker.execution.cancel()
-            await asyncio.gather(worker.execution, return_exceptions=True)
-        if worker.controls: await worker.controls.close()
-        if worker.session: await worker.session.cleanup()
-        worker.session = worker.controls = worker.naming = worker.execution = None
-    try:
-        await dispose()
-        journal.select(args['bundle'], reset_model=args.get('resetModel', False))
-        new_config = {**old_config, 'bundle': args['bundle']}
-        new_config.pop('selection', None)  # The current pin is in control-state.json.
-        await asyncio.wait_for(worker.start(new_config, raise_errors=True, recover_bundle=False,
-                                            resolved_root=resolved_root), 600)
-        journal.commit()
-        worker.bundle_preview = None
-        return {'bundle': args['bundle'], 'configuration': worker.controls.configuration(),
-                'providers': await worker.controls.perform('configuration.providers'), 'historyPreserved': True}
-    except BaseException:
-        try:
-            await dispose()
-        finally:
-            journal.restore()
-        await worker.start(old_config, raise_errors=True, recover_bundle=False)
-        raise
-    finally:
-        worker.remounting = False
+    return {'replacement': {**checked, 'resetModel': args.get('resetModel', False)}}

@@ -2,20 +2,22 @@ import {conversationHistoryPending} from './history-window.js';
 import {OutputSettings} from './outputs';
 import {PublishingSettings} from './publishing';
 import {ChatOverview} from './work-overview';
-import {NavigationOpen,useModalFocus} from './responsive-navigation';
+import {NavigationOpen,useModalFocus,navigationExpanded} from './responsive-navigation';
 import {CanvasControlsHost} from './canvas-controls';
 import {CanvasWorkspace} from './canvas-workspace';
 import {McpAppVisibilityProvider} from './mcp-app-lifecycle';
 import {ShellModules,ShellSlot} from './shell/runtime';
 export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
-import React,{useEffect,useRef,useState} from 'react';
-import {SlidersHorizontal,MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
+import React,{useContext,useEffect,useRef,useState} from 'react';
+import {WorkNavigationContext} from './work-navigation';
+import {Home as HomeIcon,SlidersHorizontal,MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
 import {PaneResizer,usePanelLayout,showingOverview} from './panel-layout';
 import {chatPage,visibleWorkspaces} from './chat-navigation';
 import {WorkspaceExplorer} from './workspace-explorer';
 import {AttentionBadge} from './attention';
 import {PathField} from './settings-ui';
+import {ChatShortcutScope} from './chat-shortcuts';
 
 const patch=(act,value)=>act('view.update',{patch:value});
 export function reopenCanvas(state,act){
@@ -27,21 +29,23 @@ export function CanvasToggle({state,act,layout}){
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell,footer}){
  const layout=usePanelLayout(state,act);
- const view=state.view||{},pinned=!layout.narrow&&!!view.navPinned,expanded=(pinned||!!view.navExpanded)&&(!layout.narrow||!view.canvasFocused&&!view.panel&&!view.toolbarMenuOpen),draft=view.workspaceDraft||{};
+ const navigation=useContext(WorkNavigationContext),supportsStatus=shell.composition.instances.some(row=>row.package==='builtin.chats');
+ const view=state.view||{},pinned=!layout.narrow&&!!view.navPinned,expanded=navigationExpanded(view,layout.narrow),draft=view.workspaceDraft||{};
  const nav=useRef(null),wasNarrow=useRef(layout.narrow),close=()=>patch(act,{navExpanded:false});
  useEffect(()=>{if(layout.narrow&&!wasNarrow.current&&view.navExpanded)close();wasNarrow.current=layout.narrow},[layout.narrow]);
- useModalFocus(nav,layout.narrow&&expanded,close);
+ useModalFocus(nav,layout.narrow&&expanded,close,'#navigation-toggle');
  const workspaces=visibleWorkspaces(state),workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId);
  const add=()=>{(newSession||(()=>act('session.draft',{})))();if(!pinned)patch(act,{navExpanded:false})};
- return <NavigationOpen.Provider value={expanded}>{layout.narrow&&expanded&&<div className="a-navigation-scrim" onClick={close}/>}
- <aside ref={nav} id="workspace-navigation" role={layout.narrow?'dialog':undefined} aria-modal={layout.narrow&&expanded||undefined} hidden={!expanded} inert={!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and conversations" onClick={e=>{if(layout.narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}}>
+ return <NavigationOpen.Provider value={expanded}><ChatShortcutScope navigation={nav} enabled={expanded&&!view.panel&&!view.toolbarMenuOpen&&!draft.mode&&!view.canvasFocused} scope={[state.selectedSessionId,view.workSurface,view.workWorkspaceId,view.navChatScope].join(':')}>{layout.narrow&&expanded&&<div className="a-navigation-scrim" onClick={close}/>}
+ <aside ref={nav} id="workspace-navigation" role={layout.narrow?'dialog':undefined} aria-modal={layout.narrow&&expanded||undefined} aria-owns={layout.narrow&&expanded?'navigation-toggle':undefined} hidden={!expanded} inert={!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and chats" onClick={e=>{if(layout.narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}}>
   <div className="a-nav-rail">
-   <div className="a-nav-head"><button className="a-icon" type="button" aria-label="Close navigation" title="Close sidebar" aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>layout.narrow?close():patch(act,{navPinned:false,navExpanded:false}).then(()=>{if(typeof document!=='undefined')document.querySelector('[aria-label="Open navigation"]')?.focus()})}>{layout.narrow?<X/>:<PanelLeft/>}{!layout.narrow&&<AttentionBadge state={state} section="chats"/>}</button><strong className="a-nav-reveal">Your work</strong></div>
+   <div className="a-nav-head a-sidebar-modes">{navigation&&<button type="button" className="a-sidebar-home a-icon" aria-label="Home" title="Home" aria-current={view.workSurface==='home'?'page':undefined} onClick={()=>navigation.home(layout.narrow?{navExpanded:false}:{})}><HomeIcon/></button>}<div className="a-sidebar-organizations" role="group" aria-label="Sidebar view">{supportsStatus?['browse','status'].map(mode=><button type="button" key={mode} aria-pressed={(view.navMode||'browse')===mode} onClick={()=>patch(act,{navMode:mode})}>{mode==='browse'?'Browse':'Status'}</button>):<strong>Browse</strong>}</div></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.draft" aria-label="New chat" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
+   {navigation&&<button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>}
    <div className="a-nav-content a-nav-reveal"><ShellModules shell={shell}/></div>{footer}
   </div>
   {layout.docked&&<PaneResizer layout={layout} pane="nav"/>}
- </aside></NavigationOpen.Provider>;
+ </aside></ChatShortcutScope></NavigationOpen.Provider>;
 }
 
 export function SessionHistoryControls({session,act,onLoadEarlier,hideEarlier=false}){

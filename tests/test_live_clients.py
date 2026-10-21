@@ -152,14 +152,32 @@ async def test_restart_keeps_private_native_selection_until_catalog_is_loaded(tm
 
 
 @pytest.mark.parametrize('outcome', ['rediscovered', 'complete-absent', 'navigate', 'deleted'])
-async def test_cache_recovery_preserves_private_selection_across_partial_passes(tmp_path, outcome):
+@pytest.mark.parametrize('slice_budget', [None, 1])
+async def test_cache_recovery_preserves_private_selection_across_partial_passes(
+        tmp_path, monkeypatch, outcome, slice_budget):
     from test_automatic_history import native_session, ObservedRuntime
     native_session(tmp_path/'native-project', 'saved-recovery')
-    service = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
+    def create(runtime):
+        app = AppService(tmp_path/'app', runtime, workspace=tmp_path)
+        if slice_budget is not None:
+            app.history.index._recovery_budget = slice_budget
+            monkeypatch.setattr(app.history.index, '_invalidations', lambda: (False, set()))
+        return app
+
+    async def discover(app, *, force=True):
+        # Explicit refresh still advances bounded discovery. Establish the
+        # known fixture row without assuming one slice completes the catalog.
+        for _ in range(64):
+            await app.history.refresh(force=force)
+            row = app.directory.resolve('saved-recovery')
+            if row is not None:
+                return row
+        pytest.fail('Saved recovery fixture was not discovered after 64 bounded passes')
+
+    service = create(Runtime())
     await service.dispatch('session.create', {'title':'Other current chat'})
     current = service.state['selectedSessionId']
-    await service.history.refresh()
-    selected = service.directory.resolve('saved-recovery')
+    selected = await discover(service)
     record = service.clients.attach('private-browser')
     record.update(selectedSessionId=selected['id'], selectedWorkspaceId=selected['workspaceId'],
                   canvas={'id':'retained-canvas', 'kind':'markdown', 'content':'Saved preview', 'open':True})
@@ -171,7 +189,7 @@ async def test_cache_recovery_preserves_private_selection_across_partial_passes(
     # saved client state. The selected owner has no local presentation record.
     for suffix in ('', '-wal', '-shm'):
         (tmp_path/'app'/('native-catalog.sqlite3'+suffix)).unlink(missing_ok=True)
-    restarted = AppService(tmp_path/'app', ObservedRuntime(), workspace=tmp_path)
+    restarted = create(ObservedRuntime())
     try:
         restored = restarted.clients.attach('private-browser')
         assert restarted.directory.resolve(selected['id']) is None
@@ -186,7 +204,7 @@ async def test_cache_recovery_preserves_private_selection_across_partial_passes(
             assert restored['canvas']['content'] == 'Saved preview'
             assert selected['id'] not in {row['id'] for row in restarted.state['sessions']}
         if outcome == 'rediscovered':
-            await restarted.history.refresh(force=False)
+            await discover(restarted, force=False)
             restarted.clients.reconcile('private-browser')
             assert restarted.directory.resolve(selected['id']) is not None
             assert restored['selectedSessionId'] == selected['id']
@@ -194,7 +212,7 @@ async def test_cache_recovery_preserves_private_selection_across_partial_passes(
         elif outcome == 'navigate':
             await command(restarted, 'private-browser', 'session.select', {'id':current})
             assert restored['selectedSessionId'] == current
-            await restarted.history.refresh(force=False)
+            await discover(restarted, force=False)
             restarted.clients.reconcile('private-browser')
             assert restored['selectedSessionId'] == current
         else:

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -20,7 +21,7 @@ try{
  const act=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const probe=async(id,run)=>{const result=await evidence.probe(id,['notifications.read-end'],async()=>{await run();return await evidence.snapshot(page,id,'#amp-one')});if(result.status!=='passed')throw Error('Stopped after '+id)};
- await page.goto(base);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();const first=(await state()).selectedSessionId;
+ await page.goto(base);await showFixtureConversation(page,{navPinned:true});await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();const first=(await state()).selectedSessionId;
  await act('session.pin',{id:first,pinned:true});const second=(await act('session.create',{title:'Other visible chat'})).result.sessionId;await act('session.pin',{id:second,pinned:true});await act('view.update',{patch:{navPinned:true}});
  const pin=id=>page.locator(`[data-sidebar-section="pinned"] [data-session-id="${id}"] [data-navigation-select]`);
  let lastGeneration;

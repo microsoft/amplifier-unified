@@ -121,8 +121,8 @@ def materialize_provider_config(config, schema, *, environment=None):
     return result
 
 
-async def materialize_bundle_providers(bundle, prepared, *, environment=None, schema_loader=None):
-    """Preflight every instance atomically; never prune failed provider choices."""
+async def materialize_bundle_providers(bundle, prepared, *, environment=None, schema_loader=None, isolation=None):
+    """Materialize instances without pruning; opt-in failures remain non-executable."""
     from .module_failures import ConfiguredModuleError
 
     root = copy.deepcopy({"providers": bundle.providers, "agents": bundle.agents})
@@ -143,6 +143,7 @@ async def materialize_bundle_providers(bundle, prepared, *, environment=None, sc
         _schema_fields(schema)
         return schema
 
+    rows = [row for row in rows if isolation is None or not isolation.failure(row)]
     keys = dict.fromkeys(schema_key(row) for row in rows)
     schemas = dict(zip(keys, await asyncio.gather(*(load(key) for key in keys), return_exceptions=True)))
     failures = []
@@ -155,9 +156,11 @@ async def materialize_bundle_providers(bundle, prepared, *, environment=None, sc
             reason = "provider_configuration_failed"
             row["config"] = materialize_provider_config(row.get("config", {}), schema, environment=environment)
         except Exception:
+            if isolation is not None:
+                isolation.record(row, reason)
             failures.append({"module": row["module"], "type": "provider", "reason_code": reason,
                              "instance_id": row.get("instance_id") or row.get("id")})
-    if failures:
+    if failures and isolation is None:
         raise ConfiguredModuleError(failures) from None
     bundle.providers, bundle.agents = root["providers"], root["agents"]
     prepared.mount_plan["providers"] = copy.deepcopy(bundle.providers)

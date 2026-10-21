@@ -47,7 +47,8 @@ def test_changed_feature_selects_its_owner_without_full_matrix():
 
 
 @pytest.mark.parametrize('probe', ['warm_worker_probe.py', 'history_edit_probe.py', 'attachments_runtime_probe.py',
-                                  'live_terminal_probe.py', 'standalone_controls_probe.py', 'computation_runtime.py'])
+                                  'live_terminal_probe.py', 'standalone_controls_probe.py', 'computation_runtime.py', 'bundle_switch_probe.py',
+                                  'provider_isolation_native.py'])
 def test_runtime_probe_changes_select_native_owner(probe):
     assert 'native' in {row['lane'] for row in checks.select_lanes([f'tests/fixtures/{probe}'])}
 
@@ -145,3 +146,160 @@ def test_run_is_source_bound_and_cannot_reuse_stale_success(tmp_path, monkeypatc
     if outcome == 'launch-error':
         assert not junit.exists() and result['exitCode'] is None
         assert 'interpreter missing' in result['error']
+
+
+def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
+    import hashlib
+    coverage = checks.manifest()
+    # Do not rewrite the historical audit when later features add optional cases.
+    frozen = json.dumps({'baseline': coverage['baseline'],
+                         'records': coverage['baselineRecords']}, sort_keys=True).encode()
+    assert hashlib.sha256(frozen).hexdigest() == '8356817d31275554bf00c526c4f76b467646d2146f06907cd0ed564ac455b9f0'
+    records = coverage['additionalRecords']
+    expected = {
+        'tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged': 'native',
+        'tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input': 'native',
+        'tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay': 'native',
+        'tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait': 'native',
+        **{f'tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[{resumed}]': 'native'
+           for resumed in ('False', 'True')},
+        'tests/test_search_read_policy.py': 'native',
+        'tests/test_default_capability_policy.py': 'native',
+        'tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip': 'native',
+        **{f'tests/test_{name}.py': 'default-installed' for name in (
+            'default_behaviors_integration', 'default_runtime_safety',
+            'default_mount_runtime', 'default_routing_runtime')},
+        'tests/fixtures/status_emitter_probe.py': 'status-installed',
+        'tests/fixtures/status_package_probe.py': 'status-installed',
+        'tests/test_default_desktop_safety.py': 'default-desktop-safety',
+        'tests/test_browser_auth.py::test_installed_pwa_launch': 'browser-installed',
+        **{'tests/test_durable_guest_jobs.py::test_' + name: 'root-guest' for name in (
+            'lost_response_repeated_identity_and_fresh_observer_do_not_replay',
+            'cancel_is_prompt_and_terminal_requires_actual_exit',
+            'timeout_is_enforced_in_guest_and_output_is_bounded',
+            'worker_cannot_modify_supervisor_receipts_and_profile_environment_survives',
+            'two_roots_execute_independently_and_cannot_adopt_identity',
+            'dead_supervisor_is_unknown_and_same_request_never_restarts',
+            'crash_after_reservation_does_not_launch_on_observe_or_repeat',
+            'background_pipe_inheritance_does_not_hold_finished_check_until_deadline')},
+    }
+    assert {row['node']: row['owner'] for row in records} == expected
+    assert len(records) == len(expected)
+    for row in records:
+        lane = coverage['lanes'][row['owner']]
+        assert row['node'] in lane['selectors'] and row['prerequisite']
+        if lane['mode'] == 'automatic':
+            assert row['owner'] in {job['lane'] for job in checks.select_lanes([row['node'].split('::')[0]])}
+    assert coverage['lanes']['default-installed']['mode'] == 'manual'
+    assert 'default-installed' not in {job['lane'] for job in checks.select_lanes()}
+
+
+def test_status_installed_owner_is_explicit_and_affected_changes_are_discoverable(tmp_path):
+    coverage = checks.manifest()
+    lane = coverage['lanes']['status-installed']
+    assert lane['mode'] == 'manual'
+    assert lane['command'] == ['python', 'scripts/qualify_status_emitter.py']
+    assert 'status-installed' not in {job['lane'] for job in checks.select_lanes()}
+    for path in ['amplifier_web/status_emitter.py', 'amplifier_web/status_protocol/hook.py',
+                 'amplifier_web/execution_events.py', 'tests/fixtures/status_package_probe.py']:
+        assert 'status-installed' in {job['lane'] for job in checks.select_lanes([path], include_manual=True)}
+    assert 'status-installed' not in {job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}
+    with pytest.raises(ValueError, match='explicit qualification runner'):
+        checks.run_lane('status-installed', 'python', tmp_path)
+
+
+def test_desktop_safety_owner_uses_its_manual_runner_without_changing_ic13(tmp_path):
+    coverage = checks.manifest()
+    lane = coverage['lanes']['default-desktop-safety']
+    assert lane['runner'] == 'owned-container'
+    assert lane['mode'] == 'manual'
+    assert lane['command'] == [
+        'python', 'scripts/qualify_default_installed.py', 'run', '--desktop-safety']
+    assert lane['selectors'] == ['tests/test_default_desktop_safety.py']
+    assert 'default-desktop-safety' not in {job['lane'] for job in checks.select_lanes()}
+    for path in ['tests/test_default_desktop_safety.py', 'amplifier_web/host/children.py',
+                 'scripts/qualify_default_installed.py', 'scripts/default-installed-pins.json']:
+        assert 'default-desktop-safety' in {
+            job['lane'] for job in checks.select_lanes([path], include_manual=True)}
+        assert 'default-desktop-safety' not in {
+            job['lane'] for job in checks.select_lanes([path])}
+    assert 'default-desktop-safety' not in {
+        job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}
+    assert coverage['lanes']['default-installed']['selectors'] == [
+        'tests/test_default_behaviors_integration.py',
+        'tests/test_default_runtime_safety.py',
+        'tests/test_default_mount_runtime.py',
+        'tests/test_default_routing_runtime.py',
+    ]
+    output = tmp_path / 'not-generic-pytest'
+    with pytest.raises(ValueError, match='explicit qualification runner'):
+        checks.run_lane('default-desktop-safety', 'python', output)
+    assert not output.exists()
+
+
+def test_new_default_and_search_skips_cannot_be_ownerless():
+    import ast
+    coverage = checks.manifest()
+    registered = {row['node'] for row in coverage['additionalRecords']}
+    paths = [*ROOT.glob('tests/test_default_*.py'), ROOT / 'tests/test_search_read_policy.py']
+    for path in paths:
+        tree = ast.parse(path.read_text())
+        file = path.relative_to(ROOT).as_posix()
+        for statement in tree.body:
+            skipped = any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                          and isinstance(node.func.value, ast.Name) and node.func.value.id == 'pytest'
+                          and node.func.attr in {'skip', 'importorskip'} for node in ast.walk(statement))
+            if not skipped:
+                continue
+            function = statement.name if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) else ''
+            assert file in registered or (function.startswith('test_') and file + '::' + function in registered), (
+                f'New optional runtime check has no additive execution owner: {file}:{function}')
+
+
+def test_native_search_owner_prepares_actual_ripgrep():
+    import yaml
+    workflow = yaml.load((ROOT / '.github/workflows/integration-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    setup = next(step for step in workflow['jobs']['integration']['steps']
+                 if step.get('name') == 'Prepare actual search backend')
+    assert setup['if'] == "matrix.lane == 'native'"
+    assert 'apt-get install -y ripgrep' in setup['run']
+
+
+def test_root_and_installed_pwa_have_separate_fixed_manual_routes(tmp_path):
+    coverage = checks.manifest()
+    root = coverage['lanes']['root-guest']
+    assert root['mode'] == 'manual' and root['runner'] == 'owned-container'
+    assert root['command'] == ['python', 'scripts/qualify_default_installed.py', 'run', '--root-guest']
+    assert len(root['selectors']) == len(set(root['selectors'])) == 8
+    pwa = coverage['lanes']['browser-installed']
+    assert pwa['mode'] == 'manual' and pwa['selectors'] == [
+        'tests/test_browser_auth.py::test_installed_pwa_launch']
+    assert pwa['qualificationCommand'] == [
+        'python', 'scripts/qualify_default_installed.py', 'run', '--installed-pwa']
+    assert not {'root-guest', 'browser-installed'} & {row['lane'] for row in checks.select_lanes()}
+    assert {'root-guest', 'browser-installed'} <= {
+        row['lane'] for row in checks.select_lanes(['scripts/qualify_default_installed.py'], include_manual=True)}
+    with pytest.raises(ValueError, match='explicit qualification runner'):
+        checks.run_lane('root-guest', 'python', tmp_path / 'not-a-host-root-run')
+    assert not (tmp_path / 'not-a-host-root-run').exists()
+
+
+def test_handoff_native_admission_has_an_executing_owner_and_coordination_guard():
+    import yaml
+    coverage = checks.manifest()
+    selector = 'tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait'
+    assert selector in coverage['lanes']['native']['selectors']
+    for path in (
+        'amplifier_web/worktrees.py', 'amplifier_web/handoff_boundary.py',
+        'amplifier_web/handoff_admission.py', 'amplifier_web/capacity.py',
+        'amplifier_web/capacity_wait.py', 'amplifier_web/execution_events.py',
+        'tests/test_handoff_native_admission.py', 'tests/test_handoff_model_admission.py',
+        'tests/test_handoff_boundary.py', 'tests/test_handoff_refusal.py',
+        'tests/test_model_admission_wait.py',
+    ):
+        assert 'native' in {job['lane'] for job in checks.select_lanes([path])}
+    workflow = yaml.load((ROOT / '.github/workflows/coordination.yml').read_text(), Loader=yaml.BaseLoader)
+    assert 'tests/test_handoff_model_admission.py' in workflow['on']['pull_request']['paths']
+    steps = workflow['jobs']['contracts']['steps']
+    assert any('uv run --no-sync pytest' in step.get('run', '') and
+               'tests/test_handoff_model_admission.py' in step['run'] for step in steps)

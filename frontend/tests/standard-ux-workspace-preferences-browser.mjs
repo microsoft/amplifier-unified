@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public workspace defaults and starter definitions; only owned fixture files.
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
@@ -15,7 +16,7 @@ try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Workspace fixture timed out')),20000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',data=>{text+=data;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page.on('pageerror',error=>errors.push(error.message));
  const state=()=>page.evaluate(()=>window.amplifier.getState()),inspect=async()=>(await page.request.get(url+'/fixture')).json();
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep private workspace preferences draft');
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep private workspace preferences draft');
  const original=await inspect(),base=original.registeredWorkspaces[0].path,nextRoot=base+'/owned-new-workspaces',sentinel=base+'/keep-existing.txt';await mkdir(nextRoot);await writeFile(sentinel,'Existing workspace bytes stay exact.\n');
  await openSettingsPage(page,'workspaces');const panel=page.locator('.a-settings-experience'),content=panel.getByRole('region',{name:'Settings content',exact:true}),folder=content.locator('#default-workspace-root');
  await folder.fill(nextRoot);await content.getByRole('button',{name:'Save',exact:true}).click();await expect(content.getByText('Saved. Existing workspaces stay where they are.',{exact:true})).toBeVisible();assert.equal((await state()).settings.workspaces.defaultRoot,nextRoot);

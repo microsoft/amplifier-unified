@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -19,6 +20,22 @@ from pathlib import Path
 _retention_spec = importlib.util.spec_from_file_location('_environment_retention', Path(__file__).with_name('environment_retention.py'))
 retention = importlib.util.module_from_spec(_retention_spec)
 _retention_spec.loader.exec_module(retention)
+
+_jobs_spec = importlib.util.spec_from_file_location('_environment_jobs', Path(__file__).with_name('test_job_transport.py'))
+jobs = importlib.util.module_from_spec(_jobs_spec)
+_jobs_spec.loader.exec_module(jobs)
+
+
+_host_spec = importlib.util.spec_from_file_location('_host_resources', Path(__file__).with_name('test_host_resources.py'))
+host_resources = importlib.util.module_from_spec(_host_spec)
+_host_spec.loader.exec_module(host_resources)
+
+
+def selected_profile(payload):
+    spec = importlib.util.spec_from_file_location('_environment_profiles', Path(__file__).with_name('test_environment_profiles.py'))
+    profiles = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(profiles)
+    return profiles.resources(payload.get('profileId', 'linux-python'), payload.get('resourceRequest'))
 
 
 def read_private_record(path):
@@ -335,35 +352,279 @@ def retain_source_ready(root, identity, snapshot):
 
 def retain_manifest(directory, archives):
     """Persist archive names and their receipt before the volumes can disappear."""
-    with (directory / 'manifest.json').open('x') as stream:
-        json.dump(archives, stream)
-        stream.flush()
-        os.fsync(stream.fileno())
-    for path in (directory, directory.parent):
-        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+    retention.publish_record(directory / 'manifest.json', archives)
+
+
+def removal_binding(payload, identity, backend):
+    value = {**binding(payload, identity, backend), **{key: payload.get(key) for key in (
+        'resourceId', 'resourceRevision', 'admissionRevision', 'requestId', 'backendKey', 'snapshot')}}
+    if (any(not isinstance(value[k], str) or not value[k] or len(value[k]) > 512 for k in
+            ('rootOwner', 'resourceId', 'requestId', 'operationId', 'universeId', 'backendKey'))
+            or any(type(value[k]) is not int or value[k] < 1 for k in
+                   ('resourceRevision', 'admissionRevision'))
+            or value['resourceRevision'] < value['admissionRevision']
+            or not isinstance(value['snapshot'], dict) or not value['snapshot']
+            or not isinstance(backend, dict) or set(backend) != {'backend', 'daemon'}
+            or backend['backend'] != 'docker' or not isinstance(backend['daemon'], str)
+            or not backend['daemon'] or len(json.dumps(value).encode()) > 2048):
+        raise ValueError('The original removal binding is incomplete.')
+    return value
+
+
+def removal_directory(payload):
+    root = Path(payload['root'])
+    if not root.is_absolute() or any(p.is_symlink() for p in (root, *root.parents)):
+        raise ValueError('The removal owner directory is unsafe.')
+    request = payload['requestId']
+    if not isinstance(request, str) or not request or len(request) > 200:
+        raise ValueError('The removal request identity is invalid.')
+    return root / ('retained-' + hashlib.sha256(request.encode()).hexdigest())
+
+
+class RemovalFailure(OSError):
+    """Direct callers retain failure semantics; the helper publishes safe enums."""
+    def __init__(self, receipt):
+        super().__init__('Managed removal did not complete; retained evidence must be inspected.')
+        self.receipt = receipt
+
+
+def remove_owned(payload, identity, backend, config, lib, backend_error, binding_source):
+    phase, effect, destination, started = 'observe-stopped', 'not_dispatched', None, False
+    recovering, cleanup = payload.get('action') == 'finishCleanup', None
+    try:
+        universe = lib.status(identity, config=config)
+        if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
+            return {'ok': False, 'universeId': identity, 'status': 'unknown',
+                    'message': 'Removal requires observed stopped containers. No data was removed.'}
+        if recovering:
+            cleanup = 'rechecking'
+            if docker_backend(payload) != backend:
+                raise ValueError('The actual backend changed before cleanup.')
+            observed = docker_reconcile(payload, identity, backend, binding_source)
+            if (observed.get('status') != 'stopped'
+                    or observed.get('observation', {}).get('ownership') != 'matched'):
+                raise ValueError('The stopped cleanup owner is unverified.')
+        phase = 'prepare-retention'
+        destination = removal_directory(payload)
+        original = removal_binding(payload, identity, backend)
+        cleanup = 'preserving'
+        if recovering:
+            cleanup_phase(payload, cleanup)
+            if shutil.disk_usage(Path(payload['root'])).free < 2 * retention.RECOVERY_LIMIT + 1024 ** 3:
+                return {**cleanup_failure(payload, cleanup, identity, 'retention_storage'),
+                        'removal': {'version': 1, 'phase': phase, 'code': 'phase_failed',
+                                    'destroyEffect': effect}}
+        destination.mkdir(mode=0o700)  # Existing/partial exports are never reused by removal.
+        write_private_record(destination / 'removal-started.json',
+            {'version': 1, 'phase': 'started', 'binding': original})
+        started = True
+        archives = []
+        options = {'max_bytes': retention.RECOVERY_LIMIT, 'timeout_seconds': 300} if recovering else {}
+        for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]:
+            phase = 'export-' + source.strip('/')
+            archives.append(serialize(lib.export_files(identity, source, destination / name, config=config, **options)))
+        phase = 'verify-exports'
+        cleanup = 'verifying'
+        if recovering:
+            cleanup_phase(payload, cleanup)
+        for archive, source, name in zip(archives, ('/workspace', '/artifacts'), ('workspace.tar', 'artifacts.tar')):
+            if (archive.get('id') != identity or archive.get('source') != source
+                    or archive.get('destination') != str(destination / name)):
+                raise ValueError('The exported selection does not match the original removal.')
+        retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if recovering else 'files')
+        phase = 'publish-manifest'
+        retain_manifest(destination, archives)
+        if recovering:
+            phase, cleanup = 'recheck-stopped', 'rechecking'
+            cleanup_phase(payload, cleanup)
+            if docker_backend(payload) != backend:
+                raise ValueError('The actual backend changed before removal.')
+            observed = docker_reconcile(payload, identity, backend, binding_source)
+            if (observed.get('status') != 'stopped'
+                    or observed.get('observation', {}).get('ownership') != 'matched'):
+                raise ValueError('The stopped cleanup owner changed before removal.')
+        phase = 'record-dispatch'
+        if recovering:
+            cleanup = 'removing'
+            cleanup_phase(payload, cleanup)
+        intent = {'version': 1, 'phase': 'destroy-dispatched', 'binding': original,
+            'startedSha256': retention.digest(destination / 'removal-started.json')[0],
+            'manifestSha256': retention.digest(destination / 'manifest.json')[0],
+            'retentionSha256': retention.digest(destination / 'retention.json')[0],
+            'archives': [{key: item[key] for key in ('source', 'sha256', 'bytes')} for item in archives]}
+        write_private_record(destination / 'destroy-dispatched.json', intent)
+        # A dispatch intent can survive a crash before/after the actual call.
+        # Its presence never proves completion or authorizes another destroy.
+        phase, effect = 'destroy', 'unknown'
+        result = lib.destroy(identity, config=config)
+        complete = bool(result.complete)
+        if complete:
+            effect = 'confirmed'
+        if recovering:
+            phase, cleanup = 'observe-absence', 'observing'
+            cleanup_phase(payload, cleanup)
+            if docker_backend(payload) != backend:
+                raise ValueError('The actual backend changed while observing removal.')
+            observed = docker_reconcile(payload, identity, backend, binding_source)
+            if (observed.get('status') != 'absent'
+                    or observed.get('observation', {}).get('absenceConfirmed') is not True):
+                return {**cleanup_failure(payload, cleanup, identity),
+                        'archives': archives, 'retention': retained,
+                        'removal': {'version': 1, 'phase': phase, 'code': 'unconfirmed',
+                                    'destroyEffect': effect}}
+            complete = True
+        if complete:
+            phase, effect = 'settle', 'confirmed'
+            try:
+                write_private_record(destination / 'destroy-confirmed.json', {
+                    'version': 1, 'phase': 'destroy-confirmed', 'binding': original,
+                    'intentSha256': retention.digest(destination / 'destroy-dispatched.json')[0]})
+            finally:
+                # A diagnostic write failure cannot skip the existing bounded
+                # admission cleanup/settlement after confirmed destruction.
+                release_admission(payload, identity)
+                retain_settlement(payload, identity, backend, 'removed')
+        return {'ok': complete, 'universeId': identity,
+                'status': 'removed' if complete else 'unknown',
+                'result': {'complete': complete, 'outcome': 'removed' if complete else 'unknown'},
+                'archives': archives, 'retention': retained,
+                'removal': {'version': 1, 'phase': phase, 'code': 'complete' if complete else 'unconfirmed',
+                            'destroyEffect': effect},
+                'message': 'Source and artifacts were retained before removal.' if complete
+                           else 'Artifacts were retained; teardown is not confirmed.'}
+    except Exception as exc:
+        diagnostic = {'version': 1, 'phase': phase, 'code': 'phase_failed', 'destroyEffect': effect}
+        receipt = {'ok': False, 'status': 'unknown', 'universeId': identity, 'removal': diagnostic,
+                   'message': 'Removal did not complete. Preserve the original request and inspect retained evidence; do not replay.'}
+        if effect == 'not_dispatched':
+            if isinstance(exc, backend_error) and phase in {'export-workspace', 'export-artifacts'}:
+                # Only a synchronous library export rejection is a known
+                # preservation failure. Publication/validation OSErrors remain
+                # unknown under the original removal boundary.
+                receipt = {**cleanup_failure(payload, 'preserving', identity, getattr(exc, 'code', None)),
+                           'removal': diagnostic}
+            elif recovering and cleanup == 'rechecking':
+                receipt = {**cleanup_failure(payload, cleanup, identity), 'removal': diagnostic}
+        if started:
+            try:
+                write_private_record(destination / 'removal-failed.json', {
+                    **diagnostic, 'binding': original,
+                    'startedSha256': retention.digest(destination / 'removal-started.json')[0]})
+            except Exception:
+                pass  # Diagnostic persistence cannot change the known external outcome.
+        if isinstance(exc, backend_error) or (recovering and cleanup == 'rechecking'):
+            return receipt
+        raise RemovalFailure(receipt) from None
+
+
+def inspect_removal(payload):
+    """Inspect exact retained bytes only. No continuation is admitted here.
+
+    Private records and hashes establish consistency, not cryptographic origin,
+    executor quiescence or the current physical backend state.
+    """
+    held = {'version': 1, 'status': 'held', 'continuationAvailable': False,
+            'code': 'removal_evidence_unverified'}
+    try:
+        directory = removal_directory(payload)
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077):
+            return held
+        expected = removal_binding(payload, payload['universeId'], payload['expectedBackendIdentity'])
+        started = read_private_record(directory / 'removal-started.json')
+        intent = read_private_record(directory / 'destroy-dispatched.json')
+        if (started != {'version': 1, 'phase': 'started', 'binding': expected}
+                or not isinstance(intent, dict)
+                or intent.get('version') != 1 or intent.get('phase') != 'destroy-dispatched'
+                or intent.get('binding') != expected
+                or intent.get('startedSha256') != retention.digest(directory / 'removal-started.json')[0]):
+            return held
+        for name in ('manifest', 'retention'):
+            if intent.get(name + 'Sha256') != retention.digest(directory / (name + '.json'))[0]:
+                return held
+        archives = read_private_record(directory / 'manifest.json')
+        if (not isinstance(archives, list) or len(archives) != 2
+                or any(not isinstance(a, dict) for a in archives)
+                or [a.get('source') for a in archives] != ['/workspace', '/artifacts']):
+            return held
+        for a, name in zip(archives, ('workspace.tar', 'artifacts.tar')):
+            # Never follow a receipt's arbitrary path, foreign guest or source.
+            if (a.get('destination') != str(directory / name) or a.get('id') != expected['universeId']
+                    or a.get('verified') is not True):
+                return held
+        if intent.get('archives') != [{k: a[k] for k in ('source', 'sha256', 'bytes')} for a in archives]:
+            return held
+        accounting = read_private_record(directory / 'retention.json')
+        mode = accounting.get('policy') if isinstance(accounting, dict) else None
+        if mode not in {'files', 'archive-only'}:
+            return held
+        checked = retention.verify_retention(Path(payload['root']), archives, mode, publish=False)
+        if checked != accounting:
+            return held
+        confirmed = read_private_record(directory / 'destroy-confirmed.json')
+        if confirmed is None:
+            return {**held, 'code': 'destroy_outcome_unknown'}
+        if confirmed != {'version': 1, 'phase': 'destroy-confirmed', 'binding': expected,
+                         'intentSha256': retention.digest(directory / 'destroy-dispatched.json')[0]}:
+            return held
+        return {**held, 'code': 'destroy_confirmation_recorded'}
+    except (OSError, ValueError, TypeError, KeyError, retention.tarfile.TarError):
+        return held
+
+
+def cleanup_phase(payload, phase):
+    """Immutable phase evidence distinguishes preservation from destructive work."""
+    root = Path(payload['root']) / ('cleanup-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
+    root.mkdir(mode=0o700, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError('The cleanup evidence directory is unsafe.')
+    write_private_record(root / (phase + '.json'), {
+        'requestId': payload['requestId'], 'operationId': payload['operationId'],
+        'rootOwner': payload['rootOwner'], 'phase': phase})
+
+
+def cleanup_failure(payload, phase, identity, code='preservation_failed'):
+    if not isinstance(code, str) or code not in {
+            'preservation_failed', 'retention_storage', 'archive_verification_failed',
+            'owner_unverified', 'owner_changed', 'ownership_conflict', 'backend_changed'}:
+        code = 'preservation_failed'
+    before_removal = phase in {'preserving', 'verifying', 'rechecking'}
+    changed_owner = phase == 'rechecking' or code in {'owner_unverified', 'owner_changed', 'ownership_conflict', 'backend_changed'}
+    if phase == 'rechecking' and code == 'preservation_failed':
+        code = 'owner_unverified'
+    if phase == 'verifying' and code == 'preservation_failed':
+        code = 'archive_verification_failed'
+    return {'ok': False, 'status': 'stopped' if before_removal and not changed_owner else 'unknown',
+            'universeId': identity, 'code': code, 'phase': phase,
+            'effectAdmitted': not before_removal,
+            'message': ('The environment owner or backend could not be verified. No removal was attempted; inspect the exact environment before continuing cleanup.'
+                        if before_removal and changed_owner else
+                        'Files could not be completely preserved. The stopped environment is unchanged; no removal was attempted.'
+                        if before_removal else 'Files were preserved, but removal is not confirmed. Inspect the exact environment before continuing cleanup.')}
 
 
 def profile(image, payload=None):
+    selected = selected_profile(payload or {})
     value = {
         'name': 'unified-test',
         'services': {'twin': {
             'image': image, 'command': ['sleep', 'infinity'],
             'read_only': True, 'cap_drop': ['ALL'],
+            'cap_add': ['CHOWN', 'SETUID', 'SETGID', 'KILL'],
             'security_opt': ['no-new-privileges:true'],
-            'pids_limit': 128, 'mem_limit': '1g', 'cpus': 2,
+            'pids_limit': selected['pids'], 'mem_limit': str(selected['memoryMiB'])+'m', 'cpus': selected['cpus'],
+            'shm_size': str(selected['shmMiB'])+'m',
             'healthcheck': {'test': ['CMD', 'true'], 'interval': '2s'},
-            'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
-            'volumes': ['workspace:/workspace', 'artifacts:/artifacts'],
+            'tmpfs': ['/tmp:rw,noexec,nosuid,size='+str(selected['tmpMiB']*1024**2)],
+            'volumes': ['workspace:/workspace', 'artifacts:/artifacts', 'control:/var/lib/unified-jobs'],
             'networks': ['default'], 'working_dir': '/workspace',
             # Root only inside this container, with no capabilities or host mounts.
             # Docker copy initializes the fresh owned volumes before commands run.
             'user': '0:0',
         }},
-        'volumes': {'workspace': {}, 'artifacts': {}},
+        'volumes': {'workspace': {}, 'artifacts': {}, 'control': {}},
         'networks': {'default': {'internal': True}},
         'x-dtu': {'twin_machine': 'twin'},
     }
@@ -400,7 +661,8 @@ def execute_call(payload):
             # Source snapshot is immutable and retained even when launch fails.
             snapshot = serialize(lib.export_repository_snapshot(Path(payload['source']), root / 'source.tar'))
             (root / 'snapshot.json').write_text(json.dumps(snapshot))
-            return {'ok': True, 'universeId': identity, 'snapshot': snapshot, 'backendIdentity': backend}
+            return {'ok': True, 'universeId': identity, 'snapshot': snapshot, 'backendIdentity': backend,
+                    'hostTarget': host_resources.local_target(payload.get('dockerHost'), {'dockerd'})}
         if action == 'start':
             source_identity(identity, snapshot)
             compose = root / 'compose.json'
@@ -427,6 +689,11 @@ def execute_call(payload):
             if unpack.exit_code != 0:
                 return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
                         'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
+            initialized = lib.execute(identity, jobs.initialize_command(selected_profile(payload)['preparationRequired']),
+                workdir='/', timeout_seconds=120, max_output_bytes=32768, config=config)
+            if initialized.exit_code != 0:
+                return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
+                        'message': 'The owned source and dependency initialization did not complete. It was not repeated.'}
             retain_source_ready(root, identity, snapshot)
             return {'ok': True, 'universeId': identity, 'sourceReady': True,
                     'status': universe.state, 'services': [serialize(item) for item in universe.services]}
@@ -434,8 +701,16 @@ def execute_call(payload):
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
             identity = lib.launch_id(payload['operationId'], config=config)
-        if action in {'read', 'execute', 'stop', 'remove'}:
+        if action in {'read', 'execute', 'stop', 'remove', 'finishCleanup', 'exportArtifacts'} | jobs.JOB_ACTIONS:
             docker_owner(payload, identity, backend, binding_source)
+        if action in jobs.JOB_ACTIONS:
+            if not source_ready(root, identity, snapshot):
+                return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
+                        'message': 'The exact source preparation is not confirmed; no job was started.'}
+            payload = {**payload, 'universeId': identity, 'jobEnvironment': selected_profile(payload)['environment']}
+            result = lib.execute(identity, jobs.command(payload), workdir='/', timeout_seconds=15,
+                max_output_bytes=262144, config=config)
+            return jobs.result(payload, serialize(result))
         if action == 'read':
             universe = lib.status(identity, config=config)
             ready = source_ready(root, identity, snapshot)
@@ -447,7 +722,8 @@ def execute_call(payload):
             if not source_ready(root, identity, snapshot):
                 return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                         'message': 'Source preparation is not confirmed for this exact snapshot. No check was started and source was not installed again.'}
-            result = lib.execute(identity, payload['command'], workdir='/workspace',
+            command = jobs.command({**payload, 'jobEnvironment': selected_profile(payload)['environment']})
+            result = lib.execute(identity, command, workdir='/workspace',
                 timeout_seconds=payload['timeoutSeconds'], max_output_bytes=32768, config=config)
             return {'ok': True, 'universeId': identity, 'result': serialize(result)}
         if action == 'stop':
@@ -457,41 +733,58 @@ def execute_call(payload):
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'stopped' if result.complete else 'unknown', 'result': serialize(result),
                     'message': 'Containers stopped; source and artifacts are retained.' if result.complete else 'Stop was requested but not confirmed. Inspect current state.'}
-        if action == 'remove':
-            if payload.get('retentionMode', 'files') != 'files':
+        if action in {'remove', 'finishCleanup'}:
+            recovering = action == 'finishCleanup'
+            if not recovering and payload.get('retentionMode', 'files') != 'files':
                 return {'ok': False, 'status': 'unknown', 'universeId': identity, 'code': 'retention_unsupported',
                         'message': 'Full environment retention is unavailable for this backend. The stopped environment was preserved.'}
+            return remove_owned(payload, identity, backend, config, lib, DigitalTwinUniverseError, binding_source)
+        if action == 'exportArtifacts':
             universe = lib.status(identity, config=config)
             if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
-                return {'ok': False, 'universeId': identity, 'status': 'unknown', 'message': 'Removal requires observed stopped containers. No data was removed.'}
-            destination = root / ('retained-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
+                return {'ok': False, 'effectAdmitted': False, 'universeId': identity, 'status': 'unknown',
+                        'message': 'Artifact recovery requires observed stopped containers. Nothing was exported.'}
+            destination = root / ('artifacts-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
             destination.mkdir(mode=0o700)
-            archives = [serialize(lib.export_files(identity, source, destination / name, config=config))
-                        for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]]
-            retained = retention.verify_retention(root, archives)
+            # The qualified library bounds the producer's export. Verification
+            # additionally checks complete tar structure, links and selected size.
+            archives = [serialize(lib.export_files(identity, '/artifacts', destination / 'artifacts.tar', config=config))]
+            retained = retention.verify_artifacts(archives)
             retain_manifest(destination, archives)
-            result = lib.destroy(identity, config=config)
-            if result.complete:
-                release_admission(payload, identity)
-                retain_settlement(payload, identity, backend, 'removed')
-            return {'ok': result.complete, 'universeId': identity,
-                    'status': 'removed' if result.complete else 'unknown', 'result': serialize(result),
-                    'archives': archives, 'retention': retained, 'message': 'Source and artifacts were retained before removal.' if result.complete else 'Artifacts were retained; teardown is not confirmed.'}
+            return {'ok': True, 'universeId': identity, 'status': 'stopped', 'archives': archives,
+                    'artifactExport': retained, 'message': 'Artifacts retained. The stopped environment and workspace are unchanged; removal is not authorized.'}
         raise ValueError('Unsupported managed test environment action.')
+    except RemovalFailure:
+        raise  # Preserve the inner bounded receipt, including confirmed destruction.
     except DigitalTwinUniverseError as exc:
+        if action in {'remove', 'finishCleanup'}:
+            return {'ok': False, 'status': 'unknown', 'code': 'backend_unconfirmed',
+                    'message': 'The original removal could not be confirmed. Inspect retained evidence; do not replay.'}
         return {'ok': False, 'status': 'unknown', 'universeId': identity or exc.universe_id,
                 'snapshot': snapshot, 'code': exc.code,
                 'message': 'The backend did not confirm this operation. A command may still be running; inspect the retained environment without replaying the request.'}
 
 
 def main():
+    value = None
     try:
         payload = json.loads(sys.stdin.buffer.read(65537))
         value = execute_call(payload)
+    except RemovalFailure as exc:
+        value = exc.receipt
     except Exception:  # noqa: BLE001 - subprocess boundary returns uncertainty, never raw private diagnostics.
         value = {'ok': False, 'status': 'unknown',
                  'message': 'The managed backend failed before returning a confirmed result. Inspect retained state; this request will not replay.'}
-    sys.stdout.write(json.dumps(value))
+    try:
+        encoded = json.dumps(value)
+    except Exception:
+        # No raw error or broken diagnostic object in the fallback. Preserve
+        # confirmed destruction as distinct from unconfirmed metadata/transport.
+        effect = value.get('removal', {}).get('destroyEffect') if isinstance(value, dict) else None
+        effect = effect if effect in {'not_dispatched', 'unknown', 'confirmed'} else 'unknown'
+        encoded = ('{"ok":false,"status":"unknown","code":"receipt_unavailable",'
+                   '"destroyEffect":"' + effect + '","message":"Inspect retained evidence; do not replay."}')
+    sys.stdout.write(encoded)
 
 
 if __name__ == '__main__':

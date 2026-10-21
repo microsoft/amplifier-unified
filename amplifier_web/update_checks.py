@@ -18,6 +18,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlsplit
 
+GIT_CHECK_CONCURRENCY = 5
+
 _scope = ContextVar("update_check_scope", default=None)
 
 
@@ -55,13 +57,42 @@ def identity(url):
     ).geturl()
 
 
+def git_access_scope(scope, environment):
+    effective = os.environ if environment is None else environment
+    access = {
+        name: value
+        for name, value in effective.items()
+        if name
+        in {
+            "HOME",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_SSH_COMMAND",
+            "GIT_SSH",
+            "SSH_AUTH_SOCK",
+            "SSH_ASKPASS",
+            "GIT_ASKPASS",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_HOST",
+            "GH_CONFIG_DIR",
+        }
+        or name.startswith("GIT_CONFIG_")
+    }
+    scope = hashlib.sha256(
+        json.dumps([scope, access], sort_keys=True).encode()
+    ).hexdigest()
+    return scope
+
+
 class CheckCache:
     def __init__(self, directory, *, clock=time.time):
         self.path = Path(directory) / "check-cache.json"
         self.clock = clock
         self.tasks = {}
         self.entries = {}
-        self.semaphore = asyncio.Semaphore(5)
+        self.semaphore = asyncio.Semaphore(GIT_CHECK_CONCURRENCY)
         self.client = None
         self.pending_refs = {}
         self.ref_batches = set()
@@ -142,31 +173,7 @@ class CheckCache:
         return await asyncio.shield(task)
 
     async def git(self, url, ref, runner, environment, *, fresh, ttl, scope):
-        effective = os.environ if environment is None else environment
-        access = {
-            name: value
-            for name, value in effective.items()
-            if name
-            in {
-                "HOME",
-                "GIT_CONFIG_GLOBAL",
-                "GIT_CONFIG_SYSTEM",
-                "GIT_CONFIG_NOSYSTEM",
-                "GIT_SSH_COMMAND",
-                "GIT_SSH",
-                "SSH_AUTH_SOCK",
-                "SSH_ASKPASS",
-                "GIT_ASKPASS",
-                "GH_TOKEN",
-                "GITHUB_TOKEN",
-                "GH_HOST",
-                "GH_CONFIG_DIR",
-            }
-            or name.startswith("GIT_CONFIG_")
-        }
-        scope = hashlib.sha256(
-            json.dumps([scope, access], sort_keys=True).encode()
-        ).hexdigest()
+        scope = git_access_scope(scope, environment)
         ref = ref.removeprefix("refs/heads/")
         pattern = (
             ref if ref == "HEAD" or ref.startswith("refs/") else "refs/heads/" + ref
@@ -188,6 +195,14 @@ class CheckCache:
         return await self.get(
             ["git", identity(url), ref], load, fresh=fresh, ttl=ttl, scope=scope
         )
+
+    async def git_policy(self, url, ref, runner, environment, *, fresh, ttl, scope):
+        async def load():
+            async with self.semaphore:
+                return await read_ref_policy(url, ref, runner, environment)
+        return await self.get(
+            ['git-ref-policy-v1', identity(url), ref], load, fresh=fresh, ttl=ttl,
+            scope=git_access_scope(scope, environment))
 
     async def _git_batch(self, key, url, runner, environment):
         await asyncio.sleep(0)  # Gather sibling refs into one ls-remote request.
@@ -300,3 +315,45 @@ async def index_latest(name, loader):
             raise ValueError("Component release could not be checked") from error
 
     return await cached(["registry", name], load)
+
+
+async def read_ref_policy(url, ref, runner, environment=None):
+    """Observe branch and same-name tag in one response, without guessing kind."""
+    explicit_tag = ref.startswith('refs/tags/')
+    if ref == 'HEAD' or ref.startswith('refs/heads/') or explicit_tag:
+        # Fully qualified refs carry their authored kind. A same-name ref in
+        # another namespace cannot change what Git resolves this name to.
+        patterns = [ref]
+    elif ref.startswith('refs/'):
+        return {'kind': 'unresolved'}
+    else:
+        patterns = ['refs/heads/' + ref, 'refs/tags/' + ref]
+    output = await runner('git', 'ls-remote', url, *patterns, env=environment, timeout=35)
+    found = {}
+    for line in output.splitlines():
+        pair = line.split()
+        if len(pair) == 2 and pair[1] in patterns and re.fullmatch('[a-f0-9]{40}', pair[0]):
+            if pair[1] in found and found[pair[1]] != pair[0]:
+                return {'kind': 'unresolved'}
+            found[pair[1]] = pair[0]
+    if explicit_tag:
+        return {'kind': 'tag', 'revision': found[ref]} if ref in found else {'kind': 'unresolved'}
+    branch = found.get(patterns[0])
+    tag = found.get(patterns[1]) if len(patterns) > 1 else None
+    if tag:
+        return {'kind': 'ambiguous' if branch else 'tag', 'revision': tag}
+    return {'kind': 'branch', 'revision': branch} if branch else {'kind': 'unresolved'}
+
+
+async def ref_policy(url, ref, runner, environment=None):
+    scope = _scope.get()
+    if scope is None:
+        return await read_ref_policy(url, ref, runner, environment)
+    cache, fresh, ttl, access, _ = scope
+    return await cache.git_policy(url, ref, runner, environment, fresh=fresh, ttl=ttl, scope=access)
+
+
+async def moving_revision(url, ref, runner, environment=None):
+    """Shared conservative URI-ref proof for source reconciliation callers."""
+    proof = await ref_policy(url, ref, runner, environment)
+    return proof.get('revision') if proof['kind'] == 'branch' else None

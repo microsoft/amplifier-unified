@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 // Uses the real chat UI and isolated runtime. No model or existing user data.
 // Vite serves source directly, so this regression does not rebuild static assets.
@@ -58,7 +59,7 @@ try{
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  const requests=[];page.on('request',request=>requests.push(new URL(request.url()).pathname));
- await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
  const pane=page.locator('.a-messages'),input=page.getByRole('textbox',{name:'Message Amplifier'});
  // Work notices can change the content above a message during streaming.
  // Capture one settled frame and preserve the reader's message/offset; raw

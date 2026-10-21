@@ -1,8 +1,9 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {ChevronRight,ArrowLeft,HardDrive,Folder,MessagesSquare,Archive,Database,Settings} from 'lucide-react';
 import {ChatDelete} from './chat-delete';
+import {StorageCleanupSettings} from './storage-cleanup-settings';
 import './storage-settings.css';
-const bytes=value=>value<1024?`${value} B`:value<1048576?`${(value/1024).toFixed(1)} KB`:value<1073741824?`${(value/1048576).toFixed(1)} MB`:`${(value/1073741824).toFixed(2)} GB`;
+import {formatStorageBytes as bytes} from './storage-bytes';
 function WorkspaceCleanupResult({result}){return <p role="status">{result.status==='completed'?`Workspace files deleted (${bytes(result.deletedBytes)} of file content). Chat history was retained.`:result.message||'Cleanup was interrupted; inspect the recorded folder before proceeding.'}{result.status!=='completed'&&<code style={{display:'block',overflowWrap:'anywhere'}}>{result.cleanupPath}</code>}</p>}
 export function WorkspaceCleanup({id,act,onDone}){
  const [review,setReview]=useState(null),[path,setPath]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState(null);
@@ -23,7 +24,7 @@ const categories={
  sessions:{icon:MessagesSquare,color:'#8662c5',title:'Review chats you no longer need',help:'Delete an app-managed chat and its owned files together. Review exactly what will be removed before confirming. You can also remove a project’s saved sessions or an individual session from shared CLI history. Project working files and CLI configuration are kept.'},
  runtime:{icon:HardDrive,color:'#b98131',title:'Keep your working installation',help:'These files run Amplifier. Runtime versions may still be used by workers or recovery, so they cannot be deleted from this screen.'},
  backups:{icon:Archive,color:'#b15b82',title:'Review older backups',help:'Remove an older private backup after reviewing it. Your newest backup is kept. Reset recovery copies stay protected.'},
- cache:{icon:Database,color:'#478879',title:'Inspect caches and logs',help:'Some caches and logs are in use by running components. Automatic cleanup is not available here yet; inspect their sizes below.'},
+ cache:{icon:Database,color:'#478879',title:'Inspect caches and logs',help:'Some caches and logs are in use by running components. Automatic cleanup covers only proven unused component and test runner copies. Inspect other sizes below.'},
  other:{icon:Settings,color:'#77808d',title:'Keep your settings and records',help:'Configuration, credentials and application records are protected. Use the other categories to review files you can remove.'}
 };
 const size=row=>row.pending?(row.bytes?`${bytes(row.bytes)} so far`:'Measuring…'):row.bytes==null?'Not measured':`${row.incomplete?'At least ':''}${bytes(row.bytes)}`;
@@ -39,7 +40,7 @@ function BackupCleanup({id,act,close,onDone}){
  {result?<p role="status">{result.status==='completed'?`Backup removed (${bytes(result.deletedBytes)}).`:result.message}{result.cleanupPath&&result.status!=='completed'&&<code>{result.cleanupPath}</code>}</p>:review?<><p>{review.description}</p><p>{bytes(review.inventory.fileBytes)} in {review.inventory.fileCount} files.</p><code>{review.path}</code><p><strong>This cannot be undone.</strong></p><button className="a-soft a-danger" disabled={busy} onClick={()=>run(true)}>Permanently delete backup</button></>:<button className="a-soft" disabled={busy} onClick={()=>run()}>Review backup contents</button>}
  <button className="a-soft" disabled={busy} onClick={close}>{result?'Close':'Keep backup'}</button></section>;
 }
-export function StorageSettings({act,onPrivacy}){
+export function StorageSettings({act,onPrivacy,navigate}){
  const [args,setArgs]=useState({}),[trail,setTrail]=useState([]),[data,setData]=useState(null),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[filter,setFilter]=useState(''),[count,setCount]=useState(5),[sort,setSort]=useState('size'),[cleanupOnly,setCleanupOnly]=useState(false),[review,setReview]=useState(null),[notice,setNotice]=useState(''),[workspaceResult,setWorkspaceResult]=useState(null);
  const key=JSON.stringify(args),action=useRef(act),heading=useRef(null),shown=useRef(key),reviewPanel=useRef(null),cache=useRef(new Map()),epoch=useRef(0),requested=useRef(null),snapshot=useRef(null);action.current=act;
  useEffect(()=>{if(data&&shown.current!==key){shown.current=key;heading.current?.scrollIntoView({block:'start'})}},[data,key]);
@@ -78,6 +79,7 @@ export function StorageSettings({act,onPrivacy}){
  return <section className="a-storage" aria-label="Storage usage">
  {notice&&<p role="status">{notice}</p>}
  {workspaceResult&&<WorkspaceCleanupResult result={workspaceResult}/>}
+ {overview&&<StorageCleanupSettings act={act} navigate={navigate}/>}
  <nav className="a-storage-breadcrumbs" aria-label="Storage navigation">{onPrivacy&&<><button className="a-link" onClick={onPrivacy}>Privacy &amp; files</button><ChevronRight size={14}/></>}{trail.map((entry,index)=><React.Fragment key={index}><button className="a-link" onClick={()=>jump(index)}>{index===0?'Storage':entry.label}</button><ChevronRight size={14}/></React.Fragment>)}<span aria-current="page">{overview?'Storage':data?.label||'Loading…'}</span></nav>
  <div className="a-storage-heading" ref={heading}><div><h3>{overview?'Storage on this host':data?.label||category?.title||'Storage'}</h3></div><button className="a-soft" disabled={!data&&!error} onClick={invalidate}>Refresh storage</button></div>
  {error&&<p role="alert">{error}</p>}{!data&&!error?<p role="status">Opening storage…</p>:data&&<>
@@ -98,6 +100,6 @@ export function StorageSettings({act,onPrivacy}){
  {!rows.length&&!data.scanning&&<p>{cleanupOnly?'No items available for cleanup in this category.':'No items to show.'}</p>}{filtered.length>count&&<button className="a-soft" onClick={()=>setCount(n=>n+10)}>Show more ({filtered.length-count} remaining)</button>}
  </>}
  {data.incomplete&&!data.scanning&&<p className="a-caption">Some locations could not be fully measured. Totals are lower bounds; unreadable files, links and scan limits can leave data uncounted.</p>}
- <p className="a-caption">Archiving hides work; it does not free storage. Deletion always starts with a review.</p>
+ <p className="a-caption">Archiving hides work; it does not free storage. Deleting your work always starts with a review. Automatic cleanup uses your saved policy for proven unused code copies only.</p>
  </>}</section>;
 }

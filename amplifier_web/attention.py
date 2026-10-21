@@ -142,7 +142,9 @@ def snapshot(state):
     for dest in state.get('diagnostics',{}).get('destinations',[]):
         if dest.get('error'):add('diagnostics:'+dest['id'],'Context Intelligence delivery needs attention','maintenance','diagnostics',dest['error'].get('type','Delivery failed'))
     local=state.get('diagnostics',{}).get('local',{})
-    if local.get('storageError') or local.get('configurationError') or local.get('dropped') or local.get('outboxDropped') or local.get('expiredPending'):add('diagnostics:capture','Some diagnostic records could not be retained','maintenance','diagnostics',version=local)
+    health = {key: local.get(key, False if key.endswith('Error') else 0) for key in
+              ('storageError', 'configurationError', 'dropped', 'outboxDropped', 'expiredPending')}
+    if any(health.values()):add('diagnostics:capture','Some diagnostic records could not be retained','maintenance','diagnostics',version=health)
     if state.get('notificationError'):add('notifications:error','Notification delivery failed','maintenance','notifications',state['notificationError'])
     for session in state.get('sessions', []):
         for position in range(session_item_count(session)):

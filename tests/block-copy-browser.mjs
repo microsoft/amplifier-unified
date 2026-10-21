@@ -3,11 +3,17 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
+import {mkdir,mkdtemp} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
 import {readComposerDraft} from '../frontend/tests/composer-test-helpers.mjs';
 const require=createRequire(new URL('../frontend/package.json',import.meta.url));
 const {chromium,expect}=require('@playwright/test');
 const root=fileURLToPath(new URL('../',import.meta.url));
+const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||await mkdtemp(join(tmpdir(),'unified-block-copy-'));
+await mkdir(artifacts,{recursive:true});
+const tracePath=join(artifacts,'unified-block-copy-trace.zip');
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--canvas-versions'],{stdio:['ignore','pipe','inherit']});
 let browser,context;
 async function bounded(promise,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`${label} did not settle within 30 seconds`)),30000)})])}finally{clearTimeout(timer)}}
@@ -40,18 +46,20 @@ try{
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const clipboard=()=>bounded(page.evaluate(()=>navigator.clipboard.readText()),'Read clipboard');
  const canvas=page.locator('.a-canvas-viewer');
- async function ready(){
+ async function ready({home=false}={}){
   // Current startup is stream-first. Do not send actions against an empty baseline.
   await page.waitForFunction(()=>window.blockCopyBaselineReceived&&Array.isArray(window.amplifier?.getState()?.sessions));
-  await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+  if(home)await expect(page.locator('.a-adaptive-home')).toBeVisible();
+  else await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  }
  async function copy(button,expected){
   await button.focus();await page.keyboard.press('Enter');
   await expect.poll(clipboard).toBe(expected);
   await expect(button.locator('..').getByRole('status')).toHaveText('Copied.');
  }
- await page.goto(url);await ready();
+ await page.goto(url);await ready({home:true});
  await action('session.create');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const raw='\t  α😀\r\n\r\n  tail\t\r\n\r\n';
  const nested='1.\tOuter\r\n\r\n\t- Inner\r\n\r\n\t  ```txt\r\n\t  \tα😀\r\n\t  \r\n\t    tail\t\r\n\t  \r\n\t  ```\r\n';
  const table='| Left | Right |\r\n| :--- | ---: |\r\n| a\\|b | **α😀** |\r\n';
@@ -246,4 +254,4 @@ try{
  console.log(JSON.stringify({pageErrors:errors,frameExceptions:exceptions}));
  assert.deepEqual(errors,[]);
  console.log('PASS block-copy browser: SSE-first baseline, exact source clipboard, assistant/Canvas list/quote/table blocks, diagrams, code/text/JSON, saved-source readiness/failure, reference spans, reload, permission denial, unsupported API, pending/version race, keyboard/touch, writing/message regression.');
-}finally{try{await context?.tracing.stop({path:'/tmp/unified-block-copy-trace.zip'})}finally{await browser?.close();fixture.kill()}}
+}finally{try{await context?.tracing.stop({path:tracePath});if(context)console.log(JSON.stringify({tracePath}))}finally{await browser?.close();fixture.kill()}}

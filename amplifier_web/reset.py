@@ -610,9 +610,13 @@ def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
     elif start_error or not results['service status']['ok']:
         raise RuntimeError("Unified was reinstalled, but could not be confirmed ready. Run amplifier-unified service status for guidance. Your data and recovery backup are preserved.")
     else:
-        print("\nUnified is ready.")
+        print("\nUnified is ready on this computer.")
         if results['service status'].get('url'):
-            print("Open: " + results['service status']['url'])
+            print("Host listener: " + results['service status']['url'])
+        for url in results['service status'].get('publicUrls', []):
+            print("Configured public address (not checked): " + url)
+        if results['service status'].get('publicUrls'):
+            print("Check DNS, network access and certificate trust on the device you will use.")
     print("Your chats, settings, sign-ins, and files are preserved.")
     print("The first message may take longer while components finish preparing.")
     return backup

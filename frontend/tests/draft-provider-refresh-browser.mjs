@@ -13,7 +13,7 @@ try{
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const preference=async model=>assert.equal((await page.request.post(url+'/fixture/provider-preference',{data:{model}})).status(),200);
- await page.goto(url);
+ await page.goto(url);await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();
  const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true});
  await expect(model).toContainText('first');
  await preference('chosen-model');

@@ -4,7 +4,11 @@ import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-import {writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||await mkdtemp(join(tmpdir(),'amplifier-bootstrap-recovery-'));
+await mkdir(artifacts,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
 let fixtureLog='';fixture.stderr.on('data',chunk=>fixtureLog+=chunk);
 const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+fixtureLog)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+fixtureLog))})});
@@ -49,5 +53,5 @@ try{
  await retry.goto(base);await retry.getByRole('button',{name:'Retry connection',exact:true}).waitFor({timeout:13000});await retry.getByRole('button',{name:'Retry connection',exact:true}).click();await retry.getByRole('button',{name:'Settings',exact:true}).waitFor();await retry.close();
  const retained=await control({op:'inspect'});assert.equal(retained.retainedMessages,1069);assert.equal(retained.retainedSessions,2);assert.equal(retained.runtimeSends,0);assert.equal(retained.runtimeStarts,0);assert.deepEqual(errors,[]);
  const result={sessions:2,messages:1069,canonicalBytes:seeded.canonicalBytes,browserBytes:Buffer.byteLength(compact),initialMessages:initialIds.length,loadedMessages:messageIds.length,shellMs,maintenanceDuringSlowDetail:true,recoveredDetailFailure:true,stateStreamFallback:true,startupRetry:true,historyRetained:true};
- await writeFile('/tmp/amplifier-bootstrap-recovery-results.json',JSON.stringify(result,null,2));console.log(result);
+ await writeFile(join(artifacts,'amplifier-bootstrap-recovery-results.json'),JSON.stringify(result,null,2));console.log({...result,artifacts});
 }finally{await browser?.close();fixture.kill()}

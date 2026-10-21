@@ -22,7 +22,7 @@ const scope={mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section
 const page={items:[{id:'b-chat',title:'Research ideas',workspace:'/research',workspaceId:'b'}],scope,total:1,pages:1,index:0,start:0,end:1};
 const snapshot={navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts','workspaceExplorer','sidebarSearch','sidebarRecent','sidebarPinned'],view:{},selectedSessionId:'a',selectedWorkspaceId:'b',workspaces:[workspace],library:{bounded:true,workspaceCount:1},workspaceShortcuts:[row],recentShortcuts:page.items,recentNavigation:{...page,remaining:0,limit:20,scope:{...scope,section:'shortcuts',showAgentCreated:false,limit:20,viewRevision:0}},workspaceExplorer:{rows:[row],mode:'recent'},sidebarNavigation:{pinned:{items:[],total:0,pages:1},recent:page,search:{...page,scope:{...scope,section:'search'}},recentView:{}},sharedHistory:{}};
 const host={instanceId:'chats',getSnapshot:()=>snapshot,subscribe:()=>()=>{},dispatch:async()=>({accepted:true})};
-const navigation={browse(){},create(){},newChat(){}};
+const navigation={browse(){},create(){},newChat(){},sidebarView:{},updateSidebar(){}};
 const render=child=>React.createElement(WorkNavigationContext.Provider,{value:navigation},child);
 for(const surface of ['chat','chats'])test(`managed delete obtains one confirmation token on the ${surface} surface`,async()=>{
  const calls=[],current={...snapshot,view:{workSurface:surface,workspaceDraft:{mode:'chat-delete',id:'managed',name:'Reviewed chat'}}};
@@ -44,7 +44,7 @@ for(const surface of ['chat','chats'])test(`managed delete obtains one confirmat
 });
 test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host})));
- assert.match(html,/Search chats/);assert.match(html,/All workspaces/);
+ assert.match(html,/All workspaces/);
  assert.doesNotMatch(html,/All chats|Review chats|View all chats|of 1 recent chats|a-recent-controls/);
  assert.doesNotMatch(html,/Filter conversations|Filter workspaces|Browse folders/);
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
@@ -245,10 +245,10 @@ test('collapsed sidebar toggle lives in the header without duplicate chat contro
  assert.doesNotMatch(draft,/Research/);
 });
 test('browsing headers have no return control with or without a retained chat',()=>{
- for(const surface of ['workspace','workspaces','chats'])for(const narrow of [false,true])for(const session of [undefined,{id:'a',title:'Retained chat',status:'working'}]){
+ for(const surface of ['home','workspace','workspaces','chats'])for(const narrow of [false,true])for(const session of [undefined,{id:'a',title:'Retained chat',status:'working'}]){
   const state={view:{workSurface:surface,workWorkspaceId:'b'},workspaces:[workspace]};
   const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state,session,narrow,presentation:{},act:host.dispatch})));
-  assert.doesNotMatch(html,/Back to chat|>Back<|Retained chat/);
+  assert.doesNotMatch(html,/Back to chat|>Back<|Retained chat|Resume|Return to draft|Go to Home/);
   assert.match(html,/Open navigation/);
  }
 });
@@ -406,10 +406,11 @@ test('call work stays stoppable in chat and targets the call even after navigati
  assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
  await act(async()=>root.unmount());
 });
-test('quiet navigation keeps discovery status, failures and refresh access',()=>{
+test('quiet navigation retains rows without refresh text and keeps failures and refresh access',()=>{
  const state={...snapshot,sharedHistory:{loading:true,issueCount:2,error:'History unavailable'}};
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state}})));
- assert.match(html,/Finding existing chats/);assert.doesNotMatch(html,/Some saved folders or chats need attention/);
+ assert.doesNotMatch(html,/Finding existing chats|Some saved folders or chats need attention/);
+ assert.match(html,/Research ideas/);
  assert.match(html,/History unavailable/);assert.match(html,/Refresh workspaces and chats/);
 });
 

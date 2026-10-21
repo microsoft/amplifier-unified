@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 import inspect
 import json
 import os
@@ -11,7 +12,8 @@ from pathlib import Path
 import stat
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private
-from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, installed_package_source
+from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
+from .components import declarations, git_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -252,6 +254,10 @@ def _apply_settings(bundle, config):
     settings = config.settings
     # Generic list merging replaces config arrays. Keep the bundle's explicit
     # filesystem denials across that merge so host policy can enforce them.
+    search_declarations = {
+        row.get("id") or row.get("instance_id") or row["module"]: copy.deepcopy(row.get("config", {}))
+        for row in bundle.tools if row.get("module") == "tool-search"
+    }
     filesystem_denials = {
         row.get("id") or row.get("instance_id") or row["module"]:
             {key: copy.deepcopy(row.get('config', {})[key]) for key in ('denied_write_paths', 'denied_read_paths') if key in row.get('config', {})}
@@ -294,6 +300,9 @@ def _apply_settings(bundle, config):
                 continue
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
             identity = row.get("id") or row.get("instance_id") or row.get("module")
+            if kind == "tools" and row.get("module") == "tool-search":
+                from ..read_policy import restore_search_declaration
+                restore_search_declaration(row.setdefault("config", {}), search_declarations.get(identity, {}))
             if kind == 'tools' and row.get('module') == 'tool-filesystem':
                 original = filesystem_allowlists.get(identity, {})
                 for key in ('allowed_write_paths', 'allowed_read_paths'):
@@ -354,6 +363,8 @@ def _expand_module_configuration(node, in_provider=False):
 
 def _apply_host_policy(bundle, config, *, execution_workspace=None):
     """Host write boundaries cover file, patch and image tools, including snapshots."""
+    from ..access_mode import restore_file_policy, full_file_policy
+    restore_file_policy(bundle)
     settings = config.settings
     # A managed checkout can differ from the immutable history/config workspace.
     # Repository paths follow execution; unrelated explicitly allowed paths stay.
@@ -394,7 +405,8 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
         values = merge(values, overrides.get("tool-filesystem", {}).get("config", {}))
         if identity != "tool-filesystem":
             values = merge(values, overrides.get(identity, {}).get("config", {}))
-        policy = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        policy = expand_environment({key: value for key, value in values.items() if key in policy_keys
+                                     and not (key == "allowed_read_paths" and value is None)})
         # Match the CLI's _ensure_cwd_in_write_paths policy. Shared allowed
         # directories extend project access; they must not replace it. Use an
         # absolute session workspace, never the server process's directory.
@@ -403,7 +415,10 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
         policies[identity] = policy
 
     def restrict(current, policy):
-        policy = copy.deepcopy(policy)
+        current, policy = copy.deepcopy(current), copy.deepcopy(policy)
+        for value in (current, policy):
+            if value.get("allowed_read_paths", False) is None:
+                value.pop("allowed_read_paths")
         for kind in ('read', 'write'):
             allowed, denied = f'allowed_{kind}_paths', f'denied_{kind}_paths'
             if allowed in policy and allowed in current:
@@ -428,6 +443,8 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             # Normalize paths only after resolving their environment references.
             for key in policy_keys & current.keys():
                 current[key] = expand_environment(current[key])
+            if current.get("allowed_read_paths", False) is None:
+                current.pop("allowed_read_paths")
             if row["module"] == "tool-filesystem":
                 identity = row.get("id") or row.get("instance_id") or "tool-filesystem"
                 policy = policies.get(identity, policies["tool-filesystem"])
@@ -480,21 +497,90 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             if isinstance(child, dict):
                 writer_policies(child.get('tools', []), child.get('agents', {}), effective)
     writer_policies(bundle.tools, bundle.agents, [])
-    return bundle
+    from ..read_policy import restrict_search
+    configured_searches = {row.get('id') or row.get('instance_id') or row['module']: row.get('config', {})
+        for row in configured if isinstance(row, dict) and row.get('module') == 'tool-search'}
+    def search_policies(rows, children, inherited_files, inherited_searches):
+        files = [*inherited_files, *policies.values(), *(row.get('config', {}) for row in rows
+                 if isinstance(row, dict) and row.get('module') == 'tool-filesystem')]
+        declarations = [row for row in rows if isinstance(row, dict) and row.get('module') == 'tool-search']
+        for row in declarations:
+            identity = row.get('id') or row.get('instance_id') or row['module']
+            shared = merge(configured_searches.get(identity, {}), overrides.get('tool-search', {}).get('config', {}))
+            if identity != 'tool-search':
+                shared = merge(shared, overrides.get(identity, {}).get('config', {}))
+            row['config'] = restrict_search(row.get('config', {}), files=files,
+                searches=[*inherited_searches, shared], paths=paths)
+        inherited = [*inherited_searches, *(row['config'] for row in declarations)]
+        for child in children.values():
+            if isinstance(child, dict):
+                search_policies(child.get('tools', []), child.get('agents', {}), files, inherited)
+    search_policies(bundle.tools, bundle.agents, [], [])
+    return full_file_policy(bundle) if getattr(config, "access_mode", "ask") == "full" else bundle
 
 
 async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
+    from .model_selection import explicit_routing_settings, routing_hooks
     snapshot = is_snapshot(loaded)
+    automatic_routing = False
     root_identity = {key: getattr(loaded, key) for key in ('name', 'version') if hasattr(loaded, key)}
     components = required_components()
     if not snapshot:
-        from ..builtin_behaviors import IMAGEGEN_BEHAVIOR_URI, resolve_builtin_behavior
+        from ..builtin_behaviors import (
+            IMAGEGEN_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI,
+            CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI,
+            default_behavior_uri, resolve_builtin_behavior,
+        )
+        from ..session_files import capture_dir, project_slug
+        # App lists may contain saved defaults, but without explicit provenance
+        # we cannot distinguish those from a deliberate selection. Stay strict.
+        explicit_routing = bool(routing_hooks(loaded.to_mount_plan())) or any(
+            default_behavior_uri(uri) == ROUTING_BEHAVIOR_URI
+            for uri in config.settings.get("bundle", {}).get("app", []))
+        context_repository = 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence'
+        # The capture fallback must share an explicit root sibling's revision,
+        # even when no capability default registers the root's sources. Seed
+        # only this repository before app overlays so later selections still win.
+        for row in declarations(loaded.to_mount_plan()):
+            source = config.module_sources.get(row['module']) or row.get('source')
+            repository = git_source(source)
+            if repository and repository[0] == context_repository:
+                components.select(row['module'], source)
+        context_defaults = set()
         for behavior in config.app_bundles:
             selected, _ = await load_configured_bundle(registry, config, resolve_builtin_behavior(behavior))
-            if behavior == IMAGEGEN_BEHAVIOR_URI:
+            canonical = default_behavior_uri(behavior)
+            if routing_hooks(selected.to_mount_plan()):
+                if (behavior == ROUTING_BEHAVIOR_URI and not explicit_routing
+                        and config.resolve_source(behavior) is None):
+                    automatic_routing = True
+                else:
+                    explicit_routing = True
+                    automatic_routing = False
+            if canonical == IMAGEGEN_BEHAVIOR_URI:
                 loaded, selected = imagegen_defaults(loaded, selected)
-            components.select_bundle(selected, config.module_sources)
+            elif canonical in {COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
+                if not any(row.get("module") == "hook-context-intelligence" for row in loaded.hooks):
+                    context_defaults.update(row.get("id") or row.get("instance_id") or row["module"]
+                                            for row in selected.hooks if row.get("module") == "hook-context-intelligence")
+                loaded, selected = capability_defaults(loaded, selected, {
+                    'tool-computer-use': {'read_only': True},
+                    'hook-context-intelligence': {
+                        # Merely installing the behavior must not adopt ambient
+                        # server credentials. Explicit scoped destinations win
+                        # later, while existing hook declarations stay intact.
+                        'destinations': {},
+                        'context_intelligence_server_url': '',
+                        'context_intelligence_api_key': '',
+                        'base_path': str(capture_dir(config.workspace, 'root').parents[3]),
+                        'project_slug': project_slug(config.workspace),
+                    },
+                })
+            if canonical in {COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
+                components.select_defaults(selected, loaded, config.module_sources)
+            else:
+                components.select_bundle(selected, config.module_sources)
             loaded = compose_bundles(loaded, selected)
         if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
             from ..session_files import capture_dir, project_slug
@@ -502,20 +588,21 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
             # App destinations are explicit; ambient server keys never enable
             # forwarding merely because this default hook is present.
             loaded.hooks.append({'module': 'hook-context-intelligence',
-                'source': 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence',
+                'source': context_repository + '@main#subdirectory=modules/hook-context-intelligence',
                 'config': {'destinations': {}, 'base_path': str(capture_dir(config.workspace, 'root').parents[3]),
                            'project_slug': project_slug(config.workspace),
                            'additional_events': ['delegate:agent_spawned', 'delegate:agent_resumed', 'delegate:agent_completed', 'delegate:agent_cancelled', 'delegate:error']}})
-        if config.settings.get("routing") and not any(row.get("module") == "hooks-routing" for row in loaded.hooks):
-            selected, _ = await load_configured_bundle(registry, config, "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml")
-            components.select_bundle(selected, config.module_sources)
-            loaded = compose_bundles(loaded, selected)
+            context_defaults.add("hook-context-intelligence")
+        # Routing is now an ordinary opt-out-capable default. A retained matrix
+        # setting must not silently restore a behavior the user disabled.
+        explicit_context_forwarding(loaded, config.settings, context_defaults)
         loaded = _apply_settings(loaded, config)
         # Existing root defaults are explicit selections, not a new forced
         # version. Reuse their effective source for child/sibling declarations.
         for row in loaded.hooks:
             if row.get("module") in {"hook-context-intelligence", "hooks-routing"}:
-                components.select(row["module"], config.module_sources.get(row["module"]) or row.get("source"))
+                components.select(row["module"], config.module_sources.get(row["module"])
+                                  or components.source(row["module"], row.get("source")))
     # Behaviors retain their own resource namespaces, but do not become the
     # selected conversation root through Foundation's last-overlay metadata.
     for key, value in root_identity.items():
@@ -526,6 +613,13 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
     for key in (("providers", "tools", "hooks", "session", "agents") if snapshot else ("session", "agents")):
         setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
+    # This Python attribute is host provenance, not bundle/configuration data.
+    # Recomputed from raw intent on root resume; never imported from snapshots.
+    hooks = routing_hooks(loaded.to_mount_plan())
+    loaded._host_automatic_routing = (
+        automatic_routing and len(hooks) == 1
+        and hooks[0].get("config", {}).get("default_matrix") == "balanced"
+        and not explicit_routing_settings(config.settings, hooks))
     return loaded
 
 
@@ -549,7 +643,11 @@ def module_source(config, snapshot, module, source, components=None):
     selected = components.source(module, source, installed=True)
     if components.owns(module, source):
         return selected
-    return source if snapshot else config.module_sources.get(module) or source
+    result = source if snapshot else config.module_sources.get(module) or source
+    observer = getattr(config, '_source_policy_observer', None)
+    if observer:
+        observer.observe(result, config, explicit_local=bool(not snapshot and config.module_sources.get(module)))
+    return result
 
 
 async def load_configured_bundle(registry, config, reference):
@@ -565,6 +663,9 @@ async def load_configured_bundle(registry, config, reference):
     from .bundle_paths import local_bundle_path
     candidate = local_bundle_path(config, reference)
     chosen = str(candidate) if candidate is not None else reference
+    observer = getattr(config, '_source_policy_observer', None)
+    if observer:
+        observer.observe(chosen, config, registry, explicit_local=candidate is not None)
     return await registry.load(chosen), chosen
 
 
@@ -576,8 +677,14 @@ def session_registry(config):
     old imported alias cannot silently become a source-selection fallback.
     """
     from amplifier_foundation import BundleRegistry
+    def resolve_include(reference):
+        selected = config.resolve_source(reference)
+        observer = getattr(config, '_source_policy_observer', None)
+        if observer:
+            observer.observe(selected or reference, config, explicit_local=selected is not None)
+        return selected
     options = dict(home=config.registry_home, strict=True,
-                   include_source_resolver=config.resolve_source)
+                   include_source_resolver=resolve_include)
     parameters = inspect.signature(BundleRegistry).parameters
     if 'persist' in parameters:
         options['persist'] = False
@@ -625,6 +732,10 @@ class ResolvedRoot:
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
     validate_plan(edited)
+    if "hooks" in edited:
+        # Even a same-valued balanced selection is explicit. An effective saved
+        # plan has no authority to restore the automatic-origin exception.
+        loaded._host_automatic_routing = False
     from ..provider_environment import rebind_provider_credentials
     edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan())
     loaded._host_provider_credentials_bound = bound
@@ -642,7 +753,7 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
     return loaded
 
 
-async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None, dependency_batch=None, global_only=False, runtime_plan=None, profile_catalog=None):
+async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None, dependency_batch=None, global_only=False, runtime_plan=None, profile_catalog=None, source_policy_collector=None):
     """Prepare a fresh qualification worker before importing its live runtime.
 
     This first probe only installs configured dependencies. A separate process
@@ -651,6 +762,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
     No conversation, history store, job recovery or model execution is opened.
     """
     config = load_config(workspace, global_only=global_only)
+    if source_policy_collector is not None:
+        config._source_policy_observer = source_policy_collector
     from .config import prepare_registry
     prepare_registry(config)
     execution_workspace = Path(config.workspace).expanduser().resolve(strict=True)
@@ -787,7 +900,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime.observer:
             runtime.observer({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Preparing community modules (" + str(action).replace("_", " ")[:60] + ")."})
-    preparation_policy = {}
+    from ..provider_isolation import ProviderIsolation, UnavailableProvider, supported
+    isolation = ProviderIsolation() if supported() else None
+    preparation_policy = ({"provider_failure_policy": isolation.preparation_failed} if isolation else {})
     if refresh_dependencies:
         preparation_policy["refresh_dependencies"] = True
     if install_overrides is not None:
@@ -800,13 +915,20 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         progress_callback=progress)
     if getattr(prepared, "resolver", None) is not None:
         prepared.resolver = ComponentResolver(prepared.resolver, components)
-    await materialize_bundle_providers(loaded, prepared)
+    await materialize_bundle_providers(loaded, prepared, **({"isolation": isolation} if isolation else {}))
     # Bound child plans inherit an exact parent selection, including image
     # capability. Do not discover a new account outside that inherited plan.
     if not snapshot and not getattr(loaded, '_host_provider_credentials_bound', False):
         from ..image_defaults import apply_defaults
-        await apply_defaults(prepared.mount_plan, config.settings)
-    apply_provider_environment(prepared.mount_plan)
+        await apply_defaults(prepared.mount_plan, config.settings,
+                             **({"check_available": lambda row: not isolation.failure(row)} if isolation else {}))
+    environment_plan = prepared.mount_plan
+    if isolation:
+        environment_plan = copy.deepcopy(environment_plan)
+        for row in iter_provider_rows(environment_plan):
+            if isolation.failure(row):
+                row["enabled"] = False
+    apply_provider_environment(environment_plan)
     from ..session_files import project_slug
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
         project_slug=project_slug(config.workspace),
@@ -829,9 +951,24 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         for row in prepared.mount_plan.get('providers',[])}
     catalog_keys=mounted_catalog_keys(config.home,config.workspace,prepared.mount_plan.get('providers',[]),catalog_sources)
     try:
+        from .model_selection import prepare_default_routing
+        routing_policy = ({"before_initialize": partial(
+            prepare_default_routing, automatic=getattr(loaded, "_host_automatic_routing", False))}
+                          if not snapshot and any(row.get("module") == "hooks-routing" for row in loaded.hooks) else {})
+        if isolation:
+            routing_callback = routing_policy.get("before_initialize")
+            async def initialize_with_isolation(session):
+                await isolation.before_initialize(session)
+                if routing_callback:
+                    await routing_callback(session)
+            routing_policy["before_initialize"] = initialize_with_isolation
         session = await prepared.create_session(session_id=runtime.session_id,
-            session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
+            session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
+            **routing_policy)
         coordinator = session.coordinator
+        coordinator.register_capability("approval.interactive", approvals.interactive)
+        from ..read_policy import validate_mounted_read_policy
+        validate_mounted_read_policy(coordinator)
         from ..provider_recording import install_request_redaction
         from ..session_files import capture_dir
         install_request_redaction(coordinator, directory=capture_dir(config.workspace, runtime.session_id))
@@ -872,6 +1009,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             defaults = getattr(info, "defaults", {}) or {}
             choices.append({"id": identity, "provider": getattr(info, "id", identity),
                 "display_name": getattr(info, "display_name", None),
+                **({"available": False, "failure": provider.failure} if isinstance(provider, UnavailableProvider) else {}),
                 "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
         # Keep public connection choices available even when a saved ID prevents
         # startup. Reading this receipt never chooses a connection or runs work.
@@ -885,6 +1023,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 from .model_selection import ProviderSelectionError
                 raise ProviderSelectionError("Root selection needs an available provider instance and model")
             loop.root_provider = SelectedProvider(providers[identity], selection)
+        from ..provider_isolation import require_selected
+        require_selected(coordinator)
         selected = loop._select_provider(providers)
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),
@@ -932,9 +1072,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_cleanup(cleanup_jobs)
         await checkpoint()
         failures = getattr(loop, "load_failures", [])
-        if failures:
+        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
+        if fatal_failures:
             from ..module_failures import persist_failures
-            raise persist_failures(directory, failures)
+            raise persist_failures(directory, fatal_failures)
         from ..module_failures import clear_failures
         clear_failures(directory)
         # Stamp only explicit, local bundle resources actually consumed by this
@@ -960,7 +1101,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "settings_file": str(config.settings_file),
             "capabilities": {name: coordinator.get_capability(name) is not None for name in
                 ("session.spawn", "session.resume", "mention_resolver", "model_role_resolver")},
-            "module_load_failures": failures}
+            "module_load_failures": fatal_failures,
+            "provider_failures": isolation.outcomes(coordinator) if isolation else []}
         report["config_inputs"] = config_inputs
         report["history_source"] = history_source
         report["execution_workspace"] = str(execution_workspace)

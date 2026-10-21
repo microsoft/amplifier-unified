@@ -1,6 +1,7 @@
-"""Synthetic receiving-only provenance fixture. Any model/worker start is a failure."""
+"""Synthetic receiving-only fixture. Model/provider starts are forbidden."""
 import asyncio
 import json
+import hashlib
 import os
 from pathlib import Path
 import signal
@@ -42,8 +43,17 @@ async def main():
     # Receiving-only fixture: replace catalog/default discovery at its boundary
     # and fail any unexpected SDK/provider subprocess, even in a background task.
     probe_attempts = []
+    query_workers = []
+    spawn_exec = asyncio.create_subprocess_exec
+    async def query_only_subprocess(*args, **kwargs):
+        # Bounded shell reads use a real isolated query helper. It neither
+        # discovers providers nor admits chat work; retain this production path.
+        if args[:3] == (sys.executable, "-m", "amplifier_web.shell_query_worker"):
+            query_workers.append("shell-query")
+            return await spawn_exec(*args, **kwargs)
+        return await forbidden_subprocess(*args, **kwargs)
     async def forbidden_subprocess(*args, **kwargs):
-        probe_attempts.append("subprocess")
+        probe_attempts.append([str(arg)[:200] for arg in args[:4]])
         raise AssertionError("Receiving fixture cannot spawn a provider or worker")
     async def forbidden_probe(*args, **kwargs):
         probe_attempts.append("provider-probe")
@@ -55,7 +65,7 @@ async def main():
     async def fixture_defaults(home, workspace, bundle=None, app_bundle=None, **kwargs):
         return {"bundle": bundle or "work", "effective": {}, "providers": []}
     defaults.resolve_defaults = fixture_defaults
-    asyncio.create_subprocess_exec = forbidden_subprocess
+    asyncio.create_subprocess_exec = query_only_subprocess
     asyncio.create_subprocess_shell = forbidden_subprocess
     if INSTALLED:
         backend = Path(server.__file__).resolve()
@@ -92,10 +102,11 @@ async def main():
         # Synthetic host transport evidence, not a model start or caller-forged
         # generation. Notify retains an input without admitting a runtime turn.
         await generation(service, sender, "fixture-source-generation", ["fixture-source-input"])
+        peer_text = "Exact **α** 🐈\n\n```text\nunchanged  \n```\n" + "\nLong peer detail retained exactly. " * 150
         async def send(identity, origin):
             args = {
                 "sessionId": recipient["id"], "senderSessionId": sender["id"],
-                "mode": "notify", "text": "Exact **α** 🐈\n\n```text\nunchanged  \n```\n"}
+                "mode": "notify", "text": peer_text if identity == "visible-peer" else "Exact **α** 🐈\n\n```text\nunchanged  \n```\n"}
             if origin == "agent":
                 return await agent_action(service, sender, "coordination.send", args, identity)
             return await service.dispatch("coordination.send", args, origin=origin, command_id=identity)
@@ -125,10 +136,31 @@ async def main():
 
         async def facts(request):
             return web.json_response({"starts": runtime.starts, "sends": runtime.sends, "probeAttempts": probe_attempts,
+                "queryWorkers": len(query_workers),
+                "peerTextDigest": hashlib.sha256(peer_text.encode()).hexdigest(), "peerTextLength": len(peer_text.encode()),
                 "agent": agent["messageId"], "human": human["messageId"], "older": older["messageId"],
                 "quote": quoted["id"], "forged": forged["id"], "notification": notification['messageId'],
                 "installedStatic": INSTALLED, "backendFile": str(Path(server.__file__).resolve())})
         app.router.add_get("/api/fixture/peerFacts", facts)
+        async def react(request):
+            args = await request.json()
+            result = await service.app_bridge('dispatch', {'action': 'message.reaction', 'args': {
+                'sessionId': recipient['id'], 'messageId': quoted['id'], 'emoji': '👍',
+                'present': args['present']}}, recipient['id'])
+            return web.json_response(result)
+        app.router.add_post('/api/fixture/reaction', react)
+        async def extend_history(request):
+            # Exercise the actual >100-row cursor boundary only after proving
+            # full-set receipt attribution. Partial windows cannot prove global
+            # input uniqueness and deliberately keep neutral attribution.
+            additions = [service._message(recipient, 'assistant', 'Earlier filler ' + str(i)) for i in range(65)]
+            del recipient['messages'][-len(additions):]
+            recipient['messages'][1:1] = additions
+            service._publish()
+            return web.json_response({'extended': True})
+        app.router.add_post('/api/fixture/extendHistory', extend_history)
+
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)

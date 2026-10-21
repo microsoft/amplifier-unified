@@ -42,6 +42,7 @@
     "build:shell-example": "node scripts/build-shell-example.mjs",
     "test:draft-switch-browser": "node tests/draft-switch-browser.mjs",
     "test:live-clients-browser": "node tests/live-clients-browser.mjs",
+    "test:chat-reference-browser": "node tests/chat-reference-browser.mjs",
     "test:review-during-send-browser": "node tests/review-during-send-browser.mjs",
     "test:typing-audit-browser": "node tests/typing-audit-browser.mjs",
     "test:bootstrap-recovery-browser": "node tests/bootstrap-recovery-browser.mjs",
@@ -61,8 +62,10 @@
     "test:settings-completeness-browser": "node tests/settings-completeness-browser.mjs",
     "test:session-health-browser": "node tests/session-health-browser.mjs",
     "test:questions-browser": "node tests/questions-browser.mjs",
+    "test:approval-layout-browser": "node tests/approval-layout-browser.mjs",
     "test:message-outbox-browser": "node tests/message-outbox-browser.mjs",
     "test:task-continuity-browser": "node tests/task-continuity-browser.mjs",
+    "test:request-cancellation-browser": "node tests/request-cancellation-browser.mjs",
     "test:coordination-browser": "node tests/coordination-browser.mjs",
     "test:schedules-browser": "node tests/schedules-browser.mjs",
     "test:voice-visual-browser": "node tests/voice-visual-frame-browser.mjs && node tests/voice-visual-browser.mjs && node tests/computer-visual-browser.mjs",
@@ -100,7 +103,12 @@
     "test:demand-browser": "node tests/demand-browser.mjs",
     "test:markdown-composer-browser": "node tests/markdown-composer-browser.mjs",
     "test:draft-reload-browser": "node tests/draft-reload-browser.mjs",
-    "test:draft-discovery-recovery-browser": "node tests/draft-discovery-recovery-browser.mjs"
+    "test:draft-discovery-recovery-browser": "node tests/draft-discovery-recovery-browser.mjs",
+    "test:inline-media-transition-browser": "node tests/inline-media-transition-browser.mjs",
+    "test:adaptive-work-browser": "node tests/adaptive-work-browser.mjs",
+    "test:shared-landing-browser": "node tests/shared-landing-browser.mjs",
+    "test:home-sidebar-browser": "node tests/home-sidebar-browser.mjs",
+    "test:focus-navigation-browser": "node tests/focus-navigation-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.3.1",

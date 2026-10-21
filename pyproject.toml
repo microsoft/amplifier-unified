@@ -1,13 +1,13 @@
 [project]
 name = "amplifier-unified"
-version = "0.20.169"
+version = "0.20.204"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
     "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
-    "amplifier-core>=2.0.1",
+    "amplifier-core>=2.0.2",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "amplifier-module-hooks-session-naming @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/hooks-session-naming",
     "aiohttp>=3.12,<4",
@@ -31,6 +31,7 @@ native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/m
 
 [project.scripts]
 amplifier-unified = "amplifier_web.cli:main"
+amplifier-unified-status = "amplifier_web.status_protocol.cli:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

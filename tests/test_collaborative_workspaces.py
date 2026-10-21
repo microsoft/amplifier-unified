@@ -876,9 +876,16 @@ async def test_continuation_rechecks_saved_wait_and_never_replays(app, control):
     if control == "unknown":
         app.runtime.fail = True
     await app.collaboration.drain(source["id"])
-    await settled(app, identity, "unknown" if control == "unknown" else "suppressed")
-    phase = app.collaboration.receipt(identity)["delivery"]
-    assert phase == ("unknown" if control == "unknown" else "suppressed")
+    if control == "stop":
+        # Late evidence remains on its request; Stop must not manufacture even
+        # a suppressed continuation message that could appear as fresh input.
+        assert app.collaboration.receipt("result-request")["subscription"]["status"] == "suppressed"
+        assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (identity,)).fetchone()
+        assert not any(message.get("inputId") == identity for message in source["messages"])
+    else:
+        await settled(app, identity, "unknown" if control == "unknown" else "suppressed")
+        phase = app.collaboration.receipt(identity)["delivery"]
+        assert phase == ("unknown" if control == "unknown" else "suppressed")
     await app.collaboration.drain(source["id"])
     assert len(app.runtime.inputs) == (2 if control == "unknown" else 1)
 
@@ -1024,7 +1031,7 @@ async def test_outstanding_creation_bound_does_not_count_completed_history(app):
         task.update(status="working", collaboration={"creatorSessionId": source["id"]})
     app.state["sessions"].extend(tasks)
     args = {"title": "Next task", "text": "Initial task turn"}
-    with pytest.raises(AppError, match="eight outstanding"):
+    with pytest.raises(AppError, match="8 outstanding"):
         await agent_action(app, source, "coordination.create", args, "bounded-create")
     assert len(app.state["sessions"]) == 10 and not app.runtime.inputs
     assert not app.db.execute("SELECT 1 FROM commands WHERE id='bounded-create'").fetchone()
@@ -1082,7 +1089,7 @@ async def test_creation_cap_counts_dormant_owners_without_admitting_them(app, mo
             return original(metadata)
 
         monkeypatch.setattr(restored, '_admit_session', no_peer_admission)
-        with pytest.raises(AppError, match='eight outstanding'):
+        with pytest.raises(AppError, match='8 outstanding'):
             await agent_action(restored, source, 'coordination.create',
                 {'title': 'Would exceed cap', 'text': 'A ninth helper'}, 'dormant-cap')
         assert not restored.db.execute("SELECT 1 FROM commands WHERE id='dormant-cap'").fetchone()
@@ -1659,3 +1666,88 @@ async def test_queued_peer_user_input_has_no_immediate_human_promotion(app):
     message = target['messages'][-1]
     assert message['role'] == 'user' and message['inputOrigin'] == 'peer' and message['peerEnvelope']
     assert 'navigationPost' not in message and navigation_activity(target) == 10
+
+
+@pytest.mark.parametrize('change', ['progress', 'new-task', 'pause-resume', 'stop', 'legacy'])
+async def test_retained_outcome_survives_progress_only_without_replaying_work(app, change):
+    source, target = app.state['sessions']
+    source.update(status='working', task={'id': 'objective', 'revision': 1,
+                                         'continuationEpoch': 1, 'status': 'active'})
+    await declared_result(app)
+    wait = await agent_action(app, source, 'coordination.subscribe',
+        {'sessionId': source['id'], 'requestId': 'result-request'}, 'wait')
+    if change == 'legacy':
+        receipt = app.collaboration.receipt('result-request')
+        receipt['subscription'].pop('taskContinuationEpoch')
+        app.collaboration.save('result-request', receipt)
+    await finish(app, target, 'result-request')
+    identity = wait['result']['continuationId']
+    source['task'].update(revision=8, constraints=['No publishing; review the retained result'])
+    if change == 'new-task':
+        source['task']['id'] = 'new-objective'
+    elif change == 'pause-resume':
+        source['task']['continuationEpoch'] = 7
+    elif change == 'stop':
+        source['interruptionRevision'] = 1
+    source['status'] = 'idle'
+    await app.collaboration.drain(source['id'])
+    receipt = await settled(app, identity, 'accepted' if change == 'progress' else 'suppressed')
+    assert receipt['outcomeSnapshot']['qualified'] is True
+    await app.collaboration.drain(source['id'])
+    assert len(app.runtime.inputs) == (2 if change == 'progress' else 1)
+    if change == 'progress':
+        assert 'current task constraints and permissions' in app.runtime.inputs[-1][2]
+    else:
+        assert app.collaboration.receipt('result-request')['response']['qualified'] is True
+
+
+async def test_ordinary_peer_instruction_still_requires_exact_revision(app):
+    source, target = app.state['sessions']
+    target.update(status='working', task={'id': 'objective', 'revision': 1,
+                                          'continuationEpoch': 1, 'status': 'active'})
+    await send(app)
+    target['task']['revision'] = 2
+    target['status'] = 'idle'
+    await app.collaboration.drain(target['id'])
+    assert (await settled(app, 'request-1', 'suppressed'))['detail'] == 'The recipient task changed.'
+    assert not app.runtime.inputs
+
+
+async def test_caller_cannot_turn_an_instruction_into_an_outcome_observation(app):
+    source, target = app.state['sessions']
+    target['status'] = 'working'
+    await send(app)
+    receipt = app.collaboration.receipt('request-1')
+    receipt['delivery'] = 'submitting'
+    app.collaboration.save('request-1', receipt)
+    result = app.collaboration.admission(target['id'], {'inputId': 'request-1',
+        'taskId': None, 'taskRevision': None, 'taskContinuationEpoch': None})
+    assert result['admitted'] is False
+    assert not app.runtime.inputs
+
+
+async def test_observation_wait_reservation_survives_progress_revisions(app, monkeypatch):
+    import amplifier_web.collaboration as module
+    source, target = app.state['sessions']
+    source.update(status='working', task={'id': 'objective', 'revision': 1,
+                                         'continuationEpoch': 1, 'status': 'active'})
+    await send(app)
+    await settled(app, 'request-1', 'accepted')
+    await agent_action(app, source, 'coordination.subscribe',
+        {'sessionId': source['id'], 'requestId': 'request-1'}, 'wait')
+    source['task']['revision'] = 2
+    monkeypatch.setattr(module, 'MAX_PENDING_INPUTS', 1)
+    with pytest.raises(AppError, match='inbox is full'):
+        app.collaboration.require_inbox_slot(source['id'])
+
+
+async def test_routine_task_progress_does_not_wake_coordination_waiters(app):
+    source = app.state['sessions'][0]
+    source['task'] = {'id': 'objective', 'revision': 1, 'continuationEpoch': 1, 'status': 'active'}
+    first = app.coordination.snapshot({'sessionId': source['id']}, task=source['task'])
+    source['task'].update(revision=9, artifactRefs=['a new result reference'])
+    second = app.coordination.snapshot({'sessionId': source['id']}, task=source['task'])
+    assert first['signal'] == second['signal']
+    source['task'].update(status='blocked', continuationEpoch=10)
+    third = app.coordination.snapshot({'sessionId': source['id']}, task=source['task'])
+    assert third['signal'] != first['signal']

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import signal
 import tempfile
 from pathlib import Path
 from aiohttp import web
@@ -51,9 +52,16 @@ async def main(home):
     app.router.add_post('/api/fixture/history/expire-review',expire_review)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
-    app['allowed_origins']=app['allowed_origins']|{url};print(json.dumps({'url':url}),flush=True)
-    try:await asyncio.Event().wait()
-    finally:await runner.cleanup()
+    app['allowed_origins']=app['allowed_origins']|{url}
+    stopped=asyncio.Event();loop=asyncio.get_running_loop()
+    shutdown_signals=(signal.SIGTERM,signal.SIGINT) if os.name=='posix' else ()
+    for signum in shutdown_signals:loop.add_signal_handler(signum,stopped.set)
+    print(json.dumps({'url':url}),flush=True)
+    try:await stopped.wait()
+    finally:
+        try:await runner.cleanup()
+        finally:
+            for signum in shutdown_signals:loop.remove_signal_handler(signum)
 
 if __name__=='__main__':
     with tempfile.TemporaryDirectory(prefix='unified-storage-history-') as temp:asyncio.run(main(Path(temp)))

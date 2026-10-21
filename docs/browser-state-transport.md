@@ -118,6 +118,14 @@ owner's status. Workspace highlighting follows the current chat/workspace route,
 not a remembered workspace browsing location from a different route.
 
 The server reuses immutable resource values while semantic dependencies match.
+Completed built-in resource envelopes also reuse their page/context assembly
+when the current bound client's effective views, selection scope, descriptor,
+semantic generations, committed global epochs, recent limits and resource budget
+are unchanged. Effective views include initial preferences and selected resident
+chat scope; a composition revision alone is not a view revision. Pending or
+failed reads keep their completion/retry path, and custom modules retain their
+existing snapshot contract. This reuse neither delays canonical writes nor
+changes the returned resource revisions.
 Workspace explorer and shortcut aggregates have a separate directory generation:
 root membership, placement, stable recency, activity and notice/read facts can
 change them; chat titles and child/internal progress cannot. Native membership
@@ -290,6 +298,14 @@ clients and independent single-session streams retain their existing contracts.
 No omitted browser page changes durable membership, execution, or persistence.
 
 ## Existing stream and receipt behavior
+
+Recent Work readiness notifies an attached, selected web reader as soon as its
+state stream exists, including before shell-resource registration finishes.
+That notification invalidates the reader's cached frame through the existing
+loss-safe shell lane. It does not depend on an unrelated command or view report
+to expose a completed read. Registered/current selected web readers retain the
+same behavior; unrelated selections, dormant client records and non-web clients
+do not gain a notification or a new display read.
 
 Browsers opt into compact action receipts with `X-Amplifier-State-Transport:
 delta-v1`. Current hosts advertise `websocket` at client attachment; browsers

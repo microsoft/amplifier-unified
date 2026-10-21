@@ -5,6 +5,15 @@ import {navigationResources,hasNavigationResource} from '../src/shell/navigation
 import {shellScope} from '../src/shell/resources.js';
 
 const sidebar=['pinnedNavigation','recentNavigation','workspaceShortcuts'];
+test('Status requests only open groups, independently of Home filters; hidden navigation requests no rows',()=>{
+ const view={navMode:'status',navStatusCollapsed:['idle','working'],workHomeScope:'project',workHomeQuery:'private search'};
+ assert.deepEqual(navigationResources({view}),['workStatusAttention','workStatusUnread']);
+ assert.deepEqual(navigationResources({view},true,false),sidebar,'Replacing standard Chats restores Browse demand for remaining navigation');
+ assert.deepEqual(navigationResources({view},false),[]);
+ assert.deepEqual(navigationResources({view:{...view,workSurface:'home'}},false),['workHome','workspaceShortcuts']);
+ assert.deepEqual(navigationResources({view:{...view,workSurface:'home'}}),['workHome','workStatusAttention','workStatusUnread','workspaceShortcuts']);
+ assert.deepEqual(navigationResources({view:{workSurface:'chats'}},false),['sidebarSearch']);
+});
 test('built-in demand includes only the sidebar and visible browsing page',()=>{
  for(const view of [{},{workSurface:'chat'},{workSurface:'workspace',workWorkspaceTab:'files'},{workSurface:'workspace',workWorkspaceTab:'details'}])
   assert.deepEqual(navigationResources({view}),sidebar);

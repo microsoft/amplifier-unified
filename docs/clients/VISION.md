@@ -8,9 +8,11 @@ evidence and missing work live in the linked assessment and plan.
 ## What Amplifier shared clients are
 
 Amplifier is a continuing conversation with work happening on an identified host.
-A person reaches that work through a browser, terminal, desktop or mobile client.
-The interface fits the device; the conversation, its meaning and its progress
-remain recognizable when the person changes interfaces.
+A person can begin with a one-off request or an established project, then return
+to work that needs attention or find something they already know. They reach
+that work through a browser, terminal, desktop or mobile client. The interface
+fits the device; the work, its meaning and its progress remain recognizable
+when the person changes interfaces.
 
 The target Unified host exposes AHP to clients and uses ACP for every agent,
 including Amplifier. The web and TUI are independently developed experiences.
@@ -29,14 +31,20 @@ are distinct from clients attached to Unified's running session.
 ## Principles
 
 ### 1. Continuity is the product
-The person recognizes the conversation, its workspace, its history and its next
-available action. Moving between devices does not become an import/export task.
-Moving execution to another machine is a separate, explicit capability.
+A person returning to work can tell what needs their input, what has a response
+to read, and what is running. They can find a familiar conversation without
+reconstructing its organization. The conversation, workspace when present,
+history, and next available action remain recognizable. Their current context
+survives visits elsewhere in the same client. Moving between devices does not
+become an import/export task; moving execution to another machine remains a
+separate, explicit capability.
 
 ### 2. Common meaning, native interaction
 People learn the concepts once. A terminal uses its keyboard and scrollback well;
-a browser uses its panels and rich views well. Neither imitates the other's
-layout at the expense of being useful on its own device.
+a browser uses its panels and rich views well. A quiet view and a detailed view
+remain ways into the same work, with the same essential actions. Neither density
+nor a change of interface changes what a status means or grants more authority.
+Clients express these promises in the form that fits their device.
 
 ### 3. Independent attention, shared work
 A person's selection, unfinished input and reading position persist locally in
@@ -94,10 +102,25 @@ the assessment says how much of it has actually been demonstrated.
   state in both clients without affecting a second, overriding workspace.
 - A reviewer traces **every shared behavior change** to its contract clause,
   affected consumers and evidence; **0 unmeasured claims** are reported as passes.
+- A returning person identifies **1 required decision**, **1 unread response**,
+  and **1 running conversation** without inspecting execution settings.
+- A person begins **1 standalone request** with **0 mandatory project or folder
+  choices**, then can find that conversation again.
+- A person visits **2 conversations**, returns to their work overview, and
+  reconstructs **0 previously chosen filters or reading positions** in that client.
+
+## Current desktop consumers
+
+[Amplifier for Mac and the planned Windows client](desktop-clients.md) apply this
+vision through the shared desktop contract. The Mac companion preview is released;
+the integrated workspace and Windows implementation remain future work. This
+consumer record does not change the AHP/ACP destination or claim current parity.
 
 ## Changelog
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-20 | Identify current Mac and planned Windows consumers; link shared desktop journeys. | Product-owner request for coordinated platform documentation. |
+| 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../ux/decisions/20261020.md). |
 | 2026-10-02 | Adopt protocol boundaries, client-local state and independent repos. | [Family architecture direction](../architecture/README.md); implementation pending. |
 | 2026-09-20 | Initial draft. | Shared-client design discussion and the sources in the direction index. |

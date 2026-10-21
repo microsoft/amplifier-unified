@@ -42,7 +42,7 @@ def mounted_host(tmp_path, monkeypatch):
     session = SimpleNamespace(coordinator=coordinator, config={}, cleanup=AsyncMock(), execute=AsyncMock())
     prepared = SimpleNamespace(mount_plan={"session": {"orchestrator": {"module": "loop-live"}}},
                                create_session=AsyncMock(return_value=session))
-    loaded = SimpleNamespace(to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
+    loaded = SimpleNamespace(hooks=[], to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
                              prepare=AsyncMock(return_value=prepared))
     registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
@@ -80,12 +80,25 @@ def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
 
 
+@pytest.mark.parametrize('connected', [False, True])
+async def test_root_preparation_advertises_only_existing_human_transport(mounted_host, connected):
+    ask = AsyncMock() if connected else None
+    h = mounted_host
+    await h.prepare(ask=ask)
+    assert h.capabilities['approval.interactive'] is connected
+    adapter = h.prepared.create_session.call_args.kwargs['approval_system']
+    assert adapter.interactive is connected
+    if connected:
+        ask.assert_not_called()
+
+
 @pytest.mark.parametrize('frozen', [False, True])
 async def test_host_binds_instruction_paths_after_overrides_except_frozen_snapshots(mounted_host, monkeypatch, frozen):
     h = mounted_host
     observed = []
     class Root:
         instruction = 'Original root.'
+        hooks = []
         def to_mount_plan(self):
             return {**copy.deepcopy(h.prepared.mount_plan), 'instruction': self.instruction}
         async def prepare(self, **kwargs):
@@ -169,6 +182,7 @@ async def test_app_recording_policy_reaches_root_preparation_and_installs_redact
     h.prepared.mount_plan['agents'] = {'private': {'providers':[
         {'module':'provider-anthropic','config':{'raw':False}}]}}
     class Root:
+        hooks = []
         def to_mount_plan(self):
             return copy.deepcopy({**h.prepared.mount_plan,
                 'providers': getattr(self, 'providers', h.prepared.mount_plan['providers']),

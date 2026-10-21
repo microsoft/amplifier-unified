@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 // Real navigation projections/actions; disposable history and synthetic runtime.
 import assert from 'node:assert/strict';
@@ -27,7 +28,7 @@ try{
  const chatSearch=recent.getByRole('searchbox',{name:'Search chats',exact:true});
  const snapshot=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
  const toggle=section=>section.locator('.a-sidebar-section-heading>button').first();
- await page.goto(vite?.resolvedUrls.local[0]||target);await shortcuts.locator('.a-nav-chat').first().waitFor();
+ await page.goto(vite?.resolvedUrls.local[0]||target);await showFixtureConversation(page,{navPinned:true});await shortcuts.locator('.a-nav-chat').first().waitFor();
  const initial=await info(),selected=initial.initialSession;
  assert.deepEqual(await page.locator('[data-sidebar-section]').evaluateAll(rows=>rows.map(row=>row.dataset.sidebarSection)),[ 'workspaces','recent']);
  assert.equal(await page.getByRole('group',{name:'Chat view'}).count(),0);

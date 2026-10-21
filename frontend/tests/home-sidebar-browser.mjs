@@ -1,0 +1,183 @@
+// Production client/catalog, isolated synthetic fixture. No live history/providers.
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
+import {chromium,expect} from '@playwright/test';
+
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const output=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-checks/home-sidebar');
+await mkdir(output,{recursive:true});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python'),
+ ['-u',join(root,'tests/fixtures/chat_library_server.py')],
+ {env:{...process.env,AMPLIFIER_NAVIGATION_PROOF:'1'},stdio:['ignore','pipe','pipe']});
+let logs='',browser,page,failure;
+fixture.stderr.on('data',chunk=>{logs=(logs+chunk).slice(-12000)});
+const report={checks:[],errors:[],liveProvider:false};
+try{
+ const port=await new Promise((resolve,reject)=>{
+  let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout: '+logs)),30000);
+  fixture.once('error',error=>{clearTimeout(timer);reject(error)});
+  fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+logs))});
+  fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const data=JSON.parse(line);if(data.port){clearTimeout(timer);resolve(data.port)}}catch{}});
+ });
+ browser=await chromium.launch({headless:true});
+ page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ page.setDefaultTimeout(15000);page.on('pageerror',error=>report.errors.push(error.message));
+ const state=()=>page.evaluate(()=>window.amplifier.getState());
+ const shell=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
+ const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+ const info=async()=>(await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();
+ const home=page.locator('.a-adaptive-home'),sidebar=page.locator('#workspace-navigation');
+ const choose=mode=>home.getByRole('group',{name:'Work view'}).getByRole('button',{name:mode,exact:true}).click();
+ const switchTo=mode=>sidebar.getByRole('group',{name:'Sidebar view'}).getByRole('button',{name:mode,exact:true}).click();
+ const ready=()=>expect(home.locator('.a-home-filters')).toBeVisible();
+ const goHome=async()=>{await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
+ const settled=()=>expect.poll(async()=>Object.keys((await shell()).navigationResourcePending||{}).length).toBe(0);
+ await page.goto(`http://127.0.0.1:${port}`);await ready();await choose('Brief');
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await switchTo('Status');await settled();
+ const before=await info(),selected=(await state()).selectedSessionId;
+ for(const label of ['New chat','Search chats'])await expect(sidebar.getByRole('button',{name:label,exact:true})).toBeVisible();
+ assert.equal(await page.locator('header #navigation-toggle').count(),1);
+ assert.equal(await sidebar.getByRole('button',{name:'Close navigation',exact:true}).count(),0);
+ const headings=home.locator('.a-home-brief>.a-work-group h2');
+ await expect(headings).toHaveText(['Needs you','Ready for you']);
+ const boxes=await headings.evaluateAll(nodes=>nodes.map(node=>({x:node.getBoundingClientRect().x,y:node.getBoundingClientRect().y})));
+ assert.ok(boxes[1].x>boxes[0].x&&Math.abs(boxes[1].y-boxes[0].y)<2);
+ await page.screenshot({path:join(output,'desktop-status-brief.png')});
+ await choose('Studio');
+ await expect(home.locator('.a-home-studio>.a-work-group h2')).toHaveText(['Needs you','Ready for you','Working']);
+ await page.screenshot({path:join(output,'desktop-status-studio.png')});
+ report.checks.push('Brief pairs waiting/ready work; Studio separates three status columns; both sidebar actions remain accessible on Home');
+
+ // Both views use the same chat row and respect the existing path preference.
+ const completed=before.state.sessions.find(row=>row.nativeIdentity==='alpha-198');
+ const chatRow=()=>sidebar.locator(`.a-nav-chat[data-session-id="${completed.id}"]`).first();
+ const rowStyle=()=>chatRow().evaluate(node=>({
+  height:node.getBoundingClientRect().height,
+  location:getComputedStyle(node.querySelector('.a-nav-chat-workspace')).display,
+  text:node.querySelector('.a-nav-chat-workspace').textContent,
+  status:node.querySelector('.a-navigation-status').dataset.kind
+ }));
+ const statusStyle=await rowStyle();assert.equal(statusStyle.location,'none');
+ await switchTo('Browse');await settled();
+ assert.deepEqual(await rowStyle(),statusStyle);
+ for(const mode of ['Browse','Status']){
+  await switchTo(mode);await settled();
+  await act('settings.update',{patch:{workspaces:{showPaths:true}}});await settled();
+  await expect(chatRow().locator('.a-nav-chat-workspace')).toBeVisible();
+  assert.equal((await rowStyle()).text,completed.workspace);
+  assert.equal((await rowStyle()).height,54);
+  await act('settings.update',{patch:{workspaces:{showPaths:false}}});await settled();
+  await expect(chatRow().locator('.a-nav-chat-workspace')).toBeHidden();
+ }
+ for(const level of ['detailed','minimal','standard']){
+  const current=await page.evaluate(()=>window.amplifier.getShellState());
+  const composition=structuredClone(current.composition);
+  composition.presentation={...composition.presentation,interfaceDetail:level,executionDetail:level};
+  const clientId=(await state()).client.id;
+  const prepared=await act('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition});
+  await act('shell.changes.apply',{clientId,expectedRevision:current.revision,changeId:prepared.result.id});
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail',level);
+  const styles=[];
+  for(const mode of ['Browse','Status']){
+   await switchTo(mode);await settled();styles.push(await rowStyle());
+  }
+  assert.deepEqual(styles[0],styles[1],level+' keeps the two sidebar presentations aligned');
+  assert.equal(styles[0].location,level==='detailed'?'block':'none');
+  if(level==='detailed')assert.equal(styles[0].height,54);
+ }
+ await act('history.refresh',{});await settled();
+ await expect(home).not.toContainText('Updating your work');
+ await expect(sidebar).not.toContainText(/Updating|Finding existing chats/);
+ assert.deepEqual(await rowStyle(),statusStyle);
+ report.checks.push('Browse and Status share row height/status/location; folder-path preference is honored in both; background refresh leaves no updating text');
+
+ const idle=sidebar.locator('[data-status-group=idle]');
+ await idle.getByRole('button',{name:'Show more pick up again chats',exact:true}).click();
+ const first=(await shell()).workStatusIdle;
+ assert.ok(first.pages>1&&first.items.length<=50);
+ await idle.getByRole('button',{name:'Next pick up again page',exact:true}).focus();
+ await page.keyboard.press('Enter');await settled();
+ await expect.poll(async()=>(await shell()).workStatusIdle?.index).toBe(1);
+ await expect(idle.getByRole('button',{name:'Next pick up again page',exact:true})).toBeFocused();
+ const saved=(await shell()).workStatusIdle.items.map(row=>row.id);
+ assert.equal(saved.some(id=>first.items.some(row=>row.id===id)),false);
+ await home.getByLabel('Search your work',{exact:true}).fill('no matching home query');await home.getByLabel('Search your work',{exact:true}).press('Tab');
+ await expect(home).toContainText('No matching work.');
+ assert.deepEqual((await shell()).workStatusIdle.items.map(row=>row.id),saved);
+ const working=sidebar.locator('[data-status-group=working]');
+ await working.getByRole('button',{name:/^Working/}).click();await settled();
+ await expect.poll(async()=>(await shell()).navigationResources.includes('workStatusWorking')).toBe(false);
+ await switchTo('Browse');await settled();await expect(sidebar.locator('[data-sidebar-section=workspaces]')).toBeVisible();
+ await expect.poll(async()=>(await shell()).navigationResources.some(name=>name.startsWith('workStatus'))).toBe(false);
+ await switchTo('Status');await settled();
+ await expect(working.getByRole('button',{name:/^Working/})).toHaveAttribute('aria-expanded','false');
+ await expect.poll(async()=>(await shell()).workStatusIdle?.index).toBe(1);
+ await page.reload();await ready();await settled();
+ await expect(sidebar.getByRole('button',{name:'Status',exact:true})).toHaveAttribute('aria-pressed','true');
+ await expect(home.getByLabel('Search your work',{exact:true})).toHaveValue('no matching home query');
+ assert.deepEqual((await shell()).workStatusIdle.items.map(row=>row.id),saved);
+ assert.equal((await state()).selectedSessionId,selected);
+ const after=await info();assert.deepEqual(after.runtimeStarts,before.runtimeStarts);assert.deepEqual(after.runtimeSends,before.runtimeSends);
+ assert.deepEqual(after.state.attention,before.state.attention);
+ report.checks.push('Status paging/expansion and Home search remain independent across Browse/Status and reload; navigation starts no workers and changes no attention');
+
+ await idle.locator('.a-nav-chat-select').first().click();
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'});await expect(composer).toBeVisible();
+ await composer.fill('Keep my draft through both sidebar views');
+ const chosen=(await state()).selectedSessionId;
+ await switchTo('Browse');await switchTo('Status');await settled();await goHome();
+ await expect(sidebar.locator('.a-nav-chat-select[aria-current=page]')).toHaveCount(0);
+ await expect(page.locator('header')).not.toContainText('Home');
+ await expect(home.getByLabel('Search your work',{exact:true})).toHaveValue('no matching home query');
+ await sidebar.locator(`[data-session-id="${chosen}"] .a-nav-chat-select`).click();await expect(composer).toContainText('Keep my draft through both sidebar views');
+ await goHome();await home.getByLabel('Search your work',{exact:true}).fill('');await home.getByLabel('Search your work',{exact:true}).press('Tab');await settled();
+ await page.getByRole('button',{name:'Close navigation',exact:true}).click();await settled();
+ await expect.poll(async()=>(await shell()).navigationResources.some(name=>name.startsWith('workStatus'))).toBe(false);
+ await choose('Focus');await expect(sidebar).toBeHidden();
+ report.checks.push('Chat selection/draft survives mode changes; Home has no stale highlight; hidden Status releases its page demand');
+
+ await page.setViewportSize({width:390,height:844});
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();await settled();
+ await expect(sidebar).toBeVisible();await expect(page.locator('#navigation-toggle')).toBeEnabled();
+ const rect=await sidebar.boundingBox(),header=await page.locator('header').boundingBox();
+ assert.ok(rect.y>=header.y+header.height-1&&rect.width>=388);
+ await page.screenshot({path:join(output,'phone-status.png')});
+ await switchTo('Browse');await settled();await page.screenshot({path:join(output,'phone-browse.png')});
+ await page.keyboard.press('Escape');await expect(sidebar).toBeHidden();await expect(page.locator('#navigation-toggle')).toBeFocused();
+ await page.keyboard.press('Enter');await expect(sidebar).toBeVisible();
+ await sidebar.getByRole('button',{name:'Search chats',exact:true}).click();await expect(sidebar).toBeHidden();
+ await expect(page.getByRole('searchbox',{name:'Search chats',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await switchTo('Status');await settled();await sidebar.locator('.a-nav-chat-select').first().click();await expect(sidebar).toBeHidden();await expect(composer).toBeVisible();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await sidebar.getByRole('button',{name:'New chat',exact:true}).click();await expect(sidebar).toBeHidden();await expect(composer).toBeVisible();
+ await goHome();await choose('Brief');
+ for(const width of [320,820]){
+  await page.setViewportSize({width,height:900});await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.locator('#navigation-toggle').click();await expect(sidebar).toBeHidden();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ }
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(output,'phone-brief.png')});
+ await page.emulateMedia({forcedColors:'active'});await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await expect(sidebar.getByRole('button',{name:'Status',exact:true})).toBeVisible();await page.screenshot({path:join(output,'phone-forced-colors.png')});
+ report.checks.push('Phone/tablet sidebar stays below the header; Escape and header control work; chat/search/new-chat close it; 320px and forced colors remain usable');
+ assert.deepEqual(report.errors,[]);
+ report.build=JSON.parse(await readFile(join(root,'amplifier_web/static/build.json'),'utf8'));report.passed=true;
+}catch(error){failure=error;report.passed=false;report.failure=error.stack;report.fixtureLog=logs;report.diagnostics=await page?.evaluate(async()=>(await fetch('/api/diagnostics/performance')).json()).catch(()=>null);await page?.screenshot({path:join(output,'failure.png')}).catch(()=>{});report.text=await page?.locator('body').innerText().catch(()=>null)}
+finally{
+ await browser?.close();
+ if(fixture.exitCode===null&&fixture.signalCode===null){
+  const exited=once(fixture,'exit');fixture.kill('SIGTERM');let timer;
+  try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture cleanup timeout')),10000)})]);report.fixtureClosed=true}
+  catch(error){fixture.kill('SIGKILL');await exited;failure ||= error;report.cleanupError=error.message;report.passed=false}
+  finally{clearTimeout(timer)}
+ }
+ await writeFile(join(output,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
+}
+if(failure)throw failure;

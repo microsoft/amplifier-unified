@@ -240,6 +240,8 @@ jobs:
           python -m pip install maturin
           python "$RUNNER_TEMP/release-tools/release_qualification.py" runtime-project --runtime "$RUNNER_TEMP/surface-runtime"
           uv add --project "$RUNNER_TEMP/surface-runtime" --frozen --editable "$GITHUB_WORKSPACE/.ci/loop-live"
+          # The source-level recipe probe needs the module's declared dependencies.
+          uv add --project "$RUNNER_TEMP/surface-runtime" --frozen --editable "$GITHUB_WORKSPACE/.ci/recipes/modules/tool-recipes"
           # The native peer regression composes AppService with the real Worker.
           uv add --project "$RUNNER_TEMP/surface-runtime" --frozen --editable "$GITHUB_WORKSPACE"
           uv add --project "$RUNNER_TEMP/surface-runtime" --frozen pytest pytest-asyncio 'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'

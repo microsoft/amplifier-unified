@@ -7,10 +7,12 @@ import json
 import os
 import stat
 import tarfile
+import tempfile
 from pathlib import Path
 
 INPUT_LIMIT = 8 * 1024 ** 3
 SELECTED_LIMIT = 512 * 1024 ** 2
+RECOVERY_LIMIT = 4 * 1024 ** 3
 MEMBER_LIMIT = 200000
 PREFIX = 'backup/container/rootfs/'
 SELECTION = ('workspace', 'artifacts')
@@ -87,7 +89,7 @@ def digest(path):
     return checksum.hexdigest(), size
 
 
-def inspect_archive(path, expected_root):
+def inspect_archive(path, expected_root, *, archive_only=False):
     """Validate an independently exported selection before destructive removal."""
     count, logical, names, links, ancestors = 0, 0, {}, {}, set()
     with tarfile.open(path, 'r:', tarinfo=BoundedTarInfo, stream=True) as archive:
@@ -98,18 +100,19 @@ def inspect_archive(path, expected_root):
             name = canonical(item.name)
             if name.split('/')[0] != expected_root:
                 raise ValueError('An archive contains files outside its declared selection.')
-            validate_member(item, name, names, links, ancestors)
+            validate_member(item, name, names, links, ancestors, archive_only=archive_only)
             logical += item.size if item.isfile() else 0
-            if logical > SELECTED_LIMIT:
+            if logical > (RECOVERY_LIMIT if archive_only else SELECTED_LIMIT):
                 raise ValueError('The retained selection exceeds its bound.')
         verified_footer(archive)
-    validate_links(names, links)
+    if not archive_only:
+        validate_links(names, links)
     if names.get(expected_root) != 'directory':
         raise ValueError('The selected root directory was not retained.')
     return logical
 
 
-def validate_member(item, name, names, links, ancestors):
+def validate_member(item, name, names, links, ancestors, *, archive_only=False):
     if (name in names or item.size < 0 or item.sparse is not None
             or any(key.startswith('GNU.sparse') for key in item.pax_headers)
             or not (item.isfile() or item.isdir() or item.issym() or item.islnk())):
@@ -123,7 +126,7 @@ def validate_member(item, name, names, links, ancestors):
         raise ValueError('An archive link replaces a selected directory.')
     if item.issym():
         target = item.linkname
-        if not target or len(target) > 4096 or target.startswith('/') or '\x00' in target:
+        if not target or len(target) > 4096 or '\x00' in target or (not archive_only and target.startswith('/')):
             raise ValueError('An archive symbolic link leaves the retained selection.')
         links[name] = target
     elif item.islnk():
@@ -159,13 +162,15 @@ def validate_links(names, links):
             raise ValueError('A symbolic link leaves its retained root.')
 
 
-def filter_incus_stream(stream, destination, identity):
-    """Read one complete plain Incus backup, retaining two verified tar files."""
+def filter_incus_stream(stream, destination, identity, *, selections=SELECTION, archive_only=False):
+    """Filter a bounded backup without extracting guest-controlled paths."""
+    if selections not in (SELECTION, ('artifacts',)):
+        raise ValueError('Unsupported retained selection.')
     destination = Path(destination)
     outputs, files, names, links, ancestors, roots = {}, {}, {}, {}, {}, set()
     count = logical = 0
     try:
-        for selection in SELECTION:
+        for selection in selections:
             files[selection] = (destination / (selection + '.tar')).open('xb')
             outputs[selection] = tarfile.open(fileobj=files[selection], mode='w', format=tarfile.PAX_FORMAT)  # noqa: SIM115 - closed before fsync in finally.
             names[selection], links[selection] = {}, {}
@@ -180,7 +185,7 @@ def filter_incus_stream(stream, destination, identity):
                     continue
                 relative = full[len(PREFIX):]
                 selection = relative.split('/')[0]
-                if selection not in SELECTION:
+                if selection not in selections:
                     continue
                 selected = copy.copy(item)
                 selected.name = relative
@@ -196,19 +201,20 @@ def filter_incus_stream(stream, destination, identity):
                     if not item.isdir():
                         raise ValueError('A selected root is not a directory.')
                     roots.add(selection)
-                validate_member(selected, relative, names[selection], links[selection], ancestors[selection])
+                validate_member(selected, relative, names[selection], links[selection], ancestors[selection], archive_only=archive_only)
                 logical += selected.size if selected.isfile() else 0
-                if logical > SELECTED_LIMIT:
+                if logical > (RECOVERY_LIMIT if archive_only else SELECTED_LIMIT):
                     raise ValueError('The selected filesystem exceeds its retention limit.')
                 outputs[selection].addfile(selected, archive.extractfile(item) if item.isfile() else None)
                 # Manual addfile writes and close use the byte offset, never the
                 # prior-member cache. Link validation has its own bounded index.
                 outputs[selection].members.clear()
             verified_footer(archive)
-        if roots != set(SELECTION):
-            raise ValueError('The instance export does not contain both selected roots.')
-        for selection in SELECTION:
-            validate_links(names[selection], links[selection])
+        if roots != set(selections):
+            raise ValueError('The instance export does not contain all selected roots.')
+        if not archive_only:
+            for selection in selections:
+                validate_links(names[selection], links[selection])
     finally:
         for output in outputs.values():
             output.close()
@@ -217,12 +223,56 @@ def filter_incus_stream(stream, destination, identity):
             os.fsync(output.fileno())
             output.close()
     return [{'id': identity, 'source': '/' + selection, 'destination': str(destination / (selection + '.tar'))}
-            for selection in SELECTION]
+            for selection in selections]
 
 
-def verify_retention(root, archives, mode='files'):
+def verify_artifacts(archives):
+    """Artifacts-only evidence is never a removal or workspace-retention grant."""
+    if len(archives) != 1 or archives[0].get('source') != '/artifacts':
+        raise ValueError('Exactly the artifacts filesystem must be retained.')
+    archive = archives[0]
+    path = Path(archive['destination'])
+    checksum, size = digest(path)
+    if archive.get('sha256') not in {None, checksum} or archive.get('bytes') not in {None, size}:
+        raise ValueError('The exported archive does not match its receipt.')
+    logical = inspect_archive(path, 'artifacts')
+    archive.update(bytes=size, sha256=checksum, logicalBytes=logical, verified=True)
+    result = {'archiveBytes': size, 'logicalBytes': logical, 'format': 'tar',
+              'selection': ['/artifacts'], 'verified': True}
+    with (path.parent / 'artifacts-retention.json').open('x') as output:
+        json.dump(result, output)
+        output.flush()
+        os.fsync(output.fileno())
+    return result
+
+
+def publish_record(path, value):
+    """Publish one complete private JSON record; never replace earlier evidence."""
+    path = Path(path)
+    descriptor, temporary = tempfile.mkstemp(prefix='.retention-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)
+        Path(temporary).unlink()
+        for directory in (path.parent, path.parent.parent):
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def verify_retention(root, archives, mode='files', *, publish=True):
     """Persist byte-verified selection receipts; this never scans the live guest."""
-    if mode == 'files' and (len(archives) != 2 or {row.get('source') for row in archives} != {'/workspace', '/artifacts'}):
+    if not publish:
+        # Observation must not change caller-owned records or existing receipts.
+        archives = copy.deepcopy(archives)
+    if mode in {'files', 'archive-only'} and (len(archives) != 2 or {row.get('source') for row in archives} != {'/workspace', '/artifacts'}):
         raise ValueError('Both distinct selected filesystems must be retained.')
     if len({row.get('destination') for row in archives}) != len(archives):
         raise ValueError('Retained archives cannot share a destination.')
@@ -232,18 +282,19 @@ def verify_retention(root, archives, mode='files'):
         checksum, size = digest(path)
         if archive.get('sha256') not in {None, checksum} or archive.get('bytes') not in {None, size}:
             raise ValueError('The exported archive does not match its receipt.')
-        if mode == 'files':
-            archive['logicalBytes'] = inspect_archive(path, archive['source'].strip('/'))
+        if mode in {'files', 'archive-only'}:
+            archive['logicalBytes'] = inspect_archive(path, archive['source'].strip('/'), archive_only=mode == 'archive-only')
         archive.update(bytes=size, sha256=checksum, verified=True)
         total += size
     source_hash, source_size = digest(Path(root) / 'source.tar')
     result = {'archiveBytes': total, 'sourceBytes': source_size, 'totalBytes': total + source_size,
               'format': 'tar', 'policy': mode, 'verified': True,
-              'selection': ['/workspace', '/artifacts'] if mode == 'files' else ['/'],
+              'selection': ['/workspace', '/artifacts'] if mode in {'files', 'archive-only'} else ['/'],
               'sourceSha256': source_hash}
-    directory = Path(archives[0]['destination']).parent
-    with (directory / 'retention.json').open('x') as output:
-        json.dump(result, output)
-        output.flush()
-        os.fsync(output.fileno())
+    # Existing ordinary receipts have no archiveOnly field. Passive verification
+    # must preserve that exact historical shape without rewriting old evidence.
+    if mode == 'archive-only':
+        result['archiveOnly'] = True
+    if publish:
+        publish_record(Path(archives[0]['destination']).parent / 'retention.json', result)
     return result

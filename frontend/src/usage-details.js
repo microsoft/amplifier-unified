@@ -38,9 +38,9 @@ export function compactBreakdown(usage){
  return parts.join(' · ');
 }
 
-export function usageRows(metrics,costLabel='Cost (USD)'){
+export function usageRows(metrics,costLabel='Cost (USD)',{includeUnavailable=false}={}){
  return [
   ['grossInputTokens','Input tokens'],['cacheReadTokens','Read from cache'],['cacheWriteTokens','Written to cache'],
   ['outputTokens','Output tokens'],['reasoningTokens','Reasoning tokens'],['grossTotalTokens','Total tokens'],['costUsd',costLabel]
- ].map(([key,label])=>({key,label,metric:metrics[key]})).filter(row=>count(row.metric?.value));
+ ].map(([key,label])=>({key,label,metric:metrics[key]||{value:null,status:'unknown'}})).filter(row=>includeUnavailable||count(row.metric?.value));
 }

@@ -1,9 +1,11 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir,readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {settingsButton} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/theme-surfaces';
 const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/main_refresh_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
@@ -22,7 +24,7 @@ try{
  const style=selector=>page.locator(selector).evaluate(el=>{const s=getComputedStyle(el),r=el.getBoundingClientRect();return {left:r.left,right:r.right,bottom:r.bottom,width:r.width,gap:s.columnGap,tl:s.borderTopLeftRadius,tr:s.borderTopRightRadius,bl:s.borderBottomLeftRadius,br:s.borderBottomRightRadius,art:s.backgroundImage}});
  const chat='.a-conversation',canvas='#workspace-canvas',nav='.a-nav-rail';
  const assertFits=async()=>assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal page overflow');
- await page.goto(url);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
  const draft='Keep this unfinished thought.';await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);
  await page.getByRole('button',{name:'Open Website refresh brief in canvas',exact:true}).click();
  for(const [id,gap,radius] of [['aurora',10,22],['atelier',7,10],['graphite',4,4],['default',0,0]]){
@@ -61,7 +63,7 @@ try{
  await page.setViewportSize({width:1440,height:960});await presentation({scheme:'light'});await action('theme.apply',{name:'Aurora',css:aurora.css});
  await page.getByRole('separator',{name:'Resize canvas'}).focus();await page.keyboard.press('ArrowLeft');await assertFits();
  // Exercise user-facing save -> apply -> download -> import -> reload.
- await page.getByRole('button',{name:'Settings',exact:true}).click();await page.locator('[data-settings-section="appearance"]').click();
+ await settingsButton(page).click();await page.locator('[data-settings-section="appearance"]').click();
  await page.getByRole('button',{name:'Save, import & export themes',exact:true}).click();
  await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').fill('My panel theme');
  const custom=aurora.css+'\n#amp-one{--a-panel-gap:13px;--a-panel-radius:17px}';await page.locator('#theme-css').fill(custom);

@@ -1,5 +1,5 @@
 import {messageTime} from './message-time';
-import {MessageInteractions,QuoteCard} from './message-interactions';
+import {MessageInteractions,QuoteCard,AssistantReactions} from './message-interactions';
 import {MessageDelivery} from './message-delivery';
 import {DetailText,readDetail} from './conversation-detail';
 import React,{memo,useEffect,useMemo,useRef,useState} from 'react';
@@ -7,6 +7,8 @@ import {Copy,Check,Pencil,GitBranch,ArrowUp,AlertCircle,RotateCcw,LoaderCircle} 
 import {AttachmentStrip} from './chat-controls';
 import {usePendingMessageEdit} from './pending-message-edits';
 import {InlineMedia} from './inline-media';
+import {ChatReferences} from './chat-reference';
+import {PeerMessage,isPeerMessage} from './peer-message';
 
 export function newestMessageIds(messages){
  const latest=new Map();
@@ -60,6 +62,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   finally{submitting.current=false;setSaving(false)}
  };
  if(m.observation)return null;
+ if(isPeerMessage(m))return <PeerMessage message={m} session={session} state={state} act={act} dispatch={dispatch} date={date} label={label} attribution={attribution} newest={newest}/>;
  return <article className={`a-message a-${external?'external-message':m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>
   <div className="a-message-body">
   <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments} act={act} sessionId={session.id}/>{detailError&&<p role="alert">{detailError}</p>}
@@ -69,8 +72,10 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} disabled={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch({...edit,text,fork:e.target.checked})}}/>Create a separate chat (fork)</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':!localDelivery&&edit?.fork?'Create edited chat':'Save & regenerate'}</button></div>
   </form>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act} displayOnly={m.displayOnly}/>}
-  {m.role==='assistant'&&!m.displayOnly&&!editing&&!omitMedia&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} dispatch={dispatch}/>}
+  {m.role==='assistant'&&!m.displayOnly&&!m.ephemeral&&!localDelivery&&!editing&&!!m.id&&<ChatReferences key={`${session.id}:${m.id}`} sessionId={session.id} messageId={m.id} revision={session.chatReferenceRevision||''} available={session.linkedChatReferencesAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>}
+  {m.role==='assistant'&&!m.displayOnly&&!editing&&!omitMedia&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>}
   </div>
+  <AssistantReactions message={m}/>
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery&&!m.displayOnly){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.textDetail?await readDetail(m.textDetail):m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
@@ -15,7 +16,7 @@ try{
  page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST'){const body=request.postDataJSON();if(body.action==='session.titlePreview')previews.push(body.args)}});
  const act=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
- await page.goto(ready.url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(ready.url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await act('view.update',{patch:{navPinned:true,navExpanded:true}});
  await act('session.select',{id:ready.sessionId});
  await expect(page.locator('.a-work-heading strong')).toHaveText('Plan a neighborhood garden');
@@ -33,8 +34,19 @@ try{
  await expect(page.getByRole('textbox',{name:/New name for/})).toHaveValue('Neighborhood garden plan');
  assert.equal((await check()).namingCalls,1);assert.equal((await check()).unchanged,true);
  await page.keyboard.press('Escape');
+ await expect(page.locator('.a-work-heading strong')).toHaveText('Neighborhood garden plan');
+ await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await expect(page.getByRole('button',{name:'Neighborhood garden plan',exact:true}).first()).toBeVisible();
+ // A second naming cycle preserves a newer manual choice and the Auto setting.
+ await act('session.naming',{id:ready.sessionId,automatic:false});
+ await act('session.naming',{id:ready.sessionId,regenerate:true});
+ await expect.poll(async()=>(await check()).namingCalls).toBe(2);
  await act('session.rename',{id:ready.sessionId,title:'My chosen garden name'});
+ await page.request.post(ready.url+'/fixture/release');
  await expect(page.locator('.a-work-heading strong')).toHaveText('My chosen garden name');
+ await expect.poll(async()=>page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).naming.status,ready.sessionId)).toBe('conflict');
+ assert.equal((await check()).namingCalls,2);
+ assert.equal(await page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).autoName,ready.sessionId),false);
  await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await expect(page.getByRole('button',{name:'My chosen garden name',exact:true}).first()).toBeVisible();
  const labels=page.locator('.a-workspace-result-path').filter({hasText:/^in (design|research)$/});

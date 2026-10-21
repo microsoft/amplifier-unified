@@ -16,9 +16,9 @@ def route_legacy(state, patch):
 GLOBAL_PAGES = {
     'ai-connections':'AI connections', 'appearance':'Appearance', 'smart-tools':'Smart Tools',
     'workspaces':'Workspace defaults', 'workspace-starters':'Workspace starters', 'voice':'Voice',
-    'notifications':'Notifications', 'privacy':'Privacy & files', 'permissions':'Global file access',
+    'access-approvals':'Access & approvals', 'notifications':'Notifications', 'privacy':'Privacy & files', 'permissions':'Global file access',
     'desktop':'Host screen & computer setup', 'diagnostics':'App diagnostic capture', 'history':'Saved work', 'storage':'Storage',
-    'updates':'Updates', 'advanced':'Advanced', 'providers':'Provider configuration', 'routing':'Model rules',
+    'testing':'Testing & resources', 'updates':'Updates', 'advanced':'Advanced', 'providers':'Provider configuration', 'routing':'Model rules',
     'app-bundles':'Configured bundles', 'add-bundles':'Discover bundles', 'defaults':'Conversation defaults',
     'registries':'Module & source registries', 'tool-connections':'Tool connections',
     'custom-appearance':'Custom appearance', 'repair':'Backup & repair', 'reset':'Advanced recovery',
