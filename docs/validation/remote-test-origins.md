@@ -10,7 +10,7 @@ registered target's existing admission, operation and cleanup controls.
 ## Evidence
 
 - Focused Linux source, receipt, queue, retained-configuration and recovery checks:
-  41 passed, two native-Windows-only cases skipped. Local setup regression lane:
+  61 passed, two native-Windows-only cases skipped. Local setup regression lane:
   27 passed. The existing task-environment lane also passed during development.
 - Native macOS origin: registered an already configured Linux target using its
   existing SSH authentication and strict host-key verification; copied dirty and
@@ -22,9 +22,18 @@ registered target's existing admission, operation and cleanup controls.
   account policy and private controller protocol. No host setup was repeated.
 - The portable origin CI lane runs actual Git snapshots, retained authority,
   Windows junction/ACL negatives, and target routing on Linux, macOS and Windows.
+  All three native CI jobs passed at source commit 9f333388 ([run](https://github.com/microsoft/amplifier-unified/actions/runs/39545452942)).
   This does not establish real Windows SSH-to-target execution by itself.
 - The frontend is rebuilt with the locked dependencies and release Node version.
-  Rendered Settings acceptance is recorded separately before readiness.
+  Repeating the canonical build leaves committed assets unchanged.
+- Built UI with mounted AppService Settings passed inside a task-owned Linux
+  guest: registration/save acknowledgement loss, named unsaved drafts, stale
+  revisions, paused target refresh, narrow layout and cold reopen. Target
+  responses were a bounded protocol fixture; no host setup was performed.
+- After publication-boundary correction, 14 native Mac checks passed (two
+  Windows-only cases skipped). A new source export reproduced the earlier
+  archive hash, and ordinary reconciliation confirmed the previous owned guest
+  absent with admission settled; no new guest was created.
 
 ## Boundaries
 
