@@ -83,29 +83,19 @@ def definitions(schema, string):
 
 def store(app):
     path = Path(app.data_dir) / 'test-runners.json'
+    from .test_origin_files import read
     try:
-        info = path.lstat()
+        value = read(path, 1024 * 1024)
     except FileNotFoundError:
         return {'version': 1, 'runners': []}
-    if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024 or (hasattr(os, 'getuid') and info.st_uid != os.getuid()) or (os.name != 'nt' and info.st_mode & 0o077):
-        raise ValueError('The test machine settings must be a private bounded file.')
-    value = json.loads(path.read_text())
     if value.get('version') != 1 or not isinstance(value.get('runners'), list) or len(value['runners']) > 16:
         raise ValueError('The test machine settings are invalid.')
     return value
 
 
 def publish(app, value):
-    path = Path(app.data_dir) / 'test-runners.json'
-    temporary = path.with_name('.test-runners-' + uuid.uuid4().hex)
-    try:
-        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_EXCL | os.O_CREAT, 0o600), 'w') as stream:
-            json.dump(value, stream, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    from .test_origin_files import replace
+    replace(Path(app.data_dir) / 'test-runners.json', value)
 
 
 def snapshot(app):

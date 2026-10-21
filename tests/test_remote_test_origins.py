@@ -230,3 +230,68 @@ def test_remote_posix_controller_path_and_strict_trust_survive_origin_platform(m
     assert '-oStrictHostKeyChecking=yes' in observed[0]
     assert '-oBatchMode=yes' in observed[0]
     assert '-oForwardAgent=no' in observed[0]
+
+
+def test_snapshot_output_parent_replacement_cannot_redirect_archive(repository, tmp_path, monkeypatch):
+    if os.name == 'nt':
+        pytest.skip('Windows directory handles deny parent replacement')
+    output = tmp_path / 'output'
+    output.mkdir(mode=0o700)
+    retained = tmp_path / 'retained'
+    original = snapshots.directory
+    @contextmanager
+    def swap(path, **options):
+        with original(path, **options) as pinned:
+            if Path(path) == output:
+                output.rename(retained)
+                output.mkdir(mode=0o700)
+            yield pinned
+    monkeypatch.setattr(snapshots, 'directory', swap)
+    with pytest.raises(ValueError, match='directory changed'):
+        snapshots.export_archive(repository, output / 'source.tar')
+    assert not list(output.iterdir())
+    assert not list(retained.iterdir())
+
+
+def test_snapshot_late_parent_swap_keeps_all_writes_at_pinned_owner(repository, tmp_path, monkeypatch):
+    if os.name == 'nt':
+        pytest.skip('Windows directory handles deny parent replacement')
+    output = tmp_path / 'output'
+    output.mkdir(mode=0o700)
+    retained = tmp_path / 'retained'
+    create = files.PinnedDirectory.create
+    def swap(parent, name):
+        descriptor = create(parent, name)
+        if parent.path == output:
+            output.rename(retained)
+            output.mkdir(mode=0o700)
+        return descriptor
+    monkeypatch.setattr(files.PinnedDirectory, 'create', swap)
+    with pytest.raises(ValueError, match='directory changed'):
+        snapshots.export_archive(repository, output / 'source.tar')
+    assert not list(output.iterdir())
+    assert [path.name for path in retained.iterdir()] == ['source.tar']
+    with tarfile.open(retained / 'source.tar') as archive:
+        assert archive.extractfile('tracked.txt').read() == b'committed\n'
+
+
+def test_registration_store_rejects_shared_write_and_linked_authority(tmp_path):
+    app = SimpleNamespace(data_dir=tmp_path)
+    runners.publish(app, {'version': 1, 'runners': [target()]})
+    assert runners.store(app)['runners'] == [target()]
+    path = tmp_path / 'test-runners.json'
+    if os.name == 'nt':
+        subprocess.run(['icacls', str(path), '/grant', '*S-1-1-0:(W)'], check=True, capture_output=True)
+        with pytest.raises(ValueError, match='other Windows users'):
+            runners.store(app)
+    else:
+        path.chmod(0o666)
+        with pytest.raises(ValueError, match='private'):
+            runners.store(app)
+        path.chmod(0o600)
+    # A hard-linked authority is rejected even with private ACL/mode.
+    original = tmp_path / 'original.json'
+    path.rename(original)
+    os.link(original, path)
+    with pytest.raises(ValueError):
+        runners.store(app)

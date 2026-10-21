@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 from tempfile import NamedTemporaryFile, TemporaryDirectory, TemporaryFile
 import time
+import uuid
 from typing import BinaryIO
 import zlib
 
@@ -235,7 +236,7 @@ def export(source: Path, destination: Path) -> dict[str, str | int | bool]:
         raise
 
 
-def _export_archive(source: Path, destination: Path) -> dict:
+def _export_archive(source: Path, destination: Path, parent) -> dict:
     """Export selected raw tree contents as a private tar archive, without Git archive attribute transforms."""
     if destination.resolve().is_relative_to(source.resolve()):
         raise _error("snapshot-destination-inside-source", "Keep snapshot output outside the source checkout.")
@@ -243,7 +244,9 @@ def _export_archive(source: Path, destination: Path) -> dict:
         raise _error("snapshot-destination-exists", f"Snapshot destination {destination} already exists.")
     if not destination.parents[0].is_dir():
         raise _error("snapshot-destination-missing", "Create the owner-managed archive destination directory first.")
-    with TemporaryDirectory(prefix="dtu-snapshot-", dir=destination.parents[0]) as scratch:
+    # Scratch is independent of the destination pathname. Only publication
+    # writes to that directory, through its retained descriptor/Windows pin.
+    with TemporaryDirectory(prefix="dtu-snapshot-") as scratch:
         repository = Path(scratch) / "repository"
         provenance = export(source, repository)
         git = Git(Path(scratch))
@@ -277,13 +280,29 @@ def _export_archive(source: Path, destination: Path) -> dict:
             for chunk in iter(lambda: temporary.read(1024 * 1024), b""):
                 digest.update(chunk)
             size = os.fstat(temporary.fileno()).st_size
-            # A hard link publishes without replacing another writer's destination; the private temp owns mode 0600.
+            # Copy into an exclusive file relative to the pinned destination;
+            # the scratch filesystem need not support cross-device hard links.
+            name = '.' + uuid.uuid4().hex + '.snapshot'
+            parent.assert_current()
             try:
-                os.link(temporary.name, destination)
-            except FileExistsError as error:
-                raise _error(
-                    "snapshot-destination-exists", f"Snapshot destination {destination} appeared during export."
-                ) from error
+                temporary.seek(0)
+                with os.fdopen(parent.create(name), 'wb') as output:
+                    shutil.copyfileobj(temporary, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                try:
+                    parent.link(name, destination.name)
+                except FileExistsError as error:
+                    raise _error(
+                        "snapshot-destination-exists", "Snapshot destination appeared during export."
+                    ) from error
+                parent.sync()
+                parent.assert_current()
+            finally:
+                try:
+                    parent.unlink(name)
+                except FileNotFoundError:
+                    pass
         return {
                 "path": str(destination),
                 "archive_sha256": digest.hexdigest(),
@@ -294,5 +313,7 @@ def _export_archive(source: Path, destination: Path) -> dict:
 
 def export_archive(source: Path, destination: Path) -> dict:
     source, destination = Path(source).resolve(), Path(destination).absolute()
-    with directory(source), directory(destination.parent):
-        return _export_archive(source, destination)
+    if destination.resolve().is_relative_to(source):
+        raise _error('snapshot-destination-inside-source', 'Keep snapshot output outside the source checkout.')
+    with directory(source), directory(destination.parent, private=True) as parent:
+        return _export_archive(source, destination, parent)
