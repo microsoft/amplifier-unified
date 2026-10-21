@@ -277,7 +277,8 @@ def _observation(event, raw, offset, path, identity):
         if tool_name(row) == 'delegate':
             for field in FIELDS:
                 source = row['_eventFields'].get(source_field(field))
-                if source is None or field == 'delegateResponse' and name == 'tool:error':
+                if source is None or field == 'delegateResponse' and (name == 'tool:error'
+                        or data.get('error') or data.get('error_message')):
                     continue
                 value = select(data[source['key']], field)
                 if not isinstance(value, str):

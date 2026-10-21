@@ -177,3 +177,12 @@ def test_outcome_summary_uses_only_explicit_terminal_evidence(owner, name, data,
     write(path, [event(1, name, **data)])
     row = read(session)['items'][0]
     assert row.get('outcomeSummary', {}) == expected
+
+
+def test_explicit_event_error_does_not_turn_delegate_output_into_an_answer(owner):
+    session, path = owner
+    write(path, [event(1, 'tool:post', tool_name='delegate', result='partial diagnostic', error='operation failed')])
+    row = read(session)['items'][0]
+    assert row['outcomeSummary']['error'] == 'operation failed'
+    assert 'outputDetail' in row and 'errorDetail' in row
+    assert 'delegateResponseDetail' not in row and 'delegateResponse' not in row
