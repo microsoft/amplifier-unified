@@ -34,7 +34,6 @@ try{
  }
  // A deliberate return to the old tall framed input must fail the SAME user-boundary assertion.
  const previous=await surface.getAttribute('style');await surface.evaluate(el=>el.style.minHeight='160px');
- assert.throws(()=>checkIdle(evidence.negativeControl={...evidence.geometry.at(-1),surface:{...evidence.geometry.at(-1).surface,height:160}}));
  const broken=await measure();assert.throws(()=>checkIdle(broken));evidence.negativeControl={rejected:true,observed:broken};
  await surface.evaluate((el,value)=>value===null?el.removeAttribute('style'):el.setAttribute('style',value),previous);checkIdle(await measure());
  await input.fill('Long draft. '.repeat(150));await expect(surface).toHaveAttribute('data-expanded','true');await expect(primary).toBeInViewport();
@@ -44,8 +43,13 @@ try{
  await clearComposer(input);await input.fill('Do not send during composition');
  await input.evaluate(el=>{el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:true,keyCode:229,bubbles:true,cancelable:true}));el.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertParagraph',isComposing:true,bubbles:true,cancelable:true}));});assert.equal(sends.length,0);await expect(input).toHaveDraft('Do not send during composition');
  await input.press('Shift+Enter');await page.keyboard.type('Second line');assert.equal(sends.length,0);
+ await expect(input).toHaveDraft('Do not send during composition\n\nSecond line');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles([{name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Synthetic notes')},{name:'budget.csv',mimeType:'text/csv',buffer:Buffer.from('item,cost\nroom,20')}]);await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();await expect(surface).toHaveAttribute('data-expanded','true');assert.equal((await measure()).overflow,false);
- await page.getByRole('button',{name:'Remove budget.csv'}).click();await expect(input).toHaveDraft('Do not send during composition\nSecond line');
+ const observed=await page.evaluate(()=>window.amplifier.getState().renderedView);
+ assert.ok(!JSON.stringify(observed).includes('Do not send during composition'));
+ assert.ok(!JSON.stringify(observed).includes('notes.txt'),'Ordinary rendered readback excludes attachment draft names');
+ assert.ok(!JSON.stringify(observed).includes('data-expanded'),'Layout-only attributes are not projected');
+ await page.getByRole('button',{name:'Remove budget.csv'}).click();await expect(input).toHaveDraft('Do not send during composition\n\nSecond line');
  await presentation({scheme:'light',interfaceDetail:'minimal'});await expect(page.getByRole('button',{name:'Remove notes.txt'})).toBeVisible();await page.getByRole('button',{name:'Remove notes.txt'}).click();
  await clearComposer(input);await input.fill('Before\n\n> First reference\n\nBetween\n\n> Second reference\n\nAfter');
  await page.reload();await input.waitFor();await expect(input).toHaveDraft('Before\n\n> First reference\n\nBetween\n\n> Second reference\n\nAfter');await expect(primary).toBeInViewport();
@@ -53,4 +57,14 @@ try{
  await page.setViewportSize({width:800,height:1000});await page.locator('#amp-one').evaluate(el=>el.style.zoom='2');await expect(primary).toBeInViewport();assert.equal((await measure()).pageOverflow,false);await page.screenshot({path:output+'/compact-zoom2.png'});await page.locator('#amp-one').evaluate(el=>el.style.zoom='');
  await clearComposer(input);await input.fill('A retained first message');await primary.click();await page.getByText('Synthetic first response',{exact:true}).waitFor();assert.equal(sends.length,1);await expect(input).toHaveDraft('');
  assert.deepEqual(errors,[]);await writeFile(output+'/compact-composer.json',JSON.stringify(evidence,null,2));console.log('PASS compact composer: rendered geometry, modes, long text, attachments, quote-shaped Markdown, focus, composition, reload, synthetic send; limits retained.');
-}finally{await browser?.close();if(fixture.exitCode===null){const exit=once(fixture,'exit');fixture.kill();await exit;}}
+}finally{
+ await browser?.close();
+ if(fixture.exitCode===null&&fixture.signalCode===null){
+  const exited=once(fixture,'exit');let timer;
+  fixture.kill('SIGTERM');
+  try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>{fixture.kill('SIGKILL');reject(Error('Fixture did not finish graceful shutdown within 5 seconds'));},5000)})]);}
+  finally{clearTimeout(timer)}
+ }
+ assert.equal(fixture.exitCode,0,'Fixture must finish normal cleanup');
+ assert.equal(fixture.signalCode,null,'Fixture must not require forced cleanup');
+}

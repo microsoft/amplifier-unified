@@ -14,7 +14,7 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
  const page=await browser.newPage({viewport:{width:390,height:844},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),options=page.getByRole('button',{name:'Chat options',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),options=page.getByRole('button',{name:'Model and reasoning settings',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
  await expect(options).toBeVisible();await composer.fill('Use my selected model');
  // A saved custom ID can be valid without appearing in a provider's catalog.
  // Seed that prerequisite, then prove ordinary Options never silently replaces it.
@@ -32,30 +32,37 @@ try{
   const body=response.request().postDataJSON();
   return body?.action==='view.update'&&body.args?.patch?.newSessionDraft?.selection?.effort==='high';
  });
- await menu.getByText('Advanced model options',{exact:true}).click();await menu.locator('#chat-effort').press('End');
+ await menu.locator('#chat-effort').press('End');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.selection.effort)).toBe('high');
  await expect(menu.locator('#chat-effort')).toHaveAttribute('aria-valuetext','high');
  await menu.getByRole('button',{name:'Done',exact:true}).click();await expect(composer).toHaveDraft('Use my selected model');
  const saved=await effortSaved;assert.equal(saved.ok(),true);assert.equal((await saved.json()).accepted,true);
  await page.reload();await expect(options).toBeVisible();await options.click();await expect(menu.locator('#chat-model')).toHaveValue('chosen-model');await expect(bundle).toHaveValue('work');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.selection.effort)).toBe('high');
- await expect(menu.getByRole('button',{name:'Refresh models',exact:true})).toBeHidden();
+ await expect(menu.getByRole('button',{name:'Refresh models',exact:true})).toBeVisible();
  await menu.getByRole('button',{name:'Done',exact:true}).click();
- // Resizing closes the narrow menu and restores independent controls.
- await options.click();await page.setViewportSize({width:1280,height:900});await expect(menu).toHaveCount(0);await expect(options).toHaveCount(0);
- await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toContainText('chosen-model');
- await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();await expect(page.getByRole('region',{name:'Conversation model',exact:true})).toBeVisible();
- await page.setViewportSize({width:320,height:700});await expect(page.getByRole('region',{name:'Conversation model',exact:true})).toHaveCount(0);
- await options.click();await expect(menu).toBeVisible();await page.screenshot({path:output+'/readiness107-options-mobile.png'});await menu.getByRole('button',{name:'Done',exact:true}).click();
+ // The same controls remain mounted across widths; only their popup position changes.
+ await options.click();await page.setViewportSize({width:1280,height:900});await expect(menu).toBeVisible();await expect(options).toHaveCount(1);
+ await expect(options).toContainText('chosen-model');await expect(menu.locator('#chat-model')).toHaveValue('chosen-model');
+ await page.setViewportSize({width:320,height:700});await expect(menu).toBeVisible();await expect(menu.locator('#chat-model')).toHaveValue('chosen-model');
+ await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
+ await options.click();await page.screenshot({path:output+'/readiness107-options-mobile.png'});await menu.getByRole('button',{name:'Done',exact:true}).click();
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
  const data=await(await page.request.get(url+'/fixture')).json();assert.equal(data.sent.length,1);assert.equal(data.sent[0].selection.instance,'test-provider');assert.equal(data.sent[0].bundle,'work');assert.equal(data.sent[0].selection.model,'chosen-model');assert.equal(data.sent[0].selection.effort,'high');
  // A running conversation keeps readable output while configuration controls
  // refuse changes. This state is synthetic; no external provider is running.
  const sid=data.sent[0].sessionId;await page.request.post(url+'/fixture/activity',{data:{sessionId:sid,status:'working'}});
  await options.click();await expect(menu.locator('#chat-provider')).toBeDisabled();await expect(menu.locator('#chat-model')).toBeDisabled();await expect(bundle).toBeDisabled();
+ await expect(menu.getByRole('button',{name:'Close chat options'})).toBeFocused();
  await expect(page.getByText('Synthetic first response',{exact:true})).toBeVisible();
  await menu.getByRole('button',{name:'Done',exact:true}).click();await page.request.post(url+'/fixture/activity',{data:{sessionId:sid,status:'idle'}});
+ await options.click();await expect(menu).toBeVisible();await page.reload();
+ // Persisted presentation may reopen, but reload is not a local request to steal focus.
+ await inputReady();
+ assert.equal(await menu.evaluate(el=>el.contains(document.activeElement)),false);
+ await menu.getByRole('button',{name:'Done',exact:true}).click();
+ async function inputReady(){await composer.waitFor();await expect(menu).toBeVisible();}
  assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1,'Opening settings while busy must not send again');
  for(const scheme of ['light','dark']){await page.evaluate(scheme=>window.amplifier.dispatch('view.update',{patch:{scheme}}),scheme);await expect(options).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:`${output}/readiness107-composer-${scheme}.png`});}
- assert.deepEqual(errors,[]);console.log('PASS: one narrow Options menu; real model/bundle/effort selection, preserved draft and reload, viewport resize, exact first submission, light/dark 320px.');
+ assert.deepEqual(errors,[]);console.log('PASS: one compact model/options menu; real model/bundle/effort selection, preserved draft and reload, viewport resize, exact first submission, light/dark 320px.');
 }finally{await browser?.close();fixture.kill()}
