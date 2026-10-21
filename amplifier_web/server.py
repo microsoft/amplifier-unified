@@ -176,6 +176,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             return web.json_response(await asyncio.to_thread(read_text, session, dict(request.query)))
         part = request.query.get('part')
         if web_context(service):
+            if part == 'tool':
+                return web.json_response(await windows.read_tool(session['id'], dict(request.query)))
             if part == 'messages':
                 return web.json_response(await service.history.windows.read(session['id'],
                     before=request.query.get('before'), native=request.query.get('native') == 'true'))

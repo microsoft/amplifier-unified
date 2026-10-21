@@ -91,7 +91,7 @@ class ResidentWorkPages:
         item.update(anchorMessageId=anchor, detailVersion=str(detail_version(row)))
         for key, value in item.items():
             if (key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes'
-                    and not str(value.get('windowKey', '')).startswith('event-window:')):
+                    and not str(value.get('windowKey', '')).startswith(('event-window:', 'tool-window:'))):
                 item[key] = {**value, 'windowKey': entry['key']}
         if row.get('kind') == 'llm':
             # These references belong to the accepted canonical window, not
@@ -107,6 +107,12 @@ class ResidentWorkPages:
                         item.pop(field + suffix, None)
             item.update(recordings)
             item['detailVersion'] = str(detail_version([row, recordings]))
+        if row.get('kind') == 'tool' and row['id'] in entry['ids']:
+            item['toolDetail'] = {'sessionId': session['id'], 'part': 'tool', 'group': entry['group'], 'id': row['id']}
+        exchange = item.get('exchange')
+        if exchange and exchange.get('id') in entry['ids']:
+            item['exchange'] = {**exchange, 'toolDetail': {'sessionId': session['id'],
+                'part': 'tool', 'group': entry['group'], 'id': exchange['id']}}
         return item
 
     def read(self, session, group, before=None, revision=None):
@@ -116,7 +122,7 @@ class ResidentWorkPages:
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         if before is None:
             start, end, within = max(0, len(nodes) - NODE_LIMIT), len(nodes), None
-            entry = {'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
+            entry = {'group': group, 'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
                      'owner': self._owner_stamp(session), 'ranges': {}, 'ids': {}, 'positions': {}, 'revision': None}
         else:
             cursor = self._parse(before)

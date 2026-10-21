@@ -73,6 +73,8 @@ class WorkWindows:
         self.retry_at = {}
         from .resident_work_pages import ResidentWorkPages
         self.live_pages = ResidentWorkPages(self)
+        from .tool_payload_windows import ToolPayloadWindows
+        self.tool_payloads = ToolPayloadWindows(self)
 
     def _worker(self):
         if self.projector is None and not sys.platform.startswith('linux'):
@@ -361,8 +363,10 @@ class WorkWindows:
     def _page(self, identity, group):
         owner = self._owner(identity)  # Current canonical authority, not cache presence.
         page = self.pages.get(group)
-        if page is None or page['sessionId'] != identity or source_identity(owner) != page['source']:
+        if page is None or page['sessionId'] != identity or source_identity(owner) != page.get('ownerSource', page['source']):
             raise ValueError('This saved work window expired. Open the recent window again.')
+        if '_toolScope' in page:
+            self.tool_payloads.check(owner, page)
         self.pages.move_to_end(group)
         return page
 
@@ -426,6 +430,18 @@ class WorkWindows:
                 'offset': 0, 'total': len(page['items']), 'before': None,
                 'group': group, 'revision': page['generation'], 'coverage': page['coverage']}
 
+    async def read_tool(self, identity, args):
+        return await self.tool_payloads.read(self._owner(identity), args)
+
+    @staticmethod
+    def field_failure(result):
+        reason = result.get('reason')
+        if reason == 'source_changed':
+            raise ValueError('This saved field changed. Reopen its Work window.')
+        if reason in {'queue_full', 'timeout'}:
+            raise ValueError('Saved content is taking longer to read. Try again shortly.')
+        raise ValueError('Saved content could not be read. Try again.')
+
     async def read_text(self, identity, args):
         owner = self._owner(identity)
         page = self._page(owner['id'], args.get('windowKey'))
@@ -439,15 +455,12 @@ class WorkWindows:
             'reference': reference, 'offset': int(args.get('offset', 0)),
             'limit': min(16384, max(1, int(args.get('limit', 16000))))}, key=owner['id'] + ':field:' + row['id'])
         if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
-                or source_identity(owner) != page['source']):
+                or source_identity(owner) != page.get('ownerSource', page['source'])):
             raise ValueError('This saved field expired.')
         if result.get('status') != 'complete':
-            reason = result.get('reason')
-            if reason == 'source_changed':
-                raise ValueError('This saved field changed. Reopen its Work window.')
-            if reason in {'queue_full', 'timeout'}:
-                raise ValueError('Saved content is taking longer to read. Try again shortly.')
-            raise ValueError('Saved content could not be read. Try again.')
+            self.field_failure(result)
+        if '_toolScope' in page:
+            self.tool_payloads.check(owner, page)
         value = result['field']
         return {'value': value['text'], 'nextOffset': value['nextOffset'], 'total': value['total']}
 
@@ -464,7 +477,7 @@ class WorkWindows:
 
     def check_recording(self, owner, page):
         if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
-                or source_identity(owner) != page['source']):
+                or source_identity(owner) != page.get('ownerSource', page['source'])):
             raise ValueError('This provider recording expired. Reopen its saved work window.')
 
     async def close(self):

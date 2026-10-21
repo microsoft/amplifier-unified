@@ -49,6 +49,27 @@ Unrelated log appends do not invalidate an unchanged exact saved field. Source
 replacement or edits still invalidate it; temporary read failures offer retry
 without claiming the content changed.
 
+New tool observations carry a host-generated ID shared by the exact native event
+and its host update. The bounded current window can attach that event's input,
+result, error and typed delegation fields without adopting native lifecycle or
+accounting. Collapsed hints are at most 180 characters each and do not substitute
+for complete saved fields. A new observation cannot inherit an earlier input when
+its own producer omitted it.
+
+Expanding a host tool whose saved fields are outside the current window performs
+one bounded read of that tool's admitted native session. **Look further back**
+requests another bounded page; it never scans the whole history or enumerates
+child directories. Lookup leases are bound to the web client, source identity,
+open Work group, admitted row position and observation ID. At most 100 matching
+observations and eight window pages are retained in memory.
+
+Older history without an exact host observation ID shows related saved records
+as separately expandable observations. Matching call IDs, tool names or times
+cannot prove an attempt, so these fields are never grafted onto host lifecycle
+rows. Repeated call IDs stay separate. Clearly unrelated times are excluded;
+unknown timestamps do not become positive identity evidence. Missing, partial,
+unverified and expired details remain distinct, with bounded retry controls.
+
 Assistant replies automatically load complete saved text when approaching the
 viewport, using the existing authenticated 16 KB message-detail pages. Navigation
 cancels pending reads. User messages and large worker summaries keep their
