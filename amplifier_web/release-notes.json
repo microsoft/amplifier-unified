@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.199",
+      "title": "Qualified Incus engine updates",
+      "changes": [
+        "Check and update the managed Incus engine separately from the test runner, qualifying a private candidate before selecting it for future tests.",
+        "Preserve existing jobs, explicit source pins, custom installations and the verified runner pairing across engine updates.",
+        "Recover completed qualification and observe uncertain operations without replaying tests or changing host setup."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.198",
       "title": "Qualified updates for managed test runners",
       "changes": [
