@@ -5,11 +5,10 @@
       "version": "0.20.202",
       "title": "Reliable checkout handoff",
       "changes": [
-        "Allow the turn arranging a checkout handoff to finish its pending model step without waiting on its own settings change, while preserving task limits and unrelated work guards."
-      ],
-      "notices": [
+        "Allow the turn arranging a checkout handoff to finish its pending model step without waiting on its own settings change, while preserving task limits and unrelated work guards.",
         "Already-stopped or unresolved handoffs retain their recovery state; this update does not replay them automatically."
-      ]
+      ],
+      "notices": []
     },
     {
       "version": "0.20.201",
