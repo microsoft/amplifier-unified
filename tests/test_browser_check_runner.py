@@ -426,9 +426,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     attachment = 'tests/attachment-consumption-browser.mjs'
     assert attachment in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', attachment] for row in plan['scenarios']) == 1
-    cancellation = tests/request-cancellation-browser.mjs
+    cancellation = 'tests/request-cancellation-browser.mjs'
     assert cancellation in extended_scripts - readiness_scripts
-    assert sum(row[command] == [node, cancellation] for row in plan[scenarios]) == 1
+    assert sum(row['command'] == ['node', cancellation] for row in plan['scenarios']) == 1
     assert len((readiness_scripts | extended_scripts) - {attachment, cancellation}) == 145
     assert len(readiness_scripts | extended_scripts) == 147
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
