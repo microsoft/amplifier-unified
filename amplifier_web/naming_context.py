@@ -91,6 +91,7 @@ class NamingSample:
     latest_user: str
     user_digest: str
     digest: str
+    has_user_intent: bool
 
 
 def sample(messages):
@@ -107,15 +108,19 @@ def sample(messages):
     # Human evidence gets most of the budget; assistant narration is secondary.
     selected.update({row[0]: row for row in assistants[:1] + assistants[-1:]})
     parts = []
+    has_user_intent = False
     for _, role, text in sorted(selected.values()):
         limit = 850 if role == 'user' else 500
         if len(text.encode('utf-8')) > limit:
             text = clip(text, limit - 220) + ' ... ' + clip(text[-200:], 200)
         parts.append(f'[{role}]: {text}')
+        # Only human text retained in this excerpt can establish naming intent.
+        # A later acknowledgement does not erase it or become an early trigger.
+        has_user_intent |= role == 'user' and substantive(text)
     context = clip('\n'.join(parts), MAX_CONTEXT_BYTES) if users else ''
     latest = users[-1][2] if users else ''
     return NamingSample(context, latest, hashlib.sha256(latest.encode()).hexdigest(),
-                        hashlib.sha256(context.encode()).hexdigest())
+                        hashlib.sha256(context.encode()).hexdigest(), has_user_intent)
 
 
 def saved_sample(directory, owner):

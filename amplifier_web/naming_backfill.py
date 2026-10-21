@@ -176,11 +176,11 @@ class NamingBackfill:
             directory = directory_for(self.service.data_dir, session)
             base = read(directory)
             module, hook = _hook()
-            from .naming_context import saved_sample, substantive
+            from .naming_context import saved_sample
             excerpt = await asyncio.to_thread(saved_sample, directory, {
                 'project': session.get('nativeProject') or str(directory.parent.parent),
                 'nativeId': session.get('runtimeSessionId') or session['id']})
-            if not excerpt.text or not substantive(excerpt.latest_user):
+            if not excerpt.text or not excerpt.has_user_intent:
                 return await self._record(identity, 'skipped', None, 'The chat has no user message to name it from.')
             prompt = module.INITIAL_NAMING_PROMPT.format(context=excerpt.text)
             if automatic:

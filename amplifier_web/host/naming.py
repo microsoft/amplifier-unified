@@ -244,7 +244,7 @@ class LiveSessionNaming:
         else:
             excerpt=await asyncio.to_thread(saved_sample,self.directory,{
                 'project':str(self.directory.parent.parent),'nativeId':self.coordinator.session_id})
-        if not excerpt.text or not substantive(excerpt.latest_user):return None
+        if not excerpt.text or not excerpt.has_user_intent:return None
         if skip_unchanged and excerpt.digest==self.last_context:return None
         self.last_context=excerpt.digest
         hook.naming_sample=excerpt
