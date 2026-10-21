@@ -39,6 +39,21 @@ def main():
     assert json.loads((OUTPUT / "qualification.json").read_text())["passed"], "Positive source checks must pass first"
     result = {"scope": "Navigation-specific negative controls and installed wheel", "checks": {}}
     try:
+        layout = ROOT / "frontend/src/settings-layout.jsx"
+        original_layout = layout.read_bytes()
+        try:
+            needle = b"if(entry.key===latest.current.trail.at(-1)?.key)return;"
+            assert original_layout.count(needle) == 1
+            layout.write_bytes(original_layout.replace(needle, b""))
+            text = run("negative-settings-reopen", ["node", "--test",
+                       "--test-name-pattern=discard trail reconciliation",
+                       "tests/settings-drafts.test.mjs"], cwd=ROOT / "frontend", expected=1)
+            assert "Reconciling the already-current parent must not publish a Settings reopen" in text
+            assert "not ok" in text
+            result["checks"]["settingsCloseReopen"] = "rejected at redundant Settings navigation assertion"
+        finally:
+            layout.write_bytes(original_layout)
+
         model = ROOT / "frontend/src/destination-history.js"
         original = model.read_bytes()
         try:

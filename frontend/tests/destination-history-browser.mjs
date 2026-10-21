@@ -397,6 +397,17 @@ try{
   beforeRevision:beforeClose.revision,receiptRevision:closeReceipt.stateRevision,
   observedRevision:(await state()).revision,originalClickOnly:true,historyUnchanged:true,
  },null,2));
+ // A deliberate fresh reopen is valid; suppressing every Settings navigation
+ // would hide the measured close race while breaking this separate user intent.
+ assert.equal((await action('canvas.select',{id:closingId})).accepted,true);
+ await expect.poll(async()=>(await state()).canvas.id).toBe(closingId);
+ await expect(page.getByRole('button',{name:'Close tab Settings',exact:true})).toBeVisible();
+ const reopened=await state();assert.equal(reopened.canvas.kind,'settings');
+ assert.equal(reopened.canvasArtifacts.find(row=>row.id===closingId).tabOpen,true);
+ assert.equal((await action('canvas.tabClose',{id:closingId})).accepted,true);
+ await expect(page.getByRole('button',{name:'Close tab Settings',exact:true})).toHaveCount(0);
+ await expect.poll(async()=>(await state()).canvas.id).toBe(successor.id);
+ assert.deepEqual(await saved(),settingsTrail);
  await action('canvas.visibility',{open:false});
  // Narrow target dimensions and no reintroduced remembered-chat strip.
  for(const width of [1440,390,360]){

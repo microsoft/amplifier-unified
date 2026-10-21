@@ -138,3 +138,12 @@ test('a retired Settings history callback cannot navigate a deliberately reopene
   await fresh.popTo(3);assert.equal(fresh.actions.length,1);
  }finally{await fresh.clean()}
 });
+
+test('late Settings confirmation cannot restore browser history after unmount',async()=>{
+ const f=await settingsHistoryFixture();let pending;
+ await renderAct(async()=>{pending=f.pop({state:{}})});
+ const entries=JSON.stringify(f.entries);
+ await f.clean();await pending;
+ assert.equal(JSON.stringify(f.entries),entries,'Retired confirmation must not push Settings entries');
+ assert.equal(f.closed,0);assert.deepEqual(f.actions,[]);
+});

@@ -395,7 +395,8 @@ def test_destination_history_evidence_gate_rejects_incomplete_results(tmp_path, 
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     step = next(row for row in workflow['jobs']['destination-history']['steps']
                 if row.get('name') == 'Require executed evidence without skips')
-    assert step['if'] == 'always()'
+    assert step['if'] == '${{ always() && !inputs.settings_close_diagnostic }}'
+    assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
     code = step['run'].removeprefix("python - <<'PY'\n").removesuffix('PY\n')
     output = tmp_path / 'output/destination-history'
     output.mkdir(parents=True)
@@ -596,9 +597,10 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     option = workflow['on']['workflow_dispatch']['inputs']['destination_history']
     assert option['type'] == 'boolean' and option['default'] == 'false'
     assert workflow['permissions'] == {'contents': 'read'}
-    assert workflow['jobs']['browser']['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history }}'
+    assert workflow['jobs']['browser']['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     focused = workflow['jobs']['destination-history']
-    assert focused['if'] == '${{ inputs.destination_history }}'
+    assert focused['if'] == '${{ inputs.destination_history || inputs.settings_close_diagnostic }}'
+    assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
     assert focused['runs-on'] == 'ubuntu-latest' and focused['timeout-minutes'] == '30'
     steps = focused['steps']
     assert not any(step.get('continue-on-error') for step in steps)

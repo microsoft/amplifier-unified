@@ -554,13 +554,18 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.destination_history }}"
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
-    assert history['if'] == '${{ inputs.destination_history }}'
+    assert history['if'] == '${{ inputs.destination_history || inputs.settings_close_diagnostic }}'
     assert history['steps'][0] == {
+        'name': 'Require the fixed navigation selection for diagnostic mode',
+        'if': '${{ inputs.settings_close_diagnostic && !inputs.destination_history }}',
+        'run': 'exit 1',
+    }
+    assert history['steps'][1] == {
         'name': 'Reject mixed navigation selections',
         'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}',
         'run': 'exit 1',
