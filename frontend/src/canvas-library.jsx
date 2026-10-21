@@ -33,7 +33,9 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
    if(!result?.accepted){setError(String(result?.error?.message||result?.error||'The document was not changed. Your current view was kept.'));return}
    setOpen(false);closeCanvasDialog(dialog.current,()=>{
     const latest=current.current;
-    if(latest.selectedSessionId!==sessionId||latest.canvas?.id!==row.id||!latest.canvas.open)return;
+    // The receipt is accepted; its React state commit may follow this frame.
+    // The requested tab already exists. Do not gate focus on that later commit.
+    if(latest.selectedSessionId!==sessionId||dialog.current?.open||!latest.canvas?.open)return;
     reveal(row.id);[...(strip.current?.querySelectorAll('[role=tab]')||[])].find(el=>el.dataset.artifactId===row.id)?.focus({preventScroll:true});
    });
   }catch(err){setError(err.message)}finally{setPending(false)}

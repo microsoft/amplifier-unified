@@ -154,6 +154,15 @@ try {
  }
  await panel.getByRole('button',{name:'Open documents, 2 open',exact:true}).click();
  const openDocuments=page.getByRole('dialog',{name:'Open documents',exact:true});
+ const [selectionResponse]=await Promise.all([page.waitForResponse(response=>isAction(response.request())&&
+  unwrap(response.request().postDataJSON()).action==='canvas.select'&&
+  unwrap(response.request().postDataJSON()).args.id===otherArtifact.resourceId,{timeout:8000}),
+  openDocuments.locator('li').getByRole('button',{name:'Other artifact markdown',exact:true}).click()]);
+ const selectionReceipt=await selectionResponse.json();
+ assert.equal(selectionReceipt.accepted,false);assert.match(selectionReceipt.error,/viewer edit/);
+ report.expectedRejections.push({name:'other document from Open documents',status:selectionResponse.status(),receipt:selectionReceipt});
+ await expect(openDocuments).toBeVisible();await expect(openDocuments.getByRole('alert')).toContainText('viewer edit');
+ assert.equal((await state()).canvas.id,first.resourceId);await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
  await openDocuments.getByRole('button',{name:'Close tab Editable artifact',exact:true}).click();
  await expect(openDocuments.getByRole('alert')).toContainText('viewer edit');
  await expect(openDocuments).toBeVisible();

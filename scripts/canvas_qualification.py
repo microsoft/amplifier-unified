@@ -112,6 +112,7 @@ def verify_installed():
     probe = '''import amplifier_web,hashlib,json,pathlib,sys,zipfile
 package=pathlib.Path(amplifier_web.__file__).resolve().parent
 assert package.is_relative_to(pathlib.Path(sys.prefix).resolve())
+assert (package/'shell_validator.mjs').is_file(), 'Installed renderer validator is missing'
 wheel=pathlib.Path(sys.argv[1]); count=0
 with zipfile.ZipFile(wheel) as z:
  for name in z.namelist():
