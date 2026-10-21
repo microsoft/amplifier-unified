@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.197",
+      "title": "Unblock updates after interrupted settings changes",
+      "changes": [
+        "Allow a fully idle chat with an older interrupted settings change to stop blocking staged Smart Tool and application updates.",
+        "Keep the affected chat blocked pending recovery, preserve its saved settings payload, and continue to defer updates while work is active or its status cannot be verified."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.196",
       "title": "Reliable updates for selected components",
       "changes": [
