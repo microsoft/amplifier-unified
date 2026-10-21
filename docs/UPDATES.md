@@ -74,9 +74,16 @@ The logical roles are candidate, current and previous. Physical generations rema
 
 Availability checks reuse a private inventory index, invalidated by generation, registry and configuration changes, with periodic full reconciliation. Remote-ref requests retain coalescing and bounded cached availability; a manual refresh refreshes remote availability. Every installation repeats exact source preflight, so cached availability cannot authorize overwriting an intervening local edit. Unified owns its registry, source store and runtimes. CLI caches and registries remain separate; shared settings, credentials and native projects/history authorities are unchanged.
 
-Core, Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
+Core follows published PyPI releases using the app's wheel-only policy. Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
 
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
+
+If a worker dependency resolves differently from the checked update, activation
+stops. The diagnostic receipt identifies the component, checked/resolved commit
+IDs when available, and which fields differ: repository, ref, subdirectory,
+revision, or a missing Git source. It does not include the source URLs, ref values
+or paths. A successful resolver command alone does not prove a matching candidate,
+and this failure does not by itself prove that a remote branch moved.
 
 Application activation also verifies that the running host and the executable on PATH belong to the same uv tool installation. A development checkout or a different launcher cannot replace another installed tool. Candidate and installed-package probes use isolated Python imports, reject packages outside that environment, and cannot accidentally validate a checkout from the launch directory or PYTHONPATH. The installed package is checked again after replacement; a failed check leaves the running host up for recovery. The restart helper uses the separate validated environment, and new work remains blocked until restart. It preserves the effective bind addresses, public origins, TLS certificate/key, session lifetime, port, workspace and data directory without writing CLI overrides into saved server settings. The replacement host acknowledges the pending restart only after an authenticated HTTP request to its live listener confirms the expected version, exact installed Git revision, data directory identity, and a different process instance. Package probes and application construction alone cannot acknowledge a restart. Smart Tool servers are reported disconnected after restart and can be reconnected explicitly. The recovery record stores the actual prior installation source when available, rather than assuming an older release tag exists. Repeated installation requests reuse a pending validated generation. Cache symlinks remain symlinks while staging; external workspace trees are not copied into the update.
 
@@ -283,6 +290,13 @@ source content and explicit policy match; graph changes invalidate that reuse.
 A new attempt always starts with fresh dependency resolution. Existing explicit
 local/registry overrides are not replaced by a remembered Git lock.
 
+uv may represent a checked moving ref as `rev=<full checked commit>#<same commit>`.
+That spelling is equivalent only when repository, subdirectory and exact commit
+also match; abbreviated commits, other refs and branch movement still fail.
+The checked ref policy is carried separately into qualification and bound again
+to the installed source identity. Frozen installs retain exact commits while the
+next update check continues following the configured branch.
+
 After the uv-managed launcher supports generation activation, an already tested
 application environment becomes the live launch target through an atomic private
 pointer. This avoids installing its exact packages a second time. Older
@@ -350,3 +364,18 @@ remain authoritative. Skills' generic `cache_dir` option avoids changing
 `AMPLIFIER_HOME`, which remains the shared settings/history root. Older Skills
 modules must receive the component update before they honor that option;
 source tests do not establish adoption by already running workers.
+
+
+### App-managed Core registry updates
+
+Included-component checks also compare app-managed Core with the latest stable
+PyPI release. Eligibility requires the app's open-ended registry dependency and
+wheel-only policy, an exact PyPI lock entry, and matching installed provenance.
+Explicit fixed versions, constraints, alternate indexes, Git/local sources, or
+unexplained changes to the recorded installation remain protected.
+
+Preparation pins the checked Core version in an isolated candidate and verifies
+both the resolved registry version and the post-preparation installed package.
+Other update tiers retain the current Core version. Frozen generation receipts
+remain exact for rollback and revalidation; they do not become standing version
+pins for future update checks. The Core source-build prohibition remains enabled.

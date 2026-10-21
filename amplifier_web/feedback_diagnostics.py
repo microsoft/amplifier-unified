@@ -43,8 +43,10 @@ def build_facts():
 # Feedback is deliberately narrower than the local diagnostics UI: custom names,
 # raw errors, correlation IDs and module/source configuration never leave here.
 FAILURE_CATEGORIES = {'unknown', 'invalid_image', 'context_limit', 'tool_configuration',
-    'authentication', 'rate_limit', 'worker_startup', 'computer_capture_stop'}
+    'authentication', 'rate_limit', 'worker_startup', 'worker_communication',
+    'worker_exit', 'computer_capture_stop'}
 ERROR_TYPES = {'Error', 'RuntimeError', 'RuntimeStartupError', 'ConfiguredModuleError',
+    'WorkerCommunicationError', 'WorkerExitedError',
     'ContextLengthError', 'InvalidRequestError', 'AuthenticationError', 'RateLimitError',
     'BadRequestError', 'APIConnectionError', 'APITimeoutError', 'TimeoutError',
     'PermissionError', 'FileNotFoundError', 'ValueError', 'ModuleNotFoundError', 'ImportError'}

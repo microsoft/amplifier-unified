@@ -389,6 +389,19 @@ inside an independent mixed conversation. Stop reports that limitation. With
 an enabled token/cost limit, queue/steer to such peers is refused; informational
 notices remain available, and commissioned helpers share the budget.
 
+Individual requests support `coordination.cancel` from their original sender.
+Queued or pending-steer input is withdrawn under the same admission lock and
+keeps a negative, unqualified receipt. An in-flight or admitted input retains
+its actual delivery state and a cancellation request; every later admission
+check rejects it, and the recipient sees the instruction in its next fitted
+coordination observation. No worker is started or whole conversation stopped.
+The recipient reports `outcome=cancelled` when settled; a report awaiting its
+terminal event is distinct from a settled report. Mixed work and completed
+effects stay intact. A lost acknowledgement is re-read with the same command
+identity. Cancelling closes only that request's future return subscription;
+already admitted returns are not interrupted. This cooperative path does not
+add request-level model-call accounting or a hard interruption adapter.
+
 Explicit user recovery uses revision-bound `assignment.resume` on the commissioning
 chat after interruption receipts, roots, native workers, preparations and current
 generations have settled. It preserves membership, task records, cumulative
@@ -1366,6 +1379,61 @@ previously suppressed or unknown requests are not replayed.
 
 #### Settled failed members
 
-A fresh human-backed owner request can admit one reconciliation input to a failed commissioned member. The host requires a recorded terminal generation, no active child work, and the existing native ownership lock proving the previous worker is absent. Ownership stays held through the saved receipt. The failed generation and its effects remain evidence; no input or command is retried. A newer failure, Stop, membership change, human input or pending access change invalidates admission. Explicit provider/tool safety stops remain blocked. This resolves the former instruction to inspect a failure followed by an unconditional refusal even after inspection.
+A fresh human-backed owner request can admit one reconciliation input to a failed commissioned member. The host requires a recorded terminal generation, no active child work, and the existing native ownership lock proving the previous worker is absent. A classified provider cause gains terminal identity only when its observed admitted input and active generation match the failure event; later generic worker errors retain that cause. Ownership stays held through the saved receipt. The failed generation and its effects remain evidence; no input or command is retried. A newer failure, Stop, membership change, human input or pending access change invalidates admission.
 
-Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. Only a successful host admission clears the old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a separate settings edit in every worker.
+Explicit provider/tool safety failures block peer resumption even after ordinary Stop changes the displayed status. Passive inspection and a separate permitted human request through normal chat admission remain available; this is not a permanent ban on unrelated work or a mechanism for clearing the halted operation.
+
+Unknown assignment Stop receipts retain their original outcomes. A later durable recovery receipt can settle only its explicitly listed session/Stop pairs, using the native ownership proof held through that recovery commit. Further recovery consumes this historical evidence instead of reacquiring a detached former member's new independent writer. Current bound members must still settle, and any new or unproved unknown Stop still needs native ownership proof.
+
+Saved capacity denials continue to block automatic turns. A fresh host-verified human recovery input can reach the ordinary provider admission guard, which rechecks current conversation and assignment limits before any model call. The input must be newer than the cached denial and belong to the observed active generation. Peer input additionally needs its actual admitted human-resume receipt; a caller-supplied flag or message text is insufficient. Only successful durable host admission clears the worker's old denial; it never resets limits, task progress, usage or receipts. This allows an increased assignment allowance to take effect without a no-op settings edit in every worker, including workers with enabled local budgets. A still-exhausted or uncertain local allowance remains blocked by its current policy.
+
+### Assignment model admission waiting
+
+Temporary concurrent-call saturation and renewable held call allowances wait in a
+host-owned FIFO before invocation. Waiting calls have no admitted usage receipt.
+A released receipt wakes waiters; each checks the current input, generation, Stop,
+configuration, native owner and actual cumulative/assignment policy again. Unknown
+outcomes remain held and are never inferred complete to free a slot. Disconnect or
+cancellation removes waiting entries; admitted calls finish independently.
+
+Settings → Advanced → Performance & runtime → Model capacity applies across this
+host. The default permits 256 waiting calls with no time limit; the user can change
+both values. A zero timeout waits until capacity or cancellation. A configured
+expiry reports that no provider request was sent and does not save a budget pause.
+Policy changes wake existing waits; they neither restart nor replay any work.
+
+Individual cancellation of a worker's waiting model call sends a capacity-only
+transport cancellation for that exact bridge ID. The host retains its per-worker
+lookup until the worker consumes the reply, so cancellation also covers a reply
+in transit. A waiting entry is removed without stopping the worker. If admission
+already persisted a matching receipt, cancellation marks that unended receipt
+outcome unknown and retains its reservation; it does not infer that a provider
+was never invoked or free capacity. Unknown IDs, another worker's frames, and
+late cancellation after reply consumption cannot change another call. Unrelated
+mutation bridges retain their existing completion behavior.
+
+
+#### Retained terminal evidence for older failed members
+
+Some older workers saved a generic unknown failure without its generation ID.
+Guarded peer recovery may retain separate terminal evidence instead of changing
+that failure: the latest root event must be a failed generation, its input IDs
+must exactly match the host-observed delivered inputs, and every input must have
+its accepted peer receipt for that member. The generic failure must follow that
+terminal. A fresh owner human request and native stopped-owner proof are still
+required. Later input, terminal, Stop or configuration changes invalidate the
+prepared recovery. A retained explicit safety terminal blocks recovery even if
+an older projection hid it. This admits one new reconciliation request; no old
+input, operation or provider call is replayed and no failure cause is inferred.
+
+## Explicit responsibility for existing chats
+
+[Existing-chat adoption](assignment-adoption.md) adds a settled, independent root
+through a revision-bound preview and explicit manager/human instruction. The
+canonical assignment retains a distinct adoption receipt, not a fabricated
+creation operation. Native ownership, unresolved configuration, task state and
+concurrent Stop/input changes are checked before committing membership. Existing
+manager continuation and placement controls then use that responsibility. Earlier
+history and usage stay attributed as before; adding itself never starts a turn.
+The workspace/canvas assignment controls expose the same operation. Independent
+chats in a shared folder remain independent unless explicitly added.

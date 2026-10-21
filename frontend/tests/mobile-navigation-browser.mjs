@@ -48,12 +48,14 @@ try{
    await page.getByRole('button',{name:'Open navigation',exact:true}).tap();await drawer.waitFor();
    const navigation=await drawer.evaluate(el=>{
     const rect=el.getBoundingClientRect(),rail=el.querySelector('.a-nav-rail').getBoundingClientRect();
-    return {x:rect.x,y:rect.y,width:rect.width,height:rect.height,railWidth:rail.width,viewportWidth:innerWidth,viewportHeight:innerHeight,bodyWidth:document.documentElement.scrollWidth};
+    return {x:rect.x,y:rect.y,width:rect.width,height:rect.height,railWidth:rail.width,headerBottom:document.querySelector('.a-work-header').getBoundingClientRect().bottom,viewportWidth:innerWidth,viewportHeight:innerHeight,bodyWidth:document.documentElement.scrollWidth};
    });
    results.push({navigation});
-   assert.equal(navigation.x,0);assert.equal(navigation.y,0);
-   assert.equal(navigation.width,navigation.viewportWidth,'Phone navigation must fill the viewport');
-   assert.equal(navigation.height,navigation.viewportHeight);
+   // The persistent header owns the toggle; the drawer fills the space below it.
+   assert.ok(navigation.headerBottom>0&&navigation.headerBottom<navigation.viewportHeight);
+   assert.equal(navigation.x,0);assert.equal(navigation.y,navigation.headerBottom);
+   assert.equal(navigation.width,navigation.viewportWidth,'Phone navigation must fill the viewport width');
+   assert.equal(navigation.height,navigation.viewportHeight-navigation.headerBottom);
    assert.equal(navigation.railWidth,navigation.viewportWidth);assert.equal(navigation.bodyWidth,width);
    await page.screenshot({path:`${out}/drawer-${width}.png`});
    await page.getByRole('button',{name:'Close navigation',exact:true}).tap();
@@ -66,7 +68,12 @@ try{
  await drawer.waitFor();assert.equal((await drawer.boundingBox()).width,390);
  assert.ok(await page.locator('.a-conversation').evaluate(el=>el.inert));
  await page.screenshot({path:`${out}/drawer.png`});assert.ok(await drawer.locator('input').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).every(node=>parseFloat(getComputedStyle(node).fontSize)>=16)));
+ const toggle=page.locator('#navigation-toggle');
+ await expect(drawer.getByRole('button',{name:'Browse',exact:true})).toBeFocused();
+ await page.keyboard.press('Shift+Tab');await expect(toggle).toBeFocused();
  await page.keyboard.press('Shift+Tab');assert.ok(await drawer.evaluate(el=>el.contains(document.activeElement)));
+ await page.keyboard.press('Tab');await expect(toggle).toBeFocused();
+ await page.keyboard.press('Tab');await expect(drawer.getByRole('button',{name:'Browse',exact:true})).toBeFocused();
  const details=drawer.locator('.a-navigation-more').first();await details.focus();await details.click();await page.locator('.a-navigation-flyout').waitFor();
  await page.screenshot({path:`${out}/details.png`});
  await page.keyboard.press('Escape');assert.equal(await drawer.isVisible(),true);

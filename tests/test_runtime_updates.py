@@ -127,10 +127,65 @@ async def test_branch_movement_after_check_does_not_activate(environment):
     (manager.home / 'updates/releases' / generation).mkdir(parents=True)
     (repo / 'marker.txt').write_text('third')
     git(repo, 'commit', '-am', 'third')
-    with pytest.raises(ValueError, match='branch moved'):
+    with pytest.raises(ValueError, match='source resolved differently') as caught:
         await environments.stage(manager, generation, [row])
+    assert caught.value.diagnostic_facts == {
+        'reason': 'runtime-resolution-mismatch', 'component': 'fixture-runtime',
+        'resolutionMismatches': ['revision'], 'expectedRevision': new,
+        'observedRevision': git(repo, 'rev-parse', 'HEAD'),
+    }
     assert not active_release(manager.home)
     assert environments.locked_sources(current)['fixture-runtime'].fragment == old
+    assert not (environments.receipt_directory(manager.home, generation) / 'runtime.lock').exists()
+
+
+async def test_uv_commit_override_does_not_pin_the_next_update(environment, monkeypatch):
+    """Exercise real uv normalization, locked installation and frozen replay."""
+    import tomllib
+    from urllib.parse import parse_qs
+    from amplifier_web.runtime_qualification import freeze, verify_recorded
+    from amplifier_web.updates import process
+
+    manager, current, row, old, new, repo = environment
+    baseline = (current / 'uv.lock').read_bytes()
+    original = environments.update_manifest
+
+    async def exact_candidate(home):
+        observed, content = await original(home)
+        data = tomllib.loads(content.decode())
+        data['tool']['uv']['sources'].pop('fixture-runtime')
+        data['tool']['uv']['override-dependencies'] = [
+            'fixture-runtime @ git+' + repo.as_uri() + '@' + new]
+        return observed, ('\n'.join(json.dumps(key) + ' = ' + environments.toml_value(value)
+                                    for key, value in data.items()) + '\n').encode()
+
+    monkeypatch.setattr(environments, 'update_manifest', exact_candidate)
+    generation = '9' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    prepared = await environments.stage(manager, generation, [row], finalize=False)
+    resolved = environments.locked_sources(prepared)['fixture-runtime']
+    assert parse_qs(resolved.query)['rev'] == [new] and resolved.fragment == new
+    await process(shutil.which('uv'), 'sync', '--locked', '--project', str(prepared), timeout=90)
+    final = await freeze(manager, generation, prepared)
+    verify_recorded(final, receipt)
+    assert (current / 'uv.lock').read_bytes() == baseline
+    (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    installed = next(item for item in environments.inventory(manager.home)
+                     if item.get('package') == row['package'])
+    assert installed['ref'] == 'main' and installed['eligible'] and installed['current'] == new
+    frozen = (receipt / 'runtime.lock').read_bytes()
+
+    monkeypatch.setattr(environments, 'update_manifest', original)
+    (repo / 'marker.txt').write_text('next branch update')
+    git(repo, 'commit', '-am', 'next')
+    latest = git(repo, 'rev-parse', 'HEAD')
+    next_generation = '8' * 32
+    environments.receipt_directory(manager.home, next_generation).mkdir(parents=True)
+    next_project = await environments.stage(manager, next_generation, [{**installed, 'latest': latest}])
+    assert environments.locked_sources(next_project)[row['package']].fragment == latest
+    assert (receipt / 'runtime.lock').read_bytes() == frozen
+    verify_recorded(final, receipt)
 
 
 def test_cold_inventory_does_not_prepare_worker(tmp_path):
@@ -241,7 +296,7 @@ async def test_installed_transitive_branch_drift_rejected(installed_transitive):
     environments.receipt_directory(manager.home, generation).mkdir(parents=True)
     (repo / 'child/marker.txt').write_text('moved since check')
     git(repo, 'commit', '-am', 'drift')
-    with pytest.raises(ValueError, match='branch moved'):
+    with pytest.raises(ValueError, match='source resolved differently'):
         await environments.stage(manager, generation, [row])
     assert not active_release(manager.home)
     assert not (environments.receipt_directory(manager.home, generation) / 'runtime.lock').exists()
@@ -273,7 +328,7 @@ def test_local_override_conceals_no_locked_git_source_and_is_never_rewritten(env
     assert '/private/' not in json.dumps(local)
 
 
-async def test_freeze_captures_post_preparation_graph_and_preserves_future_branch_policy(installed_transitive):
+async def test_freeze_captures_post_preparation_graph_and_protects_untyped_policy(installed_transitive):
     from amplifier_web.runtime_qualification import freeze, installed_graph, verify_recorded
     manager, current, row, old, new, repo = installed_transitive
     generation = '1' * 32
@@ -288,22 +343,24 @@ async def test_freeze_captures_post_preparation_graph_and_preserves_future_branc
     assert before and final != current
     (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
     child = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
-    assert child['current'] == old and child['ref'] == 'main' and child['eligible']
-    assert not any(row['kind'] == 'runtime environment' for row in environments.inventory(manager.home))
+    assert child['current'] == old and child['ref'] == old and not child['eligible']
+    assert child['policyOrigin']['kind'] == 'unresolved-reference'
+    assert child['policyOrigin']['originalRef'] == 'main'
+    refresh = next(row for row in environments.inventory(manager.home) if row['kind'] == 'runtime environment')
+    assert refresh['current'] == 'legacy-policy' and refresh['eligible']
+    assert refresh['label'] == 'Refresh included components'
     frozen = (receipt / 'runtime.lock').read_bytes()
     await environments.stage(manager, generation, [{**child, 'latest': new}])
     assert (receipt / 'runtime.lock').read_bytes() == frozen
     with pytest.raises(ValueError, match='cannot be refreshed'):
         await freeze(manager, generation, final)
-    # Frozen constraints are receipts, never the next update's branch policy.
-    next_generation = '4' * 32
-    environments.receipt_directory(manager.home, next_generation).mkdir(parents=True)
-    refreshed = await environments.stage(manager, next_generation, [{**child, 'latest': new}])
-    assert environments.locked_sources(refreshed)['amplifier-fixture-child'].fragment == new
-    assert (receipt / 'runtime.lock').read_bytes() == frozen
+    # This fixture's transitive @main carries no selected branch-kind proof.
+    # Only selected-source reconciliation can grant future branch updates; a
+    # freeze or cold reopen must not guess from the reference's familiar name.
     shutil.rmtree(final / '.venv')
     cold = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
-    assert cold['ref'] == 'main' and cold['current'] == old and cold['eligible']
+    assert cold['ref'] == old and cold['current'] == old and not cold['eligible']
+    assert cold['policyOrigin'] == child['policyOrigin']
 
 
 async def test_editable_foundation_cache_has_real_source_evidence_and_freezes(installed_transitive):

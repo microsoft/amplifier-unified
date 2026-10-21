@@ -283,8 +283,8 @@ def view_patch(patch):
         raise ValueError('navWorkspaceList must be a boolean.')
     if 'navLocationFilter' in patch and patch['navLocationFilter'] not in ('all', 'managed'):
         raise ValueError('Choose all locations or no workspace.')
-    if 'navStatusFilter' in patch and patch['navStatusFilter'] not in ('all', 'attention', 'working', 'unread'):
-        raise ValueError('Choose all, attention, working, or unread conversations.')
+    if 'navStatusFilter' in patch and patch['navStatusFilter'] not in ('all', 'attention', 'working', 'unread', 'idle'):
+        raise ValueError('Choose all, attention, working, unread, or idle conversations.')
     if 'navChatScope' in patch and patch['navChatScope'] not in ('workspace', 'all'):
         raise ValueError('navChatScope must be workspace or all.')
     if 'navFilter' in patch and (not isinstance(patch['navFilter'], str) or len(patch['navFilter']) > 500):

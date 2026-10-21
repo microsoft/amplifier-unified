@@ -80,6 +80,18 @@ async def test_start_execute_stop_remove_retain_storage_and_exact_requests(app, 
     assert (await start(app, 'second'))['resource']['id'] != row['id']
 
 
+@pytest.mark.parametrize('key,value', [
+    ('env', {'HOME': '/root'}), ('environment', {'PATH': '/caller'}),
+    ('jobEnvironment', {'HOME': '/root'}), ('profileId', 'browser-test'),
+    ('uid', 0), ('gid', 0), ('user', 'root'), ('durableJob', True),
+])
+async def test_manual_execute_schema_refuses_workload_policy_overrides(app, backend, key, value):
+    row = (await start(app))['resource']
+    with pytest.raises(AppError):
+        await act(app, 'execute', row, 'override', command='true', **{key: value})
+    assert [action for action, _ in backend] == ['prepare', 'start']
+
+
 async def test_one_environment_per_root_and_no_storage_retirement_bypass(app, backend):
     row = (await start(app))['resource']
     with pytest.raises(AppError, match='already owns'):
@@ -357,8 +369,7 @@ async def test_stop_while_waiting_prevents_backend_start(app, backend, monkeypat
 
 
 def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatch):
-    pin = 'a' * 40
-    monkeypatch.setattr(owner, 'DTU_COMMIT', pin)
+    pin = owner.DTU_COMMIT
     monkeypatch.setattr(owner, 'SUPPORTED_HOST', True)
     app.smart_tools = SimpleNamespace(state={'installations': []}, close=AsyncMock())
     identity = 'b' * 24

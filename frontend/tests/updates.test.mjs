@@ -16,6 +16,23 @@ const component={id:'bundle',label:'Community bundle',status:'update',current:'a
 function state(updates={}){return {view:{},settings:{updates:{}},updates:{application,items:[],...updates}};}
 function render(updates={},view={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:{...state(updates),view},act:()=>{}}));}
 
+test('confirmed app success stays visible beside component failure without opening details',()=>{
+ const result={attemptId:'a'.repeat(32),phase:'restart-ack',version:application.current,revision:'b'.repeat(40),verifiedAt:10};
+ const updates={application:{...application,runningRevision:result.revision},applicationResult:result,
+  phase:'error',error:'Component sources changed.',sequence:{stage:'other'},
+  diagnostics:{attemptId:'component',batch:{attemptId:'component',kind:'ecosystem',components:['foundation']},
+   lastFailure:{attemptId:'component',kind:'ecosystem',phase:'ecosystem-validation',status:'failed',reason:'runtime-source-changed',at:12}}};
+ const html=render(updates);
+ assert.match(html,/Application updated successfully/);
+ assert.match(html,/Some components were not updated/);
+ assert.match(html,/Affected batch: foundation/);
+ assert.match(html,/Check for updates again before retrying/);
+ assert.ok(html.indexOf('Application updated successfully')<html.indexOf('ecosystem-update-details'));
+ assert.doesNotMatch(render({...updates,pendingRestart:{requestStatus:'uncertain'}}),/Application updated successfully|Some components were not updated/);
+ assert.doesNotMatch(render({...updates,applicationResult:{...result,phase:'restart-reconcile'}}),/Application updated successfully/);
+ assert.match(render({...updates,applicationResult:{...result,phase:'restart-reconcile'}}),/Current application verified/);
+});
+
 test('current batch names progress and completed batches remain visible without claiming the new batch installed',()=>{
  const html=render({phase:'validating',sequence:{stage:'other',install:true},
   diagnostics:{attemptId:'new',batch:{attemptId:'new',kind:'ecosystem',tier:'other',components:['amplifier-hooks-approval'],componentCount:1,startedAt:1},
@@ -458,4 +475,38 @@ test('an error arriving during validation is never hidden by a progress summary'
  const html=render({phase:'validating',error:'Validation stopped',diagnostics:{attemptId:'new',batch:{attemptId:'new'}},probeProgress:{attemptId:'new',completed:1,total:2}});
  const banner=html.slice(0,html.indexOf('data-part="update-controls"'));
  assert.match(banner,/Updates need attention/);assert.doesNotMatch(banner,/Finishing your update/);
+});
+
+test('runner-only wait keeps availability refresh usable without exposing unrelated work as a blocker',async()=>{
+ const runner={previous:'old',runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check'};
+ const base={phase:'staged',pendingSmartTools:[runner],blockers:[{kind:'conversation',sessionId:'one',label:'Unrelated chat'}]};
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(base),act:(name,args)=>calls.push({name,args})}))});
+ const check=root.root.findByProps({'data-action':'updates.check'});
+ assert.equal(check.props.disabled,false);assert.equal(check.findByType('span').children.join(''),'Check for updates');
+ assert.equal(root.root.findAllByProps({'data-part':'update-blockers'}).length,0);
+ await renderAct(async()=>check.props.onClick());assert.deepEqual(calls,[{name:'updates.check',args:undefined}]);
+ for(const change of [{pendingRelease:'candidate'},{pendingSmartTools:[runner,{previous:'ordinary-tool'}]},{phase:'validating'}]){
+  await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state({...base,...change}),act:()=>{}})));
+  assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,true);
+ }
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('prepared source mismatch explains preservation and exports only mismatch field names',()=>{
+ const failure={id:'mismatch',attemptId:'candidate',phase:'ecosystem-validation',status:'failed',
+  errorType:'ValueError',reason:'runtime-installed-source-mismatch',package:'amplifier-foundation',
+  resolutionMismatches:['revision','private/source', {path:'/private/cache'},'revision'],
+  path:'/private/cache',message:'credential-bearing failure'};
+ const diagnostics={attemptId:'candidate',lastFailure:failure,events:[failure]};
+ const html=render({phase:'error',diagnostics});
+ assert.match(html,/amplifier-foundation/);
+ assert.match(html,/component changed to a different source during update preparation/);
+ assert.match(html,/kept the current components active/);
+ assert.match(html,/share the update details/);
+ const exported=JSON.parse(diagnosticReceipt(diagnostics));
+ assert.deepEqual(exported.lastFailure.resolutionMismatches,['revision']);
+ assert.deepEqual(exported.events[0].resolutionMismatches,['revision']);
+ assert.doesNotMatch(JSON.stringify(exported),/private|credential/);
 });

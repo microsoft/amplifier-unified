@@ -293,3 +293,52 @@ def test_incus_publish_uses_positional_ownership_property_after_disconnect(tmp_p
     assert publish[3:] == ['publish', 'owned-builder', '--alias', 'owned-builder', 'user.amplifier.preparation=owned-builder']
     disconnect = next(row for row in commands if 'remove' in row)
     assert commands.index(disconnect) < commands.index(publish)
+
+
+def test_preparation_uses_frozen_total_build_deadline_and_resource_override(tmp_path, monkeypatch):
+    folder = tmp_path / 'preparation'
+    (folder / 'context').mkdir(parents=True)
+    calls, clock = [], [10.0]
+    monkeypatch.setattr(preparation.time, 'monotonic', lambda: clock[0])
+    def call(arguments, *args, **kwargs):
+        calls.append((arguments, kwargs['timeout']))
+        clock[0] += 1000
+        return 'sha256:' + '3' * 64 if 'commit' in arguments else '{}'
+    monkeypatch.setattr(preparation, 'run', call)
+    frozen = profiles.freeze_timing('python-project', {'preparationTimeoutSeconds': 2500})
+    expected = {'baseImage': config(tmp_path)['image'], 'resourceName': 'owned', 'profileId': 'python-project',
+        'timingRequest': frozen, 'resourceRequest': profiles.freeze('python-project', {'cpus': 5, 'memoryMiB': 8192})}
+    with pytest.raises(TimeoutError, match='time limit'):
+        preparation._docker(config(tmp_path), folder, expected, {})
+    assert [seconds for _, seconds in calls] == [2500, 1500, 500]
+    assert '8192m' in calls[0][0] and '5' in calls[0][0]
+
+
+def test_timing_policy_does_not_change_dependency_recipe_identity(tmp_path, backend):
+    snapshot = archive(tmp_path)
+    before = preparation.plan(tmp_path / 'source.tar', snapshot, 'python-project')
+    timing = profiles.freeze_timing('python-project', {'preparationTimeoutSeconds': 4000})
+    receipt = preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request', timing_request=timing)
+    assert receipt['intent']['timingRequest'] == timing
+    assert receipt['intent']['preparationId'] == before['preparationId']
+    assert receipt['recipeSha256'] == before['recipeSha256']
+
+
+def test_builder_wait_consumes_same_preparation_deadline(tmp_path, backend, monkeypatch):
+    from contextlib import contextmanager
+    snapshot = archive(tmp_path)
+    clock = [100.0]
+    monkeypatch.setattr(preparation.time, 'monotonic', lambda: clock[0])
+    @contextmanager
+    def delayed_slot(*args, **kwargs):
+        assert kwargs['seconds'] == 2000
+        clock[0] += 1500
+        yield
+    monkeypatch.setattr(preparation, 'preparation_slot', delayed_slot)
+    def build(config, folder, expected, env):
+        assert expected['_deadline'] - clock[0] == 500
+        return 'sha256:' + '2' * 64, json.dumps({'preparationId': expected['preparationId'], 'sourceSha256': expected['sourceSha256']})
+    monkeypatch.setattr(preparation, '_docker', build)
+    timing = profiles.freeze_timing('python-project', {'preparationTimeoutSeconds': 2000})
+    receipt = preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request', timing_request=timing)
+    assert '_deadline' not in receipt['intent']

@@ -152,11 +152,14 @@ try{
   const response=await page.request.post(url+'/fixture/scoped-query',{data:{mode,clientId:(await state()).client.id}});
   assert.equal(response.status(),200);const proof=await response.json();queryProof.push(proof);return proof;
  };
+ const retainedRow=body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true});
+ const retainedBox=await retainedRow.boundingBox();
  assert.equal((await queryControl('hold')).catalogPaused,true);
  await act('session.rename',{id:chats[1],title:'Scoped B refreshed'});
  await expect.poll(async()=>(await (await page.request.get(url+'/fixture/scoped-query')).json()).entered).toBeGreaterThan(0);
- await expect(body.getByRole('status').filter({hasText:'Updating chat search'})).toBeVisible();
- await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
+ await expect(body.getByRole('status').filter({hasText:'Updating chat search'})).toHaveCount(0);
+ await expect(retainedRow).toBeVisible();
+ assert.deepEqual(await retainedRow.boundingBox(),retainedBox,'Background refresh preserves the visible row geometry');
  // Canvas is intentionally retained but hidden on Search. Exercise a visible
  // local disclosure without changing the held query's demand or forcing input
  // into the hidden frame; exact Canvas draft conservation is checked below.
@@ -213,7 +216,7 @@ try{
  await body.getByRole('searchbox',{name:'Search chats',exact:true}).fill('');
  await waitCoverage(['sidebarSearch']);
  checks.push({coldFailureIsUnavailableNotLoadingOrEmpty:true});
- await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'Your projects',exact:true})).toBeVisible();
+ await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'All workspaces',exact:true})).toBeVisible();
  await act('session.select',{id:chats[0]});await waitCoverage([]);await expect(composer).toHaveDraft('Keep this unsent scoped-navigation draft');
  assert.equal(await page.evaluate(()=>window.scopedDocument===document.querySelector('#amp-one')&&window.scopedFrame===document.querySelector('.a-canvas-html')),true);
  await expect(page.frameLocator('.a-canvas-html').getByRole('textbox')).toHaveValue('preserved canvas input');

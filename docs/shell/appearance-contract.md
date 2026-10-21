@@ -10,7 +10,7 @@ owns behavior and accessibility; an appearance changes their presentation.
 ## Independent preferences
 
 The web arrival experience additionally follows the [adaptive work views
-contract](adaptive-work-views.md). Detail determines a default starting view;
+contract](work-discovery.v1.md). Detail determines a default starting view;
 explicit view selection and responsive layout remain independent.
 
 - Theme: semantic colors, type, surface treatment and optional artwork. Use
@@ -58,7 +58,7 @@ It does not prescribe materials or controls for other clients.
 | --- | --- | --- |
 | User starts an action | Initiating control looks unavailable; its existing icon becomes a compact busy indicator; use an action-specific label such as Saving… or Checking… where the owning component has lifecycle state | Prevent duplicate activation immediately; retain keyboard focus |
 | Server accepted a long operation | Keep local status/label until the operation actually settles | Acknowledgement alone does not re-enable conflicting actions |
-| Background refresh | Keep prior content visible, with a small local text status when useful | Keep reading, navigation and unrelated editing available |
+| Background refresh | Keep usable content silently; do not insert routine refresh text, live announcements, or layout shifts | Keep reading, navigation and unrelated editing available; initial loading and failures remain explicit |
 | Save requires a lock | Explain Saving… outside the disabled fields; dim only affected controls | Use native disabled controls/fieldset for the precise write scope; preserve entered values |
 | Failure or uncertain completion | Show a local explanation and supported retry/check-status action | Keep the draft; do not silently resend uncertain work |
 | Successful completion | Restore the normal control; show a brief local confirmation when useful | Preserve focus and layout; do not flash the whole section |
@@ -246,3 +246,7 @@ Exports include selected accounting fields and bounded identity, never reasoning
 text or request/response captures. Missing context-window, queue and internal
 retry telemetry is not fabricated. Desktop and narrow layouts must wrap, and
 hidden conversation totals must not initiate an accounting read.
+
+
+The quiet background-refresh rule follows the [October 20 UX decision](../ux/decisions/20261020.md).
+User-initiated saving, execution progress, and actionable failures keep their existing feedback.

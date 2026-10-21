@@ -84,7 +84,15 @@ try{
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const zoomed=await img.boundingBox();const scale=zoomed.width/initial.width;
   record(kind,'wheel zooms around pointer',scale>1.05&&Math.abs((zoomed.x+(x-initial.x)*scale)-x)<3&&Math.abs((zoomed.y+(y-initial.y)*scale)-y)<3,{scale});
-  await page.waitForTimeout(300);
+  // The gesture paints before its debounced save is acknowledged. Capture the
+  // reload baseline only after the real view contains that exact wheel patch.
+  let wheel;
+  await expect.poll(()=>{
+   wheel=commands.slice(wheelStart).find(row=>row.action==='canvas.views.command'&&
+    row.args.action==='canvas.view'&&row.args.args.patch?.zoom>1);
+   return !!wheel;
+  }).toBe(true);
+  await expect.poll(saved).toMatchObject(wheel.args.args.patch);
   record(kind,'wheel persistence is bounded',commands.length-wheelStart<=2,{commands:commands.length-wheelStart});
   const retained=await saved();await page.reload();await expect(img).toBeVisible();
   await expect.poll(async()=>(await saved()).zoom).toBe(retained.zoom);

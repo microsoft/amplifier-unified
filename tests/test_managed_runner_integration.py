@@ -17,10 +17,15 @@ from test_test_queue import queue, record, submit, drive
 @pytest.fixture
 def prepared(monkeypatch):
     calls = []
-    def prepare(config, root, snapshot, profile_id, request_id):
+    def prepare(config, root, snapshot, profile_id, request_id, *,
+                resource_request=None, host_reservation=None, timing_request=None):
+        assert resource_request == owner.profiles.freeze(profile_id)
+        assert timing_request == owner.profiles.freeze_timing(profile_id)
+        assert host_reservation['supported'] is False  # Controlled backend has no host target.
         calls.append((snapshot, profile_id, request_id))
         return {'version': 1, 'status': 'ready', 'profileId': profile_id,
-                'sourceSha256': snapshot['archive_sha256'], 'backend': 'docker', 'image': 'sha256:'+'a'*64}
+                'sourceSha256': snapshot['archive_sha256'], 'backend': 'docker', 'image': 'sha256:'+'a'*64,
+                'resourceRequest': resource_request, 'timingRequest': timing_request}
     monkeypatch.setattr(owner.dependencies, 'prepare', prepare)
     monkeypatch.setattr(owner.dependencies, 'cleanup', lambda *a: {'complete': True, 'status': 'removed'})
     return calls
@@ -92,13 +97,14 @@ async def test_preparation_is_bound_to_exact_snapshot_and_removed_after_guest(ap
 
 
 async def test_failed_preparation_stops_owned_builder_before_retiring(app, backend, prepared, monkeypatch):
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise ValueError('Dependency download failed')
     cleanup = []
     monkeypatch.setattr(owner.dependencies, 'prepare', fail)
     monkeypatch.setattr(owner.dependencies, 'cleanup', lambda *a: cleanup.append(True) or {'complete': True, 'status': 'removed'})
     result = await start_prepared(app)
     assert result['request']['state'] == 'failed' and cleanup == [True]
+    assert result['request']['result']['message'] == 'Dependency download failed'
     assert [action for action, _ in backend] == ['prepare']
     assert not owner.get(app.data_dir, scope(app)['sessionId'], result['resource']['id'])['preparationPending']
 
@@ -236,8 +242,8 @@ async def test_public_preparation_recovery_rechecks_owner_before_dependency_clea
     before = app.operations.requests.list(row['sessionId'])
     entered, release = threading.Event(), threading.Event()
     require_resolved = owner.require_resolved_removal
-    def waiting(current_app, current_row, exclude_request_id=None):
-        require_resolved(current_app, current_row, exclude_request_id)
+    def waiting(current_app, current_row, exclude_request_id=None, legacy=None):
+        require_resolved(current_app, current_row, exclude_request_id, legacy)
         assert exclude_request_id == 'remove'
         entered.set()
         assert release.wait(5)
@@ -304,11 +310,12 @@ async def test_preparation_cleanup_commit_gap_settles_without_repeating_cleanup(
 
 
 async def test_never_launched_preparation_cleanup_recovers_bound_original(app, backend, prepared, monkeypatch):
-    def fail_prepare(*args):
+    def fail_prepare(*args, **kwargs):
         raise ValueError('synthetic preparation failure before launch')
     monkeypatch.setattr(owner.dependencies, 'prepare', fail_prepare)
     monkeypatch.setattr(owner.dependencies, 'cleanup', lambda *a: {'complete': False, 'status': 'unknown'})
     started = await start_prepared(app)
+    assert started['request']['result']['message'] == 'synthetic preparation failure before launch'
     removed = await act(app, 'remove', started['resource'], 'remove')
     assert removed['request']['state'] == 'failed'
     saved = owner.get(app.data_dir, scope(app)['sessionId'], started['resource']['id'])
@@ -330,10 +337,10 @@ async def test_never_launched_preparation_cleanup_recovers_bound_original(app, b
 async def test_long_preparation_does_not_hold_queue_admission(app, queue, backend, prepared, monkeypatch):
     entered, release = threading.Event(), threading.Event()
     original = owner.dependencies.prepare
-    def wait(*args):
+    def wait(*args, **kwargs):
         entered.set()
         assert release.wait(5)
-        return original(*args)
+        return original(*args, **kwargs)
     monkeypatch.setattr(owner.dependencies, 'prepare', wait)
     await submit(app, profileId='python-project', timeoutSeconds=1200)
     await queue.tick()

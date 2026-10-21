@@ -208,6 +208,13 @@ try{
 
  // Narrow navigation retains row geometry; the overlaid badges stay within each row.
  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Open navigation',exact:true}).click();await expect(rail).toBeVisible();
+ // Opening hidden navigation reacquires its resources. Measure the accepted
+ // pinned/recent/project rows, not the transient layout while they are loading.
+ await page.waitForFunction(id=>{
+  const snap=window.amplifier.getShellState()?.snapshots?.chats;
+  return ['pinnedNavigation','recentNavigation','workspaceShortcuts'].every(key=>snap?.navigationResources?.includes(key)&&!snap.navigationResourcePending?.[key]&&!snap.navigationResourceRetained?.[key])
+   &&document.querySelector('[data-sidebar-section="pinned"] [data-session-id="'+id+'"]');
+ },ninth.id);
  await blur();const narrowBefore=await geometry();await reveal();assert.deepEqual(await geometry(),narrowBefore);
  const narrow=await badges.evaluateAll(nodes=>nodes.map(node=>{const badge=node.getBoundingClientRect(),row=node.closest('[data-session-id]').getBoundingClientRect();return {number:node.textContent,badge:{x:badge.x,y:badge.y,width:badge.width,height:badge.height},row:{x:row.x,y:row.y,width:row.width,height:row.height}}}));
  assert.ok(narrow.length>=9);for(const {badge,row} of narrow){assert.ok(badge.x>=row.x&&badge.x+badge.width<=row.x+row.width+1);assert.ok(badge.y>=row.y&&badge.y+badge.height<=row.y+row.height+1);assert.ok(badge.x>=0&&badge.x+badge.width<=390)}

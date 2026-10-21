@@ -16,6 +16,7 @@ on:
           - patch-placement-native
           - managed-removal-recovery
           - shared-work-continuity
+          - remote-test-origins
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -32,7 +33,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -146,3 +147,7 @@ jobs:
     uses: ./.github/workflows/core-wheels.yml
     secrets:
       LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+
+  remote-test-origins:
+    if: ${{ !inputs.core_wheels && inputs.suite == 'remote-test-origins' }}
+    uses: ./.github/workflows/remote-test-origins.yml

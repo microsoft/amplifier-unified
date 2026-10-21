@@ -1,4 +1,4 @@
-"""Fixed, bounded transport for durable guest commands (no host shell)."""
+"""Fixed transport for foreground and durable guest commands (no host shell)."""
 from __future__ import annotations
 
 import base64
@@ -13,14 +13,17 @@ TERMINAL = {'passed', 'failed', 'cancelled', 'timed_out'}
 
 
 def arguments(payload):
-    if payload['action'] not in JOB_ACTIONS:
-        raise ValueError('Unsupported durable job action.')
+    action = payload['action']
+    if action not in JOB_ACTIONS | {'execute'}:
+        raise ValueError('Unsupported guest action.')
     source = Path(__file__).with_name('test_job_guest.py').read_text()
     encoded = base64.b64encode(zlib.compress(source.encode())).decode()
     bootstrap = 'import base64,zlib; SCRIPT=zlib.decompress(base64.b64decode(' + repr(encoded) + ')).decode(); exec(SCRIPT)'
-    values = {key: payload[key] for key in ('rootOwner', 'operationId', 'universeId', 'jobId', 'command', 'timeoutSeconds')}
+    # Foreground commands share workload policy, not the durable job lifecycle.
+    keys = ('command',) if action == 'execute' else ('rootOwner', 'operationId', 'universeId', 'jobId', 'command', 'timeoutSeconds')
+    values = {key: payload[key] for key in keys}
     values['environment'] = payload.get('jobEnvironment', {})
-    return ['python3', '-I', '-c', bootstrap, payload['action'], json.dumps(values)]
+    return ['python3', '-I', '-c', bootstrap, action, json.dumps(values)]
 
 
 def command(payload):

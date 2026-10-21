@@ -8,8 +8,9 @@ export const settingsSections=[
  {id:'voice',title:'Voice',scope:'Future voice connections',pages:[['voice','Voice']]},
  {id:'notifications',title:'Notifications',scope:'This app',pages:[['notifications','Notifications']]},
  {id:'privacy',title:'Privacy & files',scope:'Your work and access choices',pages:[['privacy','Privacy & files'],['access-approvals','Access & approvals'],['permissions','File access'],['desktop','Screen & computer access'],['diagnostics','App diagnostic capture'],['history','Saved work'],['storage','Storage']]},
+ {id:'testing',title:'Testing & resources',scope:'Across workspaces on this Amplifier installation',pages:[['testing','Testing & resources']]},
  {id:'updates',title:'Updates',scope:'This Amplifier host',pages:[['updates','Updates']]},
- {id:'advanced',title:'Advanced',scope:'Full configuration',pages:[['advanced','Advanced'],['image-generation','Image generation'],['providers','Provider configuration'],['routing','Model rules'],['app-bundles','Configured bundles'],['add-bundles','Discover bundles'],['defaults','Conversation defaults'],['registries','Module & source registries'],['tool-connections','Tool connections'],['custom-appearance','Custom appearance'],['repair','Backup & repair'],['reset','Advanced recovery'],['ready-conversations','Ready conversations'],['automation','Terminal & automation'],['install-app','Install app'],]},
+ {id:'advanced',title:'Advanced',scope:'Full configuration',pages:[['advanced','Advanced'],['model-capacity','Model capacity'],['image-generation','Image generation'],['providers','Provider configuration'],['routing','Model rules'],['app-bundles','Configured bundles'],['add-bundles','Discover bundles'],['defaults','Conversation defaults'],['registries','Module & source registries'],['tool-connections','Tool connections'],['custom-appearance','Custom appearance'],['repair','Backup & repair'],['reset','Advanced recovery'],['ready-conversations','Ready conversations'],['automation','Terminal & automation'],['install-app','Install app'],]},
 ];
 export const advancedGroups=[
  {title:'AI configuration',pages:['providers','image-generation','routing']},

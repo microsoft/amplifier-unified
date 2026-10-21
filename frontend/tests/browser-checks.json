@@ -3,6 +3,7 @@
   "scenarios": [
     {"id": "adaptive-work", "command": ["node", "tests/adaptive-work-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/adaptive-work"}},
     {"id": "home-sidebar", "command": ["node", "tests/home-sidebar-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/home-sidebar"}},
+    {"id": "shared-landing", "command": ["node", "tests/shared-landing-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/shared-landing"}},
     {"id": "focus-navigation", "command": ["node", "tests/focus-navigation-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/focus-navigation"}},
     {"id": "diagram-navigation", "command": ["node", "tests/diagram-navigation-browser.mjs"], "env": {"DIAGRAM_EVIDENCE": "{root}/output/browser-checks/diagram-navigation/report.json"}},
     {"id": "chat-shortcuts", "command": ["node", "tests/chat-shortcuts-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/chat-shortcuts"}},
@@ -44,6 +45,7 @@
     {"id": "memory-personalization", "command": ["node", "tests/memory-personalization-browser.mjs"]},
     {"id": "publishing", "command": ["node", "tests/publishing-browser.mjs"]},
     {"id": "portability", "command": ["node", "tests/portability-browser.mjs"]},
+    {"id": "testing-settings", "command": ["node", "tests/testing-settings-browser.mjs"]},
     {"id": "settings", "command": ["node", "tests/settings-browser.mjs"]},
     {"id": "configuration-recovery-components", "command": ["node", "--test", "tests/configuration-recovery.test.mjs"]},
     {"id": "configuration-recovery", "command": ["node", "tests/configuration-recovery-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/configuration-recovery"}},
@@ -59,6 +61,7 @@
     {"id": "execution-observability", "command": ["node", "tests/execution-observability-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/execution-observability"}},
     {"id": "execution-inspection", "command": ["node", "tests/execution-inspection-browser.mjs"]},
     {"id": "execution-actions", "command": ["node", "tests/execution-actions-browser.mjs"]},
+    {"id": "tool-details", "command": ["node", "tests/tool-details-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/tool-details"}},
     {"id": "canonical-work", "command": ["node", "tests/canonical-work-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/canonical-work"}},
     {"id": "interim-replies", "command": ["node", "tests/interim-replies-browser.mjs"]},
     {"id": "tool-outcomes", "command": ["node", "tests/tool-outcomes-browser.mjs"]},
@@ -96,10 +99,14 @@
     {"id": "session-health-module-failure", "command": ["node", "tests/session-health-browser.mjs", "--module-failure"]},
     {"id": "activity-feedback", "command": ["node", "tests/activity-feedback-browser.mjs"]},
     {"id": "capacity", "command": ["node", "tests/capacity-browser.mjs"]},
+    {"id": "request-cancellation", "command": ["node", "tests/request-cancellation-browser.mjs"]},
     {"id": "coordination", "command": ["node", "tests/coordination-browser.mjs"]},
     {"id": "shared-work", "command": ["node", "tests/shared-work-browser.mjs"]},
     {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]},
     {"id": "test-environments", "command": ["node", "tests/test-environments-browser.mjs"], "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python", "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/test-environments"}},
-    {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}}
+    {"id": "assignment-adoption", "command": ["node", "tests/assignment-adoption-browser.mjs"]},
+    {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}},
+    {"id": "storage-cleanup-settings", "command": ["node", "tests/storage-cleanup-settings-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/storage-cleanup-settings"}},
+    {"id": "model-capacity-settings", "command": ["node", "tests/model-capacity-settings-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/model-capacity-settings"}}
   ]
 }

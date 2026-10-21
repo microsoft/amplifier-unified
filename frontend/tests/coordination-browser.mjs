@@ -48,9 +48,20 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  await expect(composer).toHaveDraft('Preserve this unsent draft');
  // Reconnect with retained cursors: one stable DOM report, no repeated command.
+ const savedWatch=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier-coordination-v1')));
+ const secondKey=JSON.stringify([current.other,'worker-b']);
+ assert(savedWatch.selected.some(target=>target.sessionId===current.other&&target.workerId==='worker-b'),'Worker selection must be saved before reload');
+ assert(savedWatch.cursors[secondKey],'Worker cursor must be saved before reload');
+ assert.equal(savedWatch.results[secondKey].filter(report=>report.id==='b-report-1').length,1,'Report body must be saved before reload');
  await page.reload();await expandControls();
+ const restoredWatch=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier-coordination-v1')));
+ assert(restoredWatch.selected.some(target=>target.sessionId===current.other&&target.workerId==='worker-b'),'Reload must retain the selected worker');
+ assert.equal(restoredWatch.results[secondKey].filter(report=>report.id==='b-report-1').length,1,'Reload must retain the report body independently of the target list');
+ await expect(second).toBeVisible();
  await expect(second.locator('[data-report-id="b-report-1"]')).toHaveCount(1);
  await expect(second.getByRole('checkbox')).toBeChecked();
+ observed=await page.request.get(url+'/fixture').then(response=>response.json());
+ assert.equal(observed.messages.length,1);assert.equal(observed.stops.length,0);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  let interruptedRead=false;
  await page.route('**/api/actions',async route=>{

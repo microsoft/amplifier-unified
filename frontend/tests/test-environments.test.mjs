@@ -15,7 +15,7 @@ const accepted=result=>({accepted:true,result});
 const page={items:[],capability:{status:'ready',profiles:[{id:'linux-python',label:'Python'}]}};
 const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join('');
 const button=(root,label)=>root.root.findAllByType('button').find(node=>text(node)===label);
-const read={action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'a'}};
+const read={action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'a',offset:0}};
 
 for(const status of ['stopped','running'])test(`artifact evidence export is ${status==='stopped'?'available':'blocked'} for ${status} work`,async()=>{
  let root;const calls=[],resource={id:'env',revision:8,status,recovery:{available:true}};
@@ -532,3 +532,50 @@ for(const failure of [
   }finally{await act(async()=>root?.unmount())}
  });
 }
+
+
+test('independent queued check remains available while another check runs',async()=>{
+ let root;const calls=[];
+ const view={items:[],checks:[{id:'running',status:'checking'}],capability:{status:'ready',ownedEnvironments:1,maxEnvironmentsPerChat:2,profiles:[{id:'linux-python',label:'Python',defaultTimeoutSeconds:300}]}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action===read.action?view:{status:'queued'})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+  const form=root.root.findByProps({'aria-label':'Queue isolated check'});
+  await act(async()=>form.findByType('textarea').props.onChange({target:{value:'python second.py'}}));
+  await act(async()=>form.findByType('input').props.onChange({target:{checked:true}}));
+  await act(async()=>form.props.onSubmit({preventDefault(){}}));
+  const mutation=calls.find(row=>row.action==='workspace.tests.submit');
+  assert.equal(mutation.args.independent,true);assert.equal(mutation.args.command,'python second.py');
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('environment paging keeps exact owner when stopping a later page',async()=>{
+ let root;const calls=[];
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action===read.action?{
+  items:[{id:args.offset?'older-owner':'newer-owner',revision:7,status:'running',recovery:{available:true}}],
+  offset:args.offset||0,nextOffset:args.offset?null:10,capability:{status:'ready',profiles:[]}}:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+  await act(async()=>button(root,'Older environments').props.onClick());
+  assert.match(text(root.toJSON()),/older-owner/);assert.doesNotMatch(text(root.toJSON()),/newer-owner/);
+  await act(async()=>button(root,'Stop and keep data').props.onClick());
+  const mutation=calls.find(row=>row.action==='workspace.environments.stop');
+  assert.equal(mutation.args.id,'older-owner');assert.equal(mutation.args.expectedRevision,7);
+  assert.equal(calls.filter(row=>row.action===read.action).at(-1).args.offset,10);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+
+test('automatic observation keeps the selected environment page while checks run',async()=>{
+ let root;const calls=[],timers=new Map();let counter=0;
+ const originalInterval=globalThis.setInterval,originalClear=globalThis.clearInterval;
+ globalThis.setInterval=callback=>{const id=++counter;timers.set(id,callback);return id};
+ globalThis.clearInterval=id=>timers.delete(id);
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted({items:[],offset:args.offset,nextOffset:args.offset===0?10:null,checks:[{id:'running',status:'checking'}]})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+  await act(async()=>button(root,'Older environments').props.onClick());
+  await act(async()=>{for(const callback of timers.values())callback()});
+  assert.equal(calls.at(-1).args.offset,10);
+ }finally{await act(async()=>root?.unmount());globalThis.setInterval=originalInterval;globalThis.clearInterval=originalClear}
+});

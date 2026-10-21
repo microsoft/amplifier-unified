@@ -216,8 +216,8 @@ ACTION_DEFINITIONS = {
     "updates.app": ("Stage a published application release and restart when idle",schema()),
     "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
-    "updates.smartToolRetry": ("Retry one failed Smart Tool update by its current installation ID. Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
-    "updates.smartToolSkip": ("Skip one failed Smart Tool revision and retain its current installation. Newer revisions remain eligible.", schema({"id":string(200)},["id"])),
+    "updates.smartToolRetry": ("Retry one failed Smart Tool update using its current update resultId (or previous installation ID when no resultId is present). Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
+    "updates.smartToolSkip": ("Skip one failed Smart Tool revision using its current update resultId (or previous installation ID when no resultId is present). Retain the current installation; newer revisions remain eligible.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
@@ -240,6 +240,9 @@ ACTION_DEFINITIONS = {
 from .voice_settings import definitions as voice_settings_definitions
 ACTION_DEFINITIONS.update(voice_settings_definitions(schema, string))
 
+from .storage_cleanup import definitions as storage_cleanup_definitions
+ACTION_DEFINITIONS.update(storage_cleanup_definitions(schema, string))
+
 from .storage_usage import definitions as storage_definitions
 ACTION_DEFINITIONS.update(storage_definitions(schema, string))
 from .operations import definitions as operation_definitions
@@ -249,6 +252,8 @@ ACTION_DEFINITIONS.update(computation_definitions())
 
 from .capacity import definitions as capacity_definitions
 ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
+from .model_capacity_settings import definitions as model_capacity_definitions
+ACTION_DEFINITIONS.update(model_capacity_definitions(schema, string))
 from .configuration_authority import definitions as configuration_authority_definitions
 ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
 from .access_mode import definitions as access_mode_definitions
@@ -361,6 +366,12 @@ from .workspace_resources import definitions as resource_reservation_definitions
 ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
 ACTION_DEFINITIONS.update(environment_definitions(schema, string))
+from .test_capacity_settings import definitions as test_capacity_definitions
+ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+from .registered_test_runners import definitions as test_runner_definitions
+ACTION_DEFINITIONS.update(test_runner_definitions(schema, string))
+from .test_execution_settings import definitions as test_execution_definitions
+ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
 ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
@@ -405,7 +416,7 @@ for _access, _actions in {
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
-        "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile",
+        "worktree.remove", "worktree.archive", "worktree.restore", "worktree.reconcile",
         "coordination.intent",
     },
     "presentation": {
@@ -418,12 +429,13 @@ for _access, _actions in {
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
         "diagnostics.records", "task.get", "task.history", "task.detail", "task.receipt",
-        "capacity.read", "question.list", "question.read",
+        "capacity.read", "modelCapacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        "worktree.create", "worktree.attach", "worktree.handoff",
         "coordination.review",
         *integration_definitions(schema, string),
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
@@ -437,6 +449,8 @@ for _access, _actions in {
         *resource_reservation_definitions(schema, string),
         *environment_definitions(schema, string),
         *test_queue_definitions(schema, string),
+        *test_capacity_definitions(schema, string),
+        *test_runner_definitions(schema, string),
         *assignment_definitions(schema, string),
         *workspace_work_definitions(schema, string),
         *handoff_definitions(schema, string),
@@ -1961,6 +1975,15 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in test_runner_definitions(schema, string):
+            from .registered_test_runners import dispatch as test_runner_dispatch
+            return await test_runner_dispatch(self, action, args, configuration_authority)
+        if action in test_capacity_definitions(schema, string):
+            from .test_capacity_settings import dispatch as test_capacity_dispatch
+            return await test_capacity_dispatch(self, action, args, configuration_authority)
+        if action in test_execution_definitions(schema, string):
+            from .test_execution_settings import dispatch as test_execution_dispatch
+            return await test_execution_dispatch(self, action, args, configuration_authority)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
         if action in environment_definitions(schema, string):
@@ -2072,6 +2095,9 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
+        if action in storage_cleanup_definitions(schema, string):
+            from .storage_cleanup import dispatch as cleanup_dispatch
+            return await cleanup_dispatch(self, action, args, origin, command_id)
         if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
             from .managed_deletion import dispatch as delete_history
             selection = {key: args[key] for key in ('project', 'nativeId') if args.get(key)}
@@ -2127,6 +2153,9 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('assignment.'):
             return await self.assignments.dispatch(action, args, origin, command_id, caller_session_id)
+        if action.startswith("modelCapacity."):
+            from .model_capacity_settings import dispatch as model_capacity_dispatch
+            return await model_capacity_dispatch(self, action, args, origin, command_id)
         if action.startswith("capacity."):
             from .capacity import dispatch as capacity_dispatch
             return await capacity_dispatch(self, action, args, origin, command_id, include_state)
@@ -2216,7 +2245,7 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('worktree.'):
             try:
-                result = await self.worktrees.dispatch(action, args, origin, command_id)
+                result = await self.worktrees.dispatch(action, args, origin, command_id, caller_session_id)
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
@@ -4383,9 +4412,33 @@ class AppService:
                     from .session_health import generation_failure
                     failure = generation_failure(payload)
                     existing = session.get('failure')
-                    if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'):
+                    safety_categories = {'content_filter', 'computer_capture_stop'}
+                    explicit_change = (failure and failure.get('category') != 'unknown'
+                        and isinstance(existing, dict) and failure['category'] != existing.get('category'))
+                    # A terminal's explicit cause supersedes an earlier transient
+                    # provider error. Never turn a terminal safety stop into a
+                    # resumable rate-limit failure by binding the earlier cause.
+                    # Conversely, a later non-safety wrapper cannot erase an
+                    # already observed safety halt; retain its separate cause.
+                    if explicit_change and existing.get('category') in safety_categories and failure['category'] not in safety_categories:
+                        existing['terminalFailure'] = copy.deepcopy(failure)
+                    if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'
+                            or explicit_change and (existing.get('category') not in safety_categories
+                                                    or failure['category'] in safety_categories)):
                         session['failure'] = {**failure, 'recordedAt': event['at'],
                             'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
+                    elif isinstance(existing, dict):
+                        active = session.get('collaborationGeneration') or {}
+                        # A classified provider cause precedes the terminal
+                        # event. Bind it only to its observed admitted input
+                        # and generation, never to an unrelated later failure.
+                        if (active.get('id') == payload.get('generation_id') and not active.get('terminal')
+                                and existing.get('generationId') in {None, active.get('id')}
+                                and existing.get('inputId')
+                                and existing['inputId'] in active.get('inputIds', [])
+                                and existing['inputId'] in payload.get('input_ids', [])):
+                            session['failure'] = {**existing, 'generationId': active['id'],
+                                'inputIds': payload['input_ids']}
                 if root_generation and payload.get("event") == "generation.finished":
                     if not scheduled_generation:
                         from .attention import completed
@@ -4691,8 +4744,11 @@ class AppService:
                     return {**result, 'inputIds': args.get('_contextInputs', [])}
                 return self.surface_context.read(session_id, args, bindings)
         if operation == "capacity.admit":
-            from .capacity import admission
-            return await admission(self, session_id, args)
+            from .capacity_wait import admit
+            return await admit(self, session_id, args)
+        if operation == 'capacity.abandoned':
+            from .capacity import abandoned
+            return await abandoned(self, session_id, args)
         if operation == "history":
             from .history_query import query_history
             return await query_history(self, args, session_id)
@@ -4741,7 +4797,10 @@ class AppService:
                 return await self.dispatch(args['action'], action_args, origin='agent',
                     command_id=args.get('id'), expected_revision=args.get('expectedRevision'),
                     include_state=False, caller_session_id=session_id)
-            if args['action'].startswith('worktree.') or (args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}):
+            if args['action'].startswith('worktree.'):
+                # The canonical worktree owner checks commissioned-manager scope.
+                action_args.setdefault('sessionId', session_id)
+            if args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id

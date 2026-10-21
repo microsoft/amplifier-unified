@@ -102,6 +102,10 @@ class Worker:
 
     async def bridge(self, operation, args):
         timeout = 60
+        if operation == "capacity.admit" and args.get('waitForCapacity'):
+            # The host owns the configurable wait deadline; default waits
+            # until capacity or cancellation. Teardown cancels this future.
+            timeout = None
         if operation == "dispatch" and args.get("action") == "coordination.wait":
             values = args.get("args", {})
             wait_ms = values.get("waitMs", 0) if isinstance(values, dict) else None
@@ -112,6 +116,7 @@ class Worker:
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
+        cancelled = False
         started = time.monotonic()
         generation = getattr(getattr(self, 'runtime', None), 'generation', None) or {}
         facts = {'type': 'runtime.bridge', 'bridgeId': identity, 'operation': operation,
@@ -135,6 +140,8 @@ class Worker:
             diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
             return result
         except TimeoutError as exc:
+            if timeout is None:
+                raise
             diagnostic('timeout', elapsedSeconds=round(time.monotonic() - started, 3),
                        errorType='TimeoutError')
             raise TimeoutError(
@@ -142,6 +149,7 @@ class Worker:
                 "(transport timeout, not normal coordination.wait expiry)."
             ) from exc
         except asyncio.CancelledError:
+            cancelled = True
             diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
@@ -149,6 +157,10 @@ class Worker:
                        elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         finally:
+            if operation == 'capacity.admit' and args.get('waitForCapacity'):
+                # A local future can disappear while this process stays alive.
+                # Fence the exact host-side wait, including a reply in transit.
+                publish({'op': 'bridge.cancel' if cancelled else 'bridge.received', 'id': identity})
             self.bridges.pop(identity, None)
             if not future.done():
                 future.cancel()
@@ -417,13 +429,17 @@ class Worker:
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
                 return HookResult()
+            stamped = None
             if self.telemetry:
-                self.telemetry.hook(identity, event, data)
+                stamped = self.telemetry.hook(identity, event, data)
+            result = (HookResult(action='modify', data=stamped)
+                      if event in {'tool:pre', 'tool:post', 'tool:error'} and isinstance(stamped, dict)
+                      else HookResult())
             from amplifier_web.execution_events import CALL_PURPOSE
             if CALL_PURPOSE.get() or event.startswith("llm:"):
                 # Naming calls retain their measured usage, but do not own the
                 # conversation's busy indicator or a delegated worker's state.
-                return HookResult()
+                return result
             phase = "model"
             retry = {}
             detail = "Waiting for the configured model to respond."
@@ -458,9 +474,12 @@ class Worker:
                 publish({"type": "worker.activity", "workerId": identity, "phase": phase,
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
                     "runId": activity_run_id, "time": time.time(), **retry})
-            return HookResult()
+            return result
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
-            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
+            # Exact tool observation identity must precede the canonical
+            # context-intelligence logger (priority 100), independent of mount order.
+            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event,
+                priority=-100 if event.startswith('tool:') else 0)
 
     async def preparation_progress(self, directory):
         while True:
@@ -553,7 +572,9 @@ class Worker:
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
                 preserve_configuration=config.get('_preserveConfiguration') is True)
-            self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {"call": row})
+            self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {
+                "call": row, "waitForCapacity": True, "_runtimeSessionId": self.session.session_id,
+                "_generationId": (getattr(self.runtime, 'generation', None) or {}).get('id')})
             self.telemetry.admission_guard = self.controls.capacity.guard
             # Preserve app controls on native mounts. A legacy common snapshot
             # retains its previous restoration policy during one-time recovery.

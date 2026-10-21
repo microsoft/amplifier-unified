@@ -156,16 +156,26 @@ def read_removal(app, args, origin, caller, *, listing=False):
                         or app.operations.requests.read(sid, args['originalRequestId']) != original
                         or root_binding() != captured):
                     raise AppError('Removal inspection changed or is busy.', 409)
-                # Even a matching cb5 resourceId lacks the immutable original
-                # admission and executor proof required for safe continuation.
+                from .test_environment_legacy import returned_export_limit
+                legacy = returned_export_limit(row, original)
+                available = bool(legacy and row.get('environmentState') == 'stopped')
+                if available:
+                    from .task_environments import require_resolved_removal
+                    try:
+                        require_resolved_removal(app, row, legacy=legacy)
+                    except ValueError:
+                        available = False
                 result = {
                     'version': 1, 'sessionId': sid, 'id': rid, 'revision': row['revision'],
                     'original': {'requestId': args['originalRequestId'], 'state': state},
-                    'status': 'held',
-                    'code': 'original_binding_missing' if original.get('resourceId') is None
+                    'status': 'qualified' if legacy else 'held',
+                    'code': 'returned_legacy_export_limit' if legacy else
+                            'original_binding_missing' if original.get('resourceId') is None
                             else 'original_binding_unverified',
-                    'executor': 'unobserved', 'physical': 'not_observed',
-                    'continuationAvailable': False, 'riskDecisionAvailable': False,
+                    'executor': 'returned_and_reaped' if legacy else 'unobserved',
+                    'physical': 'not_observed',
+                    'continuationAvailable': available,
+                    'riskDecisionAvailable': False,
                 }
                 if len(json.dumps(result).encode()) > 4096:
                     raise ValueError('projection exceeds bound')
@@ -253,7 +263,10 @@ def project(app, row, request):
                                reason='The test guest is absent. Its owned dependency preparation still needs cleanup.')
             else:
                 changes['status'] = 'retired'
-    return owner.save(app.data_dir, row, **changes)
+    updated = owner.save(app.data_dir, row, **changes)
+    if verified and result['status'] in {'stopped', 'absent'} and (not updated.get('preparationPending') or updated.get('preparedDependencies')):
+        owner.host_resources.settle(updated, release=True)
+    return updated
 
 
 def repair(app, row):

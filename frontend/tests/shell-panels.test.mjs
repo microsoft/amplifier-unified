@@ -218,11 +218,12 @@ test('rename preserves failed text and newer drafts across external renames',asy
 });
 
 
-test('automatic discovery reports loading/errors and refreshes through the shared action',async()=>{
+test('background discovery keeps existing chats quiet, reports errors and uses the shared refresh action',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>calls.push({name,args});state.sharedHistory={loading:true};let root;
  const render=()=>React.createElement(WorkspaceRail,{state,act});
  await renderAct(async()=>{root=create(render())});
- assert.match(JSON.stringify(root.toJSON()),/Finding existing chats/);
+ assert.doesNotMatch(JSON.stringify(root.toJSON()),/Finding existing chats/);
+ assert.match(JSON.stringify(root.toJSON()),/First plan/);
  assert.equal(root.root.findByProps({'aria-label':'Refresh workspaces and chats'}).props.disabled,true);
  state.sharedHistory={error:'One project could not be read.'};
  await renderAct(async()=>root.update(render()));

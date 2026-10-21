@@ -102,6 +102,8 @@ def definitions(schema, string):
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
             "textLimit": {"type": "integer", "minimum": 1, "maximum": 4000},
         }, ["sessionId"])),
+        "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
+            **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request. scope=all never widens request-participant/workspace authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
@@ -225,6 +227,9 @@ class Collaboration:
                 changed = True
             if changed:
                 self.save(identity, value)
+        service.db.execute("""CREATE INDEX IF NOT EXISTS peer_request_cancellations ON commands(
+            json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.cancellation.status'))
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'""")
         from .coordination_watches import Watches
         self.watches = Watches(self)
         service.db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS peer_resume_authorization
@@ -386,11 +391,13 @@ class Collaboration:
             except Exception:
                 continue
             value = self.current(sid)
+            from .request_cancellation import references
             session["coordinationReference"] = {
                 "sessionId": sid, "capturedAt": value["capturedAt"], "bounded": True,
                 "grants": [{key: row[key] for key in ("id", "revision", "revoked", "participants", "idleStart", "allowCreate")}
                            for row in value["grants"][:8]],
-                "requests": [{key: row.get(key) for key in ("requestId", "senderSessionId", "target", "delivery", "grantId")}
+                "cancellations": references(self, sid),
+                "requests": [{key: row.get(key) for key in ("requestId", "senderSessionId", "target", "delivery", "grantId", "cancellation")}
                              for row in value["requests"][:8]], "continuation": value["continuation"]}
 
     def current(self, sid):
@@ -402,6 +409,10 @@ class Collaboration:
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND (json_extract(receipt,'$.senderSessionId')=? OR json_extract(receipt,'$.target.sessionId')=?)
             ORDER BY rowid DESC LIMIT 32""", (sid, sid)).fetchall()]
+        from .request_cancellation import status as cancellation_status
+        for request in requests:
+            if request.get('cancellation'):
+                request['cancellation'] = cancellation_status(request)
         proposals = [json.loads(row[0]) for row in self.service.db.execute("""SELECT receipt FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.grant.pending'
             AND EXISTS (SELECT 1 FROM json_each(json_extract(receipt,'$.result.participants')) WHERE value=?)
@@ -670,6 +681,8 @@ class Collaboration:
         return bool(hasattr(self.service.runtime, "collaboration_steer") and active.get("id") and not active.get("terminal"))
 
     def guard(self, receipt, *, for_reply=False):
+        if not for_reply and receipt.get('cancellation'):
+            return 'The requester cancelled this exact request before further admission.'
         try:
             if receipt.get('delivery') == 'queued' and receipt.get('expiresAt', float('inf')) <= time.time():
                 return 'The queued request expired before runtime admission.'
@@ -692,6 +705,8 @@ class Collaboration:
                     return reason
             if receipt.get('dependencyRequestId'):
                 dependency = self.receipt(receipt['dependencyRequestId'])
+                if dependency.get('cancellation'):
+                    return 'The requester cancelled the originating request; no new automatic return is admitted.'
                 if dependency.get('commandAction') == 'workspace.tests.submit':
                     if reason := self.service.test_queue.continuation_guard(dependency):
                         return reason
@@ -881,9 +896,14 @@ class Collaboration:
                             result = {"accepted": False, "delivery": "not_sent",
                                       "reason": "Preparation cancelled before input admission."}
                             phase = "not_sent"
-                        receipt.update(delivery=phase, detail=result["reason"], admission=result)
-                        self.observe_admission(receipt)
-                        self.service.db.commit()
+                        async with self.service.lock:
+                            # Cancellation, replies and subscriptions can commit
+                            # while transport is awaited. Reconcile only admission
+                            # against the durable owner, never the pre-await copy.
+                            receipt = self.receipt(identity)
+                            receipt.update(delivery=phase, detail=result["reason"], admission=result)
+                            self.observe_admission(receipt)
+                            self.service.db.commit()
                         raise
                 async with self.service.lock:
                     receipt = self.receipt(identity)
@@ -919,6 +939,8 @@ class Collaboration:
     async def submit_steer(self, identity):
         async with self.service.lock:
             receipt = self.receipt(identity)
+            if receipt.get("delivery") != "pending_steer":
+                return receipt
             reason = self.guard(receipt)
             if reason:
                 receipt.update(delivery="suppressed", detail=reason)
@@ -937,9 +959,13 @@ class Collaboration:
         except BaseException as exc:
             result, phase = {"reason": "Steering outcome unknown; no replay."}, "unknown"
             if isinstance(exc, asyncio.CancelledError):
-                receipt.update(delivery=phase, admission=result)
-                self.save(identity, receipt)
-                self.service.db.commit()
+                async with self.service.lock:
+                    receipt = self.receipt(identity)
+                    # Native applied/held evidence can beat the acknowledgement.
+                    receipt.update(delivery=receipt.get("delivery") if receipt.get("delivery") in {"applied", "held", "unknown"} else phase,
+                                   admission=result)
+                    self.save(identity, receipt)
+                    self.service.db.commit()
                 raise
         async with self.service.lock:
             receipt = self.receipt(identity)
@@ -1300,6 +1326,9 @@ class Collaboration:
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
         source = self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None
+        if action == 'coordination.cancel':
+            from .request_cancellation import cancel
+            return await cancel(self, source, args, origin, command_id)
         if action == 'coordination.artifact':
             if source['id'] != args['sessionId']:
                 self.error('Read a retained result from the calling conversation.')
@@ -1392,7 +1421,9 @@ class Collaboration:
             if response.get("qualified") and response.get("status") == "sealed":
                 results.append({"messageId": response["terminalMessageId"], "sessionId": sid,
                                 "inputId": (initial or receipt)['requestId'], "declaration": response})
+            from .request_cancellation import status as cancellation_status
             return {"accepted": True, "result": {"receipt": receipt, "results": results,
+                'cancellation': cancellation_status(report),
                 'responseRevision': report.get('responseRevision', 1 if response else 0), 'revisions': revisions,
                 **({'initialRequest': initial} if initial is not None else {}),
                 "preparation": copy.deepcopy((target or {}).get("activity")),
@@ -1622,6 +1653,8 @@ class Collaboration:
             # evidence stays unknown and is never resolved/replayed by this cap.
             roots = [row for row in self.service.state["sessions"]
                      if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]]
+            from .test_execution_settings import concurrency
+            maximum = concurrency(self.service)['maxTaskChatsPerSource']
             outstanding = set()
             for row in roots:
                 active = row.get("collaborationGeneration") or {}
@@ -1643,7 +1676,7 @@ class Collaboration:
                     WHERE json_extract(c.receipt,'$.commandAction')='coordination.send'
                     AND json_extract(c.receipt,'$.target.sessionId')=d.id
                     AND json_extract(c.receipt,'$.delivery') IN ('queued','submitting','pending_steer')))
-                LIMIT 8""", (*bound, source['id'])))
+                LIMIT ?""", (*bound, source['id'], maximum)))
             pending = self.service.db.execute("""SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.create'
                 AND json_extract(receipt,'$.senderSessionId')=?
@@ -1651,8 +1684,8 @@ class Collaboration:
                 AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""",
                 (source["id"], PROTOCOL)).fetchall()
             outstanding.update(json.loads(row[0])["sessionId"] for row in pending)
-            if len(outstanding) >= 8:
-                self.error("At most eight outstanding task chats per source root.", 409)
+            if len(outstanding) >= maximum:
+                self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
             if not args['title'].strip() or not args['text'].strip():
                 self.error('Enter a task title and brief.', 400)
             self.require_causal_depth(self.causal_depth(source, lineage, origin))

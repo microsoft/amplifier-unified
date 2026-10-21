@@ -643,7 +643,11 @@ def module_source(config, snapshot, module, source, components=None):
     selected = components.source(module, source, installed=True)
     if components.owns(module, source):
         return selected
-    return source if snapshot else config.module_sources.get(module) or source
+    result = source if snapshot else config.module_sources.get(module) or source
+    observer = getattr(config, '_source_policy_observer', None)
+    if observer:
+        observer.observe(result, config, explicit_local=bool(not snapshot and config.module_sources.get(module)))
+    return result
 
 
 async def load_configured_bundle(registry, config, reference):
@@ -659,6 +663,9 @@ async def load_configured_bundle(registry, config, reference):
     from .bundle_paths import local_bundle_path
     candidate = local_bundle_path(config, reference)
     chosen = str(candidate) if candidate is not None else reference
+    observer = getattr(config, '_source_policy_observer', None)
+    if observer:
+        observer.observe(chosen, config, registry, explicit_local=candidate is not None)
     return await registry.load(chosen), chosen
 
 
@@ -670,8 +677,14 @@ def session_registry(config):
     old imported alias cannot silently become a source-selection fallback.
     """
     from amplifier_foundation import BundleRegistry
+    def resolve_include(reference):
+        selected = config.resolve_source(reference)
+        observer = getattr(config, '_source_policy_observer', None)
+        if observer:
+            observer.observe(selected or reference, config, explicit_local=selected is not None)
+        return selected
     options = dict(home=config.registry_home, strict=True,
-                   include_source_resolver=config.resolve_source)
+                   include_source_resolver=resolve_include)
     parameters = inspect.signature(BundleRegistry).parameters
     if 'persist' in parameters:
         options['persist'] = False
@@ -740,7 +753,7 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
     return loaded
 
 
-async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None, dependency_batch=None, global_only=False, runtime_plan=None, profile_catalog=None):
+async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None, dependency_batch=None, global_only=False, runtime_plan=None, profile_catalog=None, source_policy_collector=None):
     """Prepare a fresh qualification worker before importing its live runtime.
 
     This first probe only installs configured dependencies. A separate process
@@ -749,6 +762,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
     No conversation, history store, job recovery or model execution is opened.
     """
     config = load_config(workspace, global_only=global_only)
+    if source_policy_collector is not None:
+        config._source_policy_observer = source_policy_collector
     from .config import prepare_registry
     prepare_registry(config)
     execution_workspace = Path(config.workspace).expanduser().resolve(strict=True)

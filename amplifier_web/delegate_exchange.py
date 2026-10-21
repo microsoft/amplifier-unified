@@ -66,7 +66,7 @@ def field_value(node, field):
 
 def descriptor(node, session_id):
     """A bounded descriptor survives paging without copying full tool results."""
-    result = {key: node[key] for key in ('id', 'toolCallId', 'sessionId', 'runId', 'phase', 'startedAt', 'endedAt') if key in node}
+    result = {key: node[key] for key in ('id', 'toolCallId', 'sessionId', 'runId', 'phase', 'startedAt', 'endedAt', 'toolObservationId', 'contentAvailability', 'savedObservations') if key in node}
     for field in FIELDS:
         value = field_value(node, field)
         reference = node.get(field + 'Detail')

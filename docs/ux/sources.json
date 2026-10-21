@@ -1,0 +1,140 @@
+{
+  "reviewDate": "2026-10-20",
+  "state": "adopted-direction",
+  "sources": [
+    {
+      "repository": "microsoft/amplifier-unified",
+      "revision": "5da1e1ce137866b780c37d0ebb9a4b63aecfcadc",
+      "url": "https://github.com/microsoft/amplifier-unified/tree/5da1e1ce137866b780c37d0ebb9a4b63aecfcadc",
+      "readings": [
+        "docs/architecture/VISION.md",
+        "docs/architecture/README.md",
+        "docs/clients/VISION.md",
+        "docs/clients/direction.md",
+        "contracts/client-experience.v1.md",
+        "contracts/client-state.v1.md",
+        "contracts/working-set.v1.md",
+        "docs/workspaces/docs/VISION.md",
+        "docs/workspaces/contracts/experience.v1.md",
+        "docs/shell/appearances.md",
+        "docs/shell/appearance-contract.md",
+        "docs/shell/adaptive-work-views.md",
+        "frontend/tests/home-sidebar-browser.mjs",
+        "amplifier_web/adaptive_work.py"
+      ],
+      "qualification": "Documentation and relevant source review; no application tests rerun for this docs proposal"
+    },
+    {
+      "repository": "microsoft/amplifier-converge",
+      "revision": "c63f1e6bea6d93e5ffb86b0e3dbcc698391cbe9c",
+      "url": "https://github.com/microsoft/amplifier-converge/tree/c63f1e6bea6d93e5ffb86b0e3dbcc698391cbe9c",
+      "readings": [
+        "README.md",
+        "docs/FORMAT.md",
+        "family.toml",
+        "docs/workflow/UNIFIED-CHECKPOINT-20260923.md",
+        "contracts/experience-interface.v1.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-method",
+      "revision": "86b9a4a457df22c48b80a4c423b3e421dd309292",
+      "url": "https://github.com/microsoft/amplifier-converge-method/tree/86b9a4a457df22c48b80a4c423b3e421dd309292",
+      "readings": [
+        "contracts/documents.v1.md",
+        "contracts/settling.v1.md",
+        "contracts/verdicts.v1.md",
+        "docs/DOCUMENT-SHAPES.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "microsoft/amplifier-bundle-converge",
+      "revision": "2260b3434af915aeef28c1e200dff7aa5179d7a8",
+      "url": "https://github.com/microsoft/amplifier-bundle-converge/tree/2260b3434af915aeef28c1e200dff7aa5179d7a8",
+      "readings": [
+        "README.md",
+        "docs/PROTOCOL.md",
+        "contracts/documents.v1.md",
+        "docs/CONTRACTS-README.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-direction",
+      "revision": "1ea1568d7afd59e7391ac98b4f15b9cc3af1c981",
+      "url": "https://github.com/microsoft/amplifier-converge-direction/tree/1ea1568d7afd59e7391ac98b4f15b9cc3af1c981",
+      "readings": [
+        "contracts/experience.v1.md",
+        "smart_tool/src/converge_direction/SMART_TOOL.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-onramp",
+      "revision": "3ea9fd6356b615a22120c4a47d47307bc76ed608",
+      "url": "https://github.com/microsoft/amplifier-converge-onramp/tree/3ea9fd6356b615a22120c4a47d47307bc76ed608",
+      "readings": [
+        "docs/VISION.md",
+        "contracts/experience.v1.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "robotdad/possibly",
+      "revision": "586c39631b2b946d465ff37ee0240c2709716464",
+      "url": "https://github.com/robotdad/possibly/tree/586c39631b2b946d465ff37ee0240c2709716464",
+      "readings": [
+        "README.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "microsoft/amplifier-bundle-unified-converge",
+      "revision": "d07e710067e45abaffc662fdffa9b5a7fe21a898",
+      "url": "https://github.com/microsoft/amplifier-bundle-unified-converge/tree/d07e710067e45abaffc662fdffa9b5a7fe21a898",
+      "readings": [
+        "README.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "bkrabach/amplifier-converge-reader",
+      "revision": "cde662fa73e66517b557f7c586ee54b5e5a331eb",
+      "url": "https://github.com/bkrabach/amplifier-converge-reader/tree/cde662fa73e66517b557f7c586ee54b5e5a331eb",
+      "readings": [
+        "docs/VISION.md",
+        "contracts/reader.v1.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    },
+    {
+      "repository": "bkrabach/amplifier-converge-app",
+      "revision": "b2f76a8d88664ff788ecb4d78d3ca4eab1470513",
+      "url": "https://github.com/bkrabach/amplifier-converge-app/tree/b2f76a8d88664ff788ecb4d78d3ca4eab1470513",
+      "readings": [
+        "contracts/experience.v1.md",
+        "contracts/writes.v1.md"
+      ],
+      "qualification": "Read-only source review; not installed or runtime-tested"
+    }
+  ],
+  "methodScope": "Short vision/contracts, exact-revision candidates, explicit human decisions, and separate evidence; not wholesale adoption of runtime, guards, or ledger automation",
+  "releaseEvidence": {
+    "version": "0.20.188",
+    "qualificationSource": "db5b30ad65a5155d86a9a426d414e3dbd3b2937c",
+    "reference": "https://github.com/microsoft/amplifier-unified/releases/tag/v0.20.188",
+    "recordedBrowserChecks": {
+      "Home": 8,
+      "Focus": 7,
+      "Sidebar": 4
+    },
+    "limits": [
+      "Retained release receipt inspected; no rerun in this review",
+      "Synthetic installed build; not real-history comprehension, live-provider, or native-device evidence"
+    ]
+  },
+  "decision": "decisions/20261020.md",
+  "proposalCommit": "2157b347be3d2a5678fdaaf6c1ea489415c3170b"
+}

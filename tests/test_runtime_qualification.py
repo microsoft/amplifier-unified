@@ -34,6 +34,9 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         calls.append('verify')
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
+            if phase == 'ecosystem-source-preflight':
+                calls.append('source-alignment')
+                return await function(*command, **kwargs)
             if phase == 'ecosystem-runtime-policy':
                 return await function(*command, **kwargs)
             if phase == 'ecosystem-runtime-prepare':
@@ -49,7 +52,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', 'source-alignment', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
@@ -245,7 +248,8 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
     async def overrides(project, target): return target
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
-            if phase == 'ecosystem-runtime-policy': return await function(*command, **kwargs)
+            if phase in {'ecosystem-runtime-policy', 'ecosystem-source-preflight'}:
+                return await function(*command, **kwargs)
             if phase == 'ecosystem-runtime-prepare':
                 assert command[1:3]==('sync','--locked')
                 completed.append('sync')
