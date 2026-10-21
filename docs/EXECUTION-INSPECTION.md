@@ -29,8 +29,9 @@ collapsing a group preserves the individual action expansion choices inside it.
 Group size is measured from the skimmed rows, not the size of unopened payloads.
 Code fences show all content through 15 lines, then preview the
 first 10 lines followed by a separate ellipsis and a preview label, with a single
-expand control. Expansion shows the complete content without the preview marker; structured JSON may be formatted for readability. Copy retains the original saved text without that display
-marker; copying the shortened view still copies the complete saved field.
+expand control. Expansion shows the complete content without the preview marker;
+structured JSON may be formatted for readability. Copy retains the original saved
+text. Copying the shortened view still copies the complete saved field.
 Exceptionally long unbroken text is
 also previewed. Commands, output and exit status, file contents, patches, task
 lists and delegated actions have typed presentations. Additional recorded

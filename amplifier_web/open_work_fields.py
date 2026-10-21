@@ -94,7 +94,8 @@ class OpenWorkFields:
         node = self._node(session, entry, row['id'])
         current_binding = binding(node)
         retained = entry.setdefault('fields', {})
-        own = [(key, page) for key, page in retained.items() if key[0] == row['id']]
+        own = [(key, retained[key]) for field in FIELDS
+               if (key := (row['id'], field)) in retained]
         discard = item.get('contentAvailability', {}).get('status') == 'ambiguous'
         observed_attempt = None
         if node.get('kind') == 'llm':
