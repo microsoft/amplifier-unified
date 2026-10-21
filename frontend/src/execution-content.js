@@ -16,7 +16,7 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
  const failed=['error','failed','cancelled','interrupted','stopped'].includes(phase)||record(result).success===false;
  const done=['completed','complete','success','done'].includes(phase)&&!failed;
  const path=first(args,['file_path','path','filename']);
- const command=first(args,['command','cmd']);
+ const command=first(args,['command','cmd']),code=first(args,['code']);
  const patch=first(args,['patch','diff'])||first(out,['diff','patch'])||(/apply_patch/.test(name)&&typeof input==='string'?input:'');
  const before=first(args,['old_string','old_text']),after=first(args,['new_string','new_text']);
  const tasks=Array.isArray(args.todos)?args.todos:Array.isArray(out.todos)?out.todos:null;
@@ -25,6 +25,7 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
  const verb=(past,active,other)=>done?past:running?active:other;
  const base={tool,input,args,result,output,out,phase,running,failed,done,path,exit,preview:concise(fallback)};
  if(command)return {...base,kind:'command',title:verb('Ran','Running','Run'),target:command,command,preview:typeof out.stdout==='string'?concise(out.stdout.trim().split('\n').filter(Boolean).at(-1))+(exit!=null?` · exit ${exit}`:''):concise(output)};
+ if(code)return {...base,kind:'code',title:verb('Ran','Running','Run'),target:code,code};
  if(patch||(/edit_file|apply_patch/.test(name)&&(before||after))){
   const diff=patch||['@@',...before.split('\n').map(line=>'-'+line),...after.split('\n').map(line=>'+'+line)].join('\n');
   const rows=diffRows(diff),fileRows=rows.filter(row=>row.file),files=[...new Set(fileRows.map(row=>row.file))];
@@ -37,6 +38,30 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
  if(typeof args.action==='string'||typeof args.operation==='string')return {...base,kind:'app',title:'App action',target:typeof args.action==='string'?args.action:args.operation,preview:concise(output)};
  if(/delegate|task|agent/.test(name)&&first(args,['instruction','instructions','prompt','task']))return {...base,kind:'delegate',title:verb('Delegated','Delegating','Delegate'),target:first(args,['agent','name','description']),task:first(args,['instruction','instructions','prompt','task'])};
  return {...base,kind:'generic',title:tool,preview:concise(fallback)};
+}
+
+// Summary hints are presentation only. Never pass them to the expanded payload
+// renderer or its copy controls as if they were complete saved arguments.
+export function actionHeading(node,inputText=node.input,outputText=node.output,errorText=node.error){
+ const input=record(parsed(inputText)),hints=record(node.inputSummary);
+ const action=actionContent(node,Object.keys(input).length?inputText:Object.keys(hints).length?hints:inputText,outputText);
+ const bounded=value=>{const text=textValue(value).replace(/\s+/g,' ').trim();return text.length>180?text.slice(0,179)+'…':text};
+ const result=record(parsed(outputText)),out=record(resultValue(result)),outcome=record(node.outcomeSummary);
+ const exit=out.returncode??out.exit_code??out.exitCode??outcome.exitCode;
+ const error=parsed(errorText)??result.error??out.error??outcome.error;
+ const message=typeof error==='string'?error:first(record(error),['message','error_message','error']);
+ const failure=bounded(message||(action.failed||exit!=null&&exit!==0?first(out,['stderr']).trim().split('\n').filter(Boolean).at(-1):''));
+ const detail=[failure,exit!=null?`Exit ${exit}`:''].filter(Boolean).join(' · ');
+ return {...action,target:bounded(action.target||action.task||''),detail,failed:!!failure||exit!=null&&exit!==0,
+  preview:bounded(action.preview)};
+}
+
+export function contentUnavailable(node,label='Action content'){
+ const state=node.contentAvailability?.status;
+ if(state==='ambiguous')return `${label} could not be matched to this call. Other saved work may still be available.`;
+ if(state==='unverified')return `${label} is available only as related saved records; its exact attempt is unconfirmed.`;
+ if(state==='not-loaded')return `${label} is not in the loaded saved work. Load earlier steps to inspect older records.`;
+ return `${label} is not available in the saved record.`;
 }
 
 export function diffRows(text){

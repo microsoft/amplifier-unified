@@ -1,4 +1,5 @@
 import {openSettingsPage} from './browser-settings.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -13,7 +14,7 @@ try{
  const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);const result=JSON.parse(line);fixtureCookie=result.cookie;resolve(result.port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-detail-token'}}),errors=[];
- page.on('pageerror',error=>errors.push(error.message));
+ page.on('pageerror',error=>{errors.push(error.message);console.error('Page error:',error.message)});
  await page.context().addCookies([{name:'amplifier_unified_session',value:fixtureCookie,url:`http://127.0.0.1:${port}`,httpOnly:true,sameSite:'Strict'}]);
  await page.goto(`http://127.0.0.1:${port}`);
  await page.waitForSelector('#amp-one');
@@ -51,6 +52,7 @@ try{
  const seeded=await page.request.post(`http://127.0.0.1:${port}/api/fixture/control`,{data:{op:'bounded-provider-records',delayCapture:true}});
  assert.equal(seeded.ok(),true,await seeded.text());
  await page.reload();
+ await showFixtureConversation(page);
  const live=page.locator('[data-group-id$="@recording-question"]');
  await live.locator('button.a-execution-turn-line').click();
  await expect(live.getByRole('button',{name:'Load earlier steps',exact:true})).toBeVisible();

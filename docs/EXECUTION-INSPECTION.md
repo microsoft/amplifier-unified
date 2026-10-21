@@ -10,7 +10,7 @@ work or changing their bytes.
 `EventLogView` maintains a disposable, incremental in-memory index of lifecycle
 metadata, short previews and byte references. It does not write an index, payload
 capture or materialized execution view. New live observations carry identifiers,
-status, timing and usage only; neither those observations nor reconstructed event
+status, timing, usage and bounded action/outcome hints; neither those observations nor reconstructed event
 rows are saved to `unified/view.json`. Pre-existing legacy history is preserved.
 Foundation's transcript associations place undated native tool calls by their
 recorded identities; a session creation date is not treated as a message time.
@@ -40,6 +40,14 @@ log record, verifies its digest, and returns that complete field in one request.
 Parsing and file reads run off the server event loop. A replaced log invalidates
 old references; failed reads retain the preview and offer retry. Partial final
 JSONL records are retried after the next append. Inspection never executes tools.
+
+Collapsed tool rows retain the tool name and a bounded command, code, file, or
+action preview, plus an available error and exit status. These are display hints,
+not complete arguments or execution evidence. Expanding reads saved arguments
+and results; copy controls never treat a shortened hint as the full payload.
+Unrelated log appends do not invalidate an unchanged exact saved field. Source
+replacement or edits still invalidate it; temporary read failures offer retry
+without claiming the content changed.
 
 Assistant replies automatically load complete saved text when approaching the
 viewport, using the existing authenticated 16 KB message-detail pages. Navigation
