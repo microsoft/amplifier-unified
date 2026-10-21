@@ -124,7 +124,13 @@ async def test_clarification_refines_once_across_restart_not_every_input(native_
 async def test_stable_update_has_keep_contract_and_does_not_write_or_publish(native_home, community):
     host = await mounted(community, native_home, 'stable', count=0)
     host.metadata.set_name('Fix Atlas OAuth callback', source='generated', description='Remove the redirect loop.')
-    calls = recorder(host, [{'action': 'keep'}])
+    keep = {'action': 'keep', 'name': 'Misleading new title', 'description': 'Must not be saved.'}
+    # Prove the installed parser recognized keep; rejection is not stability.
+    parser = community.SessionNamingHook(host.co, community.SessionNamingConfig())
+    assert parser._parse_response(json.dumps({'action': 'keep'}))['action'] == 'keep'
+    assert parser._parse_response(json.dumps(keep)) == keep
+    calls = recorder(host, [keep, {'action': 'set', 'name': 'Plan Atlas migration',
+                                  'description': 'Move the Atlas database.'}])
     events = []
     namer = LiveSessionNaming(host.co, native_home / 'app', events.append, ['1', '2', '3', '4'])
     before = (namer.directory / 'metadata.json').read_bytes()
@@ -143,6 +149,14 @@ async def test_stable_update_has_keep_contract_and_does_not_write_or_publish(nat
                     'description', 'description_updated_at'):
             assert after.get(key) == old.get(key)
         assert not [event for event in events if event['type'] == 'session.naming']
+        host.context.messages.append({'role': 'user', 'content': 'Stop the login work. Plan the Atlas database migration instead.'})
+        namer.active = True
+        namer.schedule(periodic=True)
+        await namer.pending
+        assert len(calls) == 2
+        assert read(namer.directory)['name'] == 'Plan Atlas migration'
+        assert read(namer.directory)['description'] == 'Move the Atlas database.'
+        assert len([event for event in events if event['type'] == 'session.naming']) == 1
     finally:
         await namer.close()
 
@@ -173,7 +187,9 @@ async def test_automatic_history_sample_includes_later_clarification(app_factory
     # Use canonical native files, never fabricate the outgoing naming prompt.
     from amplifier_foundation.session.history import SessionHistoryStore
     history = SessionHistoryStore(directory)
-    messages = [{'role': 'user', 'content': 'Help with login.'},
+    messages = [{'role': 'user', 'content': [
+                    {'type': 'text', 'text': '<context_file>' + 'INJECTED_NATIVE ' * 1500},
+                    {'type': 'text', 'text': '</context_file>Help with login.'}]},
                 {'role': 'assistant', 'content': 'Which application?'},
                 {'role': 'user', 'content': 'The Atlas OAuth callback loops.'},
                 *[{'role': 'tool', 'content': 'TOOL_PAYLOAD'} for _ in range(80)],
@@ -184,6 +200,7 @@ async def test_automatic_history_sample_includes_later_clarification(app_factory
     assert len(calls) == 1
     text = calls[0][1]
     assert 'Atlas OAuth callback loops' in text and 'Fix the callback redirect' in text
+    assert 'Help with login.' in text and 'INJECTED_NATIVE' not in text
     assert 'TOOL_PAYLOAD' not in text
     assert (directory / 'transcript.jsonl').read_bytes() == original
     assert not app.runtime.started and not app.runtime.sent
@@ -270,6 +287,105 @@ async def test_greeting_does_not_consume_early_refinement(native_home, community
         host.context.messages.append({'role': 'user', 'content': 'The Atlas OAuth redirect loops after sign-in.'})
         await turn(namer, 3)
         assert len(calls) == 2
+    finally:
+        await namer.close()
+
+
+@pytest.mark.parametrize('first', ['greeting', 'defer'])
+async def test_delayed_first_title_arms_refinement_at_accepted_count(native_home, community, first):
+    host = await mounted(community, native_home, 'delayed-' + first, count=0)
+    host.context.messages = [{'role': 'user', 'content': 'Hello!' if first == 'greeting' else 'Help me with a problem.'}]
+    replies = ([{'action': 'defer'}] if first == 'defer' else []) + [
+        {'action': 'set', 'name': 'Fix login'},
+        {'action': 'set', 'name': 'Fix Atlas callback loop'},
+        {'action': 'keep'},
+    ]
+    calls = recorder(host, replies)
+    namer = LiveSessionNaming(host.co, native_home / 'app', lambda _: None)
+    try:
+        await turn(namer, 1)
+        assert len(calls) == int(first == 'defer')
+        assert not read(namer.directory).get('naming_refinement')
+        host.context.messages.append({'role': 'user', 'content': 'Fix the login issue.'})
+        await turn(namer, 2)
+        assert read(namer.directory)['naming_refinement']['completed'] == 2
+        assert read(namer.directory)['name'] == 'Fix login'
+        await namer.close()
+        namer = LiveSessionNaming(host.co, native_home / 'app', lambda _: None, ['1', '2'])
+        host.context.messages.append({'role': 'user', 'content': 'The Atlas OAuth callback loops after sign-in.'})
+        await turn(namer, 3)
+        assert read(namer.directory)['name'] == 'Fix Atlas callback loop'
+        assert read(namer.directory)['naming_refinement']['status'] == 'consumed'
+        call_count = len(calls)
+        await namer.close()
+        namer = LiveSessionNaming(host.co, native_home / 'app', lambda _: None, ['1', '2', '3'])
+        host.context.messages.append({'role': 'user', 'content': 'Use the existing callback handler.'})
+        await turn(namer, 4)
+        assert len(calls) == call_count
+        host.context.messages.append({'role': 'user', 'content': 'Run the regression test.'})
+        await turn(namer, 5)
+        assert len(calls) == call_count + 1
+        assert 'periodic review' in prompt_text(calls[-1])
+    finally:
+        await namer.close()
+
+
+@pytest.mark.parametrize('tag', ['context_file', 'system-reminders'])
+@pytest.mark.parametrize('structured', [False, True])
+async def test_large_envelope_preserves_following_request(native_home, community, tag, structured):
+    host = await mounted(community, native_home, 'large-envelope', count=0)
+    prefix = f'<{tag}>' + 'INJECTED_PRIVATE ' * 1300 + f'</{tag}>'
+    assert len(prefix.encode()) > 20 * 1024
+    request = 'Fix the Atlas OAuth callback loop.'
+    content = prefix + request
+    if structured:
+        # Split the opening and closing tags, not just text within the envelope.
+        split = len(prefix) - 4
+        content = [{'type': 'text', 'text': content[:8]},
+                   {'type': 'image', 'data': 'PRIVATE_IMAGE'},
+                   {'type': 'text', 'text': content[8:split]},
+                   {'type': 'text', 'text': content[split:]}]
+    host.context.messages = [{'role': 'user', 'content': content}]
+    calls = recorder(host, [{'action': 'set', 'name': 'Fix Atlas callback loop'}])
+    namer = LiveSessionNaming(host.co, native_home / 'app', lambda _: None)
+    try:
+        await turn(namer, 1)
+        assert len(calls) == 1
+        text = prompt_text(calls[0])
+        assert request in text
+        assert 'INJECTED_PRIVATE' not in text and 'PRIVATE_IMAGE' not in text
+        assert len(text.encode()) <= 24000
+    finally:
+        await namer.close()
+
+
+@pytest.mark.parametrize('structured', [False, True])
+@pytest.mark.parametrize('failure', ['unclosed', 'mismatch', 'over-scan', 'over-blocks'])
+async def test_invalid_or_over_bound_envelopes_do_not_reach_provider(native_home, community, structured, failure):
+    from amplifier_web.naming_context import MAX_SCAN_BYTES, MAX_BLOCKS
+    host = await mounted(community, native_home, 'envelope-refusal', count=0)
+    content = '<system-reminders>INJECTED_PRIVATE'
+    if failure == 'mismatch':
+        content += '</context_file>HIDDEN_REQUEST'
+    if failure == 'over-scan':
+        content += 'x' * MAX_SCAN_BYTES + '</system-reminders>HIDDEN_REQUEST'
+    if structured:
+        content = [{'type': 'text', 'text': content[:10]},
+                   {'type': 'text', 'text': content[10:]}]
+        if failure == 'over-blocks':
+            content += [{'type': 'text', 'text': 'INJECTED_PRIVATE'}] * MAX_BLOCKS
+            content += [{'type': 'text', 'text': '</system-reminders>HIDDEN_REQUEST'}]
+    host.context.messages = [{'role': 'user', 'content': 'Fix Atlas login.'},
+                             {'role': 'user', 'content': content}]
+    calls = recorder(host, [{'action': 'set', 'name': 'Fix Atlas login'}])
+    namer = LiveSessionNaming(host.co, native_home / 'app', lambda _: None)
+    try:
+        await turn(namer, 1)
+        assert len(calls) == 1
+        text = prompt_text(calls[0])
+        assert 'Fix Atlas login.' in text
+        assert 'INJECTED_PRIVATE' not in text and 'HIDDEN_REQUEST' not in text
+        assert len(text.encode()) <= 24000
     finally:
         await namer.close()
 

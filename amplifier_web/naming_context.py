@@ -11,6 +11,7 @@ from .transcript_window import TranscriptWindowReader, _bounded_json, _OBJECT_LI
 
 MAX_ROWS = 512
 MAX_BLOCKS = 32
+MAX_SCAN_BYTES = 128 * 1024
 MAX_TEXT_BYTES = 16384
 MAX_CONTEXT_BYTES = 8192
 HEAD_BYTES = 256 * 1024
@@ -26,7 +27,9 @@ def clip(text, budget):
 
 
 def clean_text(text):
-    text = clip(text, MAX_TEXT_BYTES)
+    # Scan a finite envelope budget separately from retained meaningful text.
+    # An unclosed envelope consumes the remaining scan, never exposes its body.
+    text = clip(text, MAX_SCAN_BYTES)
     parts, stack, start = [], [], 0
     for match in _TAG.finditer(text):
         if not stack:
@@ -42,7 +45,7 @@ def clean_text(text):
         parts.append(text[start:])
     # A truncated opening envelope must not become a request.
     result = re.split(r'<(?:context_file|system-reminders?)\b', ''.join(parts), flags=re.I)[0]
-    return ' '.join(_DATA.sub('[omitted payload]', result).split())
+    return clip(' '.join(_DATA.sub('[omitted payload]', result).split()), MAX_TEXT_BYTES)
 
 
 def message_text(row):
@@ -62,7 +65,7 @@ def message_text(row):
         return clean_text(content)
     if not isinstance(content, list):
         return ''
-    pieces, remaining = [], MAX_TEXT_BYTES
+    pieces, remaining = [], MAX_SCAN_BYTES
     for block in content[:MAX_BLOCKS]:
         if not isinstance(block, dict) or block.get('type') != 'text':
             continue
@@ -74,7 +77,8 @@ def message_text(row):
         remaining -= len(piece.encode('utf-8'))
         if remaining <= 0:
             break
-    return clean_text('\n'.join(pieces))
+    # Text blocks may split a tag or its body. Parse once across their boundary.
+    return clean_text(''.join(pieces))
 
 
 def substantive(text):

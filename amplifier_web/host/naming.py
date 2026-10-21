@@ -133,8 +133,8 @@ class LiveSessionNaming:
                 def _save_metadata(self,session_dir,metadata):
                     if metadata.get('name'):
                         refinement = None
-                        if not getattr(self,'refresh_title',False) and getattr(self, 'initial_count', 0) == 1:
-                            refinement = {'status': 'pending', 'completed': 1,
+                        if not getattr(self,'refresh_title',False) and getattr(self, 'initial_count', 0) >= 1:
+                            refinement = {'status': 'pending', 'completed': self.initial_count,
                                           'user_digest': self.naming_sample.user_digest}
                         accepted, changed = accept_generated(session_dir, metadata, refinement=refinement)
                         adapter.accepted_change = changed
