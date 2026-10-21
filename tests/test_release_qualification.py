@@ -538,11 +538,36 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
     assert browser_runner_commands([{'run': joined}]) == [joined]
 
 
+def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['canvas-qualification']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert 'secrets.' not in str(job)
+    assert job['steps'][0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    commands = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'uv sync --locked --group dev --group artifacts --no-build-package amplifier-core' in commands
+    assert 'npm ci --prefix frontend' in commands
+    assert 'npx playwright install --with-deps chromium' in commands
+    assert 'python scripts/canvas_qualification.py run' in commands
+    upload = next(step for step in job['steps'] if step.get('uses') == 'actions/upload-artifact@v4')
+    assert 'always()' in upload['if'] and upload['with']['if-no-files-found'] == 'error'
+    source = (ROOT / 'scripts/canvas_qualification.py').read_text()
+    assert 'from browser_check_runner import run_scenarios' in source
+    assert \"BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs')\" in source
+    assert \"raise ValueError('Qualification already started; no replay')\" in source
+    assert \"'installed-harness'\" in source and \"'installed-identity.json'\" in source
+    assert \"assert static == json.loads((OUT / 'static.json').read_text())\" in source
+
+
 def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
-    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption'}
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption', 'canvas_qualification'}
+    assert inputs['canvas_qualification']['type'] == 'boolean'
+    assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['attachment_consumption']['type'] == 'boolean'
     assert inputs['attachment_consumption']['default'] == 'false'
     assert inputs['app004_qualification']['type'] == 'boolean'
@@ -552,10 +577,10 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.canvas_qualification }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}"
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.canvas_qualification }}"
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
     incompatible = mcp['steps'][1]
     assert incompatible['name'] == 'Reject incompatible browser proof selections'
