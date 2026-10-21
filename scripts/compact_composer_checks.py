@@ -112,6 +112,12 @@ def installed(source):
     for row in selected['scenarios']:
         row['env'].update(AMPLIFIER_TEST_PACKAGE_ROOT=str(actual), AMPLIFIER_TEST_PYTHON=str(python), PYTHONPATH='')
     result = run_scenarios(harness, selected, OUTPUT / 'installed', budget=600, provenance=source)
+    if result == 0:
+        proof = json.loads((OUTPUT / 'installed/compact-composer/compact-composer.json').read_text())
+        served = proof.get('installedServedAssets')
+        assert isinstance(served, dict) and served, 'Installed served-asset proof did not execute'
+        assert all(expected.get(name) == value for name, value in served.items()), 'Served assets are not the installed bytes'
+        write(OUTPUT / 'installed-served-proof.json', {'verified': True, 'assets': served})
     shutil.copy2(wheel, OUTPUT / wheel.name)
     # Hosted job retires its workspace; retain explicit harness/process state, not an invented destroy receipt.
     write(OUTPUT / 'installed-layout.json', {'testOnlyHarness': True, 'sourceDirectoriesCopied': False,
@@ -139,7 +145,7 @@ def main():
     source['static'] = manifest(ROOT / 'amplifier_web/static')
     source['build'] = json.loads((ROOT / 'amplifier_web/static/build.json').read_text())
     write(OUTPUT / 'source.json', source)
-    source_code = run_scenarios(ROOT, plan(OUTPUT / 'source'), OUTPUT / 'source', budget=1200, provenance=source)
+    source_code = run_scenarios(ROOT, plan(OUTPUT / 'source'), OUTPUT / 'source', budget=600, provenance=source)
     # Installed execution is meaningful only after the same source journeys pass.
     installed_code = installed(source) if source_code == 0 else None
     write(OUTPUT / 'result.json', {'sourceExit': source_code, 'installedExit': installed_code,
