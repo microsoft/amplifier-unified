@@ -66,11 +66,29 @@ try{
  await page.setViewportSize({width:390,height:844});
  assert(await page.locator('.a-dialog').evaluate(element=>element.scrollWidth<=element.clientWidth));
  await page.screenshot({path:join(outputDir,'mobile.png'),animations:'disabled'});
+ // Rendering contract for canonical rejected/restarted reports. Their real
+ // service transitions are covered in test_request_cancellation.py; here the
+ // response fixture ensures the UI does not replace unconfirmed with waiting.
+ for(const reportStatus of ['rejected','unknown']){
+  const unconfirmed=async route=>{
+   if(route.request().postDataJSON()?.action!=='coordination.context')return route.fallback();
+   const response=await route.fetch(),body=await response.json();
+   const row=body.result.requests.find(row=>row.requestId==='active-request');
+   row.response={kind:'result',outcome:'cancelled',status:reportStatus,qualified:false};
+   row.cancellation={...row.cancellation,status:'reported_unconfirmed',detail:'A cancellation report was saved, but completion could not be confirmed. Inspect the retained result before deciding what to do next.'};
+   await route.fulfill({response,json:body});
+  };
+  await page.route('**/api/actions',unconfirmed);
+  await page.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
+  await expect(active.locator('[data-part="request-cancellation"]')).toContainText('completion could not be confirmed');
+  await expect(active.locator('[data-part="request-cancellation"]')).not.toContainText('waiting');
+  await page.unroute('**/api/actions',unconfirmed);
+ }
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(composer).toHaveDraft('Keep my unsent guidance');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  assert.deepEqual(errors,[]);
- const evidence={queuedWithdrawn:true,otherRequestRetained:true,activeCancellationUnconfirmed:true,lostAcknowledgementSameIdentity:true,noWholeChatStop:true,noReplay:true,draftAndSelectionPreserved:true,mobileNoOverflow:true,scriptedRuntime:true,liveModelEvidence:false,outputDir};
+ const evidence={queuedWithdrawn:true,otherRequestRetained:true,activeCancellationUnconfirmed:true,lostAcknowledgementSameIdentity:true,noWholeChatStop:true,noReplay:true,draftAndSelectionPreserved:true,mobileNoOverflow:true,rejectedAndUnknownRendering:true,reportRenderingUsesResponseFixtures:true,scriptedRuntime:true,liveModelEvidence:false,outputDir};
  await writeFile(join(outputDir,'result.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
 }catch(error){await page?.screenshot({path:join(outputDir,'failure.png')});throw error}
 finally{await browser?.close();fixture.kill()}

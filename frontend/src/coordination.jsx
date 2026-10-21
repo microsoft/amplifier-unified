@@ -112,7 +112,6 @@ function RequestCancellation({dispatch,sessionId,request,onChanged}){
  const cancellation=request.cancellation;
  const report=request.response||{};
  const finished=report.status==='sealed'&&report.kind==='result'&&['success','failed','cancelled','declined'].includes(report.outcome);
- const settled=report.outcome==='cancelled'&&report.status==='sealed';
  const canCancel=request.senderSessionId===sessionId&&!cancellation&&!finished&&['queued','pending_steer','submitting','accepted','applied','unknown'].includes(request.delivery);
  const queued=['queued','pending_steer'].includes(request.delivery);
  const cancel=async()=>{
@@ -129,7 +128,7 @@ function RequestCancellation({dispatch,sessionId,request,onChanged}){
   finally{inflight.current=false;setBusy(false)}
  };
  return <div data-part="request-cancellation">
-  {cancellation&&<p role="status">{settled?'The recipient reported cancellation. Completed effects remain saved.':report.outcome==='cancelled'?'Cancellation reported; waiting for the recipient’s turn to settle.':cancellation.detail}</p>}
+  {cancellation&&<p role="status">{cancellation.detail}</p>}
   {canCancel&&<details><summary>{queued?'Withdraw this request':'Ask to stop this request'}</summary>
    <p>{queued?'Remove this request from the queue. Other work can continue.':'Ask the recipient to stop only this request at its next check. Work may continue until it responds.'}</p>
    <label>Optional guidance<textarea value={note} disabled={busy||unknown} maxLength={1000} onChange={event=>setNote(event.target.value)}/></label>
