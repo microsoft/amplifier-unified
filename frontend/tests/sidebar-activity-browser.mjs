@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 // Packaged UI + real scoped HTTP/WebSocket; synthetic progress only, no model calls.
 import {spawn} from 'node:child_process';
@@ -52,14 +53,14 @@ async function humanPostRecency(){
    await expect(target.locator('[data-part="overlay"]')).toHaveCount(0);
   };
   const order=()=>page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
-  await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
+  await page.goto(url);await showFixtureConversation(page,{navPinned:true});await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
   await expect(page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]')).toHaveCount(20);
   await showChat(page);
   const initial=await metrics(),target=initial.target;
   assert.equal(initial.sessions.length,24);
   await expect(page.locator('.a-quiet-sidebar')).toBeVisible();
   const before=await order();assert.equal(before.length,20);assert.ok(!before.includes(target));
-  await other.goto(url);await other.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+  await other.goto(url);await showFixtureConversation(other,{navPinned:true});await other.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
   await showChat(other);
   await dispatch(other,'session.select',{id:initial.sessions[1]});
   await other.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep other-client draft');

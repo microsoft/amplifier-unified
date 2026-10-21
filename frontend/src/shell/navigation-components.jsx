@@ -1,7 +1,7 @@
 import {WorkspacePlans,WorkspacePlan} from '../workspace-plans';
 import {revealNavigationTitles} from '../navigation-title';
 import {useChatTitle} from '../use-chat-title';
-import {WorkNavigationContext} from '../work-navigation';
+import {WorkNavigationContext,workSurface} from '../work-navigation';
 import {ArchiveButton} from '../archive-feedback.jsx';
 import React,{useEffect,useLayoutEffect,useRef,useState,useContext,useId} from 'react';
 import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Folder,MoreHorizontal,ArrowUp,ArrowDown,Plus} from 'lucide-react';
@@ -17,7 +17,7 @@ import {WorkspaceExplorer,WorkspaceRow} from '../workspace-explorer';
 import {LibraryFilters} from '../conversation-library';
 import {ChatDelete} from '../chat-delete';
 import {PathField} from '../settings-ui';
-import {readItems} from '../attention';
+import {readItems,unreadChatItems} from '../attention';
 import {useNavigation} from '../../../packages/shell-sdk/index.js';
 import {waitForSnapshot} from './wait-for-snapshot';
 import {hasNavigationResource} from './navigation-demand';
@@ -25,6 +25,7 @@ import {NavigationResourceStatus} from './navigation-resource-status';
 import {usePinOrderSettlement} from './pin-order-settlement';
 import {sidebarReadingSnapshot} from './resources';
 import {ChatShortcutBadge} from '../chat-shortcuts';
+import {workGroups} from '../work-status';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
@@ -126,6 +127,17 @@ export function ChatDetails({chat,model,now,close}){
  const title=chat.title||'Untitled conversation',managed=chat.location?.kind==='managed';
  const mixed=state.pinnedItemIds,pins=mixed||state.pinnedSessionIds||[],pinKey=mixed?'session:'+chat.id:chat.id,pinIndex=pins.indexOf(pinKey),orderAction=mixed?'navigation.pinOrder':'session.pinOrder';
  const [pinError,setPinError]=useState(''),[reviewError,setReviewError]=useState(''),[reviewing,setReviewing]=useState(false);
+ const [readError,setReadError]=useState(''),[reading,setReading]=useState(false),readFlight=useRef(false);
+ const unread=unreadChatItems(state,chat.id);
+ const markedUnread=unread.length>0||activity.kind==='unread';
+ const readKnown=!state.library?.bounded||Object.hasOwn(state.attention?.sessions||{},chat.id);
+ const readUnavailable=!readKnown||(markedUnread&&!unread.length);
+ const changeRead=async()=>{
+  if(readFlight.current||readUnavailable)return;readFlight.current=true;setReading(true);setReadError('');
+  try{if(unread.length)await readItems(act,unread);else await act('session.markUnread',{id:chat.id});close()}
+  catch(error){setReadError(error.message||'Could not change read state. Please try again.')}
+  finally{readFlight.current=false;setReading(false)}
+ };
  const errorItem=state.attention?.items?.find(item=>item.id==='session:'+chat.id&&item.sessionId===chat.id&&!item.read);
  const review=async()=>{if(reviewing||!errorItem)return;setReviewing(true);setReviewError('');try{await readItems(act,[errorItem])}catch(error){setReviewError(error.message||'Could not mark this error reviewed.')}finally{setReviewing(false)}};
  const move=async direction=>{try{setPinError('');const response=await act(orderAction,{ids:movePin(pins,pinKey,pins[pinIndex+direction])});const receipt=response?.result?.accepted!==undefined?response.result:response;if(receipt?.accepted===false)throw Error(receipt.error||'Could not reorder pins.')}catch(error){setPinError(error.message)}};
@@ -143,7 +155,8 @@ export function ChatDetails({chat,model,now,close}){
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
    {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action={orderAction} disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action={orderAction} disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
-   <button type="button" data-action="session.markUnread" onClick={()=>{act('session.markUnread',{id:chat.id});close()}}>Mark unread</button>
+   <button type="button" disabled={reading||readUnavailable} data-action={markedUnread?'attention.read':'session.markUnread'} onClick={changeRead}>{reading?'Saving…':markedUnread?'Mark read':'Mark unread'}</button>
+   {readError&&<span role="alert">{readError}</span>}
    <ArchiveButton aria-label={(chat.archived?'Restore ':'Archive ')+title} chat={chat} archived={chat.archived}/>
    {managed&&!chat.parentId&&<button type="button" className="a-danger" aria-label={'Delete '+title} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Delete</button>}
   </div>}
@@ -160,11 +173,14 @@ function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
  const preview=useChatTitle(chat);
  chat={...chat,title:preview.title,titlePreviewSource:preview.source};
  const {state,choose}=model,title=chat.title,activity=activityFor(chat,state);
- const content=<>{handle}<button className="a-nav-chat-select" type="button" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref} data-scroll-title className="a-nav-chat-title"><span>{title}</span></span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
- const className='a-nav-chat '+(chat.id===state.selectedSessionId?'is-selected':'');
+ const selected=workSurface(state)==='chat'&&chat.id===state.selectedSessionId;
+ const paths=!!state.settings?.workspaces?.showPaths&&showLocation;
+ const location=chat.location?.kind==='managed'?'No workspace':paths?chat.workspace:chat.workspaceLabel||chat.workspace;
+ const content=<>{handle}<button className="a-nav-chat-select" type="button" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action="session.select" aria-current={selected?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref} data-scroll-title className="a-nav-chat-title"><span>{title}</span></span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?location:activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
+ const className='a-nav-chat '+(selected?'is-selected':'');
  // The drag preview uses the exact same contents without interactive flyouts.
- if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
- return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-session-id={chat.id} label={title} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>{content}<ChatShortcutBadge id={chat.id}/></NavigationRow>;
+ if(floating)return <div className={className} data-show-paths={paths}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
+ return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-show-paths={paths} data-session-id={chat.id} label={title} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>{content}<ChatShortcutBadge id={chat.id}/></NavigationRow>;
 }
 function ChatPagination({page,onChange,label='conversations'}){
  if(page.pages<2)return null;
@@ -334,7 +350,7 @@ function RecentShortcuts({host,model,now}){
   return()=>{following.dispose();follower.current=null};
  },[host]);
  return <div ref={root} tabIndex={-1} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
-  {!error&&<NavigationResourceStatus state={model.state} quietRefresh resource="recentNavigation" label="recent chats" refresh={model.refreshResources}/>}
+  {!error&&<NavigationResourceStatus state={model.state} resource="recentNavigation" label="recent chats" refresh={model.refreshResources}/>}
   {page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
   {!page.items.length&&!busy&&!error&&!model.state.navigationResourcePending?.recentNavigation&&<p className="a-nav-empty">Your recent chats appear here.</p>}
   {(page.remaining>0||busy||error)&&<div className="a-recent-controls">
@@ -474,8 +490,33 @@ function LegacyConversationList({host,workspaceHost}){
   <SidebarSection id="recent" title="Recent" count={recent.total} model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button>}>
    <ChatList page={recent} model={model} view={recentView} viewAct={recentAct} now={now} showLocation/>
   </SidebarSection>
-  {history.loading&&<p role="status">Finding existing chats…</p>}{history.error&&<p role="alert" className="a-danger">{history.error}</p>}
+  {history.loading&&!recent.items.length&&!workspaceChats.items.length&&<p role="status">Finding existing chats…</p>}{history.error&&<p role="alert" className="a-danger">{history.error}</p>}
  </div>;
+}
+
+function StatusGroup({kind,model,navigation,now}){
+ const group=workGroups[kind],view=navigation.sidebarView,id=useId(),root=useRef(null),restore=useRef(null);
+ const collapsed=view.navStatusCollapsed||[],expanded=view.navStatusExpanded||[],closed=collapsed.includes(kind),all=expanded.includes(kind);
+ const page=model.state[group.resource],requested=view.navStatusPages?.[kind]||0;
+ const ready=hasNavigationResource(model.state,group.resource)&&page?.requestedIndex===requested
+  &&page.workScope===(model.state.workHomePinnedScope||'all');
+ const update=navigation.updateSidebar;
+ useLayoutEffect(()=>{if(ready&&restore.current){root.current?.querySelector(`[data-status-page="${restore.current}"]`)?.focus();restore.current=null}},[ready,page?.index]);
+ const turn=(index,direction)=>{restore.current=direction;update({navStatusPages:{...view.navStatusPages,[kind]:index}})};
+ return <section ref={root} className="a-sidebar-section a-status-group" aria-label={group.title} data-status-group={kind}>
+  <div className="a-sidebar-section-heading"><button type="button" aria-expanded={!closed} aria-controls={id} onClick={()=>update({navStatusCollapsed:closed?collapsed.filter(key=>key!==kind):[...collapsed,kind]})}><span>{group.title}</span><ChevronRight className={closed?'':'is-open'}/>{!closed&&ready&&kind!=='idle'&&<small>{page.total}</small>}</button></div>
+  <div id={id} hidden={closed}>
+   {!closed&&<><NavigationResourceStatus state={model.state} resource={group.resource} label={group.title.toLowerCase()} refresh={model.refreshResources}/>
+    {!ready&&!model.state.navigationResourcePending?.[group.resource]&&<p role="status" className="a-nav-empty">Loading chats…</p>}
+    {ready&&(page.unavailable?<p className="a-nav-empty" role="alert">This project is unavailable.</p>:<>
+     {(all?page.items:page.items.slice(0,2)).map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
+     {!page.total&&<p className="a-nav-empty">{group.empty}</p>}
+     {page.total>2&&<button className="a-sidebar-all a-link" type="button" aria-label={(all?'Show fewer ':'Show more ')+group.title.toLowerCase()+' chats'} onClick={()=>update({navStatusExpanded:all?expanded.filter(key=>key!==kind):[...expanded,kind]})}>{all?'Show fewer':'Show more'}<ChevronRight/></button>}
+     {all&&page.pages>1&&<div className="a-nav-pagination" aria-label={group.title+' pages'}><span>{page.start+1}–{page.end} of {page.total}</span><div><button type="button" className="a-link" data-status-page="previous" disabled={!page.index} aria-label={'Previous '+group.title.toLowerCase()+' page'} onClick={()=>turn(page.index-1,'previous')}>Previous</button><button type="button" className="a-link" data-status-page="next" disabled={page.index+1>=page.pages} aria-label={'Next '+group.title.toLowerCase()+' page'} onClick={()=>turn(page.index+1,'next')}>Next<ChevronRight/></button></div></div>}
+    </>)}
+   </>}
+  </div>
+ </section>;
 }
 
 function QuietSidebar({host,workspaceHost,navigation}){
@@ -484,23 +525,24 @@ function QuietSidebar({host,workspaceHost,navigation}){
  const model={...controller,state:sidebarReadingSnapshot(controller.state)};
  const workspaceModel={...workspaceController,state:sidebarReadingSnapshot(workspaceController.state)},workspaceState=workspaceModel.state;
  const pins=model.state.pinnedNavigation||model.state.sidebarNavigation?.pinned||{items:[],total:0,pages:1};
- return <div className="a-sidebar-navigation a-quiet-sidebar">
+ const status=navigation.sidebarView.navMode==='status';
+ return <div className={'a-sidebar-navigation a-quiet-sidebar'+(status?' a-status-sidebar':'')}>
   <NavigationEditor model={model} deleteOwner={(model.view.workSurface||'chat')==='chat'}/>
   {!workspaceHost&&<NavigationEditor model={workspaceModel}/>}
-  <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
-  {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} quietRefresh resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
-  <SidebarSection id="workspaces" title="Workspaces" model={model} actions={<button type="button" className="a-icon" aria-label="New workspace" onClick={()=>navigation.create()}><Plus/></button>}>
-   <NavigationResourceStatus state={workspaceState} quietRefresh resource="workspaceShortcuts" label="workspaces" refresh={workspaceModel.refreshResources}/>
+  {status?Object.keys(workGroups).map(kind=><StatusGroup key={kind} kind={kind} model={model} navigation={navigation} now={now}/>):<>
+  {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
+  <SidebarSection id="workspaces" title="Projects" model={model} actions={<button type="button" className="a-icon" aria-label="New project" onClick={()=>navigation.create()}><Plus/></button>}>
+   <NavigationResourceStatus state={workspaceState} resource="workspaceShortcuts" label="workspaces" refresh={workspaceModel.refreshResources}/>
    {(hasNavigationResource(workspaceState,'workspaceShortcuts')||workspaceState.navigationResourceRetained?.workspaceShortcuts)?<WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>:!workspaceState.navigationResourcePending?.workspaceShortcuts&&<p role="status">Loading workspaces…</p>}
-   <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
+   <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All projects<ChevronRight/></button>
   </SidebarSection>
-  <SidebarSection id="recent" title="Recent" model={model} actions={<>
-   {model.history.loading&&<span className="a-caption" role="status">Finding existing chats…</span>}
+  <SidebarSection id="recent" title="Recent chats" model={model} actions={<>
    {model.history.error&&<span role="alert">{model.history.error}</span>}
    <button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>
   </>}>
    <RecentShortcuts host={host} model={model} now={now}/>
   </SidebarSection>
+  </>}
  </div>;
 }
 export function ConversationList(props){

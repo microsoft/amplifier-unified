@@ -51,9 +51,12 @@ Command receipts make an exact retry idempotent. A changed policy invalidates
 only this chat's configuration through the existing runtime owner; active work
 and persistent children reach their existing safe boundary before remounting.
 Before the canonical file write, the existing host record durably fences new
-input with a pending file-access change. New root/worker/voice input is rejected,
+input with a pending file-access change. New root/worker/voice execution is rejected,
 queued peer input waits, and schedules/observations recheck their existing
-admission guards. Answers, approvals and Stop remain available for existing work.
+admission guards. Human messages to the current active root generation remain
+available as steering. They cannot fall forward into a new turn if that run ends
+before delivery; an undelivered message remains saved with its delivery state.
+Answers, approvals and Stop remain available for existing work.
 The UI explains pending access and how to finish or stop existing child work.
 Only confirmed retirement, or proof that no owned mount exists, clears the fence.
 After host restart, new mounts read canonical settings; no old worker is adopted.
@@ -204,3 +207,33 @@ work and persistent children. Approvals use the saved preference immediately; th
 UI separately identifies file mounts pending retirement. No provider turn starts.
 Operating system permissions, unavailable tools, external account authentication
 and explicit user questions are not replaced by this preference.
+
+
+### Global access and routine testing
+
+Settings > Privacy & files > **Access & approvals** sets the app-wide default
+without opening or creating a chat. It applies to existing and future chats in
+all workspaces on this host; explicit chat or workspace overrides still win.
+The shared `access.get` and `access.set` actions accept `scope: "app"` without a
+`sessionId` for this user-only settings path. Saves retain revision and command-ID
+checks. Agents cannot enable Full access.
+
+Routine managed test snapshot, preparation, execution, export and owned cleanup
+are task-authorized workspace work, including in Ask when needed mode. They retain
+owner, generation, Stop, assignment, placement and backend identity checks. Host
+setup and broader configuration administration keep their separate grants.
+
+Pending capability cards are retired after Stop, workspace change or expiry, and
+native waits expire after host replacement. Legacy test-only cards also retire.
+Retirement preserves receipts and history, never grants permission or starts work.
+A stale Allow/Deny click acknowledges the expired request with `decisionApplied:
+false` instead of trapping the user in an error. Raw API configuration requests
+without a native waiter may still survive a host restart when otherwise valid.
+
+Both Allow and Deny accept an optional `comment` (up to 4,000 characters). The
+host retains it with the decision and in chat history. A live native waiter
+receives the note in model context before its tool is released; configuration
+requests also return it in their canonical grant receipt. Notes on expired
+requests are retained only. They never revive an old waiter or start a turn.
+Choose Deny when the proposed operation itself needs to change; an Allow note
+is guidance for subsequent work, not a rewrite of the operation being approved.

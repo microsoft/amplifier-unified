@@ -261,6 +261,8 @@ async def test_installed_pwa_launch(aiohttp_server, unused_tcp_port, tmp_path, m
             (tmp_path / "installed-pwa.json").write_text(json.dumps(evidence, indent=2))
             print("Installed Chromium launch/relaunch evidence:", tmp_path / "installed-pwa.json")
         finally:
-            if installed and cdp:
-                await cdp.send("PWA.uninstall", {"manifestId": origin + "/"})
-            await context.close()
+            try:
+                if installed and cdp:
+                    await cdp.send("PWA.uninstall", {"manifestId": origin + "/"})
+            finally:
+                await context.close()

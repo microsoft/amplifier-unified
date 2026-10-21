@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -12,7 +13,7 @@ let browser;
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
  browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(ready.url);
+ const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(ready.url);await showFixtureConversation(page);
  const output=fileURLToPath(new URL('../../output/conversation-details-proof/',import.meta.url));await mkdir(output,{recursive:true});
  if(contextLimit){
   await expect(page.getByText('Context limit reached.',{exact:true})).toBeVisible();

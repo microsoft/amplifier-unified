@@ -80,6 +80,18 @@ async def test_start_execute_stop_remove_retain_storage_and_exact_requests(app, 
     assert (await start(app, 'second'))['resource']['id'] != row['id']
 
 
+@pytest.mark.parametrize('key,value', [
+    ('env', {'HOME': '/root'}), ('environment', {'PATH': '/caller'}),
+    ('jobEnvironment', {'HOME': '/root'}), ('profileId', 'browser-test'),
+    ('uid', 0), ('gid', 0), ('user', 'root'), ('durableJob', True),
+])
+async def test_manual_execute_schema_refuses_workload_policy_overrides(app, backend, key, value):
+    row = (await start(app))['resource']
+    with pytest.raises(AppError):
+        await act(app, 'execute', row, 'override', command='true', **{key: value})
+    assert [action for action, _ in backend] == ['prepare', 'start']
+
+
 async def test_one_environment_per_root_and_no_storage_retirement_bypass(app, backend):
     row = (await start(app))['resource']
     with pytest.raises(AppError, match='already owns'):
@@ -125,22 +137,18 @@ async def test_artifact_recovery_requires_stopped_state_before_backend(app, back
     assert not any(action == 'exportArtifacts' for action, _ in backend)
 
 
-async def test_artifact_recovery_requires_own_current_authority(app, backend):
+async def test_artifact_recovery_requires_owner_and_revision_without_extra_approval(app, backend):
     source, peer = app.state['sessions']
     row = (await start(app))['resource']
     row = (await act(app, 'stop', row, 'stop'))['resource']
     args = {**scope(app), 'id': row['id'], 'expectedRevision': row['revision'], 'requestId': 'protected-export'}
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.exportArtifacts', args, 'protected')
-    authority = await grant(app, ['test_environments'], ['session'])
     with pytest.raises(AppError, match='calling conversation'):
         await agent(app, source, 'workspace.environments.exportArtifacts', {**args, 'sessionId': peer['id']}, 'peer')
-    await revoke(app, authority)
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.exportArtifacts', args, 'revoked')
     with pytest.raises(AppError, match='environment changed'):
         await act(app, 'exportArtifacts', {**row, 'revision': row['revision'] - 1}, 'stale')
-    assert not any(action == 'exportArtifacts' for action, _ in backend)
+    await agent(app, source, 'workspace.environments.exportArtifacts', args, 'owned-export')
+    assert any(action == 'exportArtifacts' for action, _ in backend)
+    assert not source['approvals']
 
 
 async def test_unknown_artifact_export_keeps_old_operation_and_never_replays(app, backend, monkeypatch):
@@ -192,22 +200,18 @@ async def test_committed_artifact_receipt_repairs_metadata_without_export(app, b
     assert sum(action == 'exportArtifacts' for action, _ in backend) == 1
 
 
-async def test_agent_requires_scoped_approval_and_peer_never_borrows_owner(app, backend):
+async def test_agent_tests_need_no_extra_approval_and_peer_never_borrows_owner(app, backend):
     source, peer = app.state['sessions']
     args = {**scope(app), 'profileId': owner.PROFILE, 'requestId': 'agent-start'}
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.start', args, 'agent-start')
-    authority = await grant(app, ['test_environments'], ['session'])
     result = await agent(app, source, 'workspace.environments.start', args, 'agent-start')
     assert result['result']['resource']['status'] == 'running'
     with pytest.raises(AppError, match='calling conversation'):
         await agent(app, source, 'workspace.environments.read', {**scope(app), 'sessionId': peer['id']}, 'peer-read')
     row = result['result']['resource']
-    await revoke(app, authority)
-    with pytest.raises(AppError, match='authority is required'):
-        await agent(app, source, 'workspace.environments.stop', {**scope(app), 'id': row['id'],
-            'expectedRevision': row['revision'], 'requestId': 'unauthorized-stop'}, 'stop')
-    assert [action for action, _ in backend] == ['prepare', 'start']
+    await agent(app, source, 'workspace.environments.stop', {**scope(app), 'id': row['id'],
+        'expectedRevision': row['revision'], 'requestId': 'owned-stop'}, 'stop')
+    assert [action for action, _ in backend] == ['prepare', 'start', 'stop']
+    assert not source['approvals']
 
 
 async def test_timeout_is_retained_unknown_and_same_request_never_runs_again(app, backend, monkeypatch):
@@ -346,9 +350,8 @@ async def test_managed_uninstall_preserves_backend_until_all_resources_retired(a
     assert not directory.exists()
 
 
-async def test_stop_or_revocation_while_waiting_prevents_backend_start(app, backend, monkeypatch):
+async def test_stop_while_waiting_prevents_backend_start(app, backend, monkeypatch):
     source = app.state['sessions'][0]
-    authority = await grant(app, ['test_environments'], ['session'])
     entered, release = threading.Event(), threading.Event()
     original = storage.allocate
     def waiting(*args):
@@ -359,15 +362,14 @@ async def test_stop_or_revocation_while_waiting_prevents_backend_start(app, back
     args = {**scope(app), 'profileId': owner.PROFILE, 'requestId': 'delayed'}
     task = asyncio.create_task(agent(app, source, 'workspace.environments.start', args, 'delayed'))
     assert await asyncio.to_thread(entered.wait, 5)
-    await revoke(app, authority)
+    await app.dispatch('conversation.stop', {'sessionId': source['id']})
     release.set()
     result = await task
     assert result['result']['request']['state'] == 'failed' and backend == []
 
 
 def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatch):
-    pin = 'a' * 40
-    monkeypatch.setattr(owner, 'DTU_COMMIT', pin)
+    pin = owner.DTU_COMMIT
     monkeypatch.setattr(owner, 'SUPPORTED_HOST', True)
     app.smart_tools = SimpleNamespace(state={'installations': []}, close=AsyncMock())
     identity = 'b' * 24

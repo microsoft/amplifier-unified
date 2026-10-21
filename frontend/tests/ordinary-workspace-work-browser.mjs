@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -28,12 +29,12 @@ try{
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const inspect=()=>page.request.get(url+'/fixture/ordinary-work').then(r=>r.json());
  const seed=path=>page.request.post(url+'/fixture/ordinary-work/'+path).then(async r=>{assert.equal(r.ok(),true);return r.json()});
- await page.goto(url);
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await expect(composer).toBeEditable();await composer.fill('Keep the ordinary inspection draft');
  const initial=await inspect();
  // Public breadcrumb -> Workspace work. No API preopened panel or surface.
- await page.locator('[data-part="header"] .a-work-crumb').click();
+ await page.locator('[data-part="header"] .a-work-crumb:not(.a-work-home-crumb)').click();
  const workspaceView=page.getByRole('group',{name:'Workspace view',exact:true});
  await expect(workspaceView).toBeVisible();
  await page.locator('.a-workspace-work-entry > summary').click();
@@ -156,6 +157,26 @@ try{
  await expect(assignment.locator('pre').first()).toContainText('"status": "detached"');
  assert.equal(detached.assignmentUsage.calls,2);assert.equal(detached.assignmentUsage.metrics.grossTotalTokens.status,'partial');
 
+ // Stop followed by explicit human resume preserves the shared work rather
+ // than forcing users to detach chats or discard cumulative accounting.
+ await assignment.getByRole('button',{name:'Stop assignment',exact:true}).click();
+ await expect(assignment).toContainText('Assignment stopped');
+ await expect(assignment).toContainText('nothing is sent automatically');
+ await expect.poll(async()=>(await inspect()).runtimeCalls.length).toBe(detached.runtimeCalls.length+1);
+ const stopped=await inspect();
+ assert.deepEqual(stopped.runtimeCalls,[...detached.runtimeCalls,'stop']);
+ await assignment.getByRole('button',{name:'Resume assignment',exact:true}).click();
+ await expect(assignment).toContainText('Assignment active');
+ const resumed=await inspect();
+ assert.equal(resumed.assignment.id,detached.assignment.id);
+ assert.deepEqual(resumed.assignment.members,detached.assignment.members);
+ assert.deepEqual(resumed.assignment.limits,detached.assignment.limits);
+ assert.deepEqual(resumed.assignmentUsage,detached.assignmentUsage);
+ assert.deepEqual(resumed.runtimeCalls,stopped.runtimeCalls);
+ const resumeAction=actions.filter(row=>row.action==='assignment.resume').at(-1);
+ assert.equal(resumeAction.args.sessionId,initial.selected);
+ assert.equal(resumeAction.args.expectedRevision,detached.assignment.revision+1);
+
  // Candidate capture/recheck uses real local Git reads. It must neither invoke
  // a validation command nor mutate source/ref bytes or execution placement.
  const candidateBefore=await inspect(),candidate=related.locator('[data-part="integration-evidence"]');
@@ -217,7 +238,7 @@ try{
  await related.getByText('Workspace chat list',{exact:true}).click();
  await related.getByRole('button',{name:'Open chat: Settings test',exact:true}).click();
  await expect(composer).toHaveDraft('Keep the ordinary inspection draft');
- assert.deepEqual((await inspect()).runtimeCalls,initial.runtimeCalls);
+ assert.deepEqual((await inspect()).runtimeCalls,[...initial.runtimeCalls,'stop']);
  assert.deepEqual(errors,[]);
  await page.screenshot({path:output+'/ordinary-workspace-work.png'});
  const receipt={passed:true,route:'Chat breadcrumb → workspace → Workspace work; workspace Details → Managed resources',checks:[
@@ -225,6 +246,7 @@ try{
   'held scope response cannot overwrite another inspected owner or private draft','bounded 4000-character excerpt and full original retained',
   'explicit assignment identity owner and revision','limits use exact observed authority/revision and show partial unknown usage',
   'settled member detachment retains attributed incomplete usage','task board reachable through ordinary route',
+  'stopped assignment explicitly resumes with topology and cumulative usage retained; zero new runtime work',
   'candidate observation and recheck use only local read Git commands and do not validate','public validation controls and passive recap',
   'managed resources reads selected workspace without allocation or retirement','scope read failure hides stale controls and refresh recovers','rebound workspace rejected with stale controls hidden',
   'selected conversation and exact private draft retained; zero runtime calls'

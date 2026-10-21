@@ -1,6 +1,11 @@
 # Host-owned isolated checks
 
-`workspace.tests.submit` admits one bounded check per root conversation. The
+`workspace.tests.submit` queues bounded checks per root conversation. The global
+**Settings → Testing & resources → Advanced execution limits** controls both the
+total pending queue and **Maximum pending checks per chat** (default 1). These
+positive limits count all waiting and active checks, including those beyond the
+first displayed page. Raising the per-chat limit permits a sequence of checks;
+it does not permit overlapping environments for one chat. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
 command once, stops the exact owned environment, exports source and artifacts,
@@ -48,12 +53,46 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   or changed owner becomes unknown and preserves the environment. Automatic
   stop/export/remove requires a recorded terminal guest result. Old queue
   receipts retain their original bounded-execute recovery behavior.
+- Checks from the same chat are admitted in submission order, one at a time,
+  across local and registered remote machines. A later check waits until the
+  earlier check and its owned environment cleanup settle. A terminal unknown
+  result does not free ownership; the retained allocation continues to block
+  later checks until exact cleanup or reconciliation confirms release. Waiting
+  reasons remain visible in the existing check list.
 - A host admits FIFO among its eligible roots. One physical capacity observation
   is shared by a batch; unavailable backends back off to at most one observation
   per minute. Local cleanup wakes the queue immediately. Physical backend
   admission performs its own atomic recheck; a snapshot is not a reservation.
 
 ## Capacity policy
+
+Global **Settings → Testing & resources → Advanced limits** exposes running
+and total retained environment ceilings and the free-disk reserve. These apply
+across workspaces on this app installation. The screen shows each effective
+value and whether it comes from a global setting, an optional selected-runner
+connection override, the configured backend, or the backend default. An empty
+field inherits; explicit zero disables that individual limit. Saving requires
+an exact settings/selected-runner revision. Agents additionally need global
+`host_defaults` configuration authority. Ordinary checks cannot raise limits.
+
+The host keeps these mutable overrides in a separate private `test-capacity.json`
+policy, not the immutable backend configuration used by owned environments.
+Consequently existing queued receipts, source bindings, and cleanup snapshots
+remain valid after settings edits, including receipts written before this UI.
+A save clears queue backoff and wakes waiting checks. Capacity observations and
+the final guarded launch admission use the current policy; a policy decrease
+never kills already admitted work. Changes to backend identity, installation,
+endpoint, credentials, source/image or placement retain their existing refusal
+and cleanup rules. Direct edits to the old backend configuration remain exact
+configuration changes, not a supported live policy update.
+
+Runner overrides identify the qualified **connection**, not a universal machine.
+Changing connection aliases can select a different override; global defaults
+still apply. Docker and Incus retain their own physical daemon/project admission
+locks, but this UI does not synchronize policies across other app installations,
+users, or container systems. CPU/memory budgets, queue size/wait policies,
+resource-aware scheduling and automatic routing across machines remain separate
+work. This screen does not claim those controls exist.
 
 The Docker configuration may set `maxRunning` (default 15), `maxInstances`
 (default 256 retained plus active), and `minFreeBytes` (default 10 GiB). Zero
@@ -108,3 +147,79 @@ against controlled backend effects. Physical Docker/Incus and native worker
 continuation evidence must be recorded separately. A passing command proves
 that command's result, not release adoption, real-provider behavior, browser
 rendering or integrated acceptance.
+
+## Shared native-machine resource admission
+
+Settings → Testing & resources also exposes **This machine’s test resources**.
+A native Linux machine uses one private authority per OS account, independent of
+Amplifier installation data roots, workspaces, runner aliases, Docker daemons and
+Incus projects. The location is derived from the OS account database and machine
+identity, not the helper's temporary HOME or an agent-provided path. A local Unix
+socket kernel peer must identify the actual Docker or Incus daemon. A proxy,
+remote connection or Desktop VM does not prove a native local execution target.
+
+The shared policy has advanced overrides for reserved CPU, reserved memory,
+minimum observed available memory, free home-storage bytes, CPU load, and
+concurrent dependency builds. Empty fields use automatic values; zero disables
+that individual check. Automatic ceilings are twice the logical CPU count,
+80% of total memory and two dependency builds. The automatic pressure thresholds
+keep 1 GiB memory and 10 GiB home storage available, with a load-average ceiling
+of twice the logical CPU count. Backend free-storage limits still independently
+protect the actual container storage pool. These are admission controls and
+observations, not resource isolation from arbitrary programs or OS guarantees.
+
+The queue freezes the application-owned CPU/memory/process/tmp/shared-memory
+request when accepting a job. A direct environment freezes it at allocation.
+Later code updates cannot silently reinterpret that admitted request. Historical
+jobs without a frozen request use the then-current profile when first allocated.
+The same frozen request is used by dependency builders and test environments.
+
+Immediately before admitting new work, the shared lock serializes an authoritative
+policy read, target-machine resource observation and reservation. Reservations
+refer to the existing canonical allocation and launch operation; they are not a
+second job ledger or scheduler. Admitted preparation, active work and uncertain
+launches continue to count. Lowering a policy never kills admitted work. Source
+snapshot/ownership is retained when a queued check waits; no build or test starts
+when the machine budget refuses it. Current request, effective budgets and exact
+wait reasons are available in the existing environment/queue receipts.
+
+A confirmed completed build frees its build slot, retaining the request's CPU and
+memory reservation for launch. Confirmed owner stop/removal or an exact verified
+reconciliation releases the reservation. An unknown result, process exit, elapsed
+time or missing UI record does not release it. The allocation-before-index-receipt
+commit gap is recoverable only through the same positive owner cleanup evidence.
+There is no administrative “forget uncertain work” escape hatch.
+
+Machine policy updates use a shared revision comparison. Two installations cannot
+silently overwrite one another. The Settings UI reconciles a lost save response by
+reading the exact desired values, without replaying a mutation. The saving app
+wakes its queue; other cooperating installations see the shared policy on their
+next admission check.
+
+### Explicit scope and remaining work
+
+- Native Linux (including a local Linux runner in WSL) is the first supported
+  shared authority. Its policy covers cooperating current clients under the same
+  OS account. Other accounts and older/unmanaged clients are observed as resource
+  pressure, not governed by reservations.
+- Remote Incus, Docker Desktop and unsupported native hosts retain their existing
+  supported testing route and backend limits. They report shared-machine authority
+  as unavailable; they do not acquire a false local budget or a new generic stop.
+- Remote Incus dependency preparation now checks the target's memory instead of
+  taking the minimum of target and controller memory.
+- Registered remote target controllers, cross-account administration and automatic
+  machine routing remain separate work. Multiple client connections to one remote
+  machine must share that machine's authority before being called machine-wide.
+- Queue depth/wait controls, profile execution timeout controls, artifact retention
+  limits and broader host registration remain distinct from these resource budgets.
+
+### Legacy export-limit cleanup continuation
+
+A qualified legacy returned export-limit failure keeps its original UNKNOWN
+receipt. If its separately admitted cleanup verifies guest removal but cannot
+finish dependency cleanup, the next `finishCleanup` names that confirmed guest
+removal request. It revalidates the persisted legacy qualification against the
+original receipt and unchanged owner/source/backend bindings, then finishes only
+dependency cleanup. It does not issue another guest removal or create another
+operation identity. Missing or changed qualification, another unresolved removal,
+and unverified guest removal remain held. Restart does not weaken these checks.

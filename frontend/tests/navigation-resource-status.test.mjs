@@ -10,9 +10,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>vite.close());
 const state=(status,covered=false)=>({navigationResources:covered?['sidebarSearch']:[],navigationResourcePending:status?{sidebarSearch:{status}}:{}});
 const element=(value,refresh)=>React.createElement(NavigationResourceStatus,{state:value,resource:'sidebarSearch',label:'chat search',refresh});
-test('initial query, retained update and completed query have distinct presentation',()=>{
+test('initial loading stays explicit while retained background refresh is silent',()=>{
  assert.match(renderToStaticMarkup(element(state('pending'))),/Loading chat search/);
- assert.match(renderToStaticMarkup(element(state('pending',true))),/Updating chat search/);
+ assert.equal(renderToStaticMarkup(element(state('pending',true))),'');
+ assert.equal(renderToStaticMarkup(element({...state('pending'),navigationResourceRetained:{sidebarSearch:{}}})), '');
  assert.equal(renderToStaticMarkup(element(state(null,true))),'');
  assert.match(renderToStaticMarkup(element(state('retry'))),/Retry chat search/);
 });

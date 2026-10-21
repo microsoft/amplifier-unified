@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
@@ -11,7 +12,7 @@ try{
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const scenario=data=>page.evaluate(async data=>{const client=window.amplifier.shellClientId;const response=await fetch('/fixture/scenario',{method:'POST',headers:{'Content-Type':'application/json','X-Amplifier-Client':client},body:JSON.stringify(data)});if(!response.ok)throw Error(await response.text())},data);
  const inspect=()=>page.request.get(url+'/fixture').then(r=>r.json());

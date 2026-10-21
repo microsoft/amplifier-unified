@@ -7,6 +7,8 @@ import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {ChatDetails,WorkspaceManager}=await server.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceRail:Rail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
+const {WorkHeader}=await server.ssrLoadModule('/src/work-shell.jsx');
+const {WorkNavigationContext}=await server.ssrLoadModule('/src/work-navigation.js');
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
@@ -92,17 +94,43 @@ test('chat details review only the displayed failure through the shared action',
  await renderAct(async()=>root.unmount());
 });
 
-test('sidebar collapse, workspace drill-in and chat selection use shared actions',async()=>{
+test('header sidebar toggle, workspace drill-in and chat selection use shared actions',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
- await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
+ await renderAct(async()=>{root=create(React.createElement(React.Fragment,null,
+  React.createElement(WorkHeader,{state,act,presentation:{}}),
+  React.createElement(WorkspaceRail,{state,act})))});
+ assert.equal(root.root.findByType(WorkspaceRail).findAllByProps({'aria-label':'Close navigation'}).length,0);
  await renderAct(async()=>root.root.findByProps({'aria-label':'Close navigation'}).props.onClick());
- assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navPinned:false,navExpanded:false}}});
+ assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navPinned:false,navExpanded:false,toolbarMenuOpen:false}}});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Open chats in /two'}).props.onClick());
  assert.ok(calls.some(call=>call.name==='workspace.select'&&call.args.id==='two'));
  assert.equal(calls.at(-1).args.patch.navWorkspaceList,false);
  await renderAct(async()=>root.root.findAllByProps({className:'a-nav-chat-select'})[1].props.onClick());
  assert.ok(calls.some(call=>call.name==='session.select'&&call.args.id==='b'));
  await renderAct(async()=>root.unmount());
+});
+
+test('sidebar New chat and Search stay outside the scrollable modules on Home in both modes',async()=>{
+ const state=initial(),calls=[];
+ state.view.workSurface='home';
+ const act=async(name,args)=>{calls.push([name,args]);return {accepted:true}};
+ const navigation={sidebarView:state.view,updateSidebar:patch=>act('view.update',{patch}),
+  browse:mode=>calls.push(['browse',mode]),create(){},newChat(){}};
+ let root;
+ try{
+  for(const navMode of ['browse','status']){
+   state.view.navMode=navMode;
+   const element=React.createElement(WorkNavigationContext.Provider,{value:navigation},React.createElement(WorkspaceRail,{state,act}));
+   await renderAct(async()=>{if(root)root.update(element);else root=create(element)});
+   const scroll=root.root.findByProps({className:'a-nav-content a-nav-reveal'});
+   assert.equal(scroll.findAllByProps({'aria-label':'New chat'}).length,0);
+   assert.equal(scroll.findAllByProps({className:'a-nav-search-launch'}).length,0);
+   await renderAct(async()=>root.root.findByProps({className:'a-nav-search-launch'}).props.onClick());
+   assert.deepEqual(calls.at(-1),['browse','chats']);
+   await renderAct(async()=>root.root.findByProps({'aria-label':'New chat'}).props.onClick());
+   assert.ok(calls.some(([name])=>name==='session.draft'));
+  }
+ }finally{if(root)await renderAct(async()=>root.unmount())}
 });
 
 test('chat rename opens the flyout editor and submits its new title',async()=>{
@@ -190,11 +218,12 @@ test('rename preserves failed text and newer drafts across external renames',asy
 });
 
 
-test('automatic discovery reports loading/errors and refreshes through the shared action',async()=>{
+test('background discovery keeps existing chats quiet, reports errors and uses the shared refresh action',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>calls.push({name,args});state.sharedHistory={loading:true};let root;
  const render=()=>React.createElement(WorkspaceRail,{state,act});
  await renderAct(async()=>{root=create(render())});
- assert.match(JSON.stringify(root.toJSON()),/Finding existing chats/);
+ assert.doesNotMatch(JSON.stringify(root.toJSON()),/Finding existing chats/);
+ assert.match(JSON.stringify(root.toJSON()),/First plan/);
  assert.equal(root.root.findByProps({'aria-label':'Refresh workspaces and chats'}).props.disabled,true);
  state.sharedHistory={error:'One project could not be read.'};
  await renderAct(async()=>root.update(render()));

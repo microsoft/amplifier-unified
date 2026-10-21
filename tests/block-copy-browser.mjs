@@ -46,18 +46,20 @@ try{
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const clipboard=()=>bounded(page.evaluate(()=>navigator.clipboard.readText()),'Read clipboard');
  const canvas=page.locator('.a-canvas-viewer');
- async function ready(){
+ async function ready({home=false}={}){
   // Current startup is stream-first. Do not send actions against an empty baseline.
   await page.waitForFunction(()=>window.blockCopyBaselineReceived&&Array.isArray(window.amplifier?.getState()?.sessions));
-  await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+  if(home)await expect(page.locator('.a-adaptive-home')).toBeVisible();
+  else await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  }
  async function copy(button,expected){
   await button.focus();await page.keyboard.press('Enter');
   await expect.poll(clipboard).toBe(expected);
   await expect(button.locator('..').getByRole('status')).toHaveText('Copied.');
  }
- await page.goto(url);await ready();
+ await page.goto(url);await ready({home:true});
  await action('session.create');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const raw='\t  α😀\r\n\r\n  tail\t\r\n\r\n';
  const nested='1.\tOuter\r\n\r\n\t- Inner\r\n\r\n\t  ```txt\r\n\t  \tα😀\r\n\t  \r\n\t    tail\t\r\n\t  \r\n\t  ```\r\n';
  const table='| Left | Right |\r\n| :--- | ---: |\r\n| a\\|b | **α😀** |\r\n';

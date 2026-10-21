@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -73,7 +74,7 @@ try{
   await saved;await expect(page.getByRole('dialog')).toHaveCount(0);
  };
  const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
- await page.goto(ready.url);
+ await page.goto(ready.url);await showFixtureConversation(page);
  await expect(card(ready.required)).toBeVisible();
  const uniqueQuestions=async()=>{for(const id of [ready.required,ready.optional,ready.skipped])await expect(card(id)).toHaveCount(1)};
  await uniqueQuestions();

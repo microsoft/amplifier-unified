@@ -876,9 +876,16 @@ async def test_continuation_rechecks_saved_wait_and_never_replays(app, control):
     if control == "unknown":
         app.runtime.fail = True
     await app.collaboration.drain(source["id"])
-    await settled(app, identity, "unknown" if control == "unknown" else "suppressed")
-    phase = app.collaboration.receipt(identity)["delivery"]
-    assert phase == ("unknown" if control == "unknown" else "suppressed")
+    if control == "stop":
+        # Late evidence remains on its request; Stop must not manufacture even
+        # a suppressed continuation message that could appear as fresh input.
+        assert app.collaboration.receipt("result-request")["subscription"]["status"] == "suppressed"
+        assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (identity,)).fetchone()
+        assert not any(message.get("inputId") == identity for message in source["messages"])
+    else:
+        await settled(app, identity, "unknown" if control == "unknown" else "suppressed")
+        phase = app.collaboration.receipt(identity)["delivery"]
+        assert phase == ("unknown" if control == "unknown" else "suppressed")
     await app.collaboration.drain(source["id"])
     assert len(app.runtime.inputs) == (2 if control == "unknown" else 1)
 

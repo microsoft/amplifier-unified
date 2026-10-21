@@ -90,8 +90,9 @@ def validate_plan(plan):
 
 
 class RuntimeControls:
-    def __init__(self, session, runtime, telemetry=None):
+    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False):
         self.session, self.runtime, self.telemetry = session, runtime, telemetry
+        self.preserve_configuration = preserve_configuration
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
@@ -167,6 +168,8 @@ class RuntimeControls:
             await self.mode("mode.set", {"name":saved["mode"]})
 
     def persist(self, *, task_only=False):
+        if self.preserve_configuration:
+            return  # A scoped placement mount restores controls without rewriting them.
         snapshot = self.configurator.snapshot() if self.configurator else {}
         loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
         budget = {key:getattr(target, attr) for key,target,attr in
@@ -280,6 +283,38 @@ class RuntimeControls:
         async with self.lock:
             return await self._perform(operation, args)
 
+    def prepare_configuration(self, config):
+        previous = copy.deepcopy(self.coordinator.config)
+        stored = override_path(self.session.session_id)
+        if stored.exists():
+            saved = json.loads(stored.read_text())
+            for section in SECTIONS:
+                current = {identity(row) for row in previous.get(section, [])}
+                previous.setdefault(section, []).extend(
+                    row for row in saved.get(section, []) if identity(row) not in current)
+        plan = restore_redactions(config, previous)
+        validate_plan(plan)
+        return {key: value for key, value in plan.items() if key in PLAN_KEYS}
+
+    def save_configuration(self, plan):
+        write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
+        # A full mount-plan edit supersedes previous live module toggles.
+        if self.state_path().exists():
+            controls = json.loads(self.state_path().read_text())
+            disabled = controls.get('configurator', {}).get('disabled', {})
+            for section in SECTIONS:
+                disabled.pop(section, None)
+            write_private(self.state_path(), json.dumps(controls))
+
+    def prepare_patch_placement(self, payload):
+        from .patch_placement import prepare
+        return prepare(self, payload)
+
+    def save_patch_placement(self, plan):
+        # Field-only repair must not clear toggles, provider selection or other
+        # control-state. The existing operation receipt owns save uncertainty.
+        write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
+
     async def _perform(self, operation, args):
         if operation == 'memory.consolidate':
             from .memory_consolidation import generate
@@ -310,23 +345,8 @@ class RuntimeControls:
             return await self.provider_control(operation,args)
         if operation == "configuration.apply":
             self.require_idle()
-            previous=copy.deepcopy(self.coordinator.config)
-            stored=override_path(self.session.session_id)
-            if stored.exists():
-                saved=json.loads(stored.read_text())
-                for section in SECTIONS:
-                    current={identity(row) for row in previous.get(section,[])}
-                    previous.setdefault(section,[]).extend(row for row in saved.get(section,[]) if identity(row) not in current)
-            plan = restore_redactions(args.get("config"), previous)
-            validate_plan(plan)
-            plan = {key:value for key,value in plan.items() if key in PLAN_KEYS}
-            write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
-            # A full mount-plan edit supersedes previous live module toggles.
-            if self.state_path().exists():
-                controls=json.loads(self.state_path().read_text())
-                disabled=controls.get('configurator',{}).get('disabled',{})
-                for section in SECTIONS:disabled.pop(section,None)
-                write_private(self.state_path(),json.dumps(controls))
+            plan = self.prepare_configuration(args.get("config"))
+            self.save_configuration(plan)
             return {"requiresRestart": True, "configuration": public_config(plan)}
         if operation == "configuration.toggle":
             self.require_idle()

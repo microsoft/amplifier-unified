@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -14,7 +15,7 @@ try{
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const patch=values=>action('view.update',{patch:values});
  const panel=page.locator('#workspace-canvas'),overview=panel.getByRole('button',{name:'Chat overview',exact:true});
- await page.goto(url);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
  await page.mouse.move(700,20);await page.screenshot({path:'/tmp/main-refresh-conversation.png'});
  await page.getByRole('button',{name:'Open Website refresh brief in canvas',exact:true}).click();await expect(panel).toHaveAttribute('data-mode','artifact');
  await overview.click();await expect(panel).toHaveAttribute('data-mode','overview');

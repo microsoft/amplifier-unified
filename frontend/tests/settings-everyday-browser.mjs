@@ -2,9 +2,13 @@ import './composer-test-helpers.mjs';
 import {openSettingsPage,openSettingsDialog} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
 import {spawn} from 'node:child_process';
+import {mkdir} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-settings-everyday');await mkdir(evidence,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_collections_server.py',import.meta.url))]);
 let browser,page,stderr='';fixture.stderr.on('data',data=>stderr+=data);
 try{
@@ -13,6 +17,11 @@ try{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(base);await page.waitForSelector('#amp-one');
+ // A fresh browser starts on Home. This journey checks an existing chat's
+ // saved draft, so explicitly open that chat before testing its settings.
+ assert.equal((await state()).view.workSurface,'home');
+ await page.evaluate(()=>{const chat=window.amplifier.getState().sessions.find(row=>row.title==='Settings test');return window.amplifier.dispatch('session.select',{id:chat.id})});
+ await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='chat');
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  const savedDraft=page.waitForResponse(response=>{if(response.request().method()!=='POST'||!response.url().includes('/api/actions'))return false;const body=response.request().postDataJSON();return body.action==='view.update'&&body.args?.patch?.draft==='Keep this while I connect AI'&&response.ok()});
  await composer.fill('Keep this while I connect AI');await savedDraft;
@@ -46,7 +55,7 @@ try{
  await page.getByLabel('Model',{exact:true}).selectOption('fixture-model');
  await expect(page.getByText('Model saved. Existing model rules are unchanged.',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Finish setup',exact:true})).toHaveCount(0);
- await page.screenshot({path:'/tmp/settings-everyday-ai-desktop.png'});
+ await page.screenshot({path:join(evidence,'settings-everyday-ai-desktop.png')});
  await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Tool catalog',exact:true}).click();
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await page.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();
  await page.getByRole('button',{name:'Review & install',exact:true}).click();
@@ -77,10 +86,10 @@ try{
    assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1),`${id} dialog overflow at ${width}`);layouts++;
   }
  }
- await openSettingsPage(page,'updates');await page.screenshot({path:'/tmp/settings-everyday-updates-desktop.png'});
+ await openSettingsPage(page,'updates');await page.screenshot({path:join(evidence,'settings-everyday-updates-desktop.png')});
  await page.setViewportSize({width:390,height:844});await openSettingsPage(page,'ai-connections');
- await page.locator('.a-settings-mobile-head button').first().click();await page.screenshot({path:'/tmp/settings-everyday-mobile-index.png'});
- await page.locator('[data-settings-section=privacy]').click();await page.screenshot({path:'/tmp/settings-everyday-mobile-privacy.png'});
+ await page.locator('.a-settings-mobile-head button').first().click();await page.screenshot({path:join(evidence,'settings-everyday-mobile-index.png')});
+ await page.locator('[data-settings-section=privacy]').click();await page.screenshot({path:join(evidence,'settings-everyday-mobile-privacy.png')});
  assert.deepEqual(errors,[]);console.log(JSON.stringify({guidedProvider:true,privateDrafts:true,routingPreserved:true,catalogReviewAndRetry:true,installedVsReady:true,layouts,browserErrors:0}));
-}catch(error){if(page)await page.screenshot({path:'/tmp/settings-everyday-failure.png'});throw error}
+}catch(error){if(page)await page.screenshot({path:join(evidence,'settings-everyday-failure.png')});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}

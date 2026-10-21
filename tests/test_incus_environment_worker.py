@@ -317,7 +317,7 @@ def test_package_digest_changes_and_rejects_symlink(tmp_path):
         worker.package_digest(package)
 
 
-@pytest.mark.parametrize('version', ['0.4.0', '0.4.1'])
+@pytest.mark.parametrize('version', ['0.4.0', '0.4.1', '0.4.2', '0.4.3'])
 @pytest.mark.parametrize('wrapper', [False, True])
 def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, monkeypatch, version, wrapper):
     package = tmp_path / 'installed'
@@ -418,7 +418,7 @@ def test_reconcile_absence_requires_exact_settled_receipt(tmp_path, backend, mon
     backend[1]['launch'] = state
     previous = worker.incus
     def query(config, env, arguments, **kwargs):
-        if arguments == ['query', '/1.0/instances?recursion=1']:
+        if arguments == ['query', '/1.0/instances']:
             return {'exit_code': 0, 'truncated': False, 'stdout': '[]'}
         return previous(config, env, arguments, **kwargs)
     monkeypatch.setattr(worker, 'incus', query)
@@ -440,11 +440,107 @@ def test_reconcile_daemon_change_and_missing_legacy_identity_are_unverified(tmp_
 def test_reconcile_query_failure_never_proves_absence(tmp_path, backend, monkeypatch):
     previous = worker.incus
     def query(config, env, arguments, **kwargs):
-        if arguments == ['query', '/1.0/instances?recursion=1']:
+        if arguments == ['query', '/1.0/instances']:
             raise worker.BackendFailure('timeout', 'fixture timeout')
         return previous(config, env, arguments, **kwargs)
     monkeypatch.setattr(worker, 'incus', query)
     result = worker.execute_call(payload(tmp_path, 'reconcile'))
+    assert result['status'] == 'unknown' and not result.get('observation', {}).get('absenceConfirmed')
+
+
+@pytest.mark.parametrize('version,state,request_matches,owner_matches,exists,settled', [
+    ('0.4.3', 'failed', True, True, False, True),
+    ('0.4.3', 'unknown', True, True, False, False),
+    ('0.4.3', 'failed', False, True, False, False),
+    ('0.4.3', 'failed', True, False, False, False),
+    ('0.4.3', 'failed', True, True, True, False),
+    ('0.4.2', 'failed', True, True, False, True),
+    ('0.4.2', 'unknown', True, True, False, False),
+    ('0.4.2', 'failed', False, True, False, False),
+    ('0.4.2', 'failed', True, False, False, False),
+    ('0.4.1', 'failed', True, True, False, False),
+    ('0.4.2', 'failed', True, True, True, False),
+])
+def test_reconcile_terminal_creation_failure_requires_exact_generation_and_absence(
+        tmp_path, backend, monkeypatch, version, state, request_matches, owner_matches, exists, settled):
+    value = payload(tmp_path, 'reconcile')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES[version]
+    backend[1].update(launch=state, owner='parent-root' if owner_matches else 'peer')
+    original_cli, original_incus = worker.cli, worker.incus
+    def receipt(config, env, arguments, **kwargs):
+        result = original_cli(config, env, arguments, **kwargs)
+        if arguments[0] == 'launch-status':
+            result['request_id'] = value['operationId'] if request_matches else 'another-request'
+        return result
+    def inventory(config, env, arguments, **kwargs):
+        if arguments == ['query', '/1.0/instances']:
+            instance = json.loads(original_incus(config, env, ['query', '/1.0/instances/owned'])['stdout'])
+            instance['name'] = worker.identity(value)
+            return {'exit_code': 0, 'truncated': False, 'stdout': json.dumps(['/1.0/instances/' + worker.identity(value)] if exists else [])}
+        return original_incus(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'cli', receipt)
+    monkeypatch.setattr(worker, 'incus', inventory)
+    result = worker.execute_call(value)
+    assert result['observation']['absenceConfirmed'] is settled
+    assert result['observation']['admissionSettled'] is settled
+    assert not any(args[0] in {'launch', 'stop', 'destroy'} for _, args in backend[0])
+
+
+@pytest.mark.parametrize('version', ['0.4.2', '0.4.3'])
+def test_terminal_failed_creation_preserves_owned_instance_for_cleanup(tmp_path, backend, version):
+    value = payload(tmp_path, 'remove')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES[version]
+    backend[1].update(launch='failed', instance='Stopped')
+    result = worker.execute_call(value)
+    assert result['ok'] and result['status'] == 'removed'
+    assert any(args[0] == 'destroy' for _, args in backend[0])
+    assert not any(args[0] == 'launch' for _, args in backend[0])
+
+
+@pytest.mark.parametrize('version', ['0.4.2', '0.4.3'])
+def test_failed_creation_cannot_claim_peer_instance_for_cleanup(tmp_path, backend, version):
+    value = payload(tmp_path, 'remove')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES[version]
+    backend[1].update(launch='failed', instance='Stopped', owner='peer-root')
+    result = worker.execute_call(value)
+    assert not result['ok']
+    assert not any(args[0] in {'destroy', 'stop', 'launch'} for _, args in backend[0])
+
+
+def test_reconcile_uses_small_inventory_and_reads_only_exact_owned_metadata(tmp_path, backend, monkeypatch):
+    value = payload(tmp_path, 'reconcile')
+    original = worker.incus
+    calls = []
+    def query(config, env, arguments, **kwargs):
+        calls.append(arguments)
+        if arguments == ['query', '/1.0/instances']:
+            paths = ['/1.0/instances/peer-' + str(n) for n in range(100)]
+            paths.append('/1.0/instances/' + worker.identity(value) + '?project=tests')
+            return {'exit_code': 0, 'truncated': False, 'stdout': json.dumps(paths)}
+        assert 'recursion' not in arguments[-1]
+        if arguments[0] == 'query' and '/instances/' in arguments[-1]:
+            assert arguments[-1] == '/1.0/instances/' + worker.identity(value)
+        return original(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'incus', query)
+    result = worker.execute_call(value)
+    assert result['status'] == 'running' and result['observation']['admissionSettled']
+    assert len([args for args in calls if '/instances/' in args[-1]]) == 1
+
+
+@pytest.mark.parametrize('problem', ['foreign-project', 'malformed-list', 'disappeared', 'truncated-target'])
+def test_reconcile_unverifiable_target_never_proves_absence(tmp_path, backend, monkeypatch, problem):
+    value = payload(tmp_path, 'reconcile')
+    original = worker.incus
+    def query(config, env, arguments, **kwargs):
+        if arguments == ['query', '/1.0/instances']:
+            name = '/1.0/instances/' + worker.identity(value)
+            entries = [{'name': name}] if problem == 'malformed-list' else [name + ('?project=other' if problem == 'foreign-project' else '')]
+            return {'exit_code': 0, 'truncated': False, 'stdout': json.dumps(entries)}
+        if '/instances/' in arguments[-1]:
+            return {'exit_code': int(problem == 'disappeared'), 'truncated': problem == 'truncated-target', 'stdout': '{}'}
+        return original(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'incus', query)
+    result = worker.execute_call(value)
     assert result['status'] == 'unknown' and not result.get('observation', {}).get('absenceConfirmed')
 
 
@@ -520,3 +616,93 @@ def test_cleanup_owner_change_after_export_is_not_preservation_failure(tmp_path,
     assert result['status'] == 'unknown' and result['effectAdmitted'] is False
     assert result['phase'] == 'rechecking' and result['code'] == 'ownership_conflict'
     assert not any(args[0] == 'destroy' for _, args in backend[0])
+
+
+@pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test'])
+def test_manual_execution_selects_fixed_profile_and_preserves_transport(tmp_path, backend, monkeypatch, profile_id):
+    value = {**payload(tmp_path, 'execute'), 'profileId': profile_id,
+             'command': "printf '%s' 'literal ; $HOME \"'; exit 7", 'timeoutSeconds': 23,
+             'jobEnvironment': {'HOME': '/root'}, 'environment': {'PATH': '/caller'}, 'user': 'root'}
+    name = worker.identity(value)
+    worker.common.retain_source_ready(tmp_path, name, value['snapshot'])
+    original = worker.incus
+    executions = []
+    expected = {'exit_code': 7, 'stdout': 'partial', 'stderr': 'error', 'truncated': True}
+    def incus(config, env, args, timeout=30, **kwargs):
+        if args[0] == 'exec':
+            executions.append((args, timeout, kwargs))
+            return expected
+        return original(config, env, args, timeout, **kwargs)
+    monkeypatch.setattr(worker, 'incus', incus)
+    result = worker.execute_call(value)
+    assert result == {'ok': True, 'universeId': name, 'result': expected}
+    assert len(executions) == 1
+    args, timeout, kwargs = executions[0]
+    assert args[:8] == ['exec', name, '--cwd', '/workspace', '--', 'python3', '-I', '-c']
+    assert args[9] == 'execute'
+    assert json.loads(args[10]) == {
+        'command': value['command'],
+        'environment': worker.common.selected_profile(value)['environment']}
+    assert timeout == 23 and kwargs == {}
+    assert not any(args[0] in {'launch', 'file', 'stop', 'destroy', 'export'} for _, args in backend[0])
+
+
+@pytest.mark.parametrize('fault', ['owner', 'snapshot', 'stopped', 'backend'])
+def test_manual_currentness_refusals_dispatch_nothing(tmp_path, backend, fault):
+    value = payload(tmp_path, 'execute')
+    worker.common.retain_source_ready(tmp_path, worker.identity(value), value['snapshot'])
+    if fault == 'owner':
+        backend[1]['owner'] = 'another-root'
+    elif fault == 'snapshot':
+        value['snapshot']['archive_sha256'] = 'changed'
+    elif fault == 'stopped':
+        backend[1].update(instance='Stopped', launch='stopped')
+    else:
+        value['expectedBackendIdentity']['daemon'] = 'changed'
+    result = worker.execute_call(value)
+    assert not result['ok']
+    assert not any(args[0] in {'exec', 'launch', 'file', 'stop', 'destroy', 'export'} for _, args in backend[0])
+
+
+def test_manual_timeout_keeps_unknown_without_redispatch(tmp_path, backend, monkeypatch):
+    value = payload(tmp_path, 'execute')
+    worker.common.retain_source_ready(tmp_path, worker.identity(value), value['snapshot'])
+    original = worker.incus
+    executions = []
+    def incus(config, env, args, timeout=30, **kwargs):
+        if args[0] == 'exec':
+            executions.append(args)
+            raise worker.BackendFailure('timeout', 'The operation may still be running.')
+        return original(config, env, args, timeout, **kwargs)
+    monkeypatch.setattr(worker, 'incus', incus)
+    result = worker.execute_call(value)
+    assert not result['ok'] and result['status'] == 'unknown' and result['effectAdmitted']
+    assert result['code'] == 'timeout' and len(executions) == 1
+
+
+def test_dynamic_inventory_reads_only_receipts_but_dispatch_checks_runtime(tmp_path, monkeypatch):
+    package = tmp_path / 'installed'; package.mkdir()
+    (package / '__init__.py').write_text('# candidate')
+    launcher = tmp_path / 'engine'; launcher.write_text('#!' + sys.executable + '\n'); launcher.chmod(0o700)
+    incus = tmp_path / 'incus'; incus.write_text('#!/bin/sh\n'); incus.chmod(0o700)
+    for name in ('config', 'admission', 'owned'):
+        (tmp_path / name).mkdir(mode=0o700)
+    config = {'executable': str(launcher), 'executableSha256': worker.file_digest(launcher)[0],
+        'packageSha256': worker.package_digest(package), 'incusExecutable': str(incus),
+        'project': 'qualified', 'image': 'a' * 64, 'configDir': str(tmp_path / 'config'),
+        'admissionDir': str(tmp_path / 'admission'), 'engineQualification': {'exact': 'receipt'}}
+    monkeypatch.setattr(worker, 'run', lambda *args, **kwargs: {'exit_code': 0, 'truncated': False,
+        'stdout': json.dumps({'version': 'next', 'directory': str(package)})})
+    checks = []
+    def verify(config, *, owner, runtime):
+        checks.append(runtime)
+        if runtime:
+            raise ValueError('runtime changed')
+    monkeypatch.setattr(worker, 'engine_generations', lambda: SimpleNamespace(verify=verify))
+    worker.validate_configuration(config)
+    worker.validate_configuration(config)
+    assert checks == [False, False]
+    request = {'root': str(tmp_path / 'owned'), 'incus': config, 'action': 'capacity'}
+    with pytest.raises(ValueError, match='runtime changed'):
+        worker.execute_call(request)
+    assert checks == [False, False, False, True]

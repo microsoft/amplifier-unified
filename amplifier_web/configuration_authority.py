@@ -52,10 +52,12 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
+    if action in {'testing.capacity.save', 'testing.machine.save', 'testing.runners.register', 'testing.runners.refresh', 'testing.runners.enable', 'testing.runners.machine.save', 'testing.runners.capacity.save', 'testing.execution.save'}:
+        return 'host_defaults', 'global'
     if action in {'workspace.environments.setup', 'workspace.environments.setup.cleanup'}:
         return 'test_host_setup', 'global'
-    if action in {'workspace.tests.submit', 'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove', 'workspace.environments.finishCleanup', 'workspace.environments.reconcile', 'workspace.environments.exportArtifacts'}:
-        return 'test_environments', 'session'
+    # Routine managed tests use the workspace's task authority. Their adapter
+    # still checks root ownership, Stop, source placement and backend identity.
     if action in PERSISTENT:
         if 'scope' not in args:
             raise ValueError('Choose an explicit configuration scope: session, local, project, or global. No settings were changed.')
@@ -68,7 +70,7 @@ def requirement(action, args):
         return 'bundles', 'global'
     if action in {'bundle.switch', 'bundle.fork'}:
         return 'bundles', 'session'
-    if action == 'configuration.apply':
+    if action in {'configuration.apply', 'configuration.patchPlacement.bind'}:
         return 'runtime_configuration', 'session'
     if action == 'runtime.control' and args.get('operation') == 'configuration.providerLogin':
         return 'connections', 'session'
@@ -86,6 +88,8 @@ class ConfigurationAuthority:
         self.service = service
         service.db.execute("""CREATE INDEX IF NOT EXISTS configuration_grants ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.result.sessionId'))""")
+        for session in service.state['sessions']:
+            self.reconcile(session)
         service.db.commit()
 
     def error(self, text, status=403):
@@ -99,7 +103,8 @@ class ConfigurationAuthority:
             return
         try:
             await asyncio.wait_for(respond(grant['sessionId'], grant['id'],
-                'allow' if grant['status'] == 'active' else 'deny'), 5)
+                'allow' if grant['status'] == 'active' else 'deny',
+                **({'comment': grant['comment']} if grant.get('comment') else {})), 5)
         except (RuntimeError, ValueError, KeyError, OSError, TimeoutError):
             # The saved decision remains authoritative after a lost worker or
             # acknowledgement. A later native request reads it without replay.
@@ -110,6 +115,52 @@ class ConfigurationAuthority:
             WHERE json_extract(receipt,'$.commandAction')='capability.record'
             AND json_extract(receipt,'$.result.sessionId')=?
             ORDER BY json_extract(receipt,'$.result.createdAt') DESC,id LIMIT ? OFFSET ?""", (sid, limit, offset))]
+
+    def reconcile(self, session):
+        """Retire obsolete cards and grants without approving or replaying work.
+
+        Visit only this admitted owner's pending cards; dormant history stays cold.
+        A native wait dies with its host, while a raw API grant can survive restart.
+        """
+        changed = False
+        for card in session.get('approvals', []):
+            if not card.get('id', '').startswith('capability:') or card.get('status') != 'pending':
+                continue
+            row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (card['id'],)).fetchone()
+            receipt = json.loads(row[0]) if row else {}
+            grant = receipt.get('result') if receipt.get('commandAction') == 'capability.record' else None
+            reason = None
+            if not grant or grant.get('sessionId') != session['id']:
+                reason = 'request_unavailable'
+            elif grant['status'] not in {'pending', 'active'}:
+                card.update(status=grant['status'])
+                card.pop('_hostRestarted', None)
+                changed = True
+                continue
+            elif grant['workspace'] != session['workspace'] or grant['interruptionRevision'] != session.get('interruptionRevision', 0):
+                reason = 'conversation_changed'
+            elif grant.get('expiresAt') is not None and grant['expiresAt'] <= time.time():
+                reason = 'expired'
+            elif card.get('_hostRestarted') and grant.get('nativeWait'):
+                reason = 'host_restarted'
+            elif grant['status'] == 'active':
+                # A current grant may still await worker acknowledgement.
+                # Only that delivery path may dismiss this live card.
+                card.pop('_hostRestarted', None)
+                continue
+            elif grant['effects'] == ['test_environments'] and grant['scopes'] == ['session']:
+                reason = 'approval_not_required'
+            card.pop('_hostRestarted', None)
+            if reason:
+                detail = ('This permission request is no longer current. No approval was applied and nothing was replayed. '
+                          'Resume the chat to continue from its saved work.')
+                card.update(status='expired', resolutionReason=reason, detail=detail)
+                if grant and grant.get('sessionId') == session['id']:
+                    grant.update(status='expired', revision=grant['revision'] + 1,
+                                 resolvedAt=time.time(), resolutionReason=reason)
+                    self.save(grant)
+                changed = True
+        return changed
 
     def eligible(self, session):
         return [json.loads(row[0])['result'] for row in self.service.db.execute("""SELECT receipt FROM commands
@@ -346,21 +397,24 @@ class ConfigurationAuthority:
                             row['status'] = 'revoked'
                 else:
                     full = self.service.access_mode.full(source)
-                    if not full and len(self.eligible(source)) >= 64:
+                    routine_test = args['effects'] == ['test_environments'] and args['scopes'] == ['session']
+                    if not full and not routine_test and len(self.eligible(source)) >= 64:
                         self.error('This conversation already has 64 active or pending configuration grants.', 409)
                     if args.get('expiresAt', time.time() + 1) <= time.time():
                         self.error('Choose a future expiry.', 400)
                     grant = {key: copy.deepcopy(args[key]) for key in ('effects', 'scopes', 'reason', 'expiresAt') if key in args}
                     grant.update(id='capability:' + str(uuid.uuid5(uuid.NAMESPACE_URL, identity)), sessionId=source['id'],
                         workspace=source['workspace'], interruptionRevision=source.get('interruptionRevision', 0), revision=1,
-                        status='active' if action == 'capability.grant' or full else 'pending', createdAt=time.time(),
+                        status='active' if action == 'capability.grant' or full or routine_test else 'pending', createdAt=time.time(),
                         origin=origin, approvedBy='user' if action == 'capability.grant' else None,
                         authorizedInputIds=list((source.get('collaborationGeneration') or {}).get('inputIds', []))[:64])
                     from .collaboration import BINDING
                     grant['nativeWait'] = action == 'capability.request' and (BINDING.get() or {}).get('_configurationWait') is True
                     if full and action == 'capability.request':
                         grant.update(approvedBy='full-access', accessRevision=self.service.access_mode.snapshot(source)['revision'])
-                    if action == 'capability.request' and not full:
+                    if routine_test and action == 'capability.request' and not full:
+                        grant.update(approvedBy='workspace-task')
+                    if action == 'capability.request' and not full and not routine_test:
                         source.setdefault('approvals', []).append({'id': grant['id'], 'status': 'pending',
                             'title': 'Allow configuration changes?', 'prompt': grant['reason'],
                             'details': {'Changes': [EFFECTS[key] for key in grant['effects']], 'Scopes': grant['scopes'],
@@ -379,6 +433,19 @@ class ConfigurationAuthority:
                     source['approvals'] = before
                 raise
 
+    def retain_comment(self, session, grant, args, *, expired=False):
+        comment = args.get('comment', '').strip()
+        if not comment:
+            return
+        grant['comment'] = comment
+        self.save(grant)
+        for card in session.get('approvals', []):
+            if card['id'] == grant['id']:
+                card['comment'] = comment
+        decision = 'expired (note retained only)' if expired else ('allow' if grant['status'] == 'active' else 'deny')
+        self.service._message(session, 'user', f'Permission {decision}:\n\n{comment}', 'permission',
+                              approvalId=grant['id'], inputOrigin='approval')
+
     async def decide(self, args, origin, command_id):
         if origin not in {'ui', 'user'}:
             self.error('Only the user can answer a configuration approval.')
@@ -391,12 +458,36 @@ class ConfigurationAuthority:
                 if previous[0] != digest:
                     self.error('This command ID was already used with different contents.', 409)
                 receipt = json.loads(previous[1])
-                self.service._task(self.notify_waiter(self.record(receipt['result']['id'])))
+                grant = self.record(receipt['result']['id'])
+                if grant['status'] != 'expired':
+                    self.service._task(self.notify_waiter(grant))
                 return {**receipt, 'duplicate': True}
             grant = self.record(args['id'])
             if grant['sessionId'] != sid:
                 self.error('The approval belongs to another conversation.')
             session = self.service._session(sid)
+            # A stale browser can still post an old Allow/Deny click. Clear its
+            # exact card and acknowledge the no-op, never revive that authority.
+            self.reconcile(session)
+            grant = self.record(args['id'])
+            if grant['status'] == 'expired':
+                before = copy.deepcopy(session.get('approvals', []))
+                messages_before = list(session.get('messages', []))
+                # Retirement is independent of the user's optional new note.
+                self.service.db.commit()
+                try:
+                    self.retain_comment(session, grant, args, expired=True)
+                    receipt = {'accepted': True, 'commandAction': 'approval.respond',
+                               'decisionApplied': False, 'result': grant}
+                    self.service.db.execute('INSERT INTO commands VALUES(?,?,?)', (identity, digest, json.dumps(receipt)))
+                    self.service._publish_changes(sessions={sid})
+                except BaseException:
+                    self.service.db.rollback()
+                    if not self.service.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
+                        session['approvals'] = before
+                        session['messages'] = messages_before
+                    raise
+                return receipt
             if grant['status'] != 'pending':
                 self.error('This configuration approval is no longer pending.', 409)
             if (grant['workspace'] != session['workspace'] or grant['interruptionRevision'] != session.get('interruptionRevision', 0)
@@ -405,8 +496,10 @@ class ConfigurationAuthority:
             grant.update(status='active' if args['decision'] in {'allow', 'approve'} else 'denied', revision=grant['revision'] + 1,
                          approvedBy='user', decidedAt=time.time(), decisionCommandId=identity)
             before = copy.deepcopy(session.get('approvals', []))
+            messages_before = list(session.get('messages', []))
             self.service.db.commit()
             try:
+                self.retain_comment(session, grant, args)
                 for row in session.get('approvals', []):
                     if row['id'] == grant['id']:
                         row['status'] = 'allow' if grant['status'] == 'active' else 'deny'
@@ -420,5 +513,6 @@ class ConfigurationAuthority:
                 retained = self.service.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone()
                 if not retained:
                     session['approvals'] = before
+                    session['messages'] = messages_before
                 raise
             return receipt

@@ -5,7 +5,8 @@ These are proposed observable behaviors, not a claim of current parity.
 
 ## Who builds against this
 
-Web, TUI and future native client builders, the Unified host, and acceptance reviewers.
+Web, TUI, Amplifier for Mac and future Windows client builders, the Unified host,
+and acceptance reviewers. [DC](desktop-client.v1.md) specializes desktop journeys.
 Platform implementations retain their own presentation contracts.
 
 ## What it is
@@ -23,10 +24,14 @@ The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-pro
 
 ## The promises
 
-1. **CX1 — Orient and navigate consistently.** Every client identifies the execution
-   host, workspace and conversation, and offers discoverable selection, creation,
-   rename and history navigation. Selection responds locally while loading/preparation continues.
-   Broken: a click leaves the old selection unexplained, or viewing a chat needs its execution lock. Affected: readers switching work.
+1. **CX1 — Orient and navigate consistently.** Every client makes its execution
+   host, workspace when present, and conversation discoverable. People can start
+   standalone work, find required attention, and retrieve saved conversations
+   without a mandatory project choice or knowledge of agent internals. Selection, creation,
+   rename and history navigation remain available; selection responds locally
+   while loading/preparation continues.
+   Broken: returning requires reconstructing context, a click leaves the old
+   selection unexplained, or reading needs an execution lock. Affected: people finding work.
 
 2. **CX2 — Make sending feel immediate and remain truthful.** Send clears the submitted
    draft into one provisional bubble while preserving subsequently typed input. Delivery
@@ -48,8 +53,9 @@ The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-pro
    remain inspectable. A revision does not undo or replay tool effects. Pending delivery must be resolved before editing its command.
    Broken: editing silently forks, destroys retained evidence or races an uncertain send. Affected: users correcting their instructions.
 
-6. **CX6 — Show work where it happens.** Noninstant actions change state immediately;
-   refreshing regions retain useful content with an updating cue. Failures remain actionable.
+6. **CX6 — Show work where it happens.** User-initiated noninstant actions change
+   state immediately. Routine background refresh retains useful content silently
+   and preserves layout. Initial loading and failures remain distinguishable and actionable.
    Dialogs dismiss by outside click and Escape, preserving recoverable drafts; dismissal never approves, cancels accepted work or bypasses a blocking state. Feedback is keyboard-accessible and not color-only.
    Broken: a pressed control looks idle, a refresh silently blanks options, or a dialog requires its X. Affected: all interactive users.
 
@@ -66,7 +72,9 @@ The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-pro
    drafts, credentials, destructive actions and actions with external effects.
    Removing a click must never remove required authority, meaningful feedback or
    recovery. Evaluate the whole journey, including menu opening and repeated setup,
-   alongside cognitive load and keyboard/focus behavior.
+   alongside cognitive load and keyboard/focus behavior. Frequently used actions
+   may appear on independently scrolled surfaces when that avoids return travel;
+   their labels and behavior remain consistent.
    Broken: two clicks to choose between two finishes, an unnecessary Save after a
    harmless preference, or a crowded screen that makes the shortest path harder to find.
    Affected: everyone completing routine tasks.
@@ -95,6 +103,8 @@ Which existing names should be normalized without making platform commands unfam
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-20 | Identify desktop consumers and DC; preserve CX1–8. | [Desktop coordination record](../docs/clients/desktop-clients.md). |
+| 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../docs/ux/decisions/20261020.md). |
 | 2026-10-13 | Add CX8: interaction economy without clutter or lost authority. | User direction: UX is golf; minimize strokes. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Link target protocol owners; preserve existing experience promises. | [Architecture direction](../docs/architecture/README.md). |

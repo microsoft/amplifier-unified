@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
@@ -24,7 +25,7 @@ try{
  // Browser-managed downloads use the real signed session cookie; Chromium
  // does not forward Playwright's extra Authorization header to downloads.
  await page.context().addCookies([{name:'amplifier_unified_session',value:fixtureCookie,url:base,httpOnly:true,sameSite:'Strict'}]);
- await page.goto(base);
+ await page.goto(base);await showFixtureConversation(page);
  const groups=page.locator('[data-group-id]'),before=page.locator('[data-group-id$="@before"]'),interim=page.locator('[data-group-id$="@interim"]');
  // The bounded saved-event window settles independently of live host groups.
  // Wait for that real receipt rather than racing its arrival with UI clicks.

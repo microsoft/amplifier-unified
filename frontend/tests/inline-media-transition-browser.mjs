@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium,expect} from '@playwright/test';
 import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
@@ -19,7 +20,7 @@ try{
  const context=await browser.newContext({viewport:{width:1440,height:1100},extraHTTPHeaders:headers});
  await context.addCookies([{name:'amplifier_unified_session',value:started.cookie,url:base,httpOnly:true,sameSite:'Strict'}]);
  page=await context.newPage();const errors=[],requests=[];page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(new URL(request.url()).pathname==='/api/outputs/media')requests.push(request.url())});
- await page.goto(base);await expect(page.getByText('The final next step.',{exact:true})).toBeVisible();
+ await page.goto(base);await showFixtureConversation(page);await expect(page.getByText('The final next step.',{exact:true})).toBeVisible();
  await page.waitForTimeout(250);assert.equal(requests.length,0,'ordinary messages defer while busy');
  await busy(false);await expect(page.getByText('Retained interim animation',{exact:true})).toBeVisible();
  const ordinaryCount=requests.length;await busy(true);await expect(page.getByText('Retained interim animation',{exact:true})).toBeVisible();

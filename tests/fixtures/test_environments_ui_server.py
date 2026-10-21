@@ -48,8 +48,10 @@ async def main(home, port, backend='docker'):
     (workspace / 'check.py').write_text("print('workspace check passed')\n")
     calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True,
                                  'backendAvailable': True, 'longOutput': False, 'executeFailure': False,
-                                 'setupRequired': False, 'artifactTimeout': False, 'removeFailure': False}
+                                 'setupRequired': False, 'artifactTimeout': False,
+                                 'removeUnknown': False, 'removeFailure': False}
     setup_calls = []
+    probes = Counter()
     lock = threading.Lock()
     config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
     if backend == 'incus':
@@ -57,8 +59,12 @@ async def main(home, port, backend='docker'):
                   'incus': {'project': 'fixture-project', 'daemonFingerprint': 'a' * 64}}
     # The controlled transport models a qualified Linux backend on every test host.
     environments.SUPPORTED_HOST = True
-    environments.configuration = lambda app: (None, 'disabled', 'Set up the controlled test runner.') if mode['setupRequired'] else (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
+    def configuration(app):
+        probes['configuration'] += 1
+        return (None, 'disabled', 'Set up the controlled test runner.') if mode['setupRequired'] else (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
+    environments.configuration = configuration
     async def setup_read(app):
+        probes['setupRead'] += 1
         return {'status': 'disabled' if mode['setupRequired'] else 'ready',
                 'reason': 'Controlled fixture; no backend installation.', 'operation': None,
                 'backends': [{'id': 'docker', 'label': 'Docker', 'available': True, 'reason': 'Controlled fixture'}]}
@@ -73,7 +79,10 @@ async def main(home, port, backend='docker'):
     environments.dependencies.prepare = lambda config, root, snapshot, profile_id, request_id: {
         'status': 'ready', 'profileId': profile_id, 'sourceSha256': snapshot['archive_sha256']}
     environments.dependencies.cleanup = lambda *args: {'complete': True, 'status': 'removed'}
-    environments.validate_configuration_value = lambda app, value: ({**value, 'python': config['python']}, 'ready', 'Retained controlled fixture backend.')
+    def validate_configuration(app, value):
+        probes['retainedConfiguration'] += 1
+        return {**value, 'python': config['python']}, 'ready', 'Retained controlled fixture backend.'
+    environments.validate_configuration_value = validate_configuration
     backend_identity = ({'backend': 'incus', 'daemon': 'a' * 64, 'project': 'fixture-project'}
                         if backend == 'incus' else {'backend': 'docker', 'daemon': 'fixture-daemon'})
     def invoke(config, home, row, action, args):
@@ -92,6 +101,9 @@ async def main(home, port, backend='docker'):
                 states[row['id']] = 'running'
             elif action == 'stop':
                 states[row['id']] = 'stopped'
+            elif action == 'remove' and mode['removeUnknown']:
+                return {'ok': False, 'status': 'unknown', 'universeId': identity,
+                        'message': 'Synthetic removal outcome unknown; no retry is implied.'}
             elif action == 'remove' and mode['removeFailure']:
                 return {'ok': False, 'status': 'stopped', 'effectAdmitted': False, 'phase': 'verifying', 'code': 'archive_verification_failed'}
             elif action in {'remove', 'finishCleanup'}:
@@ -126,9 +138,12 @@ async def main(home, port, backend='docker'):
                     'policy': args.get('retentionMode', config.get('retentionMode', 'files'))}
             return value
     environments.invoke = invoke
-    environments.capacity = lambda app, config: {'available': mode['capacityAvailable'],
-        'counts': {'active': 0 if mode['capacityAvailable'] else 1}, 'limits': {'max_running': 1},
-        'blockers': [] if mode['capacityAvailable'] else [{'code': 'execution_capacity'}]}
+    def capacity(app, config):
+        probes['capacity'] += 1
+        return {'available': mode['capacityAvailable'],
+            'counts': {'active': 0 if mode['capacityAvailable'] else 1}, 'limits': {'max_running': 1},
+            'blockers': [] if mode['capacityAvailable'] else [{'code': 'execution_capacity'}]}
+    environments.capacity = capacity
     runtime = Runtime()
     app = await create_app(home, workspace=workspace, runtime=runtime, voice=False, background_updates=False)
     app['control_token'] = TOKEN
@@ -143,7 +158,8 @@ async def main(home, port, backend='docker'):
         authorize(request)
         sid = service.state['selectedSessionId']
         with lock:
-            observed = {'calls': list(calls), 'setupCalls': list(setup_calls), 'callCounts': dict(Counter(call['action'] for call in calls)), 'states': dict(states), 'mode': dict(mode)}
+            observed = {'calls': list(calls), 'setupCalls': list(setup_calls), 'callCounts': dict(Counter(call['action'] for call in calls)), 'states': dict(states), 'mode': dict(mode),
+                        'probeCounts': dict(probes)}
         observed['resources'] = [{key: row.get(key) for key in ('id', 'sessionId', 'workspaceId',
             'revision', 'backendKey', 'backendType', 'retentionMode', 'environmentState',
             'lastOperation', 'lastArtifactExport', 'artifactExport')}
@@ -165,7 +181,7 @@ async def main(home, port, backend='docker'):
                 mode['capacityAvailable'] = bool(value['capacityAvailable'])
             if 'backendAvailable' in value:
                 mode['backendAvailable'] = bool(value['backendAvailable'])
-            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout', 'removeFailure'):
+            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout', 'removeUnknown', 'removeFailure'):
                 if key in value:
                     if type(value[key]) is not bool:
                         raise web.HTTPBadRequest(text=key + ' must be boolean')

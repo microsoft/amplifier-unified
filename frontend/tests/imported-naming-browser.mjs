@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Discovered chat names arrive through the real background loop and state stream.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -12,7 +13,7 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
- await page.goto(ready.url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(ready.url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{navPinned:true,navExpanded:true}}));
  await expect.poll(async()=>(await check()).calls,{timeout:25000}).toBe(1);
  assert.equal((await check()).historyLoaded,false);

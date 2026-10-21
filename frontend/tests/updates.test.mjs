@@ -163,6 +163,23 @@ test('prepared app failure is visibly an error and allows the existing install a
  await renderAct(async()=>root.unmount());
 });
 
+test('queued release refresh is read-only and only available before an app handoff',async()=>{
+ const queued={pendingApp:{...application,status:'update',latest:'v0.6.4'},phase:'app-staged'};
+ for(const patch of [{},{applicationCheckPending:true},{pendingApp:{...queued.pendingApp,featureSelection:{requestId:'chosen'}}},{pendingRestart:{version:'0.6.4'}},{pendingReplacement:{attemptId:'unknown'}},{phase:'staging'},{pendingRelease:'components'},{pendingSmartTools:[{id:'tool'}]}]){
+  const calls=[];let root;
+  try{
+   await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state({...queued,...patch}),act:(action,args)=>calls.push({action,args})}))});
+   const check=root.root.findByProps({'data-action':'updates.check'});
+   assert.equal(check.props.disabled,Object.keys(patch).length>0,JSON.stringify(patch));
+   assert.deepEqual(calls,[]);
+   if(!check.props.disabled){assert.match(JSON.stringify(root.toJSON()),/Check for newer release/);await renderAct(async()=>check.props.onClick());assert.deepEqual(calls,[{action:'updates.check',args:undefined}])}
+  }finally{await renderAct(async()=>root.unmount())}
+ }
+ const offline=render({...queued,applicationCheckWarning:'Could not check for a newer release. The prepared update is still available.'});
+ assert.match(offline,/prepared update is still available/);assert.match(offline,/Waiting for your work to finish/);
+ assert.doesNotMatch(offline,/Updates need attention/);
+});
+
 test('a rejected restart keeps its work gate but displays actionable failure instead of restarting',()=>{
  const html=render({phase:'activating',pendingRestart:{version:'0.6.4',requestStatus:'rejected'},
   error:'The app installed, but the managed restart request was rejected. Run amplifier-unified service restart.',
@@ -441,4 +458,38 @@ test('an error arriving during validation is never hidden by a progress summary'
  const html=render({phase:'validating',error:'Validation stopped',diagnostics:{attemptId:'new',batch:{attemptId:'new'}},probeProgress:{attemptId:'new',completed:1,total:2}});
  const banner=html.slice(0,html.indexOf('data-part="update-controls"'));
  assert.match(banner,/Updates need attention/);assert.doesNotMatch(banner,/Finishing your update/);
+});
+
+test('runner-only wait keeps availability refresh usable without exposing unrelated work as a blocker',async()=>{
+ const runner={previous:'old',runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check'};
+ const base={phase:'staged',pendingSmartTools:[runner],blockers:[{kind:'conversation',sessionId:'one',label:'Unrelated chat'}]};
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(base),act:(name,args)=>calls.push({name,args})}))});
+ const check=root.root.findByProps({'data-action':'updates.check'});
+ assert.equal(check.props.disabled,false);assert.equal(check.findByType('span').children.join(''),'Check for updates');
+ assert.equal(root.root.findAllByProps({'data-part':'update-blockers'}).length,0);
+ await renderAct(async()=>check.props.onClick());assert.deepEqual(calls,[{name:'updates.check',args:undefined}]);
+ for(const change of [{pendingRelease:'candidate'},{pendingSmartTools:[runner,{previous:'ordinary-tool'}]},{phase:'validating'}]){
+  await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state({...base,...change}),act:()=>{}})));
+  assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,true);
+ }
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('prepared source mismatch explains preservation and exports only mismatch field names',()=>{
+ const failure={id:'mismatch',attemptId:'candidate',phase:'ecosystem-validation',status:'failed',
+  errorType:'ValueError',reason:'runtime-installed-source-mismatch',package:'amplifier-foundation',
+  resolutionMismatches:['revision','private/source', {path:'/private/cache'},'revision'],
+  path:'/private/cache',message:'credential-bearing failure'};
+ const diagnostics={attemptId:'candidate',lastFailure:failure,events:[failure]};
+ const html=render({phase:'error',diagnostics});
+ assert.match(html,/amplifier-foundation/);
+ assert.match(html,/component changed to a different source during update preparation/);
+ assert.match(html,/kept the current components active/);
+ assert.match(html,/share the update details/);
+ const exported=JSON.parse(diagnosticReceipt(diagnostics));
+ assert.deepEqual(exported.lastFailure.resolutionMismatches,['revision']);
+ assert.deepEqual(exported.events[0].resolutionMismatches,['revision']);
+ assert.doesNotMatch(JSON.stringify(exported),/private|credential/);
 });

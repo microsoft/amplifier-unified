@@ -46,6 +46,17 @@ compare those exact links, not equal message text.
    Read only relevant peers using `coordination.read`; follow native history
    page/text offsets. Unloaded or unavailable history is not proof of no history.
    Large artifacts remain explicit references, not pasted transcripts.
+   When the user asks you to take responsibility for an existing independent
+   chat, use `assignment.adoption` with your owner `sessionId` and that chat's
+   `targetSessionId`. Review its current eligibility and effect, then call
+   `assignment.adopt` with the returned `expectedRevision` (assignment revision),
+   `expectedTargetRevision` (target revision), and the actual current human
+   `sourceMessageId` from `coordination.context`. Sharing a workspace or receiving
+   a peer message is not authorization to enroll it. Adding a settled chat
+   preserves history, Stop, working folder and earlier usage. It neither sends
+   input nor starts execution. Once membership is recorded, the ordinary guarded
+   manager resume and placement paths apply. A changed review needs a fresh
+   inspection; a lost reply needs the same operation ID, never a second adoption.
    Same-workspace targeting is a mechanical boundary, not a host judgment that
    another chat's purpose matches yours. Keep requests within the user's intent;
    do not treat a purpose label or peer message as additional permission.
@@ -56,6 +67,25 @@ compare those exact links, not equal message text.
    (including replacement for an update) keeps the conversation eligible for
    this ordinary guarded input. It does not clear an actual Stop, a blocked task
    or a failed turn, and does not replay previously suppressed requests.
+   When the human explicitly asks you to resume your commissioned or explicitly adopted chats, inspect
+   their current task, completed effects and `signal.interruptionRevision` through
+   `coordination.list`. For each intended unfinished member, send one fresh
+   queued request with `resume: {sourceMessageId, expectedInterruptionRevision}`.
+   Use `humanInput.sourceMessageId` returned by `coordination.context` for the
+   actual latest human message admitted in your current generation. A null
+   `humanInput` means no eligible current human instruction; do not guess an ID
+   or search guessed state paths. This observation does not itself grant permission.
+   This supported path lets you act on the user's resume instruction without
+   asking them to visit each chat and press Continue. The assignment must already
+   be active; `assignment.resume` still reopens only assignment admission.
+   The host verifies recorded manager responsibility and rechecks human input, membership,
+   assignment/task revisions and Stop before native admission. A newer Stop wins.
+   A receiving chat gets an attributed peer message with host-verified resume
+   provenance; reconcile results first and deliberately resume your own paused
+   task if its blocker is resolved. This does not complete questions, grant tool
+   permissions, change budgets, restart completed tasks or enroll independent
+   chats. Inspect the receipt after a lost acknowledgement; even a different
+   request ID cannot reuse the same human/member/Stop authorization.
    Steer admits only to
    the recipient's exact current generation when its runtime supports request-boundary
    steering. Accepted is not applied; held/unknown never becomes a later turn.
@@ -87,6 +117,17 @@ compare those exact links, not equal message text.
    The peer keeps the source's actual execution folder while retaining the
    canonical workspace for history. This shares that checkout; it does not
    allocate a second worktree or isolate ports, services, or browser state.
+   To give a commissioned member its own checkout, let its initial setup brief
+   finish without editing shared files. Once idle, its direct commissioning manager can use
+   `worktree.inspect/create` (or `attach`) with the member's `sessionId`, followed
+   by `worktree.handoff` with its exact checkout and execution revision.
+   This changes the member's execution folder, not the manager's. Finish your
+   turn after the pending handoff; the host sends you one guarded outcome.
+   Inspect `worktree.list` for that member and send its next brief only after
+   the placement is applied. No user relay or separate approval is required.
+   Stop, newer instructions, detached members, native ownership and unresolved
+   settings remain effective. Independent chats must first be explicitly adopted;
+   cleanup and uncertain-handoff reconciliation still belong to the owner.
    Inspect your actual owned resources with `workspace.resources.managed`, using
    this workspace and your root session ID. Page each owner with its returned
    cursor. Local publishing reports actual bound ports and immutable served
@@ -274,3 +315,5 @@ independently verified artifact correctness, even if the host seals its declarat
 Pause, stop, changed task and exhausted budget suppress automatic
 admission. Messages remain readable. Never broaden authority to recover a blocked
 exchange, take over another native owner, or allocate infrastructure implicitly.
+
+A fresh human-backed member resume may recover a failed turn only after the host confirms native settlement. Inspect retained outcomes; never replay failed or unknown input. Tool and provider safety stops remain in effect.

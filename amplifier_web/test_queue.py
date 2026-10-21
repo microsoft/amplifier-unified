@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import closing
 import json
 import logging
 import time
@@ -15,6 +16,9 @@ import uuid
 
 from . import task_environments as environments
 from . import test_environment_profiles as profiles
+from . import test_capacity_settings as capacity_settings
+from . import registered_test_runners as registered_runners
+from . import test_execution_settings as execution_settings
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -42,8 +46,8 @@ def definitions(schema, string):
         ACTION: ('Queue one isolated check. The host waits for capacity, snapshots the working folder when admitted, runs the command once, stops its environment, exports source and artifacts and removes the owned environment. Evidence is retained. Continue independent work while waiting. Unknown effects never replay. A guarded completion notification can resume this chat.', schema({
             **scope, 'requestId': {**string(200), 'minLength': 1}, 'profileId': {'enum': [row['id'] for row in profiles.catalog()]},
             'command': {**string(16384), 'minLength': 1},
-            'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 1800},
-            'waitSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 86400},
+            'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS},
+            'waitSeconds': {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS},
             'notify': {'type': 'boolean'}}, [*scope, 'requestId', 'profileId', 'command'])),
         'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. Does not execute or replay a check.', schema({**scope,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, list(scope))),
@@ -66,6 +70,7 @@ class TestQueue:
         self.backoff = {}
         self.wakeup = asyncio.Event()
         self.notification_cursor = 0
+        self.active_cursor = 0
         self.job_wakeups = {}
         self.poll_seconds = 5
         app.db.execute("""CREATE INDEX IF NOT EXISTS workspace_test_queue ON commands(
@@ -89,6 +94,63 @@ class TestQueue:
             'SELECT receipt FROM commands WHERE ' + ' AND '.join(terms) + ' ORDER BY rowid ' + ('ASC' if active else 'DESC') + ' LIMIT ? OFFSET ?',
             (*params, limit, offset))]
 
+    def pending_count(self, *, preparing_backend=None, sid=None):
+        clause = "json_extract(receipt,'$.job.status') IN ('queued','starting','checking','stopping','removing')"
+        params = [ACTION]
+        if preparing_backend is not None:
+            clause = "json_extract(receipt,'$.job.status')='starting' AND json_extract(receipt,'$.job.backendKey')=?"
+            params.append(preparing_backend)
+        if sid is not None:
+            clause += " AND json_extract(receipt,'$.senderSessionId')=?"
+            params.append(sid)
+        return self.app.db.execute("SELECT COUNT(*) FROM commands WHERE json_extract(receipt,'$.commandAction')=? AND " + clause, params).fetchone()[0]
+
+    def chat_available(self, receipt):
+        """FIFO admission across all targets, with retained ownership as the fence.
+
+        A terminal queue outcome does not prove the environment was removed.
+        Remote environments also have an origin allocation before source transfer;
+        checking that ledger preserves their exact target through lost responses.
+        """
+        identity, sid = receipt['requestId'], receipt['senderSessionId']
+        earlier = self.app.db.execute("""SELECT 1 FROM commands
+            WHERE json_extract(receipt,'$.commandAction')=?
+            AND json_extract(receipt,'$.senderSessionId')=? AND id!=?
+            AND json_extract(receipt,'$.job.status') IN ('queued','starting','checking','stopping','removing')
+            AND (rowid<(SELECT rowid FROM commands WHERE id=?)
+                 OR json_extract(receipt,'$.job.status')!='queued') LIMIT 1""",
+            (ACTION, sid, identity, identity)).fetchone()
+        reason = 'Waiting for an earlier check in this chat to finish and clean up.' if earlier else None
+        if reason is None:
+            with closing(environments.storage.connect(self.app.data_dir)) as db:
+                owned = db.execute("""SELECT body FROM allocations WHERE root=?
+                    AND status!='retired' AND json_extract(body,'$.kind')=?""", (sid, environments.KIND)).fetchall()
+            command = identity+':start:'+str(receipt['job'].get('attempt', 0))
+            # Preserve recovery of the allocation-before-queue-link crash gap.
+            # prepare still validates every immutable field before reusing it.
+            if any((row := json.loads(encoded[0])).get('commandId') != command
+                   or row.get('backendAdmitted') for encoded in owned):
+                reason = 'Waiting for this chat’s previous test environment cleanup to be confirmed.'
+        if reason:
+            if receipt['job'].get('detail') != reason:
+                receipt['job']['detail'] = reason
+                self.save(receipt)
+            return False
+        return True
+
+    def active_page(self):
+        # Rotate bounded keyset pages. Waiting old requests cannot hide work
+        # beyond the first page, and deletion/status changes cannot skip rows.
+        rows = self.app.db.execute("""SELECT rowid,receipt FROM commands
+            WHERE json_extract(receipt,'$.commandAction')=?
+            AND json_extract(receipt,'$.job.status') IN ('queued','starting','checking','stopping','removing')
+            AND rowid>? ORDER BY rowid LIMIT 64""", (ACTION, self.active_cursor)).fetchall()
+        if not rows and self.active_cursor:
+            self.active_cursor = 0
+            return self.active_page()
+        self.active_cursor = rows[-1][0] if rows else 0
+        return [json.loads(row[1]) for row in rows]
+
     def identity(self, sid, request):
         return str(uuid.uuid5(uuid.NAMESPACE_URL, 'workspace-test:' + sid + ':' + request))
 
@@ -106,7 +168,7 @@ class TestQueue:
     def public(self, receipt):
         job = receipt['job']
         value = {key: copy.deepcopy(job[key]) for key in ('id', 'status', 'createdAt', 'updatedAt', 'expiresAt',
-            'resourceId', 'capacity', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'guestJob') if key in job}
+            'resourceId', 'capacity', 'testMachine', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'resourceRequest', 'timingRequest', 'guestJob') if key in job}
         # Full output lives in the existing exact operation receipt. Queue lists
         # cannot multiply a 32 KiB command result by the page size.
         for phase in ('launch', 'check', 'cleanup', 'removal'):
@@ -123,7 +185,7 @@ class TestQueue:
         job = receipt['job']
         if job.get('cancelRequested'):
             raise ValueError('The queued check was cancelled; no new check will start.')
-        if job['status'] == 'queued' and job['expiresAt'] <= time.time():
+        if job['status'] == 'queued' and job.get('expiresAt') is not None and job['expiresAt'] <= time.time():
             raise ValueError('The saved check expired while waiting; no environment was started.')
         source = self.app._session(receipt['senderSessionId'], hydrate=False)
         if normalized_binding(job['binding']) != binding(source):
@@ -132,8 +194,11 @@ class TestQueue:
             raise ValueError('The assignment stopped; its queued check will not start.')
         self.app.configuration_authority.check(job.get('authority'))
         config, _, _ = environments.configuration(self.app)
-        if not config or environments.config_key(config) != job['backendKey']:
+        if job.get('runnerCandidates') and job.get('targetBound'):
+            config = registered_runners.resolve_job(self.app, job, config)
+        elif not config or environments.config_key(config) != job['backendKey']:
             raise ValueError('The approved test backend changed; this request will not start on another backend.')
+        capacity_settings.load(self.app)
         return config
 
     def continuation_guard(self, receipt):
@@ -144,7 +209,48 @@ class TestQueue:
             return 'The conversation stopped or moved after this check was requested.'
         return None
 
+    def retire_unstarted_allocation(self, receipt):
+        """Settle only the initial local journal commit, before any effect intent.
+
+        The common environment lock fences effect(start). Its first local effect
+        advances revision/status before touching storage or transferring source.
+        Anything beyond that boundary remains owned for normal reconciliation.
+        """
+        job, sid = receipt['job'], receipt['senderSessionId']
+        command = receipt['requestId']+':start:'+str(job.get('attempt', 0))
+        with closing(environments.storage.connect(self.app.data_dir)) as db:
+            found = db.execute("""SELECT id FROM allocations WHERE root=? AND status='prepared'
+                AND json_extract(body,'$.kind')=? AND json_extract(body,'$.commandId')=?""",
+                (sid, environments.KIND, command)).fetchone()
+            if not found:
+                return
+            lock = environments.FileLock(str(self.app.data_dir / 'workspace-resources' / ('environment-'+found[0]+'.lock')), timeout=0)
+            try:
+                with lock, db:
+                    db.execute('BEGIN IMMEDIATE')
+                    row = environments.storage.get(db, sid, found[0])
+                    workspace = next((w['id'] for w in self.app.state['workspaces'] if w['path'] == receipt['workspace']), None)
+                    expected = {'commandId': command, 'owner': job['actor'], 'source': job['source'],
+                        'workspaceId': workspace, 'backendKey': job['backendKey'], 'profileId': job['profileId'],
+                        'resourceRequest': job.get('resourceRequest'), 'timingRequest': job.get('timingRequest'),
+                        'revision': 1, 'status': 'prepared', 'environmentState': 'preparing'}
+                    if any(row.get(key) != value for key, value in expected.items()):
+                        return
+                    if any(key in row for key in ('directoryIdentity', 'pendingRequest', 'backendAdmitted',
+                            'preparationPending', 'preparedDependencies', 'snapshot', 'universeId', 'hostReservation')):
+                        return
+                    journal = self.app.operations.requests.journal
+                    with journal.lock:
+                        if journal.db.execute('SELECT 1 FROM operation_requests WHERE session_id=? AND id=?', (sid, command)).fetchone():
+                            return
+                        environments.storage.save(db, {**row, 'revision': 2, 'status': 'retired',
+                            'environmentState': 'not-started'})
+            except environments.LockTimeout:
+                return  # An active owner must settle its own work.
+
     def finish(self, receipt, status, detail):
+        if receipt['job']['status'] == 'queued' and not receipt['job'].get('resourceId'):
+            self.retire_unstarted_allocation(receipt)
         receipt['job'].update(status=status, detail=detail)
         receipt['terminalOutcome'] = {'status': 'observed', 'kind': 'test', 'outcome': status,
             'qualified': False, 'text': detail + ' Inspect workspace.tests.read and the retained environment result. This is check evidence, not proof of product acceptance.',
@@ -200,8 +306,9 @@ class TestQueue:
                 'nextOffset': offset+len(page) if offset+len(page)<len(content) else None,
                 'truncatedAtSource': bool(output.get('truncated') or output.get('stdout_truncated') or output.get('stderr_truncated')),
                 'retention': environments.public(self.app.data_dir, row)['retention'] if row else None}}
-        async with self.app.lock:
-            if action.endswith('.cancel'):
+        if action.endswith('.cancel'):
+            row = None
+            async with self.app.lock:
                 if origin not in {'ui', 'user'}:
                     owner.active_binding(owner.source(args, origin, caller, hydrate=False))
                 receipt = self.get(identity)
@@ -215,10 +322,12 @@ class TestQueue:
                     self.save(receipt)
                     if receipt['job']['status'] == 'starting' and receipt['job'].get('resourceId'):
                         row = environments.get(self.app.data_dir, source['id'], receipt['job']['resourceId'])
-                        environments.cancel_preparation(self.app, row)
                 self.wakeup.set()
                 self.wake_job(identity)
-                return {'accepted': True, 'result': self.public(receipt)}
+            if row is not None:
+                await asyncio.to_thread(environments.cancel_preparation, self.app, row)
+            return {'accepted': True, 'result': self.public(receipt)}
+        async with self.app.lock:
             digest = fingerprint([ACTION, args, source['id'], origin])
             previous = self.app.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
             if previous:
@@ -230,14 +339,16 @@ class TestQueue:
             if self.app.assignments.blocked(source):
                 owner.error('This assignment is stopped.', 409)
             self.app.configuration_authority.check(authority)
-            seconds = profiles.validate_timeout(args['profileId'], args.get('timeoutSeconds'))
+            queue_policy, resource_request, timing_request = execution_settings.accepted(self.app, args['profileId'])
+            seconds = profiles.validate_timeout(args['profileId'], args.get('timeoutSeconds'), timing_request)
+            wait_seconds = args.get('waitSeconds', queue_policy['defaultWaitSeconds'])
             config, _, reason = environments.configuration(self.app)
             if not config:
                 owner.error(reason, 409)
-            if self.rows(active=True, sid=source['id']):
-                owner.error('This chat already has a pending check. Inspect or cancel that request.', 409)
-            if len(self.rows(active=True)) >= 64:
-                owner.error('The host has 64 pending checks. Inspect or cancel existing requests.', 429)
+            if self.pending_count(sid=source['id']) >= queue_policy['maxPendingPerChat']:
+                owner.error('This chat’s pending check limit has been reached. Inspect its checks or adjust Advanced execution limits in Settings.', 429)
+            if self.pending_count() >= queue_policy['maxPending']:
+                owner.error('The saved queue limit has been reached. Inspect pending checks or adjust Advanced execution limits in Settings.', 429)
             notify = args.get('notify', True)
             if notify:
                 owner.require_continuation()
@@ -251,13 +362,14 @@ class TestQueue:
                 'assignmentId': source.get('assignmentId'),
                 'subscription': owner.saved_wait(source, identity, status='waiting' if notify else 'disabled'),
                 'job': {'id': args['requestId'], 'status': 'queued', 'createdAt': now, 'updatedAt': now,
-                    'expiresAt': now + args.get('waitSeconds', 3600),
+                    'expiresAt': now + wait_seconds if wait_seconds else None,
                     'source': source.get('workingDirectory') or source['workspace'],
                     'binding': binding(source), 'authority': authority,
                     'backendKey': environments.config_key(config), 'command': args['command'],
-                    'timeoutSeconds': seconds, 'profileId': args['profileId'], 'durableVersion': 1,
+                    'timeoutSeconds': seconds, 'profileId': args['profileId'], 'resourceRequest': resource_request, 'timingRequest': timing_request, 'durableVersion': 1,
                     'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
+            receipt['job']['runnerCandidates'] = registered_runners.retain_candidates(self.app, config, args['profileId'])
             owner.require_causal_depth(receipt['causalDepth'])
             owner.insert(identity, digest, receipt)
             self.app.db.commit()
@@ -317,7 +429,8 @@ class TestQueue:
                 # The saved result survives a temporarily unavailable inbox.
                 pass
         capacities = {}
-        for receipt in self.rows(active=True):
+        runner_observations = {}
+        for receipt in self.active_page():
             identity = receipt['requestId']
             task = self.tasks.get(identity)
             if task and not task.done():
@@ -328,39 +441,68 @@ class TestQueue:
                 self.tasks[identity] = asyncio.create_task(self.recover(identity))
                 continue
             try:
-                if receipt['job']['expiresAt'] <= time.time():
+                if receipt['job'].get('expiresAt') is not None and receipt['job']['expiresAt'] <= time.time():
                     self.finish(receipt, 'expired', 'The saved check expired while waiting for capacity. No environment was started.')
                     continue
                 config = self.guard(receipt)
             except Exception as exc:
                 self.finish(receipt, 'cancelled', str(exc))
                 continue
-            if self.admission.locked():
+            if not self.chat_available(receipt) or self.admission.locked():
                 continue
+            if receipt['job'].get('runnerCandidates') and not receipt['job'].get('targetBound'):
+                selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff)
+                async with self.app.lock:
+                    receipt = self.get(identity)
+                    if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
+                        continue
+                    if not self.chat_available(receipt):
+                        continue
+                    if selected is None or not registered_runners.enabled(self.app, selected):
+                        receipt['job']['detail'] = 'Waiting for room on an approved test machine.'
+                        self.save(receipt)
+                        continue
+                    self.guard(receipt)
+                    config = selected
+                    receipt['job'].update(backendKey=environments.config_key(config), targetBound=True,
+                        testMachine=({key: config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if config.get('remoteRunner') else None))
+                    self.save(receipt)  # Bind before source transfer or any target effect.
             key = receipt['job']['backendKey']
             if key not in capacities:
                 retry, delay = self.backoff.get(key, (0, 5))
                 if retry > time.time():
                     continue
-                capacity = await asyncio.to_thread(environments.capacity, self.app, config)
+                capacity = runner_observations.get(key)
+                if capacity is None:
+                    capacity = await asyncio.to_thread(environments.capacity, self.app, config)
                 limits, counts = capacity.get('limits', {}), capacity.get('counts', {})
                 maximum = limits.get('max_running', 1)
-                preparing = sum(item['job']['status'] == 'starting' and item['job']['backendKey'] == key
-                                for item in self.rows(active=True))
-                free = max(0, maximum-counts.get('active', 0)-preparing) if maximum else max(0, 64-preparing)
+                preparing = self.pending_count(preparing_backend=key)
+                free = max(0, maximum-counts.get('active', 0)-preparing) if maximum else 64  # Bounded scheduling batch, not a concurrency ceiling.
                 capacities[key] = [capacity, free if capacity.get('available') else 0]
                 if not capacity.get('available'):
                     self.backoff[key] = (time.time()+delay, min(60, delay*2))
                 else:
                     self.backoff.pop(key, None)
             capacity, free = capacities[key]
-            receipt = self.get(identity)
-            receipt['job']['capacity'] = capacity
-            self.save(receipt)
-            if free <= 0 or receipt['job']['status'] != 'queued':
-                continue
-            capacities[key][1] -= 1
-            self.tasks[identity] = asyncio.create_task(self.run(identity, config))
+            async with self.app.lock:
+                receipt = self.get(identity)
+                task = self.tasks.get(identity)
+                if receipt['job']['status'] != 'queued' or (task and not task.done()):
+                    continue
+                try:
+                    self.guard(receipt)
+                except Exception as exc:
+                    self.finish(receipt, 'cancelled', str(exc))
+                    continue
+                if not self.chat_available(receipt):
+                    continue
+                receipt['job']['capacity'] = capacity
+                self.save(receipt)
+                if free <= 0:
+                    continue
+                capacities[key][1] -= 1
+                self.tasks[identity] = asyncio.create_task(self.run(identity, config))
 
     async def effect(self, receipt, config, action, *, cleanup=False, suffix=None, previous_request=None):
         job, app = receipt['job'], self.app
@@ -386,13 +528,15 @@ class TestQueue:
         if not fresh:
             return request
         loop = asyncio.get_running_loop()
-        async def checked():
+        async def checked(capacity=False):
             async with app.lock:
                 # Cleanup is part of the original admitted check, even when its
                 # waiting authority is revoked. It only stops that exact owner;
                 # it never starts work, changes settings or removes evidence.
                 if not cleanup:
-                    self.guard(self.get(receipt['requestId']))
+                    current_config = self.guard(self.get(receipt['requestId']))
+                    if capacity:
+                        return capacity_settings.apply(app, current_config)
                 else:
                     active, _, _ = environments.configuration(app)
                     current = environments.get(app.data_dir, receipt['senderSessionId'], row['id'])
@@ -400,20 +544,33 @@ class TestQueue:
                         raise ValueError('The retained cleanup backend changed.')
         def admit():
             asyncio.run_coroutine_threadsafe(checked(), loop).result(timeout=10)
-        result = await app.worktrees.finish_thread(environments.effect, app, row, action, args, config, request, admit)
+        def policy_admit():
+            return asyncio.run_coroutine_threadsafe(checked(capacity=True), loop).result(timeout=10)
+        result = await app.worktrees.finish_thread(environments.effect, app, row, action, args, config, request, admit, policy_admit)
         return result['request']
 
     async def run(self, identity, config):
         try:
             async with self.admission:
                 receipt = self.get(identity)
+                if receipt['job']['status'] != 'queued':
+                    return
                 config = self.guard(receipt)
+                if not self.chat_available(receipt):
+                    return
+                if receipt['job'].get('targetBound') and not receipt['job'].get('resourceId') and not registered_runners.enabled(self.app, config):
+                    receipt['job'].pop('targetBound', None)
+                    receipt['job'].pop('testMachine', None)
+                    receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
+                    receipt['job']['detail'] = 'Waiting for an enabled test machine.'
+                    self.save(receipt)
+                    return
                 # tick shares one physical observation across this FIFO batch.
                 # The backend rechecks atomically immediately before launch.
                 job = receipt['job']
                 row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
                     receipt['senderSessionId'], next(w['id'] for w in self.app.state['workspaces'] if w['path']==receipt['workspace']),
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE))
+                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'))
                 # Cancellation may arrive while local allocation is persisted.
                 # Never overwrite the newer cancellation/subscription record.
                 receipt = self.get(identity)
@@ -439,6 +596,12 @@ class TestQueue:
                     receipt['job'].pop('resourceId', None)
                     receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
                     receipt['job']['status'] = 'queued'
+                    if receipt['job'].get('runnerCandidates'):
+                        receipt['job'].pop('targetBound', None)
+                        receipt['job'].pop('testMachine', None)
+                        receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
+                    if launch['result'].get('machineResources'):
+                        receipt['job']['capacity'] = {'available': False, 'machineResources': launch['result']['machineResources']}
                     self.save(receipt)
                     return
                 if launch['state'] == 'failed':
@@ -475,6 +638,8 @@ class TestQueue:
                 # next phase must still reconcile the owned environment.
                 await self.recover(identity)
                 return
+            if receipt['job']['status'] == 'queued' and not self.chat_available(receipt):
+                return
             status = 'failed' if receipt['job']['status'] == 'queued' else 'unknown'
             self.finish(receipt, status, 'The test lifecycle did not complete: '+str(exc)[:500]+'. No uncertain effect will be replayed.')
 
@@ -497,7 +662,7 @@ class TestQueue:
             receipt = self.get(identity)
             if (removal['state'] == 'failed' and removal.get('result', {}).get('effectAdmitted') is False
                     and removal['result'].get('phase') in {'preserving', 'verifying'}
-                    and removal['result'].get('code') not in {'owner_changed', 'ownership_conflict', 'backend_changed', 'retention_storage'}):
+                    and removal['result'].get('code') in {'preservation_failed', 'archive_verification_failed'}):
                 # A definitive pre-teardown failure permits the separately
                 # recorded preservation path, never replay of an unknown effect.
                 receipt['job']['previousRemoval'] = self.summary(removal)

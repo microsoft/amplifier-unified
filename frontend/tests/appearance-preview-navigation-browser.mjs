@@ -48,13 +48,23 @@ try{
  // must run after retiring the old request, not be cancelled by old cleanup.
  mode='before';const oldCount=held;
  await page.getByRole('button',{name:'Preview',exact:true}).click();await expect.poll(()=>held).toBe(oldCount+1);
+ const closed=page.waitForResponse(response=>{
+  if(response.request().method()!=='POST'||!response.url().endsWith('/api/actions'))return false;
+  const body=response.request().postDataJSON();
+  return body?.action==='view.update'&&body.args?.patch?.panel===null;
+ });
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ // Closure is local while the old preview holds the command queue. Do not let
+ // the opening helper reuse the retiring Settings component.
+ await expect.poll(async()=>(await state()).view.panel).toBe(null);
+ await expect(page.locator('.a-settings-experience')).toHaveCount(0);
  await openSettingsPage(page,'custom-appearance');await page.getByText('Advanced customization',{exact:true}).click();
  await page.locator('#theme-name').fill('Successor preview');
  await expect.poll(async()=>(await state()).view.themeDraftName).toBe('Successor preview');
  const successor=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.preview'&&response.request().postDataJSON().args.name==='Successor preview');
  await page.getByRole('button',{name:'Preview',exact:true}).click();
  mode='pass';release();release=null;await successor;
+ const closeReceipt=await closed;assert.ok(closeReceipt.ok());assert.equal((await closeReceipt.json()).accepted,true);
  await expect.poll(async()=>(await state()).view.themePreview).toBe(true);
  await expect(page.locator('.a-appearance-preview')).toContainText('Successor preview');
  await openSettingsPage(page,'updates');await expect.poll(async()=>(await state()).view.themePreview).toBe(false);

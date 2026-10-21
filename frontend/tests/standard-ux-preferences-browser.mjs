@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -40,7 +41,7 @@ for(const variant of variants){
    await expect.poll(async()=>(await presentation())[key]).toBe(value);await expect(control).toBeEnabled();evidence.assertion(key+' exact canonical preference',(await presentation())[key],value);
   };
   let selected;
-  await probe('entry',['entry.boot','settings.destinations'],async()=>{await evidence.action('Open clean synthetic Settings app',()=>page.goto(url));await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);selected=(await state()).selectedSessionId;await expect(page.getByRole('textbox',{name:'Message Amplifier',exact:true})).toBeEditable();await evidence.action('Type retained unsent preference draft',()=>page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Keep this unsent preference draft'));await section('appearance');evidence.assertion('Settings retains selected chat',(await state()).selectedSessionId,selected)});
+  await probe('entry',['entry.boot','settings.destinations'],async()=>{await evidence.action('Open clean synthetic Settings app',()=>page.goto(url));await showFixtureConversation(page,{navPinned:true});await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);selected=(await state()).selectedSessionId;await expect(page.getByRole('textbox',{name:'Message Amplifier',exact:true})).toBeEditable();await evidence.action('Type retained unsent preference draft',()=>page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Keep this unsent preference draft'));await section('appearance');evidence.assertion('Settings retains selected chat',(await state()).selectedSessionId,selected)});
   await probe('color-detail',['appearance.mode'],async()=>{
    for(const value of ['dark','light','system']){await setPresentation('scheme',value,page.getByRole('combobox',{name:'Color mode',exact:true}));const painted=value==='system'?'light':value;await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',painted)}
    for(const [value,label] of [['minimal','Focused'],['detailed','Everything'],['standard','Balanced']]){await setPresentation('interfaceDetail',value,page.getByRole('radio',{name:new RegExp('^'+label)}),'radio');await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail',value)}

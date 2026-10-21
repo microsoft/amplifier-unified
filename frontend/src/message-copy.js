@@ -9,5 +9,6 @@ export async function messageTextForCopy(state,effect,request){
   message=find(scoped.state||scoped);
  }
  if(!message)throw Error('Message no longer available');
- return message.textDetail?readDetail(message.textDetail,request):message.text||'';
+ const text=message.textDetail?await readDetail(message.textDetail,request):message.text||'';
+ return effect.chatReferenceText?`${text}\n\n${effect.chatReferenceText}`:text;
 }

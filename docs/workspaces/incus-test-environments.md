@@ -31,11 +31,17 @@ The app accepts these exact reviewed version and Python package digest pairs:
 | --- | --- |
 | `0.4.0` | `5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39` |
 | `0.4.1` | `b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06` |
+| `0.4.2` | `0911d18ec7256913253b53ce66520fac2f6cc78d19696a3f7b724a646dd909b8` |
+| `0.4.3` | `2019e9b6ed0d2a1e882f90d8767f3652a278e9a5df0902efcf2a4a3b869a09ff` |
 
 Version `0.4.0` introduced capacity admission in bundle
 [PR #37](https://github.com/microsoft/amplifier-bundle-digital-twin-universe/pull/37).
 Version `0.4.1` adds an exact offline image check before launch admission in
 [PR #38](https://github.com/microsoft/amplifier-bundle-digital-twin-universe/pull/38).
+Version `0.4.2` adds bound asynchronous local creation operations in
+[PR #39](https://github.com/microsoft/amplifier-bundle-digital-twin-universe/pull/39).
+New runner setup installs this current qualified generation. Checking an existing
+runner preserves its exact installation; it does not upgrade or redirect owners.
 `package_digest()` in the adapter calculates it from sorted package-relative
 Python paths and their content hashes. The app verifies the exact version/pin pair and
 the installed bytes on every helper invocation. The launcher must use an explicit
@@ -138,10 +144,25 @@ backend configuration and actual daemon/project identity, owner, launch request
 and instance identity. Confirmed running or stopped state can repair the current
 resource projection. Ownership is retired only after physical absence is proven
 and no unresolved admission or launch can still create that instance.
+Inventory reads names first and fetches metadata only for the owned target,
+so other instances' configuration cannot exhaust the bounded control response.
 
 An unreachable daemon, changed daemon identity, missing installation, pending
 launch or insufficient legacy identity evidence remains unverified. Empty
 inventory by itself is not proof that a timed-out launch will never complete.
+For the qualified `0.4.2` and `0.4.3` generations, an exact failed launch receipt plus observed
+absence can settle a definitively rejected or failed creation. A remaining owned
+instance still requires normal stop/retention/removal; failure does not grant
+authority over a different instance. Unknown receipts remain unresolved.
+
+The new bundle records operation IDs for offline exact-image launches on a local
+Unix-socket daemon. It observes those operations within bounded time and count
+budgets, without repeating creation or provisioning. Incus can expire completed
+operations within seconds; IDs are not a permanent server completion archive.
+Legacy unknown receipts, lost submission responses and expired operation records
+are not retrospectively fixed by selecting the newer package. Ordinary inspection
+cannot infer terminal failure from absence or elapsed time.
+
 Recovery has its own durable receipt and leaves original uncertain operation
 receipts unchanged. Repeating the same recovery request returns that receipt;
 a later observation uses a new request and current resource revision. The
@@ -158,3 +179,10 @@ Inspection of the retained archive confirmed source and generated artifact bytes
 All qualification instances and the owned project were removed. These results do
 not qualify other operating systems, arbitrary base images, remote previews,
 network-dependent installs, or the surrounding product's browser experience.
+
+
+Version `0.4.3` also recognizes current Incus single-address `Addrs` metadata
+when selecting the tracked local transport. Setup selects that qualified
+generation. Existing `0.4.2` owners and immutable configurations retain their
+original exact package identity and remain eligible for observation and cleanup;
+an update does not rewrite or redirect them.

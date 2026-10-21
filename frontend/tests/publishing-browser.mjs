@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -23,7 +24,7 @@ try{
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.goto(ready.url);await openPublishing(page);
+ await page.goto(ready.url);await showFixtureConversation(page);await openPublishing(page);
  const panel=page.getByRole('region',{name:'Managed publishing'}),release=panel.getByLabel('Selected release',{exact:true}),status=panel.getByLabel('Site status',{exact:true});
  const capture=panel.getByRole('button',{name:'Capture release',exact:true});
  const list=(target)=>page.request.get(ready.url+'/fixture'+(target?'?target='+encodeURIComponent(target):'')).then(response=>response.json());

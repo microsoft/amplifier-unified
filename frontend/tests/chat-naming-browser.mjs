@@ -1,4 +1,5 @@
 // Real actions and built assets, synthetic model, isolated history only.
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
@@ -11,7 +12,7 @@ try{
  await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(ready.url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(ready.url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await action('view.update',{patch:{navPinned:true,navExpanded:true}});
