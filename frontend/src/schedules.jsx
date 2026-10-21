@@ -15,6 +15,17 @@ const repeats=spec=>spec.kind==='interval'?`Every ${spec.intervalSeconds/60} min
 // Private browser-tab drafts only: no backend writes, preview hashes or authority.
 // Remounting a panel restores details, never a previous confirmation.
 const retainedDrafts=new Map();
+const targetDrafts=new Map();
+function rememberDraft(owner,value){
+ const drafts=targetDrafts.get(owner)||new Map();
+ drafts.set(value.editing?.id||null,value);targetDrafts.set(owner,drafts);retainedDrafts.set(owner,value);
+ return value;
+}
+// Explicit Create intent is local to this browser tab and owner. It cannot
+// carry a schedule ID or activation preview. Keep other target drafts intact.
+export function prepareNewSchedule(owner){
+ return rememberDraft(owner,targetDrafts.get(owner)?.get(null)||{draft:emptyDraft(),editing:null});
+}
 export const ScheduleVisibilityContext=createContext(true);
 
 export function ScheduleControls({session,act,focused=false}){
@@ -37,7 +48,7 @@ function OwnerScheduleControls({session,act,focused}){
  latest.current={records,ownerIdentity,context};
  const clearReview=()=>{reviewRef.current=null;setReview(null)};
  const invalidate=()=>{version.current++;clearReview()};
- const remember=value=>{editorRef.current=value;retainedDrafts.set(owner,value);setEditor(value)};
+ const remember=value=>{editorRef.current=value;rememberDraft(owner,value);setEditor(value)};
  const edit=patch=>{if(!mounted.current||blockedReason())return;invalidate();remember({...editorRef.current,draft:{...editorRef.current.draft,...patch}});setNotice('')};
  function blockedReason(target=editorRef.current.editing){
   if(!target)return '';
@@ -74,7 +85,7 @@ function OwnerScheduleControls({session,act,focused}){
  }
  function createSchedule(){
   if(!mounted.current)return;
-  if(editorRef.current.editing)remember({draft:emptyDraft(),editing:null});
+  remember(prepareNewSchedule(owner));
   openEditor();
  }
  function cancel(){
@@ -87,7 +98,10 @@ function OwnerScheduleControls({session,act,focused}){
   if(current?.revision!==record.revision||unknown(current))return;
   invalidate();
   const retained=editorRef.current.editing;
-  if(retained?.id!==record.id||retained?.revision!==record.revision)remember({draft:fromRecord(record),editing:{id:record.id,revision:record.revision}});
+  if(retained?.id!==record.id||retained?.revision!==record.revision){
+   const cached=targetDrafts.get(owner)?.get(record.id);
+   remember(cached?.editing?.revision===record.revision?cached:{draft:fromRecord(record),editing:{id:record.id,revision:record.revision}});
+  }
   setOpen(true);setNotice('');setError('');setFocusRevision(value=>value+1);
  }
  async function preview(){
@@ -109,7 +123,7 @@ function OwnerScheduleControls({session,act,focused}){
   clearReview();const current=version.current,identity=latest.current.ownerIdentity;
   await request(value.editing?'schedule.update':'schedule.create',{...value.config,...(value.editing?{id:value.editing.id}:{}),expectedRevision:value.editing?.revision??0,previewHash:value.previewHash},()=>{
    if(current!==version.current||identity!==latest.current.ownerIdentity)return;
-   retainedDrafts.delete(owner);const reset={draft:emptyDraft(),editing:null};editorRef.current=reset;setEditor(reset);
+   targetDrafts.get(owner)?.delete(value.editing?.id||null);remember(prepareNewSchedule(owner));
    setOpen(false);setNotice('Schedule saved. Check its current state below.');setFocusRevision(value=>value+1);
   });
  }

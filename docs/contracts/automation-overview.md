@@ -30,6 +30,9 @@ Manage saved task returns to the existing task controls when a same-task
 schedule lacks an active objective. Unsaved schedule details stay local to that browser
 tab and owner; cancel/back may retain those details, but never an activation
 preview, including when Advanced navigation merely hides the schedule page.
+Explicit Create selects a new-schedule draft, never the retained edit of an
+existing schedule. New and existing-target drafts remain separate in that tab;
+Open owning chat and Review may reopen retained edits but cannot retain approval.
 Editing or a changed owner binding invalidates review. A save consumes
 its one-use preview before awaiting the receipt; an uncertain response does not
 leave an automatic replay path. Other clients' selection and drafts are unchanged.

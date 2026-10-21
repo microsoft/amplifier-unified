@@ -1,4 +1,5 @@
 import React,{useEffect,useRef,useState} from 'react';
+import {prepareNewSchedule} from './schedules';
 import './automation-hub.css';
 
 const label=value=>({active:'Scheduled',due:'Due — not yet admitted',blocked:'Blocked',needs_review:'Needs review',paused:'Paused',cancelled:'Cancelled',completed:'Completed',failed:'Failed',unknown:'Unknown outcome',accepted:'Input accepted',running:'Running',owner_unavailable:'Owner unavailable',owner_stopped:'Owner stopped',owner_stopping:'Owner stopping',owner_interrupted:'Owner interrupted',owner_error:'Owner needs attention'}[value]||value);
@@ -26,9 +27,9 @@ export function AutomationHub({state,dispatch,isCurrent}){
  useEffect(()=>{refresh(offset,filter)},[offset,filter]);
  function changePage(start,scope=filter){setPage(null);setReview(null);setOffset(start);setFilter(scope)}
  function closeReview(){setReview(null);reviewOpener.current?.focus()}
- async function manage(id){
+ async function manage(id,create=false){
   if(mutation.current)return;mutation.current=true;setBusy(true);setError('');
-  try{if(id!==state.selectedSessionId)await request('session.select',{id});if(active.current&&isCurrent(id))await request('view.update',{patch:{panel:'chat-work',runtimeDraft:{section:'schedules'}}})}
+  try{if(id!==state.selectedSessionId)await request('session.select',{id});if(active.current&&isCurrent(id)){if(create)prepareNewSchedule(id);await request('view.update',{patch:{panel:'chat-work',runtimeDraft:{section:'schedules'}}})}}
   catch(e){if(active.current)setError(e.message)}finally{mutation.current=false;if(active.current)setBusy(false)}
  }
  async function preview(row,event){
@@ -54,7 +55,7 @@ export function AutomationHub({state,dispatch,isCurrent}){
   <div className="a-automation-actions"><button className="a-soft" disabled={busy||!row.owner} onClick={()=>manage(row.sessionId)}>Open owning chat</button>{row.owner&&row.destination==='new_task'&&row.status!=='cancelled'&&row.lastRun?.phase!=='unknown'&&<button className="a-soft" disabled={busy} onClick={event=>preview(row,event)}>Review future runs</button>}</div>
  </article>}
  return <section className="a-automation" aria-label="Automation overview" aria-busy={busy}>
-  <header className="a-automation-heading"><div><h3>Upcoming &amp; attention</h3><p>See what is planned and what needs you.</p></div><div><button className="a-primary" disabled={busy||!state.selectedSessionId} onClick={()=>manage(state.selectedSessionId)}>Create schedule</button><p className="a-caption">In {currentChat?.title||'the current chat'}</p></div></header>
+  <header className="a-automation-heading"><div><h3>Upcoming &amp; attention</h3><p>See what is planned and what needs you.</p></div><div><button className="a-primary" disabled={busy||!state.selectedSessionId} onClick={()=>manage(state.selectedSessionId,true)}>Create schedule</button><p className="a-caption">In {currentChat?.title||'the current chat'}</p></div></header>
   <div className="a-automation-actions a-automation-toolbar"><button className="a-soft" disabled={busy} onClick={()=>{setReview(null);refresh()}}>Refresh automations</button><label>Show <select aria-label="Show automations" value={filter} disabled={busy} onChange={event=>changePage(0,event.target.value)}><option value="current">Current (not cancelled)</option><option value="all">All schedules</option></select></label></div>
   {!state.selectedSessionId&&<p>Choose or create a chat to add scheduled work.</p>}
   {error&&<p role="alert">{error}</p>}
