@@ -65,6 +65,13 @@ async def main(home):
     seed_connection(home / 'shared-settings')
     from aiohttp import web
     from amplifier_web.server import create_app
+    import amplifier_web
+    package_root = Path(amplifier_web.__file__).resolve().parent
+    expected_package_root = os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT')
+    if expected_package_root:
+        assert package_root == Path(expected_package_root).resolve(), 'Fixture imported source instead of the installed wheel'
+    static_identity = {str(p.relative_to(package_root / 'static')): hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in (package_root / 'static').rglob('*') if p.is_file()} if expected_package_root else None
 
     workspace = home / "workspace"
     workspace.mkdir()
@@ -102,6 +109,7 @@ async def main(home):
 
     async def inspect(request):
         return web.json_response({"foundationCachePresent": (home / "app/foundation").exists(),
+            "installedPackageVerified": bool(expected_package_root), "staticSha256": static_identity,
             "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
             "registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),

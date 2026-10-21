@@ -5,6 +5,7 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -20,6 +21,20 @@ try{
  await page.goto(url);await showFixtureConversation(page,{navPinned:false});
  const input=page.getByRole('textbox',{name:'Message Amplifier'}),surface=page.locator('[data-part="composer-surface"]'),primary=page.locator('[data-part="composer-primary-action"]'),options=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
  await input.waitFor();
+ if(process.env.AMPLIFIER_TEST_PACKAGE_ROOT){
+  const identity=await(await page.request.get(url+'/fixture')).json();
+  assert.equal(identity.installedPackageVerified,true,'Actual fixture must import the installed wheel');
+  const assets=await page.locator('script[src],link[rel=stylesheet][href]').evaluateAll(nodes=>nodes.map(n=>n.src||n.href));
+  assert.ok(assets.length);
+  const served={};
+  for(const asset of assets){
+   const path=new URL(asset).pathname.slice(1);
+   const response=await page.request.get(asset);assert.equal(response.status(),200);
+   const hash=createHash('sha256').update(await response.body()).digest('hex');
+   assert.equal(hash,identity.staticSha256[path],`Served asset differs from installed wheel: ${path}`);served[path]=hash;
+  }
+  evidence.installedServedAssets=served;
+ }
  const presentation=async patch=>page.evaluate(async patch=>{const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,...patch}}});assertAccepted(prepared);const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});assertAccepted(applied);function assertAccepted(r){if(!r.accepted)throw Error(r.error||'Presentation refused');}},patch);
  const measure=()=>surface.evaluate(el=>{const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};const input=el.querySelector('[role=textbox]'),style=getComputedStyle(el),form=el.closest('form');return {surface:rect(el),input:rect(input),options:rect(form.querySelector('.a-model-trigger')),form:rect(form),border:style.borderTopWidth,borderStyle:style.borderTopStyle,background:style.backgroundColor,overflow:el.scrollWidth>el.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,buttons:[...el.querySelectorAll('button')].filter(b=>b.getClientRects().length).map(rect)};});
  const checkIdle=m=>{assert.ok(m.surface.height<=72,`Idle field is not compact: ${m.surface.height}`);assert.ok(m.surface.height>=44);assert.ok(m.options.y>=m.surface.y+m.surface.height-1,'Model control belongs below the writing field');assert.equal(m.border,'1px');assert.equal(m.borderStyle,'solid');assert.equal(m.overflow,false);assert.equal(m.pageOverflow,false);for(const box of m.buttons){assert.ok(box.width>=44&&box.height>=44,'Frequent actions retain touch hit areas');assert.ok(box.x>=m.surface.x&&box.x+box.width<=m.surface.x+m.surface.width+1);}};
@@ -51,7 +66,13 @@ try{
  assert.ok(!JSON.stringify(observed).includes('data-expanded'),'Layout-only attributes are not projected');
  await page.getByRole('button',{name:'Remove budget.csv'}).click();await expect(input).toHaveDraft('Do not send during composition\n\nSecond line');
  await presentation({scheme:'light',interfaceDetail:'minimal'});await expect(page.getByRole('button',{name:'Remove notes.txt'})).toBeVisible();await page.getByRole('button',{name:'Remove notes.txt'}).click();
- await clearComposer(input);await input.fill('Before\n\n> First reference\n\nBetween\n\n> Second reference\n\nAfter');
+ await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'sample.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/ldcAAAAASUVORK5CYII=','base64')});
+ await page.getByRole('button',{name:'Remove sample.png'}).waitFor();await input.fill('Caption for the synthetic image');await expect(primary).toBeEnabled();
+ await page.screenshot({path:output+'/compact-image-caption.png'});await page.getByRole('button',{name:'Remove sample.png'}).click();
+ await clearComposer(input);
+ const quoteDraft='Before\n\n> First reference\n\nBetween\n\n> Second reference\n\nAfter';
+ await input.evaluate((el,text)=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain',text);el.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}));},quoteDraft);
+ await expect(input).toHaveDraft(quoteDraft);
  await page.reload();await input.waitFor();await expect(input).toHaveDraft('Before\n\n> First reference\n\nBetween\n\n> Second reference\n\nAfter');await expect(primary).toBeInViewport();
  // CSS zoom is a layout stress check, not a claim about physical browser zoom shortcuts.
  await page.setViewportSize({width:800,height:1000});await page.locator('#amp-one').evaluate(el=>el.style.zoom='2');await expect(primary).toBeInViewport();assert.equal((await measure()).pageOverflow,false);await page.screenshot({path:output+'/compact-zoom2.png'});await page.locator('#amp-one').evaluate(el=>el.style.zoom='');

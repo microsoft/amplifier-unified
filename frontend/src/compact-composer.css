@@ -22,7 +22,7 @@
 #amp-one .a-compact-composer .a-markdown-composer{
  box-sizing:border-box;padding:10px 2px;line-height:24px;font-size:var(--a-text-lg,16px);scrollbar-gutter:stable;
 }
-#amp-one .a-compact-composer .a-markdown-composer[data-empty=true]::before{content:'Ask Amplifier…'}
+#amp-one .a-compact-composer .a-markdown-composer[data-empty=true]::before{content:'Ask Amplifier…';white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 #amp-one.a-chat-shell .a-compact-composer .a-compose-add>.a-icon,
 #amp-one.a-chat-shell .a-compact-composer .a-compose-end>.a-send,
 #amp-one.a-chat-shell .a-compact-composer .a-compose-end>.a-dictation>button{
