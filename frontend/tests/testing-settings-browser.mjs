@@ -78,6 +78,8 @@ try{
  await execution.getByLabel('Outstanding task chats per manager',{exact:true}).fill('12');
  await execution.getByLabel('Owned test environments per chat',{exact:true}).fill('3');
  await execution.getByLabel('Owned resources across this installation',{exact:true}).fill('700');
+ await execution.getByLabel('Cooperative reservations across this installation',{exact:true}).fill('1500');
+ await execution.getByLabel('Cooperative reservations per chat',{exact:true}).fill('80');
  await execution.getByLabel('Maximum pending checks',{exact:true}).fill('128');
  await execution.getByLabel('Maximum pending checks per chat',{exact:true}).fill('3');
  await execution.getByLabel('Default queue wait (seconds)',{exact:true}).fill('0');
@@ -94,7 +96,7 @@ try{
  await expect(execution.getByRole('status')).toContainText('Current execution limits match');
  assert.equal(executionSaves,1);
  const concurrency=(await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveConcurrency;
- assert.equal(concurrency.maxTaskChatsPerSource,12);assert.equal(concurrency.maxEnvironmentsPerChat,3);assert.equal(concurrency.maxOwnedResources,700);
+ assert.equal(concurrency.maxTaskChatsPerSource,12);assert.equal(concurrency.maxEnvironmentsPerChat,3);assert.equal(concurrency.maxOwnedResources,700);assert.equal(concurrency.maxResourceReservations,1500);assert.equal(concurrency.maxResourceReservationsPerChat,80);
  assert.equal((await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveQueue.maxPendingPerChat,3);
  await page.unroute('**/api/actions',lostExecution);
  await expect(execution.getByText('Waiting checks stay queued until stopped or cancelled.',{exact:false})).toBeVisible();

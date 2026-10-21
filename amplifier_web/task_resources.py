@@ -227,7 +227,7 @@ def prepare(home, workspace, sid, actor, args, command_id, execution_root=None):
         from .test_execution_settings import concurrency
         limits = concurrency(home)
         if total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']:
-            raise ValueError('Task resource capacity is full. Inspect and retire unused allocations first.')
+            raise ValueError('Task resource capacity is full. Inspect and retire unused allocations or adjust Advanced execution limits in Settings.')
         row = dict(id=str(uuid.uuid4()), workspaceId=workspace, sessionId=sid, owner=actor,
                    kind=args['kind'], label=args.get('label', '').strip(), status='prepared', revision=1,
                    createdAt=time.time(), commandId=command_id)

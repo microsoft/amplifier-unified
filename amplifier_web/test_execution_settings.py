@@ -9,7 +9,8 @@ import uuid
 from . import test_environment_profiles as profiles
 
 CONCURRENCY_DEFAULTS = {'maxTaskChatsPerSource': 8, 'maxEnvironmentsPerChat': 1,
-                        'maxOwnedResources': 512, 'maxOwnedResourcesPerChat': 32}
+                        'maxOwnedResources': 512, 'maxOwnedResourcesPerChat': 32,
+                        'maxResourceReservations': 1024, 'maxResourceReservationsPerChat': 64}
 
 QUEUE_DEFAULTS = {'maxPending': 64, 'maxPendingPerChat': 1, 'defaultWaitSeconds': 3600}
 PROFILE_FIELDS = (*profiles.RESOURCE_FIELDS, *profiles.TIMING_FIELDS)
