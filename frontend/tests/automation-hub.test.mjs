@@ -5,6 +5,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({configFile:false,cacheDir:'/tmp/unified-automation-hub-vite',server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {AutomationHub}=await server.ssrLoadModule('/src/automation-hub.jsx');
+const {ScheduleControls}=await server.ssrLoadModule('/src/schedules.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 let root;test.afterEach(async()=>{await act(async()=>root?.unmount());root=null});test.after(()=>server.close());
 const row={id:'schedule',sessionId:'owner',revision:2,status:'needs_review',displayState:'needs_review',prompt:'Read the report',destination:'new_task',spec:{kind:'interval',intervalSeconds:60,timezone:'UTC'},nextDue:1800000060,owner:{id:'owner',title:'Stopped owner',status:'stopped'}};
@@ -86,4 +87,35 @@ test('an admitted one-shot without another occurrence does not invent a review b
  await act(async()=>{root=create(view(async()=>({accepted:true,result:{...page,items:[oneShot]}})))});
  assert.match(text(),/No further occurrence/);assert.match(text(),/Input accepted/);
  assert.doesNotMatch(text(),/Review required before future runs/);
+});
+
+test('hub Create selects a new draft, while manage and Review retain existing edits without retaining authority',async()=>{
+ const id='cross-surface-owner',calls=[];
+ const saved={...row,sessionId:id,status:'active',spec:{kind:'daily',timezone:'UTC',startDate:'2027-01-18',localTime:'08:30'},runs:[],kind:'task',missedRunPolicy:'skip',notificationPolicy:'changes'};
+ const session={id,title:'Draft owner',schedules:[saved]},original=structuredClone(saved);
+ let panel='editor';
+ const render=()=>panel==='automation'?React.createElement(AutomationHub,{state:{selectedSessionId:id,sessions:[session]},dispatch,isCurrent:owner=>owner===id}):React.createElement(ScheduleControls,{session,act:dispatch,focused:true});
+ const dispatch=async(action,args)=>{
+  calls.push({action,args});
+  if(action==='view.update'){panel='editor';root.update(render())}
+  return {accepted:true,result:action==='schedule.overview'?{...page,items:[{...saved,owner:{id,title:session.title}}]}:action==='schedule.preview'?{binding:args,previewHash:'fresh-review',occurrences:[{utc:'2027-01-18T08:30:00Z',dueAt:1800261000}]}:{}};
+ };
+ const type=async value=>act(async()=>root.root.findByProps({id:'schedule-prompt'}).props.onChange({target:{value}}));
+ const navigate=async()=>{panel='automation';await act(async()=>root.update(render()))};
+ await act(async()=>{root=create(render())});await type('New draft already in this tab');
+ await act(async()=>button('Review schedule').props.onClick());await type('Unsaved edits to the existing schedule');
+ await act(async()=>button('Preview schedule').props.onClick());assert.ok(button('Save and activate schedule'));
+ await navigate();await act(async()=>button('Open owning chat').props.onClick());
+ assert.equal(root.root.findByProps({id:'schedule-prompt'}).props.value,'Unsaved edits to the existing schedule');
+ assert.equal(button('Save and activate schedule'),undefined,'manage cannot retain activation authority');
+ await navigate();await act(async()=>button('Create schedule').props.onClick());
+ assert.match(text(),/New schedule/);assert.doesNotMatch(text(),/Editing saved revision/);
+ assert.equal(root.root.findByProps({id:'schedule-prompt'}).props.value,'New draft already in this tab');
+ await act(async()=>button('Preview schedule').props.onClick());await act(async()=>button('Save and activate schedule').props.onClick());
+ const mutations=calls.filter(call=>['schedule.create','schedule.update'].includes(call.action));
+ assert.equal(mutations.length,1);assert.equal(mutations[0].action,'schedule.create');assert.equal(mutations[0].args.id,undefined);assert.equal(mutations[0].args.expectedRevision,0);
+ assert.deepEqual(saved,original);
+ await act(async()=>button('Review schedule').props.onClick());
+ assert.equal(root.root.findByProps({id:'schedule-prompt'}).props.value,'Unsaved edits to the existing schedule','creating does not discard the existing edit draft');
+ assert.equal(button('Save and activate schedule'),undefined);
 });

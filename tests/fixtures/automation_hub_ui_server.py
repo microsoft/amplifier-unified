@@ -79,7 +79,7 @@ async def main(home):
         return web.json_response({'schedules': service.schedules.store.list(current), 'runs': service.schedules.store.runs(current), 'inputs': runtime.inputs})
     async def uncertain(request):
         authorize(request)
-        saved = service.schedules.store.list(current)[0]
+        saved = service.schedules.store.get(current, request.query['id']) if 'id' in request.query else service.schedules.store.list(current)[0]
         service.schedules.store.put_run({'id': 'uncertain-demo-run', 'sessionId': current, 'scheduleId': saved['id'], 'dueAt': now[0], 'phase': 'unknown', 'revision': 1, 'detail': 'Unconfirmed result; inspect effects, never replay.'})
         service.schedules.store.review(current, saved['id'], 'A prior run has an uncertain outcome.', now[0])
         service.schedules.changed()

@@ -9,7 +9,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('..
 let browser,page,log='',phase='startup';const errors=[],actions=[],timings={},started=Date.now();fixture.stderr.on('data',value=>log+=value);
 try{
  const info=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error(log||'Fixture timeout')),30000);fixture.stdout.on('data',value=>{text+=value;for(const line of text.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data)}}catch{}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error(`Fixture exited ${code}: ${log}`))})});
- browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
+ browser=await chromium.launch({headless:true});const context=await browser.newContext({locale:'en-US',timezoneId:'Asia/Tokyo',viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const call=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const get=async()=>{const value=await page.request.get(info.url+'/fixture/inspect');assert.equal(value.status(),200);return value.json()};
@@ -76,6 +76,8 @@ try{
  const savedPreview=editor.locator('[data-part="schedule-preview"]');
  await expect(savedPreview).toContainText('America/Los_Angeles');
  await expect(savedPreview.getByRole('listitem')).toHaveCount(5);
+ assert.equal(await page.evaluate(()=>Intl.DateTimeFormat().resolvedOptions().timeZone),'Asia/Tokyo');
+ await expect(savedPreview.getByRole('listitem').first()).toHaveText('1/18/2027, 8:30:00 AM (America/Los_Angeles)');
  await page.getByRole('button',{name:'Back to Advanced',exact:true}).click();
  await expect(editor).toHaveCount(0);
  await page.getByRole('button',{name:/Work & automation/}).click();
@@ -109,12 +111,16 @@ try{
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:output+'/create-review-mobile.png',animations:'disabled'});
  await savedPreview.getByRole('button',{name:'Save and activate schedule',exact:true}).click();
- const saved=editor.locator('[data-schedule-id]').first();
+ let saved=editor.locator('[data-schedule-id]').first();
  await expect(saved).toContainText('Summarize weekday decisions');
  const journeyResponse=await page.request.get(info.url+'/fixture/journey');assert.equal(journeyResponse.status(),200);const created=await journeyResponse.json();
  assert.equal(created.schedules.length,1);assert.equal(created.schedules[0].sessionId,info.sessionId);
+ saved=editor.locator(`[data-schedule-id="${created.schedules[0].id}"]`);
  assert.deepEqual(created.schedules[0].spec.weekdays,[0,1,2,3,4]);
  assert.equal(created.schedules[0].spec.timezone,'America/Los_Angeles');
+ assert.equal(created.schedules[0].spec.localTime,'08:30');
+ assert.equal(created.schedules[0].nextDue,1800289800);
+ await expect(saved).toContainText('Next: 1/18/2027, 8:30:00 AM (America/Los_Angeles)');
  assert.equal(created.schedules[0].status,'active');
  assert.equal(created.schedules[0].missedRunPolicy,'skip');
  assert.equal(created.schedules[0].notificationPolicy,'always');
@@ -135,20 +141,63 @@ try{
  await expect(prompt).toHaveValue('Summarize weekday decisions and open risks. Keep originals unchanged.');
  await prompt.fill('Edited weekday summary. Keep originals unchanged.');
  await editor.getByRole('button',{name:'Preview schedule',exact:true}).click();
+ // Review -> Automation -> manage retains the old draft but never its approval.
+ await page.getByRole('button',{name:'Back to Automation',exact:true}).click();
+ await hub.getByRole('button',{name:'Open owning chat',exact:true}).click();
+ await expect(prompt).toHaveValue('Edited weekday summary. Keep originals unchanged.');
+ await expect(savedPreview).toHaveCount(0);
+ // Seed a different tab's editor for this SAME owner. Its draft must stay private.
+ await other.evaluate(async id=>{await window.amplifier.dispatch('session.select',{id});await window.amplifier.dispatch('view.update',{patch:{panel:'chat-work',runtimeDraft:{section:'schedules'}}})},info.sessionId);
+ const otherEditor=other.getByRole('region',{name:'Scheduled work'});
+ await otherEditor.locator('[data-schedule-id]').first().getByRole('button',{name:'Review schedule',exact:true}).click();
+ await otherEditor.getByLabel('Saved instructions').fill('Other tab edit — do not change');
+ const beforeCreate=(await (await page.request.get(info.url+'/fixture/journey')).json()).schedules[0];
+ phase='create-does-not-update-retained-edit';
+ await page.getByRole('button',{name:'Back to Automation',exact:true}).click();
+ await hub.getByRole('button',{name:'Create schedule',exact:true}).click();
+ await expect(editor.getByRole('heading',{name:'New schedule',exact:true})).toBeVisible();
+ await expect(prompt).toHaveValue('');
+ await prompt.fill('A distinct second schedule. Keep the first unchanged.');
+ await editor.getByLabel('Repeat',{exact:true}).selectOption('weekly');
+ await editor.getByLabel('Timezone',{exact:true}).fill('America/Los_Angeles');
+ await editor.getByLabel('Start date',{exact:true}).fill('2027-01-18');
+ await editor.getByLabel('Local time',{exact:true}).fill('08:30');
+ await editor.getByRole('button',{name:'Preview schedule',exact:true}).click();
+ await expect(savedPreview.getByRole('listitem').first()).toHaveText('1/18/2027, 8:30:00 AM (America/Los_Angeles)');
+ const boundary=actions.length;
+ await savedPreview.getByRole('button',{name:'Save and activate schedule',exact:true}).click();
+ await expect(editor.locator('[data-schedule-id]')).toHaveCount(2);
+ const mutations=actions.slice(boundary).filter(item=>['schedule.create','schedule.update'].includes(item.action));
+ assert.equal(mutations.length,1);assert.equal(mutations[0].action,'schedule.create');assert.equal(mutations[0].args.id,undefined);assert.equal(mutations[0].args.expectedRevision,0);
+ const afterCreate=await (await page.request.get(info.url+'/fixture/journey')).json();
+ assert.deepEqual(afterCreate.schedules.find(row=>row.id===beforeCreate.id),beforeCreate,'explicit create must not update the retained old schedule');
+ assert.equal(afterCreate.schedules.length,2);
+ await expect(otherEditor.getByLabel('Saved instructions')).toHaveValue('Other tab edit — do not change');
+ await expect(otherEditor.locator('[data-part="schedule-preview"]')).toHaveCount(0);
+ // Positive control: the retained existing edit can still be deliberately saved.
+ await editor.locator(`[data-schedule-id="${beforeCreate.id}"]`).getByRole('button',{name:'Review schedule',exact:true}).click();
+ await expect(prompt).toHaveValue('Edited weekday summary. Keep originals unchanged.');
+ await expect(savedPreview).toHaveCount(0);
+ await editor.getByRole('button',{name:'Preview schedule',exact:true}).click();
  await savedPreview.getByRole('button',{name:'Save and activate schedule',exact:true}).click();
  await expect(saved.getByRole('status')).toHaveText('Schedule active');
+ const changed=await (await page.request.get(info.url+'/fixture/journey')).json();
+ assert.equal(changed.schedules.find(row=>row.id===beforeCreate.id).prompt,'Edited weekday summary. Keep originals unchanged.');
+ await expect(otherEditor.getByLabel('Saved instructions')).toHaveValue('Other tab edit — do not change');
+ await expect(otherEditor).toContainText('This schedule changed.');
+ await other.evaluate(async id=>{await window.amplifier.dispatch('session.select',{id});await window.amplifier.dispatch('view.update',{patch:{panel:null}})},info.ownerId);
  phase='unknown-evidence-no-replay';
- await post('/fixture/uncertain');
+ await post('/fixture/uncertain?id='+encodeURIComponent(beforeCreate.id));
  await page.getByRole('button',{name:'Back to Automation',exact:true}).click();
  await expect(hub.getByRole('region',{name:'Needs attention'})).toContainText('Unknown outcome');
  await expect(hub.getByRole('button',{name:'Review future runs'})).toHaveCount(0);
- await hub.getByRole('button',{name:'Open owning chat',exact:true}).click();
+ await hub.locator(`[data-automation-id="${beforeCreate.id}"]`).getByRole('button',{name:'Open owning chat',exact:true}).click();
  await expect(saved).toContainText('needs review');
  await expect(saved.getByRole('button',{name:'Review schedule',exact:true})).toBeDisabled();
  await expect(editor.getByRole('button',{name:'Save and activate schedule',exact:true})).toHaveCount(0);
  await page.screenshot({path:output+'/unknown-mobile.png',animations:'disabled'});
  await call('view.update',{patch:{panel:null}});await expect(composer).toHaveDraft('Keep my automation test draft');
  assert.deepEqual(await otherView(),otherBefore);assert.deepEqual(errors,[]);
- await writeFile(output+'/result.json',JSON.stringify({passed:true,elapsedMs:Date.now()-started,timings,build:(await state()).client.build,browser:browser.version(),baseline,after,created,otherClientPreserved:true,errors,checks:['empty/create/weekday/timezone/review/edit-invalidation/save','owner navigation/pause/edit','unknown no activation/replay','dirty cancel/Escape/reopen','keyboard stays in panel','390px and desktop light/dark','30-row page boundary','Stop and failed-owner recovery'],limits:['Synthetic recipient; no external work, live model/account, native-device or screen-reader acceptance.','Single-run timings are regression witnesses, not latency percentiles.']},null,2)+'\n');console.log('Automation Option B browser journey passed.');
+ await writeFile(output+'/result.json',JSON.stringify({passed:true,elapsedMs:Date.now()-started,timings,build:(await state()).client.build,browser:browser.version(),baseline,after,created,createIntent:{beforeCreate,afterCreate,mutations},browserTimezone:'Asia/Tokyo',otherClientPreserved:true,errors,checks:['empty/create/weekday/timezone/review/edit-invalidation/save','exact Los Angeles 08:30 preview and nextDue in Tokyo browser','hub Create after existing edit creates without old ID and leaves old record unchanged','manage/reopen and other-tab same-owner edit preservation','owner navigation/pause/edit','unknown no activation/replay','dirty cancel/Escape/reopen','keyboard stays in panel','390px and desktop light/dark','30-row page boundary','Stop and failed-owner recovery'],limits:['Synthetic recipient; no external work, live model/account, native-device or screen-reader acceptance.','Single-run timings are regression witnesses, not latency percentiles.']},null,2)+'\n');console.log('Automation Option B browser journey passed.');
 }catch(error){await writeFile(output+'/failure.json',JSON.stringify({phase,error:error.stack,log,actions,errors},null,2)+'\n');await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
 finally{await writeFile(output+'/fixture.log',log);await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null||fixture.signalCode!==null)return resolve();const timeout=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},5000);fixture.once('exit',()=>{clearTimeout(timeout);resolve()})})}
