@@ -360,8 +360,6 @@ def _open_background_service(args, data_dir):
 
 
 def main():
-    from .host_dependencies import prepare_environment
-    prepare_environment()
     # Recognize recovery without importing application dependencies or following
     # a potentially broken generation pointer. All other commands retain the
     # active generation's parser (including options added since the bootstrap).
@@ -375,6 +373,8 @@ def main():
     if recovery is not None and recovery.command == "reset":
         from .reset import run
         return run(_parse())
+    from .host_dependencies import prepare_environment
+    prepare_environment()
     from .application_generations import delegate
     delegate()
     args = _parse()
