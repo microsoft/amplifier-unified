@@ -266,6 +266,10 @@ async def main():
                 for index in range(140):
                     log_hook(aid,'tool:post',{'tool_call_id':'newer-unrelated-'+str(index),
                         'tool_name':'unrelated','result':'later observation'},now+index)
+                legacy=next(node for node in row['execution']['nodes']
+                    if node.get('toolCallId')=='older-legacy')
+                log_hook(aid,'tool:post',{'tool_call_id':'older-legacy',
+                    'tool_name':'app_control','result':'LEGACY-RECENT-OUTPUT'},legacy['endedAt'])
                 await service.event_log_view.windows.close()
                 service.event_log_view.windows=WorkWindows(service)
                 await service.event_log_view.windows.read(aid)
