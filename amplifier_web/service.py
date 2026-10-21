@@ -4806,6 +4806,9 @@ class AppService:
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
+            compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
+            compact_domain_receipt = compact_domain_receipt or compact_task_receipt
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4863,6 +4866,11 @@ class AppService:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
                 result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt))
+            if compact_task_receipt:
+                # Task dispatch already published its canonical cache or
+                # reported publication unavailable with the committed receipt.
+                # Unrelated progress publication must not lose that receipt.
+                return result
             await self._flush_pending_progress()
             if compact_domain_receipt:
                 # The exact domain receipt already carries admission, correlation

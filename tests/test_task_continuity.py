@@ -137,7 +137,8 @@ async def test_failed_durable_write_does_not_acknowledge_or_change_task(tmp_path
 
 
 @pytest.mark.parametrize('fault', ['continuity', 'publication'])
-async def test_postcommit_observation_failure_preserves_exact_saved_receipt(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize('via', ['ui', 'agent'])
+async def test_postcommit_observation_failure_preserves_exact_saved_receipt(tmp_path, monkeypatch, fault, via):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     app = AppService(tmp_path / 'app', None, workspace=tmp_path)
     worker = None
@@ -156,8 +157,13 @@ async def test_postcommit_observation_failure_preserves_exact_saved_receipt(tmp_
             return await worker.perform(operation, args)
         app.runtime = SimpleNamespace(control=control, close=AsyncMock())
         app.management = SimpleNamespace(ensure_runtime=AsyncMock(), close=AsyncMock())
-        reply = (await app.dispatch('task.pause', {'sessionId': sid, 'expectedRevision': 1},
-                                   command_id='committed-pause'))['result']
+        async def pause():
+            if via == 'agent':
+                return await app.app_bridge('dispatch', {'action': 'task.pause',
+                    'args': {'sessionId': sid, 'expectedRevision': 1}, 'id': 'committed-pause'}, sid)
+            return await app.dispatch('task.pause', {'sessionId': sid, 'expectedRevision': 1},
+                                      command_id='committed-pause')
+        reply = (await pause())['result']
         saved = json.loads((app.data_dir / 'sessions' / sid / 'control-state.json').read_text())
         assert reply['receipt'] == saved['taskReceipts']['committed-pause']['receipt']
         assert reply['receipt']['revision'] == saved['task']['revision'] == 2
@@ -172,8 +178,7 @@ async def test_postcommit_observation_failure_preserves_exact_saved_receipt(tmp_
         receipt_read = (await app.dispatch('task.receipt', {
             'sessionId': sid, 'commandId': 'committed-pause'}))['result']
         assert receipt_read['receipt'] == reply['receipt']
-        duplicate = (await app.dispatch('task.pause', {'sessionId': sid, 'expectedRevision': 1},
-                                       command_id='committed-pause'))['result']
+        duplicate = (await pause())['result']
         assert duplicate['duplicate'] and duplicate['receipt'] == reply['receipt']
         assert worker.tasks.record()['revision'] == 2
         assert encoded_size(reply) <= TASK_CONTEXT_BYTES
@@ -601,8 +606,9 @@ async def test_task_read_rejects_missing_caller_and_cross_workspace(tmp_path, mo
             await worker.close()
 
 
+@pytest.mark.parametrize('via', ['ui', 'agent', 'agent_alias'])
 async def test_mutation_dispatch_acknowledges_without_serializing_app_state(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, via):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     app = AppService(tmp_path / 'app', None, workspace=tmp_path)
     worker = None
@@ -619,10 +625,15 @@ async def test_mutation_dispatch_acknowledges_without_serializing_app_state(
         monkeypatch.setattr(app, 'browser_state',
                             lambda *a, **kw: pytest.fail('Mutation must not serialize app state'))
         revision = worker.tasks.record()['revision']
-        result = await app.dispatch('task.update', {
-            'sessionId': sid, 'expectedRevision': revision,
-            'artifactRefs': ['exact-evidence-ref']},
-            command_id='compact-mutation', include_state=True)
+        values = {'sessionId': sid, 'expectedRevision': revision, 'artifactRefs': ['exact-evidence-ref']}
+        if via == 'ui':
+            result = await app.dispatch('task.update', values,
+                command_id='compact-mutation', include_state=True)
+        else:
+            action, args = ('runtime.control', {'sessionId': sid, 'operation': 'task.update',
+                                               'args': {k: v for k, v in values.items() if k != 'sessionId'}}) if via == 'agent_alias' else ('task.update', values)
+            result = await app.app_bridge('dispatch', {
+                'action': action, 'args': args, 'id': 'compact-mutation'}, sid)
         assert result['accepted'] is True
         assert result['result']['receipt']['commandId'] == 'compact-mutation'
         assert result['result']['receipt']['revision'] == revision + 1
@@ -631,6 +642,45 @@ async def test_mutation_dispatch_acknowledges_without_serializing_app_state(
         assert len(worker.tasks.record()['corrections']) == 113
         assert app.coordination.task(sid)['corrections'] == worker.tasks.record()['corrections']
         assert app._session(sid)['task'] == worker.tasks.record()
+        before = copy.deepcopy(worker.tasks.record())
+        if via != 'ui':
+            with pytest.raises(AppError, match='revision changed'):
+                await app.app_bridge('dispatch', {'action': 'task.update',
+                    'args': {**values, 'expectedRevision': 0}, 'id': 'stale-no-effect'}, sid)
+            assert worker.tasks.record() == before
+    finally:
+        app.management = None
+        await app.close()
+        if worker is not None:
+            await worker.close()
+
+
+async def test_mounted_unknown_mutation_is_reconciled_by_exact_receipt_without_replay(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Unknown mutation acknowledgement'})
+        sid = app._session()['id']
+        worker = controls(sid)
+        await create(worker)
+        calls = []
+        async def control(target, operation, args):
+            calls.append((operation, args['commandId']))
+            await worker.perform(operation, args)
+            raise ConnectionError('Synthetic lost acknowledgement after worker commit')
+        app.runtime = SimpleNamespace(control=control, close=AsyncMock())
+        app.management = SimpleNamespace(ensure_runtime=AsyncMock(), close=AsyncMock())
+        with pytest.raises(ConnectionError, match='lost acknowledgement'):
+            await app.app_bridge('dispatch', {'action': 'task.pause', 'id': 'uncertain-pause',
+                'args': {'sessionId': sid, 'expectedRevision': 1}}, sid)
+        readback = await app.app_bridge('dispatch', {'action': 'task.receipt',
+            'args': {'sessionId': sid, 'commandId': 'uncertain-pause'}}, sid)
+        assert readback['result']['receipt']['revision'] == 2
+        assert readback['result']['receipt']['status'] == 'paused'
+        assert calls == [('task.pause', 'uncertain-pause')]
+        assert encoded_size(readback) <= TASK_CONTEXT_BYTES and 'state' not in readback
+        assert not await worker.tasks.continuation_allowed()
     finally:
         app.management = None
         await app.close()
