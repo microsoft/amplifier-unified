@@ -16,7 +16,13 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  const [scrolled,setScrolled]=useState(false),[open,setOpen]=useState(false),[query,setQuery]=useState(''),[error,setError]=useState(''),[pending,setPending]=useState(false);
  const [focusId,setFocusId]=useState(null),selectedId=overview?'overview':state.canvas?.id;
  const tabFocus=focusId==='overview'||rows.some(row=>row.id===focusId)?focusId:selectedId;
- useEffect(()=>setFocusId(selectedId),[selectedId,state.selectedSessionId]);
+ useEffect(()=>{const focused=tabs.current?.querySelector('[role=tab]:focus');setFocusId(focused?focused.dataset.artifactId||'overview':selectedId)},[selectedId,state.selectedSessionId]);
+ const focusIntent=useRef(0);
+ useEffect(()=>{
+  const advance=()=>{focusIntent.current++};
+  document.addEventListener('keydown',advance,true);document.addEventListener('pointerdown',advance,true);
+  return()=>{advance();document.removeEventListener('keydown',advance,true);document.removeEventListener('pointerdown',advance,true)};
+ },[]);
  const current=useRef(state);current.current=state;
  useCanvasReading(strip,state.selectedSessionId,'tabs',!!state.canvas?.open);
  const reveal=id=>{const node=strip.current,tab=[...(node?.querySelectorAll('[role=tab]')||[])].find(el=>el.dataset.artifactId===id);if(!tab)return;const outer=node.getBoundingClientRect(),inner=tab.getBoundingClientRect();if(inner.left<outer.left)node.scrollLeft+=inner.left-outer.left;else if(inner.right>outer.right)node.scrollLeft+=Math.min(inner.left-outer.left,inner.right-outer.right)};
@@ -24,18 +30,21 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  useLayoutEffect(()=>{if(strip.current)setScrolled(strip.current.scrollLeft>4)},[state.selectedSessionId,state.canvas?.open]);
  useEffect(()=>{if(open&&!dialog.current?.open)dialog.current?.showModal();else if(!open&&dialog.current?.open)dialog.current.close()},[open]);
  useEffect(()=>{setOpen(false);setQuery('');setError('')},[state.selectedSessionId]);
- const close=()=>{setOpen(false);closeCanvasDialog(dialog.current,()=>trigger.current?.focus({preventScroll:true}))};
+ const close=()=>{const intent=++focusIntent.current;setOpen(false);closeCanvasDialog(dialog.current,()=>{if(focusIntent.current===intent)trigger.current?.focus({preventScroll:true})})};
  async function choose(row){
-  if(pending)return;setPending(true);setError('');const sessionId=state.selectedSessionId;
+  if(pending)return;setPending(true);setError('');const sessionId=state.selectedSessionId,fromDialog=!!dialog.current?.open,intent=focusIntent.current;
   try{
    const result=await dispatch('canvas.select',{id:row.id,...(row.id===state.canvas?.id&&state.canvas.selectedVersion!=null?{version:state.canvas.selectedVersion}:{})});
    if(current.current.selectedSessionId!==sessionId)return;
    if(!result?.accepted){setError(String(result?.error?.message||result?.error||'The document was not changed. Your current view was kept.'));return}
+   // Direct tabs already have focus. A delayed acceptance must not overtake
+   // Home/arrow navigation; only the still-current modal interaction restores it.
+   if(!fromDialog||focusIntent.current!==intent||!dialog.current?.open)return;
    setOpen(false);closeCanvasDialog(dialog.current,()=>{
     const latest=current.current;
     // The receipt is accepted; its React state commit may follow this frame.
     // The requested tab already exists. Do not gate focus on that later commit.
-    if(latest.selectedSessionId!==sessionId||dialog.current?.open||!latest.canvas?.open)return;
+    if(focusIntent.current!==intent||latest.selectedSessionId!==sessionId||dialog.current?.open||!latest.canvas?.open)return;
     reveal(row.id);[...(strip.current?.querySelectorAll('[role=tab]')||[])].find(el=>el.dataset.artifactId===row.id)?.focus({preventScroll:true});
    });
   }catch(err){setError(err.message)}finally{setPending(false)}
