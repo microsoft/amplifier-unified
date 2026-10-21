@@ -748,6 +748,14 @@ class RuntimeManager:
                         await self._emit_progress(sid, row)
                 elif data.get("type") == "runtime.ready":
                     if not row["ready"].done():
+                        # uv is the managed launcher, not necessarily the Python
+                        # worker. Bind configuration effects to the identity on
+                        # this worker's own pipe, scoped to the started session.
+                        identity = data.get("workerIdentity")
+                        if (isinstance(identity, dict)
+                                and identity.get("sessionId") == row.get("runtime_id")
+                                and type(identity.get("pid")) is int and identity["pid"] > 0):
+                            row["native_worker_pid"] = identity["pid"]
                         row["ready"].set_result(data.get("report", {}))
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
