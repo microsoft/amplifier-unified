@@ -172,8 +172,10 @@ index or unsupported file fails before environment creation.
 
 The snapshot exporter is bundled with the app. Native Windows uses pinned Win32
 handles, rejects parent junctions/reparse points, and verifies retained authority
-records' owner and ACL. The current Windows account must own those records;
-ordinary other users cannot have write access (SYSTEM and Administrators retain
+records' owner and ACL. The Windows token's user or verified default administrator owner must own those
+records. OWNER RIGHTS grants refer only to that verified owner; inheritance-only
+entries do not grant access to the current object. Ordinary other users cannot
+have write access (SYSTEM and Administrators retain
 normal OS authority). POSIX reads and writes remain relative to pinned directory
 descriptors, so replacing a parent cannot redirect a source read or receipt.
 Git for Windows link-text checkouts and executable index modes are preserved.
