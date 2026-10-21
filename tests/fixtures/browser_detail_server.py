@@ -80,7 +80,7 @@ async def main():
             @turn_id.setter
             def turn_id(self,value):self.observer.turn_id=value
             def hook(self,sid,event,data):
-                log_hook(sid,event,data);self.observer.hook(sid,event,data)
+                recorded=self.observer.hook(sid,event,data);log_hook(sid,event,recorded or data)
             def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
@@ -213,6 +213,69 @@ async def main():
                 await service.event_log_view.windows.close()
                 service.event_log_view.windows = WorkWindows(service)
                 await service.event_log_view.windows.read(aid)
+            elif op == 'bounded-tool-records':
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.runtime import normalize_event
+                from amplifier_web.event_log_view import event_path
+                from amplifier_web.work_windows import WorkWindows
+                row = service._session(aid)
+                event_path(row, aid).unlink(missing_ok=True)
+                now = time.time()
+                row.update(status='idle', workers=[], messages=[{'id':'tool-detail-question',
+                    'role':'user', 'text':'Inspect older and delegated saved tool details',
+                    'createdAt':now-10}], execution={'nodes':[], 'turns':[]})
+                ensure_turn(row, 'tool-details')
+                row['execution']['turns'][0].update(anchorMessageId='tool-detail-question',
+                    startedAt=now-9, phase='completed')
+                emitted=[]
+                events=ExecutionEvents(aid, emitted.append)
+                events.turn_id='tool-details'
+                async def call(sid, identity, name, arguments, result, *, legacy=False):
+                    for event, data in [
+                        ('tool:pre', {'tool_call_id':identity,'tool_name':name,'tool_input':arguments}),
+                        ('tool:post', {'tool_call_id':identity,'tool_name':name,'tool_input':arguments,'result':result})]:
+                        data=events.hook(sid,event,data) or data
+                        public=emitted[-1]['event']
+                        if legacy:
+                            data.pop('unified_tool_observation_id',None)
+                            public.pop('toolObservationId',None)
+                        log_hook(sid,event,data,public.get('endedAt') or public['startedAt'])
+                    for event in emitted:
+                        kind,data=normalize_event(event,aid)
+                        await service.on_runtime_event(kind,data)
+                    emitted.clear()
+                await call(aid,'older-exact','bash',{'command':'printf older-exact-command\n'+'# retained older code\n'*90+'# OLDER-EXACT-INPUT-END'},
+                    {'success':True,'output':{'stdout':'OLDER-EXACT-RESULT-END','returncode':0}})
+                await call(aid,'older-legacy','app_control',{'action':'workspace.inspect','note':'LEGACY-INPUT-END'},
+                    {'success':True,'output':'LEGACY-OUTPUT-END'},legacy=True)
+                await call(aid,'older-delegate','delegate',
+                    {'agent':'reviewer','instruction':'Review retained request. '*90+'DELEGATE-REQUEST-END'},
+                    {'success':True,'output':'Saved review result. '*90+'DELEGATE-RESPONSE-END'})
+                events.lifecycle({'type':'child.updated','sessionId':'details-child','parentSessionId':aid,
+                    'callId':'older-delegate','agent':'reviewer','status':'completed'})
+                for event in emitted:
+                    kind,data=normalize_event(event,aid)
+                    await service.on_runtime_event(kind,data)
+                emitted.clear()
+                event_path(row,'details-child').unlink(missing_ok=True)
+                await call('details-child','child-exact','tool_exec',
+                    {'code':'print("child command")\n'+'# retained line\n'*90+'# CHILD-CODE-END'},
+                    {'success':False,'output':{'stderr':'Child validation failed','returncode':2,
+                        'stdout':'Child full output. '*90+'CHILD-OUTPUT-END'}})
+                for index in range(140):
+                    log_hook(aid,'tool:post',{'tool_call_id':'newer-unrelated-'+str(index),
+                        'tool_name':'unrelated','result':'later observation'},now+index)
+                legacy=next(node for node in row['execution']['nodes']
+                    if node.get('toolCallId')=='older-legacy')
+                log_hook(aid,'tool:post',{'tool_call_id':'older-legacy',
+                    'tool_name':'app_control','result':'LEGACY-RECENT-OUTPUT'},legacy['endedAt'])
+                await service.event_log_view.windows.close()
+                service.event_log_view.windows=WorkWindows(service)
+                await service.event_log_view.windows.read(aid)
+                def no_complete_projection(*args,**kwargs):
+                    raise AssertionError('Tool details must use bounded event windows only')
+                service.event_log_view.read=no_complete_projection
             elif op == 'bounded-provider-records':
                 from types import SimpleNamespace
                 from amplifier_core import HookRegistry, HookResult
@@ -401,6 +464,10 @@ async def main():
                      {'success':True,'output':{'stdout':'','stderr':'','returncode':0}}),
                     ('failed','bash',{'command':'python failing_test.py'},
                      {'success':False,'output':{'stdout':'','stderr':'AssertionError: expected committed','returncode':1},'error':{'message':'Exit code 1'}}),
+                    ('code','tool_exec',{'description':'a long saved description '*50,
+                      'code':'const result = await tools.check({name: "fixture"});\n'+ '// retained code\n'*80+'// CODE-END'},
+                     {'success':False,'output':{'stdout':'long retained output\n'*100,
+                       'stderr':'Traceback\nFixtureError: exact failure detail','exit_code':9}}),
                     ('malformed','todo',{'todos':[{'content':{'unexpected':'shape'},'status':42}]},
                      {'success':False,'output':'Invalid task input'}),
                     ('delegate','delegate',{'agent':'code-reviewer','instruction':'Review the retry test'},

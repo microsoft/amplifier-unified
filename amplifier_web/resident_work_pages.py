@@ -90,7 +90,8 @@ class ResidentWorkPages:
         item = compact(row, session['id'], 'nodes', SUMMARY_LIMIT)
         item.update(anchorMessageId=anchor, detailVersion=str(detail_version(row)))
         for key, value in item.items():
-            if key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes':
+            if (key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes'
+                    and not str(value.get('windowKey', '')).startswith(('event-window:', 'tool-window:'))):
                 item[key] = {**value, 'windowKey': entry['key']}
         if row.get('kind') == 'llm':
             # These references belong to the accepted canonical window, not
@@ -106,6 +107,29 @@ class ResidentWorkPages:
                         item.pop(field + suffix, None)
             item.update(recordings)
             item['detailVersion'] = str(detail_version([row, recordings]))
+        nodes = raw(session).get('execution', {}).get('nodes', [])
+        def reference(identity):
+            position = entry['positions'].get(identity)
+            original = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
+            if (original is not None and original.get('id') == identity and original.get('kind') == 'tool'
+                    and not original.get('canonicalHistory') and not original.get('nativeHistory')):
+                return {'sessionId': session['id'], 'part': 'tool', 'group': entry['group'], 'id': identity}
+            return None
+        def exchange_refs(header, depth=0):
+            if not isinstance(header, dict) or depth > 20:
+                return header
+            result = dict(header)
+            exchange = result.get('exchange')
+            if isinstance(exchange, dict) and (ref := reference(exchange.get('id'))):
+                result['exchange'] = {**exchange, 'toolDetail': ref}
+            if isinstance(result.get('ancestors'), list):
+                result['ancestors'] = [exchange_refs(value, depth+1) for value in result['ancestors'][:20]]
+            return result
+        if row.get('kind') == 'tool' and (ref := reference(row['id'])):
+            item['toolDetail'] = ref
+        item = exchange_refs(item)
+        if 'delegate' in item:
+            item['delegate'] = exchange_refs(item['delegate'])
         return item
 
     def read(self, session, group, before=None, revision=None):
@@ -115,7 +139,7 @@ class ResidentWorkPages:
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         if before is None:
             start, end, within = max(0, len(nodes) - NODE_LIMIT), len(nodes), None
-            entry = {'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
+            entry = {'group': group, 'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
                      'owner': self._owner_stamp(session), 'ranges': {}, 'ids': {}, 'positions': {}, 'revision': None}
         else:
             cursor = self._parse(before)

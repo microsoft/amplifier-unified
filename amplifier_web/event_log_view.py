@@ -417,6 +417,11 @@ class EventIndex:
                     node.get('_eventFields', {}).pop(field, None)
                 node.pop('endedAt', None)
                 node['startedAt'] = at
+            from .tool_observations import input_summary, outcome_summary
+            input_key = next((name for name in ('tool_input', 'arguments', 'input') if name in data), None)
+            if input_key is not None or name == 'tool:pre':
+                node['inputSummary'] = input_summary(data.get(input_key))
+            node['outcomeSummary'] = outcome_summary(name, data)
             self.field(node, 'input', data, ('tool_input', 'arguments', 'input'), reference)
             from .delegate_exchange import tool_name
             if tool_name(node) == 'delegate':

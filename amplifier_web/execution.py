@@ -100,6 +100,8 @@ def ingest(session,event):
     if not identity:return
     allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
+    from .tool_observations import metadata as tool_metadata
+    safe.update(tool_metadata(event))
     for key in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
         if key in event:
             safe[key] = event[key]
@@ -121,6 +123,12 @@ def ingest(session,event):
         if node.get('kind') == 'llm' and node.get('endedAt') and not safe.get('endedAt') and safe.get('revision', 0) <= node.get('revision', 0): return
         if safe.get('kind') == 'worker' and safe.get('runId') and safe['runId'] != node.get('runId'):
             for field in ('provider', 'model', 'parentProvider', 'routing'):
+                node.pop(field, None)
+        if (safe.get('kind') == 'tool' and safe.get('toolObservationId')
+                and safe['toolObservationId'] != node.get('toolObservationId')):
+            # A new exact observation cannot inherit another event's details.
+            for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail',
+                          'errorDetail', '_eventFields', 'inputSummary', 'outcomeSummary', 'tool'):
                 node.pop(field, None)
         if event.get('liveObservation') and event.get('phase') == 'running':
             for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields', 'imageGeneration'):

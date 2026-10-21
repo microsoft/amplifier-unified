@@ -314,8 +314,18 @@ class ExecutionEvents:
                 "sessionId": sid, "rootSessionId": self.root_id, "kind": "tool", "toolCallId": call,
                 "label": str(data.get("tool_name") or "Tool")[:120], "startedAt": now}
             row = dict(row)
+            # Bind this host update to ONE canonical event, not an inferred
+            # attempt. Hook callbacks are separate tasks and repeated call IDs
+            # cannot prove which earlier pre belongs to a late terminal.
+            token = str(uuid.uuid4())
+            data = {**data, 'unified_tool_observation_id': token}
+            from .tool_observations import input_summary, outcome_summary
+            raw_input = next((data[key] for key in ('tool_input', 'arguments', 'input', 'prompt') if key in data), None)
+            row['tool'] = data.get('tool_name')
+            row.update(toolObservationId=token, inputSummary=input_summary(raw_input),
+                       outcomeSummary=outcome_summary(event, data))
             row["phase"] = {"tool:pre": "running", "tool:post": "completed", "tool:error": "error"}[event]
-            # The observer supplies transient lifecycle metadata only. Tool
+            # The observer supplies bounded inspection hints. Full tool
             # inputs/results are read from their native event-log records.
             row["liveObservation"] = True
             if event == "tool:pre":
@@ -349,6 +359,7 @@ class ExecutionEvents:
                     # the compact public execution projection.
                     self.emit({'type': 'image.generated', 'nodeId': row['id'],
                                'receipt': receipt})
+            return data
         elif event in {"llm:request", "llm:response", "provider:retry"}:
             current = CURRENT_CALL.get()
             if current:

@@ -429,13 +429,17 @@ class Worker:
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
                 return HookResult()
+            stamped = None
             if self.telemetry:
-                self.telemetry.hook(identity, event, data)
+                stamped = self.telemetry.hook(identity, event, data)
+            result = (HookResult(action='modify', data=stamped)
+                      if event in {'tool:pre', 'tool:post', 'tool:error'} and isinstance(stamped, dict)
+                      else HookResult())
             from amplifier_web.execution_events import CALL_PURPOSE
             if CALL_PURPOSE.get() or event.startswith("llm:"):
                 # Naming calls retain their measured usage, but do not own the
                 # conversation's busy indicator or a delegated worker's state.
-                return HookResult()
+                return result
             phase = "model"
             retry = {}
             detail = "Waiting for the configured model to respond."
@@ -470,9 +474,12 @@ class Worker:
                 publish({"type": "worker.activity", "workerId": identity, "phase": phase,
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
                     "runId": activity_run_id, "time": time.time(), **retry})
-            return HookResult()
+            return result
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
-            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
+            # Exact tool observation identity must precede the canonical
+            # context-intelligence logger (priority 100), independent of mount order.
+            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event,
+                priority=-100 if event.startswith('tool:') else 0)
 
     async def preparation_progress(self, directory):
         while True:

@@ -6,6 +6,7 @@ import {readDetail} from './detail-read';
 import {request} from './api';
 import {delegationRoutingLabel} from './delegation-routing.js';
 import {isRunning} from './timeline-data';
+import {contentUnavailable} from './execution-content.js';
 
 export function DelegateMessage({node,field,label,direction,expanded,toggle,partial=false}){
  const id=`exchange:${node.id}:${field}`,full=expanded.has(id);
@@ -52,7 +53,7 @@ export function DelegateExchange({node,expanded,toggle,activity,activityOpen,tog
  const phase=[workerPhase,exchange.phase].find(value=>failures.includes(value))||workerPhase||exchange.phase;
  const failure=failures.includes(phase);
  return <div className="a-delegate-exchange">
-  {requestPresent?<DelegateMessage node={exchange} field="delegateRequest" label="Request to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>:<p className="a-caption">Request not recorded.</p>}
+  {requestPresent?<DelegateMessage node={exchange} field="delegateRequest" label="Request to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>:<p className="a-caption">{contentUnavailable(exchange.contentAvailability?exchange:node,'Request')}</p>}
   {childrenCount>0&&<><button type="button" className="a-link a-delegate-activity-toggle" aria-expanded={activityOpen} onClick={toggleActivity}><ChevronRight className={activityOpen?'open':''}/>Worker activity · {childrenCount} {childrenCount===1?'step':'steps'}{isRunning(node)?' · running':''}</button>{activityOpen&&activity}</>}
   {entries.map(entry=><React.Fragment key={entry.id}>
    {(entry.delegateRequest!=null||entry.delegateRequestDetail)&&<Followup entry={entry} expanded={expanded} toggle={toggle}/>}
