@@ -457,7 +457,7 @@ async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files
     assert destroyed == ['owned-universe'] and sum(c[0] == 'export' for c in effects) == 2
     assert before == {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir()}
     assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
-    with pytest.raises(AppError, match='already owns an environment'):
+    with pytest.raises(AppError, match='already owns its allowed environments'):
         await start(app, 'not-a-new-removal-attempt')
 
 
