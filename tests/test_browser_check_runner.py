@@ -383,10 +383,11 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     assert steps.index(build) < steps.index(static)
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
     # Ordered normal critical run blocks from reviewed a99ab643, before the
-    # independent diagnostic job was merged. Eight pytest calls / 98 targets.
+    # independent diagnostic job was merged, plus host helper recovery coverage.
+    # Eight pytest calls / 99 targets; all previous targets and ordering retained.
     assert_readiness_python_coverage(
-        readiness, targets=98,
-        run_blocks_sha256='6ef8aeac76d06c287441679f17ee8ffe95d1dbf1cef0dbafd2fadc898c7e91e6',
+        readiness, targets=99,
+        run_blocks_sha256='a965ab7dd574127e46823a19e23a97932416aa5114a6558c60ec042588edbdf5',
     )
 
 
