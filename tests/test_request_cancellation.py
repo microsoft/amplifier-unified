@@ -182,6 +182,44 @@ async def test_a_terminal_deferred_report_does_not_close_the_request(app):
     assert result['result']['status'] == 'requested'
 
 
+@pytest.mark.parametrize('ending', ['failed', 'restart'])
+async def test_unconfirmed_report_does_not_claim_an_ended_turn_is_still_running(app, ending):
+    from amplifier_web.request_cancellation import status
+    from test_collaborative_workspaces import declared_result, finish
+    await declared_result(app, outcome='cancelled')
+    await cancel(app, identity='result-request')
+    if ending == 'failed':
+        await finish(app, app.state['sessions'][1], 'result-request', event='generation.failed')
+        value = status(app.collaboration.receipt('result-request'))
+    else:
+        await app.close()
+        reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+        try:
+            value = status(reopened.collaboration.receipt('result-request'))
+        finally:
+            await reopened.close()
+    assert value['status'] == 'reported_unconfirmed'
+    assert 'completion could not be confirmed' in value['detail']
+    assert 'not settled yet' not in value['detail']
+
+
+async def test_current_generation_cancellation_precedes_old_unknowns(app):
+    from amplifier_web.request_cancellation import references
+    await send(app)
+    await settled(app, 'request-1', 'accepted')
+    await cancel(app)
+    original = app.collaboration.receipt('request-1')
+    for index in range(165):
+        row = {**original, 'requestId': f'older-{index}', 'delivery': 'unknown'}
+        app.collaboration.insert(row['requestId'], row['requestId'], row)
+    active = {**original, 'requestId': 'active-cancel'}
+    app.collaboration.insert('active-cancel', 'active-cancel', active)
+    app.state['sessions'][1]['collaborationGeneration'] = {'inputIds': ['active-cancel']}
+    result = references(app.collaboration, app.state['sessions'][1]['id'])
+    assert result['items'][0]['requestId'] == 'active-cancel'
+    assert len(result['items']) == 160 and result['truncated']
+
+
 async def test_cancel_suppresses_only_its_unadmitted_return(app):
     from test_collaborative_workspaces import declared_result
     source, _ = app.state['sessions']
