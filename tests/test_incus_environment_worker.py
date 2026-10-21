@@ -678,3 +678,31 @@ def test_manual_timeout_keeps_unknown_without_redispatch(tmp_path, backend, monk
     result = worker.execute_call(value)
     assert not result['ok'] and result['status'] == 'unknown' and result['effectAdmitted']
     assert result['code'] == 'timeout' and len(executions) == 1
+
+
+def test_dynamic_inventory_reads_only_receipts_but_dispatch_checks_runtime(tmp_path, monkeypatch):
+    package = tmp_path / 'installed'; package.mkdir()
+    (package / '__init__.py').write_text('# candidate')
+    launcher = tmp_path / 'engine'; launcher.write_text('#!' + sys.executable + '\n'); launcher.chmod(0o700)
+    incus = tmp_path / 'incus'; incus.write_text('#!/bin/sh\n'); incus.chmod(0o700)
+    for name in ('config', 'admission', 'owned'):
+        (tmp_path / name).mkdir(mode=0o700)
+    config = {'executable': str(launcher), 'executableSha256': worker.file_digest(launcher)[0],
+        'packageSha256': worker.package_digest(package), 'incusExecutable': str(incus),
+        'project': 'qualified', 'image': 'a' * 64, 'configDir': str(tmp_path / 'config'),
+        'admissionDir': str(tmp_path / 'admission'), 'engineQualification': {'exact': 'receipt'}}
+    monkeypatch.setattr(worker, 'run', lambda *args, **kwargs: {'exit_code': 0, 'truncated': False,
+        'stdout': json.dumps({'version': 'next', 'directory': str(package)})})
+    checks = []
+    def verify(config, *, owner, runtime):
+        checks.append(runtime)
+        if runtime:
+            raise ValueError('runtime changed')
+    monkeypatch.setattr(worker, 'engine_generations', lambda: SimpleNamespace(verify=verify))
+    worker.validate_configuration(config)
+    worker.validate_configuration(config)
+    assert checks == [False, False]
+    request = {'root': str(tmp_path / 'owned'), 'incus': config, 'action': 'capacity'}
+    with pytest.raises(ValueError, match='runtime changed'):
+        worker.execute_call(request)
+    assert checks == [False, False, False, True]

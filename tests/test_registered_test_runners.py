@@ -135,7 +135,8 @@ def test_controller_package_verification_checks_exact_source_bytes():
     assert package['digest'] == client.digest(package['files'])
     assert 'test_runner_controller.py' in client.FILES
     assert "hashlib.sha256" in client.VERIFY
-    assert "runpy.run_path" in client.VERIFY
+    # Actual source-only loading and bootstrap behavior are exercised by
+    # test_registered_runner_bootstrap, including executable cache injection.
 
 
 def test_connection_options_and_arbitrary_controller_path_are_refused():

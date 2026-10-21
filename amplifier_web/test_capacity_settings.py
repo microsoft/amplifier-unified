@@ -31,6 +31,11 @@ def definitions(schema, string):
 
 def execution_key(config):
     """Only capacity integers are mutable; endpoint/code/source/auth stay bound."""
+    inherited = config.get('capacityPolicyId')
+    if inherited:
+        if not isinstance(inherited, str) or len(inherited) != 64 or any(c not in '0123456789abcdef' for c in inherited):
+            raise ValueError('The retained capacity policy identity is invalid.')
+        return inherited
     value = copy.deepcopy(config)
     for key in LIMITS:
         value.pop(key, None)

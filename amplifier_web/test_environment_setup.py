@@ -399,6 +399,8 @@ async def _run(app, record, lock, guard):
         if installed.get('commit') != owner.DTU_COMMIT or installed.get('extras'):
             raise ValueError('The managed runner did not match the approved core.')
         record['installationId'] = installed['id']
+        record['runnerSourcePolicy'] = {'version': 1, 'repository': owner.REPOSITORY,
+                                        'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
         write_json(path, record)
         base = {'enabled': True, 'installationId': installed['id'], 'commit': owner.DTU_COMMIT, 'backend': record['backend']}
         owned = folder / record['id']
@@ -509,6 +511,8 @@ async def setup_docker(base, selected, owned, record, step):
 
 async def setup_incus(base, selected, owned, record, step):
     from .incus_environment_worker import file_digest, package_digest, QUALIFIED_PACKAGES, CURRENT_QUALIFIED_VERSION
+    record['engineSourcePolicy'] = {'version': 1, 'repository': LEGACY_REPOSITORY,
+                                    'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
     binary = selected['executable']
     uv = shutil.which('uv')
     if not uv:

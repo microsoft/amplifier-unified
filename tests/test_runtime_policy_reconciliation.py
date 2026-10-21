@@ -168,7 +168,7 @@ def test_acknowledged_unselected_pin_does_not_prompt_again_for_same_configuratio
     receipt.mkdir()
     assert migration.pending(s.home, None, [oldrow])
     receipt.joinpath(migration.RECEIPT).write_text(json.dumps({
-        'version': 1, 'configuration': migration.configuration(s.config),
+        'version': 1, 'selectionVersion': migration.SELECTION_VERSION, 'configuration': migration.configuration(s.config),
         'remaining': migration.legacy_candidates([oldrow])}))
     assert migration.pending(s.home, None, [oldrow]) is None
     s.config.settings['sources'] = {'modules': {'some-module': 'git+' + URL + '@main'}}
@@ -305,7 +305,7 @@ def test_reconcile_reconsiders_receipted_pins_when_another_update_already_has_a_
     receipt = s.home / 'updates/baseline-runtime'
     receipt.mkdir()
     receipt.joinpath(migration.RECEIPT).write_text(json.dumps({
-        'version': 1, 'configuration': migration.configuration(s.config),
+        'version': 1, 'selectionVersion': migration.SELECTION_VERSION, 'configuration': migration.configuration(s.config),
         'remaining': migration.legacy_candidates([row()])}))
     assert migration.pending(s.home, None, [row()]) is None
     assert migration.pending(s.home, None, [row()], honor_receipt=False)
@@ -352,7 +352,7 @@ def test_retained_extra_usage_requires_matching_completed_profile_selection(sele
     monkeypatch.setattr('amplifier_web.host.config.read_config', lambda *a, **kw: s.config)
     rows = [row(usage='configured', usageEvidence=['Conversation worker environment'])]
     saved = {
-        'version': 1, 'configuration': migration.configuration(s.config),
+        'version': 1, 'selectionVersion': migration.SELECTION_VERSION, 'configuration': migration.configuration(s.config),
         'remaining': migration.legacy_candidates(rows), 'decisions': {NAME: 'unselected'},
         'offeredPackages': ['another-package'],
     }

@@ -17,8 +17,9 @@ difficulty. Visible status filters and a stable layout selector address the need
 for coaching during the walkthrough. Display detail remains independent from
 layout. Workspaces is the canonical name throughout these surfaces and pickers.
 
-Fresh web views already start on Home; saved views resume their state. Qualify
-those boundaries and direct links before proposing another startup policy.
+The owner confirmed that fresh windows open on Home, while refreshes, reconnects
+and direct chat links preserve their destination. This retains the existing
+web-view ownership boundary rather than introducing another startup policy.
 Related-work inspection uses the existing Workspace work surface; grouping by
 inferred dependencies or additional processing remains outside this change.
 
@@ -43,3 +44,10 @@ Workspace work access, responsive and enlarged text layouts, keyboard/forced
 colors, new-window arrival, refresh and direct chat links. Browsing did not start
 runtimes or send model requests in the synthetic fixture. These are functional
 checks; designer review with familiar live work remains separate.
+
+Before the PR handoff, main was integrated through
+`6e9743b91778a4fc7b3e678f716ba814232e7c93` and the same 113 frontend tests,
+39 backend tests and three browser workflows passed again against
+`0.20.199 / c92bddfe5110354f`. Two builds produced the same 311 client files.
+This version identifies the development base; release publication is handled
+separately from the retained preview and the user's live-instance adoption.

@@ -39,10 +39,7 @@ REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-uni
 DTU_COMMIT = '5235833098d9a630791452a46558d92f58af0389'
 # New setup selects DTU_COMMIT. Existing owners retain their exact installation
 # so qualifying a new snapshot never strands its predecessor's cleanup.
-QUALIFIED_DTU_COMMITS = frozenset({
-    '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04',
-    DTU_COMMIT,
-})
+from .managed_runner_binding import STATIC_CORE_COMMITS as QUALIFIED_DTU_COMMITS
 APPROVED_IMAGE = 'docker.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f'
 KIND = 'test-environment'
 PROFILE = 'linux-python'
@@ -92,23 +89,37 @@ def configuration(app):
         return None, 'unavailable', 'The managed Linux test host needs setup, or its approved backend configuration changed.'
 
 
-def validate_configuration_value(app, value):
+def validate_configuration_value(app, value, *, _qualification=False):
     """Qualify operator-owned fields independently of the currently selected file."""
     if not isinstance(value, dict):
         raise ValueError('The operator configuration must be an object.')
     if value.get('enabled') is not True:
         return None, 'disabled', 'Test environments are disabled on this host.'
-    if set(value) - {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes', 'retentionMode'}:
+    if set(value) - {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes', 'retentionMode', 'capacityPolicyId', 'runnerQualificationRequired'}:
         raise ValueError('The operator configuration contains unsupported settings.')
     if 'retentionMode' in value and value['retentionMode'] not in {'files', 'full'}:
         raise ValueError('Choose files or full environment retention.')
+    if 'capacityPolicyId' in value and (not isinstance(value['capacityPolicyId'], str)
+            or not re.fullmatch('[a-f0-9]{64}', value['capacityPolicyId'])):
+        raise ValueError('The retained capacity policy identity is invalid.')
     commit = value.get('commit')
-    if not isinstance(commit, str) or commit not in QUALIFIED_DTU_COMMITS:
-        raise ValueError('The managed backend is not pinned to this app’s qualified revision.')
+    if not isinstance(commit, str) or not re.fullmatch('[a-f0-9]{40}', commit):
+        raise ValueError('The managed backend has no exact revision.')
     manager = getattr(app, 'smart_tools', None)
     installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
     if not installation or installation.get('status') != 'installed' or installation.get('commit') != commit or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
         raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
+    dynamic = installation.get('runnerCandidate') is True
+    if value.get('runnerQualificationRequired') is not None and value['runnerQualificationRequired'] is not True:
+        raise ValueError('The retained runner qualification requirement changed.')
+    if value.get('runnerQualificationRequired') and not dynamic:
+        raise ValueError('The retained runner installation provenance changed.')
+    if (dynamic or commit not in QUALIFIED_DTU_COMMITS) and not _qualification:
+        from .managed_runner_updates import trusted_installation
+        if not trusted_installation(app, value):
+            raise ValueError('The managed backend has not passed this machine’s owned qualification.')
+    if dynamic:
+        value = {**value, 'runnerQualificationRequired': True}
     identity = installation['id']
     if not re.fullmatch(r'[a-f0-9]{24}', identity):
         raise ValueError('The managed installation identity is invalid.')
@@ -198,6 +209,9 @@ def installation_lock(home, identity):
 def remove_installation(home, identity, folder, *, ignore_errors=False):
     """Existing install removal cannot orphan a resource's recovery backend."""
     with installation_lock(home, identity), closing(storage.connect(home)) as db:
+        from .managed_runner_updates import referenced
+        if referenced(home, identity):
+            raise ValueError('This runner is retained for an update, rollback, or an existing test owner.')
         if db.execute("SELECT 1 FROM allocations WHERE status!='retired' AND json_extract(body,'$.kind')=? AND json_extract(body,'$.backendInstallation')=? LIMIT 1", (KIND, identity)).fetchone():
             raise ValueError('This backend still owns test environments. Remove those environments before removing or replacing its installation.')
         shutil.rmtree(folder, ignore_errors=ignore_errors)
@@ -240,8 +254,11 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
     return row
 
 
-def invoke(config, home, row, action, args):
+def invoke(config, home, row, action, args, *, _qualification=False):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
+    if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
+        from .managed_runner_updates import validate_execution
+        validate_execution(home, config)
     if action == 'execute' and args.get('durableJob') is True:
         action = 'job_start'
     folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
@@ -278,7 +295,7 @@ def invoke(config, home, row, action, args):
         else:
             payload['image'] = prepared['image']
     environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
-    process = subprocess.Popen([config['python'], '-I', str(helper)], stdin=subprocess.PIPE,
+    process = subprocess.Popen([config['python'], '-I', '-B', str(helper)], stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False

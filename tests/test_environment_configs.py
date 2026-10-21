@@ -136,7 +136,7 @@ def test_snapshot_refresh_retains_exact_qualified_owner_and_rejects_rebinding(tm
     # Qualification is a pair, not interchangeable approved commit names.
     with pytest.raises(ValueError, match='qualified DTU core'):
         owner.validate_configuration_value(app, {**request(old), 'commit': owner.DTU_COMMIT})
-    with pytest.raises(ValueError, match='qualified revision'):
+    with pytest.raises(ValueError, match='qualified DTU core'):
         owner.validate_configuration_value(app, {**request(old), 'commit': 'c' * 40})
     app.smart_tools.state['installations'][0]['commit'] = owner.DTU_COMMIT
     with pytest.raises(ValueError, match='qualified DTU core'):

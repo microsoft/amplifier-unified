@@ -1,6 +1,34 @@
 """The update safety gate and its user-visible reasons share one source."""
 
 
+def _quiescent_legacy_settings_hold(service, session):
+    """Retain the chat fence without mistaking an old recovery hold for work.
+
+    This is only an update-idleness observation. It never clears the fence,
+    resolves unknown effects, replays settings, or permits a new chat turn.
+    Modern operation-bound recovery and unobservable execution remain guarded.
+    """
+    pending = session.get('pendingConfiguration', {})
+    if (session.get('status') not in {'idle', 'stopped', 'interrupted', 'error'}
+            or pending.get('phase') != 'error' or pending.get('recoveryRequired') is not True
+            or pending.get('operationId') or session.get('configurationOperationFence')
+            or session.get('configurationPending')
+            or session.get('configurationRefresh', {}).get('phase') == 'applying'
+            or any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', []))
+            or any(worker.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'}
+                   or worker.get('persistent') and worker.get('status') == 'idle'
+                   for worker in session.get('workers', []))):
+        return False
+    management = getattr(service, 'management', None)
+    tasks = getattr(management, 'pending_config_tasks', None)
+    lock = getattr(management, 'lock', None)
+    runtime_pending = getattr(getattr(service, 'runtime', None), 'has_pending_operations', None)
+    if tasks is None or lock is None or lock.locked() or not callable(runtime_pending):
+        return False
+    task = tasks.get(session['id'])
+    return not (task is not None and not task.done()) and not runtime_pending()
+
+
 def blockers(service):
     state = service.state
     result = []
@@ -41,7 +69,7 @@ def blockers(service):
             unknown = any(row.get('phase') == 'unknown' for row in session.get('worktreeHandoffs', []))
             if unknown:
                 add('checkout-handoff', 'Checkout handoff needs inspection; restarting will not resolve it', sid)
-            else:
+            elif not _quiescent_legacy_settings_hold(service, session):
                 add('configuration', 'Conversation settings are being applied', sid)
         if session.get('status') in {'working', 'starting', 'stopping'} or (session.get('status') == 'ready' and
                 any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', []))):
