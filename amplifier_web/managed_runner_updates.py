@@ -385,7 +385,8 @@ async def retire(app, *, inspect_only=False, selected=None, evidence=None, inspe
                         evidence('attempting', candidate)
                 def cleanup_guard():
                     # Called by the canonical owner only after both install locks
-                    # and the last filesystem measurement. Policy and receipt
+                    # and the initial filesystem measurement. The removal owner
+                    # measures again after this yielding guard. Policy and receipt
                     # writes stay on their owning event loop.
                     future = asyncio.run_coroutine_threadsafe(admit(), loop)
                     try:

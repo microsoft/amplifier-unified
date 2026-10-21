@@ -221,6 +221,10 @@ def remove_installation(home, identity, folder, *, ignore_errors=False, cleanup_
                 raise ValueError("The unused runner files changed. Existing files were kept.")
         if cleanup_guard is not None:
             cleanup_guard()
+        # The guard can yield to its event loop for a fresh process/policy
+        # observation. Recheck contents after that wait, adjacent to removal.
+        if cleanup_inventory is not None and measure([str(folder)])["stamp"] != cleanup_inventory.get("stamp"):
+            raise ValueError("The unused runner files changed. Existing files were kept.")
         shutil.rmtree(folder, ignore_errors=ignore_errors)
 
 
