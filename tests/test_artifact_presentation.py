@@ -1,0 +1,83 @@
+"""One saved definition, client-local presentation, no implicit duplicate view."""
+from copy import deepcopy
+
+import pytest
+
+from amplifier_web.service import AppError
+from test_canvas_views import app, command, show, target, view
+from test_inline_artifacts import published
+
+
+def choices(app, client='one'):
+    with app.clients.bind(client):
+        return deepcopy(app.canvas_views.project().get('presentations', []))
+
+
+async def test_show_inline_preserves_unrelated_dirty_canvas_and_draft(app):
+    original = await published(app, '<input value="unfinished">', 'html')
+    await command(app, 'canvas.views.dirty', {**target(original), 'dirty': True})
+    with app.clients.bind('one'):
+        app.clients.draft(app.state['selectedSessionId'], 'Keep the parent draft')
+        before = deepcopy(app.state['canvas'])
+    saved = await command(app, 'canvas.show', {'kind': 'markdown', 'title': 'Short review',
+                                             'content': '# Review', 'presentation': 'inline'})
+    identity = saved['result']['id']
+    with app.clients.bind('one'):
+        assert app.state['canvas'] == before
+        assert app.state['view']['draft'] == 'Keep the parent draft'
+    assert any(c['id'] == identity and c['version'] == 1 and c['presentation'] == 'inline' for c in choices(app))
+    assert choices(app, 'two') == []
+
+
+async def test_exact_inline_selection_hide_and_reload_do_not_create_versions(app):
+    first = await published(app, '# Version one', 'markdown')
+    await command(app, 'canvas.versions.revise', {'id': first['resourceId'], 'expectedRevision': 1, 'content': '# Version two'})
+    with app.clients.bind('one'):
+        original = deepcopy(app.state['canvasArtifacts'])
+    args = {'id': first['resourceId'], 'version': 1, 'messageId': 'inline-message'}
+    await command(app, 'canvas.select', {**args, 'presentation': 'inline'})
+    assert any(c['id'] == first['resourceId'] and c['version'] == 1 and c['presentation'] == 'inline' for c in choices(app))
+    await command(app, 'canvas.select', {**args, 'presentation': 'saved'})
+    app.clients.attach('reload', resume='one')
+    assert any(c['id'] == first['resourceId'] and c['presentation'] == 'saved' for c in choices(app, 'reload'))
+    assert app.state['canvasArtifacts'] == original
+    with pytest.raises(AppError, match='published'):
+        await command(app, 'canvas.select', {**args, 'messageId': 'wrong', 'presentation': 'inline'})
+
+
+async def test_canvas_transition_refuses_dirty_inline_before_changing_selection(app):
+    first = await published(app, 'Saved body', 'text')
+    await command(app, 'canvas.select', {'id': first['resourceId'], 'version': 1,
+                                       'messageId': 'inline-message', 'presentation': 'inline'})
+    opened = (await command(app, 'canvas.views.inline', {'resourceId': first['resourceId'],
+              'version': 1, 'messageId': 'inline-message', 'previewId': 'mounted'}))['result']
+    await command(app, 'canvas.views.dirty', {**target(opened), 'dirty': True})
+    with app.clients.bind('one'):
+        before = deepcopy(app.state['canvas'])
+    for presentation in ('canvas', 'saved'):
+        with pytest.raises(AppError, match='edit'):
+            await command(app, 'canvas.select', {'id': first['resourceId'], 'version': 1,
+                          'messageId': 'inline-message', 'presentation': presentation})
+    with app.clients.bind('one'):
+        assert app.state['canvas'] == before
+        assert app.canvas_views.canvas(opened['viewId'])['content'] == 'Saved body'
+
+
+async def test_default_show_and_explicit_saved_are_distinct(app):
+    first = await published(app, '<p>Canvas default</p>', 'html')
+    with app.clients.bind('one'):
+        before = deepcopy(app.state['canvas'])
+    saved = await command(app, 'canvas.show', {'kind': 'code', 'content': 'pass', 'presentation': 'saved'})
+    with app.clients.bind('one'):
+        assert app.state['canvas'] == before
+        assert app.state['canvas']['open']
+    assert saved['result']['id'] != first['resourceId']
+    assert any(c['id'] == saved['result']['id'] and c['presentation'] == 'saved' for c in choices(app))
+
+
+async def test_unsupported_inline_kind_is_rejected_without_partial_publication(app):
+    await published(app)
+    original = deepcopy(app.state['canvasArtifacts'])
+    with pytest.raises(AppError, match='Canvas'):
+        await command(app, 'canvas.show', {'kind': 'browser', 'url': 'https://example.test', 'presentation': 'inline'})
+    assert app.state['canvasArtifacts'] == original
