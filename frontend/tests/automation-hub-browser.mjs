@@ -57,10 +57,30 @@ try{
  await editor.getByLabel('Start date',{exact:true}).fill('2027-01-18');
  await editor.getByLabel('Local time',{exact:true}).fill('08:30');
  for(const day of ['Mon','Tue','Wed','Thu','Fri'])await editor.getByRole('checkbox',{name:day,exact:true}).check();
+ // A normal fresh chat has no objective; the focused UI must expose its owner-local prerequisite.
+ await editor.getByRole('button',{name:'Preview schedule',exact:true}).click();
+ await expect(editor.getByRole('alert')).toContainText(/saved (task|objective)|explicit task/i);
+ await page.getByRole('button',{name:'Manage saved task',exact:true}).click();
+ const task=page.getByRole('region',{name:'Saved task'});
+ await task.getByLabel('Task objective').fill('Prepare weekday planning summaries');
+ await task.getByRole('button',{name:'Save task',exact:true}).click();
+ await expect(task.getByRole('status')).toContainText('Task active');
+ await task.getByRole('button',{name:'Pause task',exact:true}).click();
+ await expect(task.getByRole('status')).toContainText('Task paused');
+ await task.getByRole('button',{name:'Resume task',exact:true}).click();
+ await expect(task.getByRole('status')).toContainText('Task active');
+ await call('view.update',{patch:{panel:'automation'}});
+ await hub.getByRole('button',{name:'Create schedule',exact:true}).click();
+ await expect(prompt).toHaveValue('Summarize weekday decisions and open risks. Do not send messages.');
  await editor.getByRole('button',{name:'Preview schedule',exact:true}).click();
  const savedPreview=editor.locator('[data-part="schedule-preview"]');
  await expect(savedPreview).toContainText('America/Los_Angeles');
  await expect(savedPreview.getByRole('listitem')).toHaveCount(5);
+ await page.getByRole('button',{name:'Back to Advanced',exact:true}).click();
+ await expect(editor).toHaveCount(0);
+ await page.getByRole('button',{name:/Work & automation/}).click();
+ await expect(prompt).toHaveValue('Summarize weekday decisions and open risks. Do not send messages.');
+ await expect(savedPreview).toHaveCount(0);
  await prompt.fill('Summarize weekday decisions and open risks. Keep originals unchanged.');
  await expect(savedPreview).toHaveCount(0);
  phase='cancel-dirty-restore';
@@ -75,7 +95,15 @@ try{
  // Ordinary keyboard traversal remains inside the existing panel.
  await prompt.focus();await page.keyboard.press('Tab');
  assert.ok(await page.evaluate(()=>!!document.activeElement.closest('[role="dialog"]')));
+ await page.keyboard.press('Shift+Tab');await expect(prompt).toBeFocused();
+ const advanced=editor.locator('summary').filter({hasText:'Advanced policies'});
+ await advanced.focus();await page.keyboard.press('Enter');await page.keyboard.press('Tab');
+ await expect(editor.getByLabel('Purpose',{exact:true})).toBeFocused();
+ await editor.getByLabel('Purpose',{exact:true}).selectOption('task');
+ await editor.getByLabel('If the app misses a run').selectOption('skip');
+ await editor.getByLabel('Notify me',{exact:true}).selectOption('always');
  await editor.getByRole('button',{name:'Preview schedule',exact:true}).click();
+ await expect(savedPreview).toContainText('Skip occurrences more than a minute late');
  await page.setViewportSize({width:390,height:900});
  await savedPreview.scrollIntoViewIfNeeded();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -88,6 +116,8 @@ try{
  assert.deepEqual(created.schedules[0].spec.weekdays,[0,1,2,3,4]);
  assert.equal(created.schedules[0].spec.timezone,'America/Los_Angeles');
  assert.equal(created.schedules[0].status,'active');
+ assert.equal(created.schedules[0].missedRunPolicy,'skip');
+ assert.equal(created.schedules[0].notificationPolicy,'always');
  assert.equal(created.inputs.length,1,'save must not execute a second input');
  phase='populated-pause-themes';
  await page.getByRole('button',{name:'Back to Automation',exact:true}).click();

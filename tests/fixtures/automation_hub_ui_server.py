@@ -72,7 +72,6 @@ async def main(home):
         control.selection = {'instance': 'synthetic', 'model': 'test-model'}
         control.persist(); await control.close()
         service._session(current)['selection'] = dict(control.selection)
-        await service.dispatch('task.create', {'sessionId': current, 'expectedRevision': 0, 'objective': 'Prepare weekday planning summaries'}, command_id='planning-objective')
         service.schedules.changed()
         return web.json_response({'now': now[0], 'sessionId': current})
     async def journey(request):

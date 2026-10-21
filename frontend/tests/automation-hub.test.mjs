@@ -80,3 +80,10 @@ test('changing the filter clears the previous page before the new response',asyn
  assert.equal(root.root.findAll(n=>n.props['data-automation-id']).length,0);
  await act(async()=>finish({accepted:true,result:{...page,items:[],total:0}}));
 });
+
+test('an admitted one-shot without another occurrence does not invent a review blocker',async()=>{
+ const oneShot={...row,status:'active',displayState:'active',nextDue:null,lastRun:{phase:'accepted',dueAt:1800000000},spec:{kind:'once',startAt:'2027-01-15T08:00:00Z',timezone:'UTC'}};
+ await act(async()=>{root=create(view(async()=>({accepted:true,result:{...page,items:[oneShot]}})))});
+ assert.match(text(),/No further occurrence/);assert.match(text(),/Input accepted/);
+ assert.doesNotMatch(text(),/Review required before future runs/);
+});

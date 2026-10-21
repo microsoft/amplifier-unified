@@ -5,7 +5,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 
 const server=await createServer({configFile:false,cacheDir:'node_modules/.vite-schedule-editor-tests',server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {ScheduleControls}=await server.ssrLoadModule('/src/schedules.jsx');
+const {ScheduleControls,ScheduleVisibilityContext}=await server.ssrLoadModule('/src/schedules.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 let root;
 test.afterEach(async()=>{await act(async()=>root?.unmount());root=null});
@@ -20,6 +20,16 @@ const text=()=>JSON.stringify(root.toJSON());
 const change=async(id,value)=>act(async()=>field(id).props.onChange({target:{value}}));
 const click=async name=>act(async()=>button(name).props.onClick());
 const passive=(calls)=>(action,args)=>{calls.push({action,args});return Promise.resolve({accepted:true,result:action==='schedule.preview'?preview(args):{items:[]}})};
+
+test('hidden owner controls retain details but discard activation preview on return',async()=>{
+ const calls=[],session=owner('hidden-owner'),dispatch=passive(calls);
+ const render=visible=>React.createElement(ScheduleVisibilityContext.Provider,{value:visible},view(session,dispatch));
+ await act(async()=>{root=create(render(true))});await change('schedule-prompt','Keep the draft, not the authority');await click('Preview schedule');
+ assert.ok(button('Save and activate schedule'));
+ await act(async()=>root.update(render(false)));assert.equal(root.toJSON(),null);
+ await act(async()=>root.update(render(true)));assert.equal(field('schedule-prompt').props.value,'Keep the draft, not the authority');
+ assert.equal(button('Save and activate schedule'),undefined);
+});
 
 test('focused entry opens and focuses the owner editor, reads schedules once, and never starts runtime',async()=>{
  const calls=[],focused=[];const session=owner('focused-owner'),dispatch=passive(calls);

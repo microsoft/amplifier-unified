@@ -7,7 +7,7 @@ const recurrence=spec=>spec.kind==='interval'?`Every ${spec.intervalSeconds/60} 
 const model=selection=>selection?[selection.instance,selection.model,selection.effort].filter(Boolean).join(' · '):'Bundle defaults';
 const attention=row=>['blocked','needs_review','owner_unavailable','owner_stopped','owner_stopping','owner_interrupted','owner_error'].includes(row.displayState)||['failed','unknown'].includes(row.lastRun?.phase);
 const upcoming=row=>['active','due'].includes(row.displayState)&&Number.isFinite(row.nextDue)&&row.lastRun?.phase!=='unknown';
-const nextText=row=>upcoming(row)?when(row.nextDue,row.spec?.timezone):({paused:'Future runs paused',cancelled:'Future runs cancelled',completed:'No future occurrence'}[row.status]||'Review required before future runs');
+const nextText=row=>upcoming(row)?when(row.nextDue,row.spec?.timezone):['active','due'].includes(row.displayState)&&row.nextDue==null?'No further occurrence':({paused:'Future runs paused',cancelled:'Future runs cancelled',completed:'No future occurrence'}[row.status]||'Review required before future runs');
 const heading=prompt=>{const line=(prompt||'Scheduled work').split('\n').find(line=>line.trim())||'Scheduled work';return line.length>100?line.slice(0,97)+'…':line};
 export function AutomationHub({state,dispatch,isCurrent}){
  const [page,setPage]=useState(null),[filter,setFilter]=useState('current'),[offset,setOffset]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(''),[review,setReview]=useState(null),[ack,setAck]=useState(false);

@@ -1,4 +1,4 @@
-import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
+import React,{createContext,useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 
 const parts=(value,timezone)=>Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)).map(row=>[row.type,row.value]));
 const localFields=(value,timezone)=>{const p=parts(value,timezone);return {startDate:`${p.year}-${p.month}-${p.day}`,localTime:`${p.hour}:${p.minute}`}};
@@ -15,9 +15,11 @@ const repeats=spec=>spec.kind==='interval'?`Every ${spec.intervalSeconds/60} min
 // Private browser-tab drafts only: no backend writes, preview hashes or authority.
 // Remounting a panel restores details, never a previous confirmation.
 const retainedDrafts=new Map();
+export const ScheduleVisibilityContext=createContext(true);
 
 export function ScheduleControls({session,act,focused=false}){
- return session?<OwnerScheduleControls key={session.id} session={session} act={act} focused={focused}/>:null;
+ const visible=useContext(ScheduleVisibilityContext);
+ return session&&visible?<OwnerScheduleControls key={session.id} session={session} act={act} focused={focused}/>:null;
 }
 
 function OwnerScheduleControls({session,act,focused}){

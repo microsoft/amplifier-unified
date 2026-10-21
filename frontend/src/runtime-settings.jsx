@@ -13,7 +13,7 @@ import {usageLabel} from './timeline-data';
 import {ArtifactRuntime} from './artifact-runtime';
 const pretty=value=>JSON.stringify(value,null,2);
 const defaults={tab:'overview',goalCondition:'',goalMaxTurns:'',mode:'',maxIterations:'',contextTokens:'',tool:'',toolArgs:'{}',clearConfirm:false};
-export function RuntimeSettings({state,session,act,computerControls,group,extras}){
+export function RuntimeSettings({state,session,act,scheduleAct=act,computerControls,group,extras}){
  const shared=state.view?.runtimeDraft,root=useRef(null);
  const [draft,setDraft]=useState({...defaults,...shared});
  useEffect(()=>{if(shared)setDraft(current=>({...current,...shared}))},[shared]);
@@ -35,7 +35,8 @@ export function RuntimeSettings({state,session,act,computerControls,group,extras
  if(!session)return <PortabilityControls state={state} session={null} act={act}/>;
  if((group||shared?.tab||draft.tab)==='direction'&&shared?.section==='schedules')return <div ref={root} className="a-runtime-settings a-schedule-editor-panel" data-part="runtime-controls">
   <button type="button" className="a-soft" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'automation',runtimeDraft:{section:null}}})}>Back to Automation</button>
-  <ScheduleControls session={session} act={act} focused/>
+  <p className="a-caption">Continue this task needs an active saved objective. <button type="button" className="a-link" onClick={()=>act('view.update',{patch:{panel:'chat-work',runtimeDraft:{tab:'direction',section:null}}})}>Manage saved task</button></p>
+  <ScheduleControls session={session} act={scheduleAct} focused/>
  </div>;
  return <div ref={root} className="a-runtime-settings" data-part="runtime-controls">{!group&&<nav className="a-settings-nav" aria-label="Advanced chat sections">{[['direction','Work & automation'],['tools','Model & tools'],['limits','Context & recovery'],['computer','Computer access']].map(([key,label])=><button type="button" key={key} onClick={()=>edit({tab:key,section:null})} aria-pressed={tab===key}>{label}</button>)}</nav>}<p>Inspect and control the active Amplifier session. Its bundle determines which capabilities are available.</p>
   <div data-runtime-section={tab==='tools'&&draft.section==='overview'?'overview':tab} tabIndex={-1}>

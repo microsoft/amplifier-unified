@@ -24,9 +24,13 @@ state. Empty views omit pagination and give one clear creation entry.
 
 Create and Open owning chat use the existing `chat-work` route, focused on the
 owner's schedule controls instead of the general work configuration. The owner
-is explicit before review. Unsaved schedule details stay local to that browser
+is explicit before review. The registered `runtimeDraft.section=schedules` target
+selects this same `chat-work` route and direction tab; it starts no execution.
+Manage saved task returns to the existing task controls when a same-task
+schedule lacks an active objective. Unsaved schedule details stay local to that browser
 tab and owner; cancel/back may retain those details, but never an activation
-preview. Editing or a changed owner binding invalidates review. A save consumes
+preview, including when Advanced navigation merely hides the schedule page.
+Editing or a changed owner binding invalidates review. A save consumes
 its one-use preview before awaiting the receipt; an uncertain response does not
 leave an automatic replay path. Other clients' selection and drafts are unchanged.
 These presentation changes add no scheduling authority, persistent schedule
