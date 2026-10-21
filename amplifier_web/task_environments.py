@@ -73,6 +73,19 @@ def definitions(schema, string):
 
 
 def configuration(app):
+    local, status, reason = local_configuration(app)
+    if local:
+        return local, status, reason
+    try:
+        remote = registered_runners.first_configuration(app)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, 'unavailable', 'The saved test machine settings need attention. Open Settings → Testing.'
+    if remote:
+        return remote, 'ready', 'Checks run on a connected Linux test machine. This computer does not need Docker or a local test environment.'
+    return None, status, 'Test environments have not been enabled. Connect a test machine in Settings → Testing, or set up local testing on Linux.'
+
+
+def local_configuration(app):
     """Operator-owned opt-in, never a request-provided executable or profile."""
     target = app.data_dir / 'test-environments.json'
     if not target.exists():
@@ -171,7 +184,7 @@ def public(home, row):
         'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
         'previousCleanup': row.get('previousCleanup'),
         'artifactExport': row.get('artifactExport'), 'lastArtifactExport': row.get('lastArtifactExport'),
-        'preparation': dependencies.status(storage.directory(home, row)) if row.get('preparationPending') or row.get('preparedDependencies') else None,
+        'preparation': ({'status': 'ready' if row.get('preparedDependencies') else 'pending', 'remote': True} if row.get('testMachine') else dependencies.status(storage.directory(home, row))) if row.get('preparationPending') or row.get('preparedDependencies') else None,
         'preparationCleanup': row.get('preparationCleanup'),
         'reason': row.get('reason'), 'observation': row.get('observation'),
         'recovery': row.get('recovery', {'available': False, 'reason': 'Refresh to inspect the retained recovery backend.'}),
@@ -247,6 +260,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
                'resourceRequest': resource_request, 'timingRequest': timing_request, 'preparationRequired': profile['preparationRequired'],
                'backendInstallation': installation,
                'backendConfigRetained': backend_config is not None,
+               'originSnapshotVersion': backend_config.get('originSnapshotVersion') if backend_config else None,
                'testMachine': ({key: backend_config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if backend_config and backend_config.get('remoteRunner') else None),
                **({'retentionMode': backend_config.get('retentionMode', 'files'),
                    'backendType': backend_config.get('backend', 'docker')} if backend_config is not None else {}),
@@ -261,7 +275,10 @@ def invoke(config, home, row, action, args, *, _qualification=False):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
     if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
         from .managed_runner_updates import validate_execution
-        validate_execution(home, config)
+        if config.get('originSnapshotVersion') == 1:
+            registered_runners.qualify_retained(None, config)
+        else:
+            validate_execution(home, config)
     if action == 'execute' and args.get('durableJob') is True:
         action = 'job_start'
     folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
