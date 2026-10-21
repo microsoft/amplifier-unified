@@ -106,6 +106,39 @@ function ResultFileStatus({response}){
  return null;
 }
 
+function RequestCancellation({dispatch,sessionId,request,onChanged}){
+ const [busy,setBusy]=useState(false),[error,setError]=useState(''),[note,setNote]=useState(''),[unknown,setUnknown]=useState(false);
+ const operation=useRef(null),inflight=useRef(false);
+ const cancellation=request.cancellation;
+ const report=request.response||{};
+ const finished=report.status==='sealed'&&report.kind==='result'&&['success','failed','cancelled','declined'].includes(report.outcome);
+ const settled=report.outcome==='cancelled'&&report.status==='sealed';
+ const canCancel=request.senderSessionId===sessionId&&!cancellation&&!finished&&['queued','pending_steer','submitting','accepted','applied','unknown'].includes(request.delivery);
+ const queued=['queued','pending_steer'].includes(request.delivery);
+ const cancel=async()=>{
+  if(inflight.current)return;
+  inflight.current=true;setBusy(true);setError('');
+  // Retain exactly one operation across a lost acknowledgement; do not turn
+  // a retry into another request or send the original work again.
+  operation.current??={id:crypto.randomUUID(),args:{sessionId,requestId:request.requestId,reason:note}};
+  try{
+   const answer=await dispatch('coordination.cancel',operation.current.args,{id:operation.current.id,feedback:false});
+   if(answer?.accepted!==true)throw Error(answer?.error||'Cancellation could not be confirmed.');
+   setUnknown(false);await onChanged();
+  }catch(error){setUnknown(true);setError('Cancellation could not be confirmed. Refresh or check again; the original work was not resent. '+error.message)}
+  finally{inflight.current=false;setBusy(false)}
+ };
+ return <div data-part="request-cancellation">
+  {cancellation&&<p role="status">{settled?'The recipient reported cancellation. Completed effects remain saved.':report.outcome==='cancelled'?'Cancellation reported; waiting for the recipient’s turn to settle.':cancellation.detail}</p>}
+  {canCancel&&<details><summary>{queued?'Withdraw this request':'Ask to stop this request'}</summary>
+   <p>{queued?'Remove this request from the queue. Other work can continue.':'Ask the recipient to stop only this request at its next check. Work may continue until it responds.'}</p>
+   <label>Optional guidance<textarea value={note} disabled={busy||unknown} maxLength={1000} onChange={event=>setNote(event.target.value)}/></label>
+   <button className="a-link" disabled={busy} data-action="coordination.cancel" onClick={cancel}>{busy?'Sending…':unknown?'Check cancellation again':queued?'Withdraw request':'Request cancellation'}</button>
+  </details>}
+  {error&&<p role="alert">{error}</p>}
+ </div>;
+}
+
 export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorkspace,onScopeReady,scopeInvalid=false}){
  const visit=useRef(0),openingRef=useRef(false),sectionRef=useRef(null),refreshFocus=useRef(null);
  const [review,setReview]=useState(false);
@@ -187,6 +220,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
    <small>{row.senderSessionId===sessionId?'Sent to':'Received from'} {name(row.senderSessionId===sessionId?row.target.sessionId:row.senderSessionId)} · {row.delivery}</small><details><summary>Request identity</summary><code>{row.requestId}</code></details>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>
+   <RequestCancellation dispatch={dispatch} sessionId={sessionId} request={receipt} onChanged={refresh}/>
    {response&&<div data-part="exact-result"><p>Result: {response.status} · {response.outcome} · {response.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{response.text}</p>{response.detail&&<p role="alert">{response.detail}</p>}
     {response.terminalMessageId&&response.status==='sealed'&&<button className="a-link" data-message-id={response.terminalMessageId} onClick={()=>reveal(row.target.sessionId,response.terminalMessageId)}>Open exact terminal message</button>}
     <ResultFileStatus response={response}/>

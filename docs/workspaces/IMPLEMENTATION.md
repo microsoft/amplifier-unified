@@ -389,6 +389,19 @@ inside an independent mixed conversation. Stop reports that limitation. With
 an enabled token/cost limit, queue/steer to such peers is refused; informational
 notices remain available, and commissioned helpers share the budget.
 
+Individual requests support `coordination.cancel` from their original sender.
+Queued or pending-steer input is withdrawn under the same admission lock and
+keeps a negative, unqualified receipt. An in-flight or admitted input retains
+its actual delivery state and a cancellation request; every later admission
+check rejects it, and the recipient sees the instruction in its next fitted
+coordination observation. No worker is started or whole conversation stopped.
+The recipient reports `outcome=cancelled` when settled; a report awaiting its
+terminal event is distinct from a settled report. Mixed work and completed
+effects stay intact. A lost acknowledgement is re-read with the same command
+identity. Cancelling closes only that request's future return subscription;
+already admitted returns are not interrupted. This cooperative path does not
+add request-level model-call accounting or a hard interruption adapter.
+
 Explicit user recovery uses revision-bound `assignment.resume` on the commissioning
 chat after interruption receipts, roots, native workers, preparations and current
 generations have settled. It preserves membership, task records, cumulative
