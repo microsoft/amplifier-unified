@@ -145,7 +145,7 @@ def test_header_summary_uses_only_bounded_named_strings_from_accepted_input(owne
     write(path, [event(1, 'tool:pre', tool_input=value)])
     row = read(session)['items'][0]
     assert 'command' not in row['input'], 'The ordinary bounded JSON preview ended before command'
-    assert row['inputSummary'] == {'command': value['command'][:180],
+    assert row['inputSummary'] == {'command': value['command'][:179] + '…',
                                    'action': value['action'], 'path': value['path']}
     complete = windows.read_field(session, row['_eventFields']['input'], limit=16384)
     assert complete['total'] == len(json.dumps(value, ensure_ascii=False, indent=2))

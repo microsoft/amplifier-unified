@@ -235,7 +235,8 @@ def _observation(event, raw, offset, path, identity):
         if field == 'input' and kind == 'tool' and isinstance(data[key], dict):
             # Only header hints from the accepted input, never reconstructed
             # arguments or evidence that the operation completed.
-            summary = {name: value[:180] for name, value in data[key].items()
+            summary = {name: value if len(value) <= 180 else value[:179] + '…'
+                for name, value in data[key].items()
                 if name in {'command', 'cmd', 'code', 'action', 'operation',
                             'file_path', 'path', 'filename', 'instruction',
                             'instructions', 'prompt', 'task', 'agent', 'name', 'description'}
