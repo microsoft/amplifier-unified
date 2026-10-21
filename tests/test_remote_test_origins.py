@@ -295,3 +295,11 @@ def test_registration_store_rejects_shared_write_and_linked_authority(tmp_path):
     os.link(original, path)
     with pytest.raises(ValueError):
         runners.store(app)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX capability failure')
+def test_missing_private_file_primitives_fail_before_opening(tmp_path, monkeypatch):
+    monkeypatch.delattr(files.os, 'O_DIRECTORY')
+    monkeypatch.setattr(files.os, 'open', lambda *_args, **_kwargs: pytest.fail('unsupported path open'))
+    with pytest.raises(ValueError, match='not supported'):
+        files.read(tmp_path / 'record.json')

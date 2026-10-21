@@ -717,3 +717,18 @@ def test_public_tool_inventory_on_platform_without_posix_capabilities(tmp_path, 
         assert all(row['status'] == 'not_checked' and not row['eligible'] for row in rows)
     else:
         assert rows == []
+
+
+def test_remote_only_inventory_without_private_file_primitives_stays_not_checked(tmp_path, monkeypatch):
+    from amplifier_web.smart_tool_updates import ManagedUpdates
+    from amplifier_web import registered_test_runners as runners
+    app = SimpleNamespace(data_dir=tmp_path)
+    manager = SimpleNamespace(service=app, state={'installations': [], 'servers': []})
+    app.smart_tools = manager
+    (tmp_path / 'test-runners.json').write_text('not opened on unsupported platform')
+    for name in ('getuid', 'O_NOFOLLOW', 'O_DIRECTORY'):
+        monkeypatch.delattr(updates.os, name)
+    monkeypatch.setattr(runners, 'store', lambda *_: pytest.fail('unsupported private file read'))
+    rows = ManagedUpdates.update_sources(manager)
+    assert len(rows) == 1 and rows[0]['runnerKind'] == 'managed-incus-engine'
+    assert rows[0]['status'] == 'not_checked' and not rows[0]['eligible']
