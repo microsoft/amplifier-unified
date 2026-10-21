@@ -32,7 +32,7 @@ test('human review requires Stop acknowledgement and lost resume response cannot
 test('cancelled review and browsing never navigate; opening owner uses existing selected-chat controls',async()=>{
  const calls=[];const dispatch=async(action,args)=>{calls.push({action,args});return {accepted:true,result:action==='schedule.repairPreview'?review:page}};
  await act(async()=>{root=create(view(dispatch))});await act(async()=>button('Review future runs').props.onClick());await act(async()=>button('Not now').props.onClick());assert.ok(calls.every(row=>row.action.startsWith('schedule.')));
- await act(async()=>button('Open owning chat').props.onClick());assert.deepEqual(calls.slice(-2),[{action:'session.select',args:{id:'owner'}},{action:'view.update',args:{patch:{panel:'chat-work'}}}]);
+ await act(async()=>button('Open owning chat').props.onClick());assert.deepEqual(calls.slice(-2),[{action:'session.select',args:{id:'owner'}},{action:'view.update',args:{patch:{panel:'chat-work',runtimeDraft:{section:'schedules'}}}}]);
 });
 test('unmounted pending overview cannot publish or perform additional actions',async()=>{
  let finish;const calls=[];const dispatch=(action,args)=>{calls.push({action,args});return new Promise(resolve=>finish=resolve)};
@@ -46,4 +46,37 @@ for(const newer of ['other-chat','closed-panel'])test(`delayed owner selection c
  await act(async()=>{root=create(view(dispatch,()=>current))});
  await act(async()=>{button('Open owning chat').props.onClick()});current=false;
  await act(async()=>finish({accepted:true}));assert.deepEqual(calls.map(row=>row.action),['schedule.overview','session.select']);
+});
+
+test('Option B empty state leads to a focused owner-bound editor without pagination',async()=>{
+ const calls=[];const dispatch=async(action,args)=>{calls.push({action,args});return {accepted:true,result:{...page,items:[],total:0}}};
+ await act(async()=>{root=create(view(dispatch))});
+ assert.match(text(),/Give a routine a schedule/);
+ assert.equal(button('Previous schedules'),undefined);assert.equal(button('More schedules'),undefined);
+ await act(async()=>button('Create schedule').props.onClick());
+ assert.deepEqual(calls.at(-1),{action:'view.update',args:{patch:{panel:'chat-work',runtimeDraft:{section:'schedules'}}}});
+});
+
+test('Option B next occurrence and attention are page-local and separate from last-run state',async()=>{
+ const items=[
+  {...row,id:'paused',status:'paused',displayState:'paused',prompt:'Paused task',nextDue:1},
+  {...row,id:'later',status:'active',displayState:'active',prompt:'Later task',nextDue:200},
+  {...row,id:'first',status:'active',displayState:'active',prompt:'First task',nextDue:100,lastRun:{phase:'failed',dueAt:90,detail:'Provider failed'}},
+  {...row,id:'uncertain',status:'needs_review',displayState:'needs_review',prompt:'Unknown task',lastRun:{phase:'unknown',dueAt:80}}
+ ];
+ await act(async()=>{root=create(view(async()=>({accepted:true,result:{...page,items,total:40,hasMore:true}})))});
+ const next=root.root.findByProps({'data-part':'automation-next'});assert.equal(next.findByType('h3').children.join(''),'First task');
+ assert.match(text(),/On this page/);assert.match(text(),/Needs attention/);assert.match(text(),/Future runs paused/);
+ const unknown=root.root.findByProps({'data-automation-id':'uncertain'});
+ assert.equal(unknown.findAllByType('button').some(b=>b.children.join('')==='Review future runs'),false);
+ assert.equal(root.root.findAll(n=>n.props['data-automation-id']).length,4);
+});
+
+test('changing the filter clears the previous page before the new response',async()=>{
+ let finish;let reads=0;
+ const dispatch=async()=>{if(++reads===1)return {accepted:true,result:page};return new Promise(resolve=>finish=resolve)};
+ await act(async()=>{root=create(view(dispatch))});
+ await act(async()=>root.root.findByType('select').props.onChange({target:{value:'all'}}));
+ assert.equal(root.root.findAll(n=>n.props['data-automation-id']).length,0);
+ await act(async()=>finish({accepted:true,result:{...page,items:[],total:0}}));
 });
