@@ -64,6 +64,53 @@ try{
  const second=await other.newPage();await second.goto(base);await showFixtureConversation(second);
  await expect(second.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await otherBrowser.close();otherBrowser=null;
+ // Exact host-observed tools stay interleaved with prose/model rows after the
+ // saved-view transform. Full service recreation is covered by the HTTP test.
+ const detailed=await control({op:'interim-start',details:true});
+ const detailSession=detailed.state.sessions.find(row=>row.id===started.alpha);
+ const detailGeneration=detailSession.fixtureGeneration;
+ const detailProgress=detailSession.messages.filter(row=>row.role==='assistant');
+ assert.equal(detailProgress.length,2);
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ const detailFinish=await control({op:'interim-finish'});
+ const detailFinal=detailFinish.state.sessions.find(row=>row.id===started.alpha).messages.find(row=>row.text==='The final next step.');
+ await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await expect(group).toHaveCount(1);
+ await control({op:'interim-saved-view'});
+ await page.reload();await showFixtureConversation(page);
+ await expect(header).toBeVisible();
+ if(await header.getAttribute('aria-expanded')==='false')await header.click();
+ const expectedOrder=detailProgress.flatMap((message,index)=>[
+  message.id,`tool:${started.alpha}:${detailGeneration}-call-${index+1}`,`${detailGeneration}-model-${index+1}`]);
+ await expect(group.locator('[data-kind="tool"]')).toHaveCount(2);
+ await expect(group.locator('[data-kind="llm"]')).toHaveCount(2);
+ assert.deepEqual(await group.locator('[data-message-id],[data-node-id]').evaluateAll(nodes=>
+  nodes.map(node=>node.getAttribute('data-message-id')||node.getAttribute('data-node-id'))),expectedOrder);
+ assert.equal(await group.locator(`[data-message-id="${detailFinal.id}"]`).count(),0);
+ for(let index=1;index<=2;index++){
+  const node=group.locator(`[data-node-id="tool:${started.alpha}:${detailGeneration}-call-${index}"]`);
+  const button=node.locator(':scope > button.a-execution-action-line');
+  if(await button.getAttribute('aria-expanded')==='false')await button.click();
+  const copyOutput=node.getByRole('button',{name:'Copy file content',exact:true});
+  await expect(copyOutput).toBeEnabled();
+  await copyOutput.click();
+  const output='雪𝄞'.repeat(10000)+`:OUTPUT-${index}`;
+  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(output);
+  const copyInput=node.getByRole('button',{name:'Copy arguments',exact:true});
+  await expect(copyInput).toBeEnabled();await copyInput.click();
+  assert.deepEqual(JSON.parse(await page.evaluate(()=>navigator.clipboard.readText())),
+   {note:'界𝄞'.repeat(10000)+`:INPUT-${index}`});
+  const contents=node.locator('.a-execution-payload').filter({has:copyOutput});
+  await contents.getByRole('button',{name:/^Show all /}).click();
+  await expect(contents.locator('pre code')).toHaveText(output);
+  await expect(node.locator('.a-execution-load-error')).toHaveCount(0);
+ }
+ await page.setViewportSize({width:390,height:844});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ if(process.env.EVIDENCE_DIR)await page.screenshot({path:process.env.EVIDENCE_DIR+'/interim-exact-tools-mobile.png',fullPage:true});
+ await page.setViewportSize({width:1280,height:1000});
  await control({op:'interim-start'});await expect(group).toHaveCount(0);
  await expect(page.getByText('Checking the second detail.',{exact:true})).toBeVisible();
  await control({op:'interim-error'});await expect(group).toHaveCount(0);

@@ -10,10 +10,20 @@ work or changing their bytes.
 `EventLogView` maintains a disposable, incremental in-memory index of lifecycle
 metadata, short previews and byte references. It does not write an index, payload
 capture or materialized execution view. New live observations carry identifiers,
-status, timing, usage and bounded action/outcome hints; neither those observations nor reconstructed event
-rows are saved to `unified/view.json`. Pre-existing legacy history is preserved.
+status, timing, usage and bounded action/outcome hints. The existing saved view
+retains only host-owned turn placement, scalar lifecycle facts and exact tool
+observation identities; model/worker accounting uses its existing receipt
+projection. Bodies, action hints, previews and event-file references are not
+copied into that projection. Reconstructed native observations cannot establish
+this placement. Pre-existing legacy history is preserved.
 Foundation's transcript associations place undated native tool calls by their
 recorded identities; a session creation date is not treated as a message time.
+
+This retains placement already observed by this host; it does not backfill a
+missing tool-to-turn identity in older saved views. Those records remain
+separately inspectable as unassociated observations. Restored tool fields still
+require the exact canonical observation match and existing source/client/window
+checks. A terminal event without input cannot borrow an earlier event's input.
 
 Work is grouped between conversation messages. Each group has its own elapsed
 time, usage and tool/model counts. Group totals cover all source rows even when

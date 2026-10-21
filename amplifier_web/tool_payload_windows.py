@@ -17,7 +17,7 @@ class ToolPayloadWindows:
         pages = self.windows.live_pages
         entry = pages._entry(owner, group, reconcile=True)
         position = entry['positions'].get(identity)
-        nodes = raw(owner).get('execution', {}).get('nodes', [])
+        nodes = self.windows.resident_tree(owner, touch=True).get('nodes', [])
         node = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
         if (node is None or node.get('id') != identity or node.get('kind') != 'tool'
                 or not node.get('toolCallId') or not node.get('sessionId')
@@ -33,7 +33,8 @@ class ToolPayloadWindows:
             ('id', 'toolCallId', 'toolObservationId', 'sessionId', 'rootSessionId', 'label',
              'tool', 'turnId', 'parentId', 'startedAt', 'endedAt')}
         scope = {'owner': pages._owner_stamp(owner), 'client': pages._client(), 'group': group,
-                 'id': identity, 'position': position, 'binding': binding}
+                 'id': identity, 'position': position, 'binding': binding,
+                 'placement': deepcopy(raw(owner).get('_coldFields', {}).get('execution'))}
         source = source_identity(owner)
         native = node['sessionId']
         if native == owner['id']:
