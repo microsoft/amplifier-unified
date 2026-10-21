@@ -87,6 +87,7 @@ function ResourceView({view,state,dispatch,recovery}){
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  return <CanvasViewControls label="Artifact controls"><section className="a-resource-view" data-canvas-view={view.viewId} aria-label="Artifact view">
   <CanvasControl><div className="a-resource-view-controls a-canvas-toolbar">
+   <strong>{canvas?.title}</strong>
    {!!view.versions?.length&&<><label>Version<select aria-label="Artifact version" value={view.selectedVersion??'latest'} onChange={event=>run('canvas.select',{id:view.resourceId,...(event.target.value==='latest'?{}:{version:Number(event.target.value)})})}>
     <option value="latest">Latest · Version {view.latestVersion}</option>
     {view.versions.slice().reverse().map(version=><option key={version.version} value={version.version}>Version {version.version}{version.createdAt?' · '+new Date(version.createdAt*1000).toLocaleString():''}</option>)}

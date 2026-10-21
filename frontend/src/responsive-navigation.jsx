@@ -30,10 +30,14 @@ export function useModalFocus(ref,enabled,onClose,includeSelector=null){
    for(const sibling of branch.parentElement.children){if(sibling===branch||sibling.tagName==='STYLE'||sibling.matches('.a-navigation-scrim,.a-details-scrim,.a-toolbar-scrim'))continue;hide(sibling)}
    branch=branch.parentElement;
   }
-  const candidates=()=>[...included,...panel.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],[tabindex="0"]')].filter(el=>el.getClientRects().length&&!el.closest('[inert]'));
+  const candidates=()=>[...included,...panel.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,a[href],[tabindex="0"]')].filter(el=>el.tabIndex!==-1&&el.getClientRects().length&&!el.closest('[inert]'));
   candidates().find(node=>panel.contains(node))?.focus({preventScroll:true});
   const key=event=>{
    if(event.defaultPrevented)return;
+   // A native top-layer dialog (open documents or a guard) owns its Escape/Tab.
+   if(document.activeElement?.closest('dialog[open]'))return;
+   const nested=document.activeElement?.closest('.a-navigation-flyout');
+   if(nested&&nested!==panel)return;
    if(event.key==='Escape'){event.preventDefault();close.current();return}
    if(event.key!=='Tab')return;
    const list=candidates(),first=list[0],last=list.at(-1);

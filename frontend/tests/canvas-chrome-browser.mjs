@@ -1,56 +1,339 @@
-// Real host and production assets with synthetic history; no model calls.
+// Production host/assets, synthetic runtime, real browser input. Run only in the
+// owner's isolated qualification environment after building the exact candidate.
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--chat-controls'],{stdio:['ignore','pipe','inherit']});
-let browser;
+const base=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-checks');
+await mkdir(base,{recursive:true});
+const output=await mkdtemp(join(base,'canvas-chrome-'));
+const report={status:'running',checks:[],actions:[],http:[],browserErrors:[],screenshots:[],evidenceErrors:[],
+ limits:['Synthetic runtime; no provider calls.','Screenshots and trace are saved, not a claim of pixel review.',
+  'Reduced motion uses the OS media preference; no app-level Less motion setting exists.']};
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
+ [root+'tests/fixtures/empty_host_ui_server.py','--chat-controls'],{stdio:['ignore','pipe','pipe']});
+let browser,context,page,failure,stdout='',stderr='',phase='exercise';
+const pendingReceipts=[];
+fixture.stderr.on('data',chunk=>stderr+=chunk);
+const unwrap=body=>body?.action==='shell.command'?(body.args.command||body.args):body;
+const isAction=request=>request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions';
+const errorText=error=>error?.stack||String(error);
+async function check(name,run){
+ const row={name,status:'running'};report.checks.push(row);
+ try{row.observation=await run();row.status='passed'}catch(error){row.status='failed';row.error=errorText(error);throw error}
+}
+async function capture(name){
+ const file=name+'.png';await page.screenshot({path:join(output,file)});
+ report.screenshots.push({file,visualReview:'not-performed'});
+}
 try{
- const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);let output='';fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',data=>{output+=data;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
- browser=await chromium.launch({headless:true});
- const page=await browser.newPage({viewport:{width:1500,height:850},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
- const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
- await action('session.create',{});
- const sessionId=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
- await page.request.post(url+'/fixture/activity',{data:{sessionId,status:'idle',workers:Array.from({length:35},(_,i)=>({id:'worker-'+i,name:'Completed worker '+i,status:'completed'}))}});
- await action('canvas.visibility',{open:true});
- const panel=page.locator('#workspace-canvas'),overview=page.getByRole('region',{name:'Chat overview'});
- await expect(panel.getByRole('button',{name:'Canvas options',exact:true})).toHaveAttribute('aria-expanded','false');
- await expect(page.locator('#canvas-options')).toBeHidden();
- await expect(overview.getByText('Completed worker 34',{exact:false})).toHaveCount(1);
- for(const viewport of [{width:1500,height:850},{width:390,height:844}]){
-  await page.setViewportSize(viewport);await expect(overview).toBeVisible();
-  await overview.evaluate(el=>el.scrollTop=0);
-  const box=await overview.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,500);
-  await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeGreaterThan(100);
-  await overview.focus();await page.keyboard.press('ControlOrMeta+End');
-  // End targets the focused scroll region; assert reachability even in engines
-  // where the platform shortcut differs from a physical keyboard.
-  await overview.evaluate(el=>el.scrollTop=el.scrollHeight);
-  await expect(overview.getByRole('button',{name:'Chat controls and details'})).toBeInViewport();
-  assert.ok(await overview.evaluate(el=>el.scrollWidth<=el.clientWidth+1));
-  await page.screenshot({path:'/tmp/canvas-overview-'+viewport.width+'.png'});
+ const url=await new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
+  fixture.once('error',error=>{clearTimeout(timer);reject(error)});
+  fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});
+  fixture.stdout.on('data',chunk=>{stdout+=chunk;for(const line of stdout.split('\n'))try{
+   const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}
+  }catch{}});
+ });
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
+ context=await browser.newContext({viewport:{width:1500,height:850},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ await context.tracing.start({screenshots:true,snapshots:true,sources:true});
+ page=await context.newPage();page.setDefaultTimeout(8000);
+ page.on('pageerror',error=>report.browserErrors.push(error.message));
+ page.on('response',response=>{
+  if(!isAction(response.request()))return;
+  const row={phase,request:unwrap(response.request().postDataJSON()),status:response.status()};report.http.push(row);
+  pendingReceipts.push(response.json().then(body=>{row.body=body},error=>{row.readError=errorText(error)}));
+ });
+ page.on('requestfailed',request=>{if(isAction(request))report.http.push({phase,request:unwrap(request.postDataJSON()),transportError:request.failure()})});
+ const action=async(name,args={})=>{
+  const row={name,args};report.actions.push(row);
+  try{
+   row.receipt=await page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+   assert.equal(row.receipt?.accepted,true,name+': explicit accepted receipt required');
+   return row.receipt;
+  }catch(error){row.error=errorText(error);throw error}
+ };
+ const state=()=>page.evaluate(()=>window.amplifier.getState());
+ await page.goto(url);await showFixtureConversation(page,{navPinned:false});
+ await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await action('session.create');
+ const sessionId=(await state()).selectedSessionId;
+ await action('view.update',{patch:{canvasWidth:720,canvasOverviewWidth:720,canvasControlsPinned:false,canvasControlsExpanded:false,navExpanded:false,draft:'Retain the Canvas test draft'}});
+ const panel=page.locator('#workspace-canvas'),overview=page.getByRole('region',{name:'Chat overview',exact:true});
+ const overviewTab=panel.getByRole('tab',{name:'Chat overview',exact:true}),strip=panel.locator('.a-canvas-document-tabs');
+ const toggle=page.locator('#canvas-toggle'),dialog=page.getByRole('dialog',{name:'Open documents',exact:true});
+ const section=id=>overview.locator(`details[data-overview-section="${id}"]`);
+ const summary=id=>section(id).locator(':scope > summary');
+ const documents=()=>panel.locator('button.a-open-documents');
+ const artifacts=async()=>{const s=await state();return s.canvasArtifacts.filter(row=>row.sessionId===sessionId&&row.workspaceId===s.selectedWorkspaceId)};
+ const counts=async(open)=>{
+  await expect(documents()).toHaveAccessibleName(`Open documents, ${open} open`);
+  // Native modal dialogs make the surrounding page inert. Count those retained
+  // DOM tabs, not the dialog's accessible tree, while asserting their owner/name.
+  await expect(strip.locator('[role="tab"]')).toHaveCount(open);
+  const rows=await artifacts();assert.equal(rows.length,30);assert.equal(rows.filter(row=>row.tabOpen).length,open);
+ };
+ // Full containment and a hit test: a locator existing below clipped content is
+ // not reachability. All positive scroll movement below comes from native input.
+ const reachable=locator=>locator.evaluate(el=>{
+  const r=el.getBoundingClientRect(),owner=el.closest('.a-canvas-overview-page'),s=owner?.getBoundingClientRect();
+  return r.width>0&&r.height>0&&!el.closest('[inert]')&&r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1
+   &&(!s||r.top>=s.top-1&&r.bottom<=s.bottom+1)&&el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+ });
+ const requireReachable=async(locator,label)=>expect.poll(()=>reachable(locator),{message:label+' must be unclipped and hit-testable',timeout:3000}).toBe(true);
+ const wheel=async(locator,x,y)=>{
+  const b=await locator.boundingBox();assert.ok(b?.width>0&&b.height>0,'Wheel target must be rendered');
+  await page.mouse.move(b.x+b.width*.8,b.y+b.height/2);await page.mouse.wheel(x,y);
+ };
+ const top=async()=>{
+  await overview.focus();await expect(overview).toBeFocused();await page.keyboard.press('Home');
+  await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeLessThanOrEqual(1);
+ };
+ const revealByWheel=async locator=>{
+  for(let attempt=0;attempt<30;attempt++){
+   if(await reachable(locator))return;
+   const r=await locator.boundingBox(),s=await overview.boundingBox(),before=await overview.evaluate(el=>el.scrollTop);
+   assert.ok(r&&s,'The requested section must have real layout');
+   await wheel(overview,0,(r.y<s.y?-1:1)*s.height*.7);
+   await expect.poll(()=>overview.evaluate(el=>el.scrollTop),{message:'Native wheel must advance toward section',timeout:1500}).not.toBe(before);
+  }
+  assert.fail('Section did not become reachable after 30 native wheel inputs');
+ };
+ const geometry=()=>overview.evaluate(el=>{
+  const box=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,right:b.right,bottom:b.bottom}};
+  const panel=el.closest('#workspace-canvas'),wrapper=el.closest('.a-canvas-session-body');
+  return {viewport:{width:innerWidth,height:innerHeight},panel:box(panel),wrapper:box(wrapper),overview:box(el),
+   clientHeight:el.clientHeight,scrollHeight:el.scrollHeight,scrollTop:el.scrollTop,clientWidth:el.clientWidth,scrollWidth:el.scrollWidth,
+   pageWidth:document.documentElement.scrollWidth,pageHeight:document.documentElement.scrollHeight,
+   overflowY:getComputedStyle(el).overflowY,wrapperDisplay:getComputedStyle(wrapper).display};
+ });
+ const boundedViolations=g=>[
+  g.overview.height>80?null:'overview has no usable height',
+  g.scrollHeight>g.clientHeight+100?null:'long content does not overflow its own scrollport',
+  /auto|scroll/.test(g.overflowY)?null:'overview does not own vertical scrolling',
+  g.overview.bottom<=Math.min(g.panel.bottom,g.viewport.height)+1?null:'overview extends below the panel/viewport',
+  g.wrapper.bottom<=g.panel.bottom+1?null:'session wrapper escapes the panel',
+  g.scrollWidth<=g.clientWidth+1?null:'overview has horizontal overflow',
+  g.pageWidth<=g.viewport.width+1&&g.pageHeight<=g.viewport.height+1?null:'document escapes the viewport'
+ ].filter(Boolean);
+ const assertBoundedOverflow=async(timeout=3000)=>{
+  let sample;
+  await expect.poll(async()=>{sample=await geometry();return boundedViolations(sample)},
+   {message:'BOUNDED_OVERVIEW_OVERFLOW',timeout,intervals:[32,64,100]}).toEqual([]);
+  return sample;
+ };
+ const titles=Array.from({length:30},(_,i)=>`Document ${String(i+1).padStart(2,'0')} — retained research and review notes`),ids=[];
+ await check('30 saved outputs and 12 genuinely open documents',async()=>{
+  // A real attachment/send creates Sources without fabricating app state or DOM.
+  await action('attachment.add',{sessionId,name:'Canvas reference.txt',base64:Buffer.from('Synthetic Canvas reference').toString('base64')});
+  const attachment=(await state()).sessions.find(row=>row.id===sessionId).draftAttachments[0];
+  await action('conversation.send',{sessionId,text:'Canvas fixture reference',attachmentIds:[attachment.id]});
+  await expect.poll(async()=>(await state()).sessions.find(row=>row.id===sessionId).status).toBe('idle');
+  await action('view.update',{patch:{draft:'Retain the Canvas test draft'}});
+  const response=await page.request.post(url+'/fixture/activity',{data:{sessionId,status:'idle',
+   plan:{items:[{content:'Review retained sources',status:'completed'},{content:'Inspect the Canvas result',status:'pending'}]},
+   workers:Array.from({length:35},(_,i)=>({id:'worker-'+i,name:'Completed worker '+i,status:'completed'}))}});
+  assert.equal(response.ok(),true);assert.equal((await response.json()).ok,true);
+  for(const [index,title] of titles.entries()){
+   await action('canvas.show',{kind:'markdown',title,content:`# Document ${index+1}\n\nRetained source ${index+1}.`});
+   ids.push((await state()).canvas.id);
+  }
+  assert.equal(new Set(ids).size,30);
+  for(const id of ids.slice(0,18))await action('canvas.tabClose',{id});
+  await action('canvas.versions.revise',{id:ids[29],expectedRevision:1,content:'# Second version\n\nRetained source 30.'});
+  await counts(12);await overviewTab.click();await expect(overviewTab).toHaveAttribute('aria-selected','true');
+  await expect(overview.locator('.a-saved-artifact')).toHaveCount(30);
+  await expect(summary('outputs')).toContainText('30 saved');
+  await expect(summary('agents')).toContainText('35 finished');
+  await expect(section('sources')).toContainText('Canvas reference.txt');
+  return {saved:30,open:12,ids};
+ });
+ await check('scroll containment and negative control use the same assertion',async()=>{
+  const good=await assertBoundedOverflow();
+  // Reintroduce the missing flex sizing link, not replacement content. A mere
+  // "scrollHeight > clientHeight" check used to miss this clipped-wrapper defect.
+  const broken=await page.addStyleTag({content:'#amp-one .a-canvas-session-body{display:block!important;flex:none!important;min-height:auto!important;overflow:visible!important}'});
+  let negative;
+  try{
+   await assert.rejects(async()=>{try{await assertBoundedOverflow(350)}catch(error){negative={sample:await geometry(),error:errorText(error)};throw error}},/BOUNDED_OVERVIEW_OVERFLOW/);
+   assert.ok(boundedViolations(negative.sample).length,'Negative control must fail for measured overflow, not a missing selector');
+   await capture('negative-broken-wrapper');
+  }finally{await broken.evaluate(el=>el.remove())}
+  await assertBoundedOverflow();return {good,negative};
+ });
+ await check('all populated top-level sections collapse, reopen and retain choices',async()=>{
+  const sectionIds=await overview.locator('details[data-overview-section]').evaluateAll(nodes=>nodes.map(el=>el.dataset.overviewSection));
+  assert.deepEqual(sectionIds,['plan','outputs','sources','agents','workspace','activity','review','publishing']);
+  for(const id of sectionIds){
+   await revealByWheel(summary(id));
+   if(!await section(id).evaluate(el=>el.open)){await summary(id).click();await expect(section(id)).toHaveAttribute('open','')}
+   await summary(id).focus();await page.keyboard.press('Space');
+   await expect(section(id)).not.toHaveAttribute('open','');await expect(summary(id)).toBeFocused();
+   await page.keyboard.press('Enter');await expect(section(id)).toHaveAttribute('open','');
+   // Leave each closed, then verify the exact choices across hide and reload.
+   await summary(id).click();await expect(section(id)).not.toHaveAttribute('open','');
+  }
+  await toggle.click();await expect(panel).toBeHidden();await expect(toggle).toHaveAccessibleName('Open canvas');
+  await toggle.click();await expect(overview).toBeVisible();
+  await page.reload();await showFixtureConversation(page,{navPinned:false});await expect(overview).toBeVisible();
+  for(const id of sectionIds)await expect(section(id)).not.toHaveAttribute('open','');
+  for(const id of sectionIds){await revealByWheel(summary(id));await summary(id).click();await expect(section(id)).toHaveAttribute('open','')}
+  // The expensive lower panels were exercised; leave their compact defaults.
+  for(const id of ['review','publishing']){await revealByWheel(summary(id));await summary(id).click();await expect(section(id)).not.toHaveAttribute('open','')}
+  await assertBoundedOverflow();return {sectionIds,retainedAfterReload:true};
+ });
+ await check('pinned Overview, native horizontal wheel, reading retention and runtime reduced motion',async()=>{
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await wheel(strip,-100000,0);await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeLessThanOrEqual(1);
+  const transition=()=>overviewTab.evaluate(el=>({width:getComputedStyle(el).transitionDuration,label:getComputedStyle(el.querySelector('span')).transitionDuration,property:getComputedStyle(el).transitionProperty}));
+  const milliseconds=value=>value.split(',').map(part=>parseFloat(part)*(part.trim().endsWith('ms')?1:1000));
+  const normal=await transition();assert.ok(milliseconds(normal.width).some(ms=>ms>0));assert.match(normal.property,/width|all/);
+  await expect.poll(()=>overviewTab.evaluate(el=>el.getBoundingClientRect().width)).toBeGreaterThan(100);
+  await top();await wheel(overview,0,600);await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeGreaterThan(100);
+  const vertical=await overview.evaluate(el=>el.scrollTop);
+  await wheel(strip,100000,0);
+  await expect.poll(()=>strip.evaluate(el=>el.scrollLeft/(el.scrollWidth-el.clientWidth))).toBeGreaterThan(.95);
+  await expect.poll(()=>overviewTab.evaluate(el=>el.getBoundingClientRect().width)).toBeLessThanOrEqual(45);
+  await requireReachable(overviewTab,'Pinned Overview');
+  const horizontal=await strip.evaluate(el=>el.scrollLeft);
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await expect.poll(async()=>milliseconds((await transition()).width).every(ms=>ms===0)).toBe(true);
+  const reduced=await transition();assert.ok(milliseconds(reduced.label).every(ms=>ms===0));
+  const lastTab=strip.getByRole('tab',{name:titles[29],exact:true});
+  await requireReachable(lastTab,'Far document');await lastTab.click();await expect(lastTab).toHaveAttribute('aria-selected','true');
+  await overviewTab.click();await expect(overviewTab).toHaveAttribute('aria-selected','true');
+  for(let cycle=0;cycle<2;cycle++){
+   await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeCloseTo(horizontal,0);
+   await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeCloseTo(vertical,0);
+   await toggle.click();await expect(panel).toBeHidden();await toggle.click();await expect(overview).toBeVisible();
+  }
+  await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeCloseTo(horizontal,0);
+  await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeCloseTo(vertical,0);
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await expect.poll(async()=>milliseconds((await transition()).width).some(ms=>ms>0)).toBe(true);
+  await capture('pinned-overview-far-strip');
+  // Arrow/Home/End focus tabs; Enter selects. No scrollIntoView helper.
+  await overviewTab.focus();await page.keyboard.press('End');await expect(lastTab).toBeFocused();
+  await page.keyboard.press('Enter');await expect(lastTab).toHaveAttribute('aria-selected','true');
+  await page.keyboard.press('Home');await expect(overviewTab).toBeFocused();await page.keyboard.press('Enter');
+  await expect(overviewTab).toHaveAttribute('aria-selected','true');
+  return {horizontal,vertical,normal,reduced};
+ });
+ const presentation=async scheme=>{
+  await page.waitForFunction(()=>window.amplifier.getShellState()?.effectiveComposition);
+  const current=await page.evaluate(()=>({shell:window.amplifier.getShellState(),clientId:window.amplifier.shellClientId}));
+  const composition={...current.shell.effectiveComposition,presentation:{...current.shell.effectiveComposition.presentation,scheme}};
+  const prepared=await action('shell.changes.prepare',{clientId:current.clientId,expectedRevision:current.shell.revision,composition});
+  await action('shell.changes.apply',{clientId:current.clientId,expectedRevision:current.shell.revision,changeId:prepared.result.id});
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
+ };
+ for(const scheme of ['light','dark']){
+  await presentation(scheme);
+  for(const size of [{name:'desktop-1500',width:1500,pane:720},{name:'split-390',width:1500,pane:390},{name:'mobile-390',width:390,pane:390},{name:'mobile-320',width:320,pane:320}]){
+   await check(scheme+' '+size.name+' real wheel/keyboard reachability, toolbar and focused toggle',async()=>{
+    await page.setViewportSize({width:size.width,height:850});
+    await action('view.update',{patch:{canvasWidth:size.pane,canvasOverviewWidth:size.pane,canvasFocused:false}});
+    await overviewTab.click();await expect(overview).toBeVisible();await top();
+    const bounds=await assertBoundedOverflow();
+    if(size.width===1500)assert.ok(Math.abs(bounds.panel.width-size.pane)<=2,'Requested split width must actually be rendered');
+    await requireReachable(summary('outputs'),'Upper Outputs section');
+    await capture(scheme+'-'+size.name+'-upper');
+    await wheel(overview,0,bounds.scrollHeight);
+    await expect.poll(()=>overview.evaluate(el=>el.scrollTop+el.clientHeight>=el.scrollHeight-2)).toBe(true);
+    await requireReachable(summary('publishing'),'Lower Publishing section by wheel');
+    await capture(scheme+'-'+size.name+'-lower');
+    await top();await requireReachable(summary('outputs'),'Upper section by Home');
+    await page.keyboard.press('PageDown');await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeGreaterThan(100);
+    await page.keyboard.press('End');await requireReachable(summary('publishing'),'Lower section by End');
+    await action('canvas.select',{id:ids[29]});
+    await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
+    await expect(page.locator('#canvas-options')).toBeHidden();
+    for(const name of ['Choose artifact version','Copy canvas source','Download canvas source','Canvas details'])await requireReachable(panel.getByRole('button',{name,exact:true}),name);
+    await panel.getByRole('button',{name:'Choose artifact version'}).click();
+    await expect(panel.getByRole('combobox',{name:'Artifact version',exact:true})).toBeFocused();
+    await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(page.locator('#canvas-options')).toBeHidden();
+    await capture(scheme+'-'+size.name+'-artifact');
+    await panel.getByRole('button',{name:'Focus canvas',exact:true}).click();await expect(panel).toHaveAttribute('data-focused','true');
+    await requireReachable(toggle,'Header Hide canvas in focus mode');
+    await capture(scheme+'-'+size.name+'-focused');
+    // Start on the included header control and traverse both modal boundaries.
+    await toggle.focus();await page.keyboard.press('Shift+Tab');await page.keyboard.press('Tab');await expect(toggle).toBeFocused();
+    await page.keyboard.press('Enter');await expect(panel).toBeHidden();await expect(toggle).toHaveAccessibleName('Open canvas');
+    await expect(toggle).toBeFocused();await page.keyboard.press('Enter');await expect(panel).toBeVisible();
+    // Hiding ends focus mode by contract; reopening is the normal split/overlay.
+    await expect(panel).toHaveAttribute('data-focused','false');
+    await panel.getByRole('button',{name:'Focus canvas',exact:true}).click();
+    await expect(panel).toHaveAttribute('data-focused','true');await page.keyboard.press('Escape');
+    await expect(panel).toHaveAttribute('data-focused','false');
+    await expect(panel.getByRole('button',{name:/^(Close canvas panel|Back to canvas)$/})).toHaveCount(0);
+    return bounds;
+   });
+  }
  }
- await page.setViewportSize({width:1500,height:850});
- await action('canvas.show',{kind:'markdown',title:'Versioned note',content:'# First version'});
- const id=await page.evaluate(()=>window.amplifier.getState().canvas.id);
- await expect(page.locator('#canvas-options')).toBeHidden();
- await action('canvas.versions.revise',{id,expectedRevision:1,content:'# Second version'});
- await panel.getByRole('button',{name:'Choose artifact version'}).click();
- await expect(panel.getByRole('combobox',{name:'Artifact version',exact:true})).toBeVisible();
- await page.reload();
- await expect(page.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
- await expect(page.locator('#canvas-options')).toBeHidden();
- await panel.getByRole('button',{name:'Canvas options',exact:true}).click();
- await panel.getByRole('button',{name:'Canvas options',exact:true}).click();
- await expect(page.locator('#canvas-options')).toBeHidden();
- await panel.getByRole('button',{name:'Chat overview',exact:true}).click();
- await expect(overview).toBeVisible();await expect(page.locator('#canvas-options')).toBeHidden();
- await overview.getByRole('button',{name:'Open file',exact:true}).click();
- await expect(panel.getByLabel('File in this workspace')).toBeVisible();
- assert.deepEqual(errors,[]);
- console.log(JSON.stringify({scrollsDesktopAndMobile:true,bottomReachable:true,noHorizontalOverflow:true,controlsCollapsed:true,versionsAccessible:true,fileOpenAccessible:true,browserErrors:0}));
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+ await check('native all-open list, exact counts, close-active/last and saved recovery',async()=>{
+  await page.setViewportSize({width:1500,height:850});await action('view.update',{patch:{canvasWidth:720,canvasOverviewWidth:720}});
+  await counts(12);await documents().click();await expect(dialog).toBeVisible();
+  assert.equal(await dialog.evaluate(el=>el instanceof HTMLDialogElement&&el.open&&el.matches(':modal')),true);
+  await expect(dialog.locator('li')).toHaveCount(12);await expect(dialog).toContainText('12 open · 30 saved outputs');
+  const search=dialog.getByRole('searchbox',{name:'Find an open document'});
+  await search.fill('Document 19');await expect(dialog.locator('li')).toHaveCount(1);
+  await dialog.locator('li').getByRole('button',{name:titles[18]+' markdown',exact:true}).click();
+  await expect(dialog).not.toBeVisible();await expect(strip.getByRole('tab',{name:titles[18],exact:true})).toBeFocused();
+  assert.equal((await state()).canvas.id,ids[18]);
+  await documents().click();await search.fill('');await page.keyboard.press('Escape');await expect(documents()).toBeFocused();
+  // Close the selected tab through the native dialog; the other 29 saved bodies remain.
+  await documents().click();await dialog.getByRole('button',{name:'Close tab '+titles[18],exact:true}).click();
+  await counts(11);assert.equal((await state()).canvas.id,ids[29]);
+  await expect(dialog.locator('li[aria-current="true"]')).toContainText(titles[29]);
+  for(let index=19;index<30;index++){
+   await dialog.getByRole('button',{name:'Close tab '+titles[index],exact:true}).click();
+   await counts(29-index);
+  }
+  await expect(dialog).toContainText('No documents are open. Saved outputs remain in Overview.');
+  await page.keyboard.press('Escape');await expect(documents()).toBeFocused();
+  await expect(overviewTab).toHaveAttribute('aria-selected','true');await expect(overview).toBeVisible();
+  await top();const saved=overview.locator('.a-saved-artifact').filter({hasText:titles[29]});
+  await requireReachable(saved,'Saved document recovery');await saved.click();await counts(1);
+  assert.equal((await state()).canvas.id,ids[29]);await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
+  await panel.getByRole('button',{name:'Choose artifact version'}).click();
+  await panel.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
+  await expect(panel.getByRole('heading',{name:'Document 30',exact:true})).toBeVisible();
+  await panel.getByRole('button',{name:'Go to Latest',exact:true}).click();
+  await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
+  await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+  await page.reload();await showFixtureConversation(page,{navPinned:false});
+  await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();await expect(page.locator('#canvas-options')).toBeHidden();
+  await overviewTab.click();await top();await revealByWheel(overview.getByRole('button',{name:'Open file',exact:true}));
+  await overview.getByRole('button',{name:'Open file',exact:true}).click();
+  await expect(panel.getByLabel('File in this workspace')).toBeVisible();
+  await capture('recovered-file-controls');
+  assert.equal((await state()).view.draft,'Retain the Canvas test draft');return {saved:30,open:1,recoveredVersion:2};
+ });
+ await action('canvas.views.inspect');await Promise.all(pendingReceipts);
+ assert.deepEqual(report.http.filter(row=>row.transportError||row.readError||row.status>=400||row.body?.accepted===false),[],'Unexpected action receipt failures');
+ assert.deepEqual(report.browserErrors,[]);report.status='passed';
+}catch(error){
+ failure=error;report.status='failed';report.error=errorText(error);
+ if(page&&!page.isClosed())try{await capture('failure')}catch(error){report.evidenceErrors.push(errorText(error))}
+}finally{
+ phase='teardown';
+ if(context)try{await context.tracing.stop({path:join(output,'trace.zip')})}catch(error){report.evidenceErrors.push(errorText(error));failure||=error}
+ try{await browser?.close()}catch(error){report.evidenceErrors.push(errorText(error));failure||=error}
+ if(fixture.pid&&fixture.exitCode===null&&fixture.signalCode===null){
+  const exited=once(fixture,'exit'),timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);
+  fixture.kill('SIGTERM');try{await exited}finally{clearTimeout(timer)}
+ }
+ await Promise.all(pendingReceipts);
+ if(failure)report.status='failed';
+ await writeFile(join(output,'fixture.stdout.log'),stdout);await writeFile(join(output,'fixture.stderr.log'),stderr);
+ await writeFile(join(output,'report.json'),JSON.stringify(report,null,2));
+ console.log(JSON.stringify({test:'canvas-chrome',status:report.status,output,checks:report.checks.map(({name,status})=>({name,status})),visualReview:'not-performed'}));
+}
+if(failure)throw failure;

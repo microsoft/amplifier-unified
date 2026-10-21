@@ -39,11 +39,8 @@
   position:relative!important;inset:auto!important;width:100%!important;max-width:100%!important;
   height:auto!important;min-height:48px!important;padding:4px 8px!important;
 }
-/* A focused viewer replaces, rather than merely covers, the ordinary title
-   row. Inertness alone does not prevent the chat header from painting above it. */
-#amp-one[data-window-controls-overlay=true]:has(.a-canvas-panel[data-focused=true]) .a-work-header{
-  visibility:hidden!important;pointer-events:none!important;
-}
+/* Focused Canvas retains the actual header visibility toggle. Other background
+   header controls remain inert; native window-button clearance is unchanged. */
 /* Main panels reserve the native strip but cannot leave live background
    controls exposed above an aria-modal dialog. Keep only blank drag space. */
 #amp-one[data-window-controls-overlay=true] .a-work-header[inert]>*{
@@ -53,17 +50,17 @@
   content:"";position:fixed;top:var(--wco-y);left:var(--wco-x);width:var(--wco-width);height:var(--wco-height);
   -webkit-app-region:drag;
 }
-#amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true]{padding-top:var(--wco-y)!important;box-sizing:border-box!important}
+#amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true]{top:var(--a-navigation-top,var(--wco-safe-top))!important;padding-top:0!important;box-sizing:border-box!important}
 #amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true] .a-canvas-head{
   position:relative;z-index:0;
   width:100%!important;max-width:100%!important;min-width:0!important;
   margin-left:0!important;box-sizing:border-box!important;transform:none!important;
-  height:calc(var(--wco-safe-top) - var(--wco-y))!important;min-height:calc(var(--wco-safe-top) - var(--wco-y))!important;padding:0 calc(100% - var(--wco-x) - var(--wco-width) + 8px) calc(var(--wco-safe-top) - var(--wco-y) - var(--wco-height)) calc(var(--wco-x) + 8px)!important;
+  height:52px!important;min-height:52px!important;padding:4px!important;
   align-items:center!important;
   -webkit-app-region:drag;
   background:var(--a-chrome-bg,var(--a-bg));color:var(--a-chrome-ink,var(--a-ink));
 }
-#amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true]{padding-top:var(--wco-safe-top)!important}
+#amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true]{padding-top:0!important}
 #amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true]::before{
   content:"";position:fixed;top:var(--wco-y);left:var(--wco-x);width:var(--wco-width);height:var(--wco-height);
   -webkit-app-region:drag;
