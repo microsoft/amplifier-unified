@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.198",
+      "title": "Qualified updates for managed test runners",
+      "changes": [
+        "Update the managed test runner through the global update preference, qualifying each candidate in an owned offline environment before using it for new work.",
+        "Keep existing jobs on their original runner, preserve explicit pins and custom installations, and retain the current runner, a rollback and generations still owned by active work.",
+        "Show qualification waits and uncertain outcomes in Updates, with Retry and Skip controls that preserve the exact update identity."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.197",
       "title": "Unblock updates after interrupted settings changes",
       "changes": [
