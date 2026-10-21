@@ -1784,7 +1784,7 @@ class AppService:
         # directory metadata plus canonical control-state only. Keep the normal
         # validators and caller guards; never refresh history/admit an overlay.
         passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
-            action == 'runtime.control' and args.get('operation') in
+            action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
             {'task.get', 'task.history', 'task.detail', 'task.receipt'})
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
@@ -4733,7 +4733,7 @@ class AppService:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
             if args['action'] in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
-                    args['action'] == 'runtime.control' and action_args.get('operation') in
+                    args['action'] == 'runtime.control' and isinstance(action_args.get('operation'), str) and action_args['operation'] in
                     {'task.get', 'task.history', 'task.detail', 'task.receipt'}):
                 # Caller ownership was checked above. Avoid the later
                 # _session(nativeProject), pending-progress flush and full
