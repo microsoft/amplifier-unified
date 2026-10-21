@@ -8,6 +8,7 @@ const workerLabel=node=>`Delegate${node?.label?` · ${node.label.replace(/^Deleg
 export function workStream(data,turnId){
  const tree=treeForTurn(data,turnId),entries=[],statuses=[],undatedReplies=[],seen=new Set(),exchanges=new Set();
  const workers=new Map(),source=new Map(data.nodes.map(node=>[node.id,node]));
+ const workerSessions=new Set(data.nodes.flatMap(node=>[node.kind==='worker'&&node.sessionId,node.delegate?.sessionId]).filter(Boolean));
  const local=new Set(data.nodes.filter(node=>node.turnId===turnId).map(node=>node.id));
  // treeForTurn guards cycles; use a separate bounded walk for arbitrary roots.
  const visited=new Set();
@@ -16,6 +17,7 @@ export function workStream(data,turnId){
  const append=entry=>entries.push({...entry,sequence:entries.length});
  const addExchange=(node,owner,{followup=false,report=false}={})=>{
   const exchange=node.exchange||node,key=exchange.id||node.id;
+  const control=/(^|[.:])live_worker$/.test(node.tool||node.label||'');
   // Repeated owner headers are context, not another sent/returned message.
   // Their exchange remains explicitly inspectable in Delegation details.
   if(node.kind==='worker'&&!local.has(key)&&!local.has(node.ownerId||node.id))return;
@@ -26,9 +28,11 @@ export function workStream(data,turnId){
   const senders=followup&&node.sessionId?[...workers.values()].filter(worker=>worker.sessionId===node.sessionId):[];
   const sourceParent=source.get(node.id)?.parentId;
   const sender=senders.find(worker=>(worker.ownerId||worker.id)===sourceParent)||(senders.length===1?senders[0]:null);
-  const followupFrom=sender?workerLabel(sender):senders.length>1||node.sessionId&&node.rootSessionId&&node.sessionId!==node.rootSessionId?'Worker (owner unavailable)':'Main chat';
+  const rootId=node.rootSessionId||data.sessionId;
+  const followupFrom=sender?workerLabel(sender):senders.length>1||workerSessions.has(node.sessionId)?'Worker (owner unavailable)':rootId&&node.sessionId===rootId?'Main chat':'Sender unavailable';
+  const recipient=followup&&node.exchangeOwnerId&&(owner?.ownerId||owner?.id)===node.exchangeOwnerId?owner:null;
   const from=unverified?'Recorded sender':followup?followupFrom:parent?workerLabel(parent):'Main chat';
-  const to=unverified?'Delegate (association unverified)':parent?workerLabel(owner):'Delegate';
+  const to=unverified?'Delegate (association unverified)':followup?(recipient?workerLabel(recipient):'Delegate (recipient unavailable)'):parent?workerLabel(owner):'Delegate';
   const sourceNode=node.kind==='worker'?node:{...node,exchange};
   const running=isRunning({phase:node.workerPhase||node.phase||exchange.phase});
   const request=hasField(exchange,'delegateRequest'),response=hasField(exchange,'delegateResponse');
@@ -39,7 +43,7 @@ export function workStream(data,turnId){
     owner,followup,receipt:node.kind==='tool',label:unverified?'Recorded request':followup?'Follow-up':'Request',direction:`${from} → ${to}`,
     at:unverified?node.createdAt:exchange.startedAt??source.get(key)?.startedAt??node.startedAt});
   }
-  if(response||!running&&!report&&!followup&&!unverified&&exchange.delivery!=='separate'){
+  if(!control&&(response||!running&&!report&&!followup&&!unverified&&exchange.delivery!=='separate')){
    const entry={id:`${key}:delegateResponse`,kind:'exchange',field:'delegateResponse',node:sourceNode,
     owner,report,label:unverified?'Recorded reply':'Reply',direction:`${to} → ${from}`,
     at:unverified?node.createdAt:exchange.endedAt??source.get(key)?.endedAt??(report?node.startedAt:node.endedAt)};

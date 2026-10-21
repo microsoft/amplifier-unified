@@ -30,6 +30,7 @@ def exchange_fields(name, arguments):
         return FIELDS
     arguments = parsed(arguments)
     if (name == 'live_worker' and isinstance(arguments, dict)
+            and isinstance(arguments.get('action'), str)
             and arguments.get('action') in {'message', 'steer'}
             and isinstance(arguments.get('text'), str)):
         # A control receipt confirms submission at most, never a child reply.
@@ -68,13 +69,14 @@ def source_field(field):
 
 
 def field_value(node, field):
+    if tool_name(node) == 'live_worker' and (field == 'delegateResponse'
+            or field not in node and field not in exchange_fields('live_worker', node.get('input'))):
+        return None
     if field in node:
         return node[field]
     source = source_field(field)
     # A JSON preview is not a complete envelope and cannot be parsed safely.
     if node.get(source + 'Detail') or node.get('_eventFields', {}).get(source):
-        return None
-    if tool_name(node) == 'live_worker' and field not in exchange_fields('live_worker', node.get('input')):
         return None
     return select(node.get(source), field)
 

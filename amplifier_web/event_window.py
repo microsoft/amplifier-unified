@@ -471,6 +471,9 @@ def read_field(session, reference, *, offset=0, limit=4096, check_budget=None):
             name = tool_name({'tool': data.get('tool_name') or data.get('tool')})
             if reference['delegateField'] not in exchange_fields(name, inputs):
                 raise ValueError('Invalid delegation field for recorded tool')
+            if reference['delegateField'] == 'delegateResponse' and (
+                    event.get('event') == 'tool:error' or data.get('error') or data.get('error_message')):
+                raise ValueError('A failed tool observation is not a delegate reply')
             value = select(value, reference['delegateField'])
             if value is None:
                 raise StaleWindow('The delegation field is no longer available')

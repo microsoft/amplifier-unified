@@ -7,7 +7,7 @@ function scene(){
   exchange:{id:'d',startedAt:1,endedAt:30,delegateRequest:'request',delivery:'separate'}};
  const child=(id,at)=>({id,kind:'tool',label:'read_file',turnId:'t',sessionId:'child',parentId:'w',startedAt:at,endedAt:at+1});
  return {turns:[{id:'t'}],nodes:[worker,child('read',4),
-  {id:'follow',kind:'tool',label:'live_worker',turnId:'t',sessionId:'main',delegate:worker,startedAt:22,
+  {id:'follow',kind:'tool',label:'live_worker',turnId:'t',sessionId:'main',rootSessionId:'main',exchangeOwnerId:'w',delegate:worker,startedAt:22,
    exchange:{id:'follow',delegateRequest:'again',phase:'completed',startedAt:22}},
   {id:'reply2',kind:'exchange',turnId:'t',delegate:worker,startedAt:30,exchange:{id:'reply2',delegateResponse:'two',report:true}},
   {id:'main-model',kind:'llm',turnId:'t',sessionId:'main',rootSessionId:'main',startedAt:20,endedAt:21},
@@ -76,4 +76,30 @@ test('repeated owner context does not replay messages and remains inspectable',(
  assert.deepEqual(ids([later],'t2'),['later']);
  const context=workStream({nodes:[later]},'t2').entries.find(entry=>entry.kind==='worker-status');
  assert.equal(context.context,true);assert.equal(context.node.exchange.delegateRequest,'ask');
+});
+test('follow-up requires recipient proof and never labels its caller as the target',()=>{
+ const ancestor={id:'outer',kind:'worker',sessionId:'outer-session',turnId:'t',label:'Outer'};
+ const sender={id:'inner',kind:'worker',sessionId:'sender',parentWorkerId:'outer',ancestors:[ancestor],turnId:'t',label:'Sender'};
+ const follow={id:'follow',kind:'tool',tool:'live_worker',sessionId:'sender',turnId:'t',parentId:'inner',
+  delegate:sender,inputSummary:{action:'message'},startedAt:10};
+ const entry=workStream({nodes:[ancestor,sender,follow]},'t').entries.find(entry=>entry.id==='follow:delegateRequest');
+ assert.match(entry.direction,/Delegate · Sender → Delegate \(recipient unavailable\)/);
+});
+test('ambiguous worker runs and missing root evidence never claim Main chat',()=>{
+ const one={id:'one',kind:'worker',sessionId:'same',turnId:'prior',label:'One'};
+ const two={...one,id:'two',label:'Two'};
+ const follow={id:'follow',kind:'tool',tool:'live_worker',sessionId:'same',turnId:'t',inputSummary:{action:'steer'},startedAt:1};
+ const entry=workStream({nodes:[one,two,follow]},'t').entries.find(entry=>entry.kind==='exchange');
+ assert.match(entry.direction,/Worker \(owner unavailable\)/);assert.doesNotMatch(entry.direction,/Main chat/);
+});
+for(const action of ['message','steer'])test(`${action} hint supports request lookup but stray response is never an answer`,()=>{
+ const node={id:'follow',kind:'tool',tool:'live_worker',turnId:'t',sessionId:'main',rootSessionId:'main',
+  inputSummary:{action},delegateResponse:'not a child report'};
+ const entries=workStream({nodes:[node]},'t').entries;
+ assert.deepEqual(entries.map(entry=>entry.field),['delegateRequest']);
+ assert.match(entries[0].direction,/Main chat → Delegate \(recipient unavailable\)/);
+});
+for(const action of ['cancel','finish','list'])test(`${action} hint is an ordinary operation`,()=>{
+ const node={id:'control',kind:'tool',tool:'live_worker',turnId:'t',inputSummary:{action}};
+ assert.deepEqual(workStream({nodes:[node]},'t').entries.map(entry=>entry.kind),['operation']);
 });

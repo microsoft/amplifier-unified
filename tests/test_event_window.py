@@ -118,6 +118,32 @@ def test_nonmessage_worker_operations_do_not_become_exchanges(owner, action):
         windows.read_field(session, {**row['_eventFields']['input'], 'delegateField': 'delegateRequest'})
 
 
+def test_followup_pre_and_result_only_post_remain_independent_observations(owner):
+    session, path = owner
+    write(path, [
+        {'event': 'tool:pre', 'timestamp': 1, 'data': {'session_id': 'root',
+         'tool_call_id': 'follow', 'tool_name': 'live_worker',
+         'tool_input': {'action': 'message', 'session_id': 'child', 'text': 'Continue café'}}},
+        {'event': 'tool:post', 'timestamp': 2, 'data': {'session_id': 'root',
+         'tool_call_id': 'follow', 'tool_name': 'live_worker',
+         'result': {'accepted': True, 'completed': False}}},
+    ])
+    before, after = read(session)['items']
+    assert before['delegateRequest'] == 'Continue café'
+    assert 'delegateRequest' not in after and 'delegateResponse' not in after
+    assert before['association'] == after['association'] == 'unverified'
+
+
+def test_error_record_cannot_be_reselected_as_successful_delegate_reply(owner):
+    session, path = owner
+    write(path, [event(1, 'tool:error', tool_name='delegate',
+                      result={'output': {'response': 'not completed'}})])
+    row = read(session)['items'][0]
+    assert 'delegateResponseDetail' not in row
+    with pytest.raises(ValueError, match='failed tool observation'):
+        windows.read_field(session, {**row['_eventFields']['output'], 'delegateField': 'delegateResponse'})
+
+
 def test_large_unrequested_prefix_does_not_change_read_cost_or_rows(owner):
     session, path = owner
     tail = b''.join(json.dumps(event(n)).encode() + b'\n' for n in range(120))

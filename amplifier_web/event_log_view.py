@@ -428,11 +428,17 @@ class EventIndex:
             if tool_name(node) == 'delegate':
                 self.delegate_field(node, 'delegateRequest', data, ('tool_input', 'arguments', 'input'), reference)
             elif tool_name(node) == 'live_worker':
-                from .delegate_exchange import parsed
+                from .delegate_exchange import parsed, exchange_fields
                 args = parsed(data.get('tool_input', data.get('arguments', data.get('input'))))
-                if isinstance(args, dict) and args.get('action') in {'message', 'steer'}:
+                if input_key is not None:
+                    node.pop('exchangeOwnerId', None)
+                    node.pop('delegateRequest', None)
+                    node.pop('delegateRequestDetail', None)
+                    node.get('_eventFields', {}).pop('delegateRequest', None)
+                if exchange_fields('live_worker', args):
                     self.delegate_field(node, 'delegateRequest', data, ('tool_input', 'arguments', 'input'), reference)
-                    owner = self.children.get(args.get('session_id'))
+                    target = args.get('session_id')
+                    owner = self.children.get(target) if isinstance(target, str) else None
                     if owner:
                         node['exchangeOwnerId'] = owner['id']
             if at is not None:
