@@ -579,11 +579,12 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     assert '--budget-seconds 1200' in run
     for target in ('test_history_scope.py', 'test_auth.py', 'test_client_navigation.py',
                    'test_live_clients.py', 'test_approachable_shell.py', 'test_new_chat.py',
-                   'test_canvas_files.py', 'test_canvas_views.py', 'test_browser_check_runner.py'):
+                   'test_canvas_files.py', 'test_canvas_views.py', 'test_browser_check_runner.py',
+                   'test_release_qualification.py'):
         assert f'tests/{target}' in run
     for target in ('destination-history', 'destination-history-ui', 'api',
                    'conversation-navigation', 'pending-view', 'settings-drafts',
-                   'work-shell', 'archive-action', 'archive-feedback'):
+                   'work-shell', 'archive-action', 'archive-feedback', 'attention', 'shell-panels'):
         assert f'tests/{target}.test.mjs' in run
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
     assert len(uploads) == 1 and uploads[0]['if'] == 'always()'

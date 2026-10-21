@@ -336,7 +336,7 @@ jobs:
           uv run --no-sync pytest --asyncio-mode=auto -v -ra --tb=short --junitxml=output/destination-history/python.xml \
             tests/test_history_scope.py tests/test_auth.py tests/test_client_navigation.py tests/test_live_clients.py \
             tests/test_approachable_shell.py tests/test_new_chat.py tests/test_canvas_files.py tests/test_canvas_views.py \
-            tests/test_browser_check_runner.py 2>&1 | tee output/destination-history/python.log
+            tests/test_browser_check_runner.py tests/test_release_qualification.py 2>&1 | tee output/destination-history/python.log
       - name: Focused frontend regressions
         if: ${{ !cancelled() && steps.node_dependencies.outcome == 'success' }}
         working-directory: frontend
@@ -345,7 +345,8 @@ jobs:
           node --test --test-reporter=tap tests/destination-history.test.mjs tests/destination-history-ui.test.mjs \
             tests/api.test.mjs tests/conversation-navigation.test.mjs tests/pending-view.test.mjs \
             tests/settings-drafts.test.mjs tests/work-shell.test.mjs tests/archive-action.test.mjs \
-            tests/archive-feedback.test.mjs 2>&1 | tee ../output/destination-history/frontend.log
+            tests/archive-feedback.test.mjs tests/attention.test.mjs tests/shell-panels.test.mjs \
+            2>&1 | tee ../output/destination-history/frontend.log
       - name: Build and retain the exact derived assets
         id: build
         if: ${{ !cancelled() && steps.node_dependencies.outcome == 'success' }}
