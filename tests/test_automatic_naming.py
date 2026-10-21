@@ -252,8 +252,8 @@ async def test_deferred_name_waits_for_new_content_and_oversized_input_is_bounde
     await app.history.refresh()
     await tick(app, naming, clock)
     assert len(calls) == 2
-    # Oversized first records never cause a full transcript read or model call.
-    (directory / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'x' * (300 * 1024)}) + '\n')
+    # Records beyond the existing bounded window reader's limit are not decoded.
+    (directory / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'x' * (5 * 1024 * 1024)}) + '\n')
     await app.history.refresh()
     await tick(app, naming, clock)
     assert len(calls) == 2

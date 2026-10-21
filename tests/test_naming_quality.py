@@ -271,3 +271,95 @@ async def test_greeting_does_not_consume_early_refinement(native_home, community
         assert len(calls) == 2
     finally:
         await namer.close()
+
+
+def test_sampler_negative_control_exposes_old_injected_and_structured_payload(community):
+    from amplifier_web.naming_context import sample
+    rows = [
+        {'role':'user','content':'<context_file paths="note">INJECTED_SECRET</context_file> Fix Atlas login.'},
+        {'role':'user','content':[{'type':'image','data':'IMAGE_SECRET'*10000},
+                                 {'type':'text','text':'Repair the OAuth callback.'}]},
+    ]
+    old = community.SessionNamingHook(None, community.SessionNamingConfig())._extract_naming_context(rows,None,None)
+    new = sample(rows).text
+    assert 'INJECTED_SECRET' in old and 'IMAGE_SECRET' in old
+    assert 'INJECTED_SECRET' not in new and 'IMAGE_SECRET' not in new
+    assert 'Repair the OAuth callback.' in new
+
+
+@pytest.mark.parametrize('failure', ['empty-role', 'resolver-error', 'missing-resolver', 'bounded-transport'])
+async def test_unavailable_explicit_route_never_falls_back(native_home, community, failure):
+    host = await mounted(community, native_home, 'route-failure', count=0)
+    calls = recorder(host,[{'action':'set','name':'Must not run'}])
+    if failure == 'bounded-transport':
+        host.provider.config = {'auth_mode':'chatgpt_plan'}
+    else:
+        # An explicit role must not silently become an expensive/default call.
+        host.co.config['hooks'] = [{'module':'hooks-session-naming','config':{'model_role':'fast'}}]
+        async def handler(event, data):
+            from amplifier_core import HookResult
+            return HookResult()
+        host.co.hooks.register('prompt:complete',handler,name='session-naming')
+        host.co.hooks.register('session:end',handler,name='session-naming-drain')
+        if failure != 'missing-resolver':
+            class Resolver:
+                async def resolve(self, role):
+                    if failure == 'resolver-error':
+                        raise ValueError('Synthetic resolver unavailable')
+                    return []
+            host.co.register_capability('model_role_resolver',Resolver())
+    namer = LiveSessionNaming(host.co,native_home/'app',lambda _:None)
+    try:
+        with pytest.raises(ValueError):
+            await namer.suggest()
+        assert not calls
+    finally:
+        await namer.close()
+
+
+async def test_explicit_goal_change_updates_title_description_and_manual_choice_wins(native_home, community):
+    host = await mounted(community,native_home,'goal-change',count=0)
+    host.metadata.set_name('Debug cache expiry',source='generated',description='Find the Redis expiry issue.')
+    calls = recorder(host,[{'action':'set','name':'Plan database migration',
+                           'description':'Plan the Atlas database migration.'}])
+    events=[]
+    namer=LiveSessionNaming(host.co,native_home/'app',events.append,['1','2','3','4'])
+    try:
+        host.context.messages.append({'role':'user','content':'Stop cache work. Plan the Atlas database migration instead.'})
+        await turn(namer,5)
+        current=read(namer.directory)
+        assert current['name']=='Plan database migration'
+        assert current['description']=='Plan the Atlas database migration.'
+        assert 'Stop cache work' in prompt_text(calls[0])
+        assert len([e for e in events if e['type']=='session.naming'])==1
+        host.metadata.set_name('My migration checklist')
+        for n in range(6,11):
+            host.context.messages.append({'role':'user','content':f'Review migration phase {n}.'})
+            await turn(namer,n)
+        assert len(calls)==1 and read(namer.directory)['name']=='My migration checklist'
+    finally:
+        await namer.close()
+
+
+def test_saved_sample_bounds_and_fences_native_sources(tmp_path):
+    from amplifier_web.naming_context import saved_sample
+    from amplifier_web.transcript_window import READ_LIMIT
+    owner={'project':'synthetic','nativeId':'bounded'}
+    path=tmp_path/'transcript.jsonl'
+    rows=[{'role':'user','content':'Investigate Atlas login.'},
+          {'role':'user','content':'The OAuth callback loops.'},
+          *[{'role':'tool','content':'payload '*1000} for _ in range(2000)],
+          {'role':'user','content':'Fix the redirect callback in Atlas.'}]
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    assert path.stat().st_size>READ_LIMIT
+    result=saved_sample(tmp_path,owner)
+    assert 'Investigate Atlas login.' in result.text
+    assert 'OAuth callback loops.' in result.text
+    assert 'Fix the redirect callback' in result.text
+    assert 'payload' not in result.text and len(result.text.encode())<=8192
+    path.unlink()
+    other=tmp_path/'outside'
+    other.write_text('{"role":"user","content":"Do not read"}\n')
+    path.symlink_to(other)
+    with pytest.raises(ValueError):
+        saved_sample(tmp_path,owner)

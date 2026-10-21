@@ -3,11 +3,15 @@ import asyncio
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from aiohttp import web
 import settings_ui_server as fixture
 from amplifier_foundation.session.metadata import SessionMetadataStore
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.naming import directory_for, read
+from amplifier_web.host.naming import LiveSessionNaming
+from amplifier_core import HookRegistry
+from amplifier_core.message_models import ChatResponse, TextBlock, Usage
 
 
 async def main(home):
@@ -29,14 +33,35 @@ async def main(home):
     metadata = SessionMetadataStore(store.directory(source['id']))
     metadata.history._save_metadata_unlocked({**metadata.read(), 'name': 'Conversation deadbeef', 'name_source': 'fallback'})
     naming_calls = []
+    class Context:
+        async def get_messages(self):
+            return [{'role': 'user', 'content': 'Plan a neighborhood garden'}]
+    class Provider:
+        name = 'fixture'
+        priority = 1
+        def get_info(self):
+            return SimpleNamespace(id='fixture', defaults={'model': 'synthetic'})
+        async def complete(self, request, **kwargs):
+            naming_calls.append({'model': request.model, 'prompt': str(request.messages[0].content)})
+            assert request.max_output_tokens == 256 and request.metadata['stream'] is False
+            await asyncio.sleep(.2)
+            return ChatResponse(content=[TextBlock(text=json.dumps({
+                'action': 'set', 'name': 'Neighborhood garden plan',
+                'description': 'Design a shared neighborhood garden.'}))],
+                usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
+    context, provider = Context(), Provider()
+    coordinator = SimpleNamespace(
+        session_id=source['id'], config={'hooks': [], 'project_dir': source['workspace']},
+        hooks=HookRegistry(), mount_points={'context': context},
+        get=lambda key: {'context': context, 'providers': {'fixture': provider}}.get(key),
+        get_capability=lambda key: None, register_cleanup=lambda callback: None)
+    namer = LiveSessionNaming(coordinator, home, lambda _: None)
     original_control = service.runtime.control
     async def control(sid, operation, args):
         if operation != 'session.naming':
             return await original_control(sid, operation, args)
-        naming_calls.append(sid)
-        before = read(directory_for(home, service._session(sid)))
-        await asyncio.sleep(.2)
-        return {**before, 'name': 'Neighborhood garden plan'}
+        assert sid == source['id']
+        return await namer.suggest()
     service.runtime.control = control
     async def check(request):
         return web.json_response({'unchanged': original == transcript.read_bytes(), 'namingCalls': len(naming_calls), 'title': service._session(source['id'])['title']})
@@ -52,6 +77,7 @@ async def main(home):
     try:
         await asyncio.Event().wait()
     finally:
+        await namer.close()
         await runner.cleanup()
 
 

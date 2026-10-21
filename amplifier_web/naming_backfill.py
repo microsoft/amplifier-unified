@@ -176,16 +176,13 @@ class NamingBackfill:
             directory = directory_for(self.service.data_dir, session)
             base = read(directory)
             module, hook = _hook()
-            if automatic:
-                from .chat_title_preview import first_request
-                excerpt = await asyncio.to_thread(first_request, self.service.data_dir, session, 1200)
-                messages = [{'role': 'user', 'content': excerpt['title']}] if excerpt['title'] else []
-            else:
-                messages = await asyncio.to_thread(hook._read_transcript, directory)
-            if not any(row.get('role') == 'user' and row.get('content') for row in messages):
+            from .naming_context import saved_sample, substantive
+            excerpt = await asyncio.to_thread(saved_sample, directory, {
+                'project': session.get('nativeProject') or str(directory.parent.parent),
+                'nativeId': session.get('runtimeSessionId') or session['id']})
+            if not excerpt.text or not substantive(excerpt.latest_user):
                 return await self._record(identity, 'skipped', None, 'The chat has no user message to name it from.')
-            context = hook._extract_naming_context(messages, None, None)
-            prompt = module.INITIAL_NAMING_PROMPT.format(context=context)
+            prompt = module.INITIAL_NAMING_PROMPT.format(context=excerpt.text)
             if automatic:
                 from .automatic_naming import idle
                 # Loading the excerpt yielded to other work: recheck admission
