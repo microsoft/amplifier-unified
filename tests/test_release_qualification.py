@@ -539,7 +539,9 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
-    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption'}
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption', 'destination_history'}
+    assert inputs['destination_history']['type'] == 'boolean'
+    assert inputs['destination_history']['default'] == 'false'
     assert inputs['attachment_consumption']['type'] == 'boolean'
     assert inputs['attachment_consumption']['default'] == 'false'
     assert inputs['app004_qualification']['type'] == 'boolean'
@@ -549,10 +551,17 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}"
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.destination_history }}"
+    history = workflow['jobs']['destination-history']
+    assert history['if'] == '${{ inputs.destination_history }}'
+    assert history['steps'][0] == {
+        'name': 'Reject mixed navigation selections',
+        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}',
+        'run': 'exit 1',
+    }
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
     incompatible = mcp['steps'][1]
     assert incompatible['name'] == 'Reject incompatible browser proof selections'

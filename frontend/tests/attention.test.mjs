@@ -11,6 +11,7 @@ const {FeedbackNotice}=await server.ssrLoadModule('/src/feedback.jsx');
 const {browserPreviewPolicy,BrowserPreview}=await server.ssrLoadModule('/src/canvas-library.jsx');
 const {WorkspaceRail:Rail}=await server.ssrLoadModule('/src/shell-panels.jsx');
 const {WorkHeader}=await server.ssrLoadModule('/src/work-shell.jsx');
+const {WorkNavigationContext}=await server.ssrLoadModule('/src/work-navigation.js');
 test.after(()=>server.close());
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
@@ -18,7 +19,9 @@ const render=(Component,props)=>renderToStaticMarkup(React.createElement(Compone
 test('completion badges roll up across workspaces, collapsed navigation, activity and chat rows',()=>{
  const state={view:{},selectedWorkspaceId:'one',workspaceExplorer:{rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:1,unread:1,canBrowse:false},{path:'/two',name:'two',workspaceId:'two',chatCount:1,unread:1,canBrowse:false}],totalWorkspaces:2},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],sessions:[{id:'a',title:'Finished plan',workspace:'/one'}],attention:{unread:2,settingsUnread:0,sections:{chats:2},sessions:{a:1},workspaces:{one:1,two:1},items:[{id:'completion:a',title:'Response ready',label:'Finished plan',sessionId:'a',fingerprint:'g1'}]}};
  assert.match(render(WorkspaceRail,{state,act:()=>{}}),/Open chats in \/two/);
- assert.match(render(WorkHeader,{state,act:()=>{},presentation:{}}),/2 unread items/);
+ const header=React.createElement(WorkNavigationContext.Provider,{value:{history:null,visitHistory(){}}},
+  React.createElement(WorkHeader,{state,act:()=>{},presentation:{}}));
+ assert.match(renderToStaticMarkup(header),/2 unread items/);
  assert.match(render(ActivityPanel,{state,act:()=>{}}),/Finished plan/);
  assert.equal(render(AttentionBadge,{state,settings:true}),'');
 });
