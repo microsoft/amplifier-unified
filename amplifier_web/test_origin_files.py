@@ -79,7 +79,8 @@ def _windows_private(handle):
                         ('size', ctypes.c_ushort), ('count', ctypes.c_ushort), ('reserved2', ctypes.c_ushort)]
         get_ace = api.GetAce
         get_ace.argtypes = [pointer, wintypes.DWORD, ctypes.POINTER(pointer)]
-        allowed = {user, 'S-1-5-18', 'S-1-5-32-544'}
+        # OWNER RIGHTS refers to the exact owner verified above, not another user.
+        allowed = {user, 'S-1-3-4', 'S-1-5-18', 'S-1-5-32-544'}
         for index in range(ctypes.cast(acl, ctypes.POINTER(ACL)).contents.count):
             ace = pointer()
             if not get_ace(acl, index, ctypes.byref(ace)):
@@ -243,9 +244,39 @@ class PinnedDirectory:
     def link(self, old, new):
         os.link(self.argument(old), self.argument(new), src_dir_fd=self.fd, dst_dir_fd=self.fd, follow_symlinks=False)
 
+    def replace(self, old, new):
+        os.replace(self.argument(old), self.argument(new), src_dir_fd=self.fd, dst_dir_fd=self.fd)
+
+    def assert_current(self):
+        with directory(self.path) as current:
+            before, after = self.stat(), current.stat()
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise ValueError('The selected destination directory changed.')
+
     def sync(self):
         if self.fd is not None:
             os.fsync(self.fd)
+
+
+
+def replace(path, value):
+    """Atomic replacement in an already private owner directory."""
+    path = Path(path)
+    with directory(path.parent, private=True) as parent:
+        temporary = '.' + uuid.uuid4().hex + '.tmp'
+        try:
+            with os.fdopen(parent.create(temporary), 'wb') as stream:
+                stream.write(json.dumps(value, sort_keys=True).encode())
+                stream.flush()
+                os.fsync(stream.fileno())
+            parent.replace(temporary, path.name)
+            parent.sync()
+            parent.assert_current()
+        finally:
+            try:
+                parent.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
 
 def publish(path, value):
