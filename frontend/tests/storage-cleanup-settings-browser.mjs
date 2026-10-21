@@ -101,6 +101,7 @@ try{
  assert.equal(cleanupAttempts.length,2);assert.deepEqual(cleanupAttempts[0],cleanupAttempts[1]);
  const after=await observe();assert.equal(after.savedWorkIntact,true);
  assert.equal(after.lastCleanup.status,'completed');assert.ok(after.lastCleanup.removedFileBytes>=4096);
+ await expect(section.getByRole('status').filter({hasText:'Cleanup completed'})).toContainText('4.2 KB');
  assert.deepEqual(after.runtimeCalls,before.runtimeCalls);assert.equal(after.selectedSessionId,before.selectedSessionId);
  await page.screenshot({path:join(outputDir,'storage-cleanup-desktop.png'),animations:'disabled'});
  await page.setViewportSize({width:390,height:844});

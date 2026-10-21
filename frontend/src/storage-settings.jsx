@@ -3,7 +3,7 @@ import {ChevronRight,ArrowLeft,HardDrive,Folder,MessagesSquare,Archive,Database,
 import {ChatDelete} from './chat-delete';
 import {StorageCleanupSettings} from './storage-cleanup-settings';
 import './storage-settings.css';
-const bytes=value=>value<1024?`${value} B`:value<1048576?`${(value/1024).toFixed(1)} KB`:value<1073741824?`${(value/1048576).toFixed(1)} MB`:`${(value/1073741824).toFixed(2)} GB`;
+import {formatStorageBytes as bytes} from './storage-bytes';
 function WorkspaceCleanupResult({result}){return <p role="status">{result.status==='completed'?`Workspace files deleted (${bytes(result.deletedBytes)} of file content). Chat history was retained.`:result.message||'Cleanup was interrupted; inspect the recorded folder before proceeding.'}{result.status!=='completed'&&<code style={{display:'block',overflowWrap:'anywhere'}}>{result.cleanupPath}</code>}</p>}
 export function WorkspaceCleanup({id,act,onDone}){
  const [review,setReview]=useState(null),[path,setPath]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState(null);

@@ -4,7 +4,7 @@ import {useSettingsDraft} from './settings-drafts';
 const key='amplifier-storage-cleanup-pending';
 const pendingSave=()=>{try{return JSON.parse(sessionStorage.getItem(key)||'null')}catch{return null}};
 const gib=1024**3;
-const bytes=value=>`${(value/gib).toFixed(2)} GiB`;
+import {formatStorageBytes as bytes} from './storage-bytes';
 export function StorageCleanupSettings({act,navigate=()=>{}}){
  const [report,setReport]=useState(null),[draft,setDraft]=useState(null),[pending,setPending]=useState(pendingSave),[preview,setPreview]=useState(null);
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
