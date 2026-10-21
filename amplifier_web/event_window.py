@@ -159,6 +159,32 @@ def _time(value):
         return None
 
 
+def _outcome_summary(name, data):
+    """Small terminal hints; never substitute them for the saved result."""
+    if name not in {'tool:post', 'tool:error'}:
+        return {}
+    result = data.get('result', data.get('tool_result'))
+    result = result if isinstance(result, dict) else {}
+    output = result.get('output')
+    output = output if isinstance(output, dict) else result
+    code = next((output[key] for key in ('returncode', 'exit_code', 'exitCode')
+                 if type(output.get(key)) is int), None)
+    errors = [data.get('error'), data.get('error_message'), result.get('error'), output.get('error')]
+    errors = [value.get('message') if isinstance(value, dict) else value for value in errors]
+    error = next((value for value in errors if isinstance(value, str) and value.strip()), None)
+    failed = (name == 'tool:error' or result.get('success') is False
+              or output.get('success') is False or code is not None and code != 0 or bool(error))
+    if failed and error is None:
+        error = next((value for value in (result.get('message'), output.get('message'))
+                      if isinstance(value, str) and value.strip()), None)
+        if error is None and isinstance(output.get('stderr'), str):
+            error = output['stderr'].rstrip().rsplit('\n', 1)[-1]
+    summary = {'exitCode': code} if code is not None else {}
+    if error:
+        summary['error'] = error if len(error) <= 180 else error[:179] + '…'
+    return summary
+
+
 def _observation(event, raw, offset, path, identity):
     if not isinstance(event, dict) or not isinstance(event.get('data'), dict):
         return None
@@ -244,6 +270,9 @@ def _observation(event, raw, offset, path, identity):
             if summary:
                 row['inputSummary'] = summary
     if kind == 'tool':
+        outcome = _outcome_summary(name, data)
+        if outcome:
+            row['outcomeSummary'] = outcome
         from .delegate_exchange import FIELDS, select, source_field, tool_name
         if tool_name(row) == 'delegate':
             for field in FIELDS:

@@ -157,3 +157,23 @@ def test_missing_tool_payload_never_gets_invented_header_or_detail(owner):
     row = read(session)['items'][0]
     assert not row['_eventFields']
     assert 'inputSummary' not in row and 'inputDetail' not in row
+
+
+@pytest.mark.parametrize('name,data,expected', [
+    ('tool:post', {'result': {'success': False, 'error': 'failure ' * 100}},
+        {'error': ('failure ' * 100)[:179] + '…'}),
+    ('tool:error', {'error': {'message': 'Cannot find the requested file'}},
+        {'error': 'Cannot find the requested file'}),
+    ('tool:post', {'result': {'success': True, 'output': {'returncode': 2, 'stderr': 'trace\nlast failure\n'}}},
+        {'exitCode': 2, 'error': 'last failure'}),
+    ('tool:post', {'result': {'output': {'exit_code': 0, 'stderr': 'normal progress'}}}, {'exitCode': 0}),
+    ('tool:post', {'result': {'success': False, 'output': {'message': 'Explicit failure message'}}},
+        {'error': 'Explicit failure message'}),
+    ('tool:post', {'result': {'output': {'exitCode': True, 'stdout': 'ERROR: merely quoted text'}}}, {}),
+    ('tool:pre', {'result': {'success': False, 'error': 'not a result event'}}, {}),
+])
+def test_outcome_summary_uses_only_explicit_terminal_evidence(owner, name, data, expected):
+    session, path = owner
+    write(path, [event(1, name, **data)])
+    row = read(session)['items'][0]
+    assert row.get('outcomeSummary', {}) == expected
