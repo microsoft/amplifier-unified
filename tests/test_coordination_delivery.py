@@ -469,9 +469,15 @@ class InstalledWorkAdapter:
         self.counter = 0
         async def mount(kind, tool, name):
             self.tools[name] = tool
+        async def process_hook_result(result, event, name):
+            return result
         coordinator = SimpleNamespace(get_capability=self.capabilities.get,
             get=lambda kind: self.tools if kind == 'tools' else None,
-            register_capability=self.capabilities.__setitem__, mount=mount, hooks=self.hooks)
+            register_capability=self.capabilities.__setitem__, mount=mount, hooks=self.hooks,
+            session_id=child['id'], process_hook_result=process_hook_result,
+            cancellation=SimpleNamespace(is_immediate=False, register_tool_start=lambda *a: None,
+                                         register_tool_complete=lambda *a: None))
+        self.coordinator = coordinator
         async def bridge(operation, args):
             if operation == 'context.manifest':
                 return {'surfaces': [], 'inputIds': child['collaborationGeneration']['inputIds']}
@@ -494,7 +500,7 @@ class InstalledWorkAdapter:
         self.messages.append(Message(role='assistant', content='', tool_calls=[{
             'id': call.id, 'tool': call.name, 'arguments': call.arguments}]))
         identity, name, content = await self.loop._execute_tool_only(
-            call, self.tools, self.hooks, None)
+            call, self.tools, self.hooks, None, self.coordinator)
         self.messages.append(Message(role='tool', name=name, tool_call_id=identity, content=content))
         from amplifier_web.output_image_delivery import successful_output
         from amplifier_web.output_image_delivery import pair_retained
@@ -911,3 +917,244 @@ async def test_stream_attempt_restores_caller_and_closes_on_terminal_paths(work_
             await asyncio.gather(pending, return_exceptions=True)
         await iterator.aclose()
         WORK_ATTEMPT.reset(token)
+
+
+@pytest.mark.parametrize('unavailable', [False, True])
+@pytest.mark.parametrize('ending', ['completed', 'error', 'cancelled', 'closed'])
+async def test_stream_cannot_reuse_completed_call_coverage_at_outward_yield(app, unavailable, ending):
+    import asyncio
+    from amplifier_web.coordination_delivery import WORK_ATTEMPT
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    event = {'tool_call_id': 'same-call', 'tool_name': 'synthetic_write', 'tool_input': {'value': 'same'}}
+    started = asyncio.Event()
+    class Provider:
+        async def complete(self, value, **kwargs):
+            return {'content': [{'type': 'tool_call', 'id': event['tool_call_id'],
+                                 'name': event['tool_name'], 'input': event['tool_input']}]}
+        async def stream(self, value, **kwargs):
+            yield {'type': 'tool_call', 'id': event['tool_call_id'],
+                   'name': event['tool_name'], 'input': event['tool_input']}
+            started.set()
+            if ending == 'error':
+                raise RuntimeError('Synthetic stream error')
+            if ending == 'cancelled':
+                await asyncio.Event().wait()
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    await wrapped.complete(adapter.request())
+    assert (await adapter.delivery.recheck_effect_coverage(event))['complete'] is True
+    owner = adapter.delivery.begin_work.__self__
+    original_bridge = owner.bridge
+    if unavailable:
+        async def offline(operation, args):
+            if operation == 'coordination.current':
+                raise ConnectionError('Synthetic unavailable projection')
+            return await original_bridge(operation, args)
+        owner.bridge = offline
+    iterator = wrapped.stream(adapter.request())
+    pending = None
+    try:
+        assert (await anext(iterator))['id'] == 'same-call'
+        assert WORK_ATTEMPT.get() is None  # The token must not cross yield.
+        # Actual consumer-side lookup, outside the provider's context.
+        assert (await adapter.delivery.recheck_effect_coverage(event))['complete'] is False
+        if ending == 'closed':
+            await asyncio.create_task(iterator.aclose())
+        else:
+            pending = asyncio.create_task(anext(iterator))
+            if ending == 'cancelled':
+                await started.wait()
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+            else:
+                with pytest.raises(RuntimeError if ending == 'error' else StopAsyncIteration):
+                    await pending
+        owner.bridge = original_bridge
+        result = await adapter.delivery.recheck_effect_coverage(event)
+        assert result['complete'] is False and result['effectAuthorized'] is False
+    finally:
+        owner.bridge = original_bridge
+        if pending and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await iterator.aclose()
+
+
+async def test_complete_overlapping_an_unqualified_stream_cannot_restore_old_coverage(app):
+    import asyncio
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Provider:
+        async def complete(self, value, **kwargs):
+            if kwargs.get('wait'):
+                entered.set()
+                await release.wait()
+            return {'content': [{'type': 'tool_call', 'id': kwargs['identity'],
+                                 'name': 'synthetic_write', 'input': {}}]}
+        async def stream(self, value, **kwargs):
+            yield 'unqualified stream'
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    pending = asyncio.create_task(wrapped.complete(adapter.request(), identity='overlap', wait=True))
+    iterator = None
+    try:
+        await entered.wait()
+        iterator = wrapped.stream(adapter.request())
+        await anext(iterator)
+        release.set()
+        await pending
+        event = {'tool_call_id': 'overlap', 'tool_name': 'synthetic_write', 'tool_input': {}}
+        assert adapter.delivery.effect_coverage(event)['complete'] is False
+        await iterator.aclose()
+        assert adapter.delivery.effect_coverage(event)['complete'] is False
+        await wrapped.complete(adapter.request(), identity='fresh')
+        assert adapter.delivery.effect_coverage({**event, 'tool_call_id': 'fresh'})['complete'] is True
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        if iterator:
+            await iterator.aclose()
+
+
+@pytest.mark.parametrize('prior', ['unbound', 'nested'])
+async def test_identical_unbound_or_nested_page_does_not_poison_direct_read(app, prior):
+    from amplifier_core import ToolResult
+    from amplifier_core.message_models import ToolCall
+    from amplifier_web.output_image_delivery import successful_output
+    adapter, _, required = await installed_work_adapter(app)
+    manifest = await adapter.read(required['requirementsRef'])
+    ref = next(row['readRef'] for row in manifest['items'] if row['kind'] == 'promise')
+    args = {'operation': 'dispatch', 'args': {'action': ref['action'], 'args': {**ref['args'], 'limit': 700, 'offset': 0}}}
+    if prior == 'unbound':
+        earlier = (await adapter.tools['app_control'].execute(args)).output
+    else:
+        # Real ApprovedDispatch lease creates nested call IDs/hook attribution.
+        # This synthetic tool executes a read only; no program interpreter or writes.
+        captured = []
+        async def nested(input):
+            lease = adapter.loop.approved_dispatch.bind()
+            try:
+                result = await lease.call('app_control', args, request_id='read-page')
+                assert result['success'] is True, result
+                captured.append(result['output'])
+                return ToolResult(success=True, output=result['output'])
+            finally:
+                lease.close()
+        adapter.tools['tool_exec'] = SimpleNamespace(name='tool_exec', execute=nested)
+        adapter.loop.config['programmatic_dispatch'] = True
+        with adapter.loop.approved_dispatch.run_scope(adapter.coordinator):
+            await adapter.loop._execute_tool_only(
+                ToolCall(id='outer-read', name='tool_exec', arguments={}),
+                adapter.tools, adapter.hooks, None, adapter.coordinator)
+        assert len(captured) == 1
+        earlier = successful_output(captured[0])
+    current = await adapter.read(ref, limit=700, offset=0)
+    assert earlier['result'] == current  # Deterministic page, identical content.
+    await adapter.fill(required)
+    prepared = await adapter.delivery.prepare(adapter.request(), None)
+    assert adapter.delivery.request_coverage(prepared)['complete'] is True
+
+
+async def test_concurrent_identical_pages_bind_exact_execution_ids_and_reject_forgery(app):
+    import asyncio
+    from amplifier_web.output_image_delivery import pair_retained
+    adapter, _, required = await installed_work_adapter(app)
+    manifest = await adapter.read(required['requirementsRef'])
+    ref = next(row['readRef'] for row in manifest['items'] if row['kind'] == 'promise')
+    pages = await asyncio.gather(adapter.read(ref, offset=0, limit=700),
+                                 adapter.read(ref, offset=0, limit=700))
+    assert pages[0] == pages[1]
+    rows = [r for r in adapter.delivery.reads if r['input']['args']['action'] == ref['action']]
+    assert len(rows) == 2 and len({r['tool_call_id'] for r in rows}) == 2
+    assert all(pair_retained(adapter.request(), r) for r in rows)
+    for change in ('id', 'input', 'body'):
+        forged = adapter.request().model_copy(deep=True)
+        tool = next(m for m in forged.messages if m.role == 'tool' and m.tool_call_id == rows[0]['tool_call_id'])
+        if change == 'id':
+            tool.tool_call_id = 'forged'
+        elif change == 'body':
+            tool.content += ' modified'
+        else:
+            assistant = next(m for m in forged.messages if m.role == 'assistant'
+                             and any(c.get('id') == rows[0]['tool_call_id'] for c in m.tool_calls or []))
+            assistant.tool_calls[0]['arguments']['args']['args']['offset'] = 1
+        assert not pair_retained(forged, rows[0])
+
+
+async def test_stale_visual_refuses_send_then_explicit_budget_refits_same_request():
+    from amplifier_web.voice_visual_delivery import VoiceVisualDelivery
+    from amplifier_web.output_image_delivery import OutputImageDelivery
+    from amplifier_web.memory_delivery import MemoryDelivery
+    required = available_requirements()
+    stale, measured, sent = False, [], []
+    class Surfaces(Previous):
+        epoch = ['input-1']
+        image_capabilities = SimpleNamespace(supports=AsyncMock(return_value=True))
+    async def bridge(operation, args):
+        if operation == 'coordination.current':
+            return {'work': {'available': True, 'discovery': empty_discovery(), 'required': required}}
+        if operation == 'work.invocation.revalidate':
+            return {'current': True, 'required': required, 'effectAuthorized': False}
+        if operation == 'memory.context':
+            return {'items': []}
+        if operation == 'voice.visual.read':
+            if stale:
+                raise ValueError('Consent ended')
+            return {'_image': 'c3ludGhldGlj', 'source': 'Synthetic capture'}
+        raise AssertionError(operation)
+    work = CoordinationDelivery(Surfaces(), bridge)
+    voice = VoiceVisualDelivery(work, bridge)
+    receipt = voice.remember({'accepted': True, 'result': {'id': 'capture-1', 'callId': 'voice-1'}})
+    delivery = MemoryDelivery(OutputImageDelivery(voice, bridge), bridge)
+    class Provider:
+        async def request_budget(self, value, **kwargs):
+            measured.append(value.model_dump_json())
+            return {'tokens': 100}
+        async def complete(self, value, **kwargs):
+            sent.append(value.model_dump_json())
+            return 'done'
+    wrapped = SurfaceProvider(Provider(), delivery)
+    original = request(Message(role='tool', name='app_control', tool_call_id='visual-read', content=json.dumps(receipt)))
+    await wrapped.request_budget(original)
+    stale = True
+    with pytest.raises(ValueError, match='refit'):
+        await wrapped.complete(original)
+    assert sent == []
+    # No silent reprepare/send after the rejected measured request.
+    with pytest.raises(ValueError, match='budget|refit'):
+        await wrapped.complete(original)
+    await wrapped.request_budget(original)
+    assert len(measured) == 2 and measured[0] != measured[1]
+    assert await wrapped.complete(original) == 'done'
+    assert sent == measured[1:]
+
+
+async def test_real_tool_pre_receives_exact_completed_call_origin(app):
+    from amplifier_core import HookResult, ToolResult
+    from amplifier_core.message_models import ToolCall
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    seen, writes = [], []
+    class Provider:
+        async def complete(self, value, **kwargs):
+            return {'content': [{'type': 'tool_call', 'id': 'fixture-effect',
+                                 'name': 'synthetic_write', 'input': {'text': 'bounded'}}]}
+    async def observe(event, data):
+        if data.get('tool_name') == 'synthetic_write':
+            seen.append((copy.deepcopy(data), await adapter.capabilities['web.work_effect_coverage'](data)))
+        return HookResult()
+    async def write(input):
+        writes.append(copy.deepcopy(input))  # In-memory fixture, not a host write.
+        return ToolResult(success=True, output={'recorded': True})
+    adapter.tools['synthetic_write'] = SimpleNamespace(name='synthetic_write', execute=write)
+    adapter.hooks.register('tool:pre', observe, name='fixture-origin-observer')
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    response = await wrapped.complete(adapter.request())
+    call = response['content'][0]
+    await adapter.loop._execute_tool_only(
+        ToolCall(id=call['id'], name=call['name'], arguments=call['input']),
+        adapter.tools, adapter.hooks, None, adapter.coordinator)
+    assert writes == [{'text': 'bounded'}] and len(seen) == 1
+    assert seen[0][0]['tool_call_id'] == 'fixture-effect'
+    assert seen[0][1]['complete'] is True and seen[0][1]['effectAuthorized'] is False

@@ -688,6 +688,60 @@ async def test_mounted_unknown_mutation_is_reconciled_by_exact_receipt_without_r
             await worker.close()
 
 
+@pytest.mark.parametrize('action', ['task.get', 'task.history', 'task.detail', 'task.receipt'])
+async def test_runtime_identity_cold_reads_and_warm_detail_ref_share_owner(tmp_path, monkeypatch, action):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Directory identity'})
+        sid = app._session()['id']
+        native = 'synthetic-runtime-owner'
+        app._session(sid).update(runtimeSessionId=native, nativeIdentity=native)
+        worker = controls(native)
+        objective = 'Exact current objective'
+        await create(worker, objective=objective, constraints=['Large active constraint ' * 300])
+        task = copy.deepcopy(worker.tasks.record())
+        warm = worker.tasks.snapshot()
+        ref = next(r for r in warm['detailRefs'] if r['args']['field'] == 'constraints')
+        assert ref['args']['sessionId'] == native and native != sid
+        other = (await app.dispatch('session.create', {'title': 'Other caller'}))
+        other_id = app._session()['id']
+        app._save_full(reason='Synthetic distinct runtime identity fixture')
+        app.state['sessions'] = [row for row in app.state['sessions'] if row['id'] != sid]
+        app.projections.invalidate()
+        def forbidden(*args, **kwargs):
+            pytest.fail('Identity read must not admit, hydrate, publish or warm')
+        monkeypatch.setattr(app, '_admit_session', forbidden)
+        monkeypatch.setattr(app, '_publish_changes', forbidden)
+        monkeypatch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=forbidden))
+        monkeypatch.setattr(app.history, 'refresh', AsyncMock(side_effect=forbidden))
+        args = {'sessionId': sid, **{
+            'task.get': {}, 'task.history': {},
+            'task.detail': {'taskId': task['id'], 'expectedRevision': task['revision'], 'field': 'objective'},
+            'task.receipt': {'commandId': 'create'},
+        }[action]}
+        saved = (await app.app_bridge('dispatch', {'action': action, 'args': args}, sid))['result']
+        if action == 'task.get':
+            assert saved['task']['id'] == task['id'] and saved['task']['objective'] == objective
+        elif action == 'task.history':
+            assert saved['items'][0]['id'] == task['id']
+        elif action == 'task.detail':
+            assert saved['text'] == objective
+        else:
+            assert saved['receipt']['taskId'] == task['id']
+        detail = (await app.app_bridge('dispatch', ref, sid))['result']
+        assert detail['text'] and detail['offset'] == 0
+        assert detail['taskId'] == task['id'] and detail['revision'] == task['revision']
+        with pytest.raises(AppError, match='calling conversation'):
+            await app.app_bridge('dispatch', ref, other_id)
+        assert all(row['id'] != sid for row in app.state['sessions'])
+    finally:
+        await app.close()
+        if worker is not None:
+            await worker.close()
+
+
 async def test_task_history_cursor_keeps_its_high_water_when_a_correction_arrives(
         tmp_path, monkeypatch):
     """Old history remains readable; it cannot masquerade as current scope."""
