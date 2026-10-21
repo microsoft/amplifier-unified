@@ -447,7 +447,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     coordination = yaml.load((workflows / 'coordination.yml').read_text(), Loader=yaml.BaseLoader)
     assert 'frontend/' + environment in coordination['on']['pull_request']['paths']
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
-               and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
+               and step.get('with', {}).get('path', '').splitlines() == [
+                   '${{ runner.temp }}/test-environments',
+                   'output/coordination-runtime-readiness.json']
                for step in coordination['jobs']['contracts']['steps'])
 
 

@@ -1,4 +1,5 @@
 """Host-owned UI tool and ephemeral guidance, shared by root and worker sessions."""
+import asyncio
 import json
 import re
 
@@ -120,9 +121,20 @@ async def install_app_access(coordinator, bridge):
     # Keep selected visual evidence after general workspace observations.
     delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(SurfaceDelivery(bridge), bridge), bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
+    # Observation only. The service's effect policy must independently decide
+    # applicability and permissions; absent producer wiring is not a grant.
+    coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)
     from .surface_delivery import SurfaceProvider
     from .request_recovery import RecoveringProvider, install as install_recovery
     install_recovery(coordinator)
+    class WorkRecoveringProvider(RecoveringProvider):
+        async def _retry(self, error, attempt, scope, generation, request, saved, kwargs, saved_kwargs):
+            observed = delivery.work_request(request)
+            if observed and observed['required']['status'] == 'available':
+                # Recovery is inside SurfaceProvider and cannot refit/revalidate
+                # after its backoff. Do not replay a bound Work request there.
+                return False
+            return await super()._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs)
     transformed = []
     def transform(provider):
         if isinstance(provider, SurfaceProvider) and provider.delivery is delivery:
@@ -131,7 +143,7 @@ async def install_app_access(coordinator, bridge):
         if callable(observe):provider = observe(provider)
         for original, wrapped in transformed:
             if original is provider:return wrapped
-        wrapped = SurfaceProvider(RecoveringProvider(provider, coordinator), delivery)
+        wrapped = SurfaceProvider(WorkRecoveringProvider(provider, coordinator), delivery)
         transformed.append((provider, wrapped))
         del transformed[:-16]
         return wrapped
@@ -160,7 +172,13 @@ async def install_app_access(coordinator, bridge):
                     return ToolResult(success=True, output=await delivery.read(input.get('args', {})))
                 if input['operation'] == 'context.focus':
                     return ToolResult(success=True, output=await delivery.interest(input.get('args', {})))
+                # The existing loop sets this per executing task, including
+                # nested dispatch. A body match or last-read order is not an
+                # execution identity; calls without that seam stay unbound.
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
+                execution_id = dispatch.get('tool_call_id')
                 result = await bridge(input['operation'], input.get('args', {}))
+                result = delivery.remember_work(result, input, execution_id=execution_id)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') in {'voice.visual.capture', 'computer.visual.capture'}:
                     result = delivery.remember(result)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') == 'outputs.image':
@@ -190,6 +208,7 @@ async def install_app_access(coordinator, bridge):
 
     async def bind_image_pair(event, data):
         delivery.bind_pair(data)
+        delivery.bind_work(data)
         return HookResult()
 
     await coordinator.mount('tools', AppControl(), name='app_control')

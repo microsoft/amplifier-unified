@@ -74,6 +74,8 @@ class VoiceVisualDelivery:
     async def revalidate(self, request):
         """Budget preparation may be cached; recheck permission before transport."""
         from amplifier_core.message_models import Message
+        if hasattr(self.surfaces, "revalidate"):
+            request = await self.surfaces.revalidate(request)
         messages = list(request.messages)
         for index, message in enumerate(messages):
             identity = (message.metadata or {}).get("voiceVisualObservation")

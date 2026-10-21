@@ -417,7 +417,8 @@ for _access, _actions in {
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
-        "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
+        "diagnostics.records", "task.get", "task.history", "task.detail", "task.receipt",
+        "capacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
@@ -1779,6 +1780,12 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
+        # Four exact passive task actions (including their public alias) use
+        # directory metadata plus canonical control-state only. Keep the normal
+        # validators and caller guards; never refresh history/admit an overlay.
+        passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
+            action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
+            {'task.get', 'task.history', 'task.detail', 'task.receipt'})
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
@@ -1813,7 +1820,7 @@ class AppService:
             try:
                 target = self.directory.resolve(args[target_key], scope,
                                                 include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
-                if target is None:
+                if target is None and not passive_task:
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
                                                     include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
@@ -1893,7 +1900,12 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
-        if resolved_target is not None and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
+        if passive_task and origin not in {'ui', 'user'}:
+            if not caller_session_id:
+                raise AppError('Task reads require a registered calling conversation.', 403)
+            from .owned_history import require
+            require(self, caller_session_id, args['sessionId'])
+        if resolved_target is not None and not passive_task and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -4720,6 +4732,15 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'] in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
+                    args['action'] == 'runtime.control' and isinstance(action_args.get('operation'), str) and action_args['operation'] in
+                    {'task.get', 'task.history', 'task.detail', 'task.receipt'}):
+                # Caller ownership was checked above. Avoid the later
+                # _session(nativeProject), pending-progress flush and full
+                # agent snapshot, which would turn this into an active read.
+                return await self.dispatch(args['action'], action_args, origin='agent',
+                    command_id=args.get('id'), expected_revision=args.get('expectedRevision'),
+                    include_state=False, caller_session_id=session_id)
             if args['action'].startswith('worktree.') or (args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
@@ -4785,6 +4806,9 @@ class AppService:
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
+            compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
+            compact_domain_receipt = compact_domain_receipt or compact_task_receipt
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4842,6 +4866,11 @@ class AppService:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
                 result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt))
+            if compact_task_receipt:
+                # Task dispatch already published its canonical cache or
+                # reported publication unavailable with the committed receipt.
+                # Unrelated progress publication must not lose that receipt.
+                return result
             await self._flush_pending_progress()
             if compact_domain_receipt:
                 # The exact domain receipt already carries admission, correlation
