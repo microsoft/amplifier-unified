@@ -15,7 +15,7 @@ import uuid
 
 MAX_BYTES = 65536
 FIELDS = {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image',
-          'maxRunning', 'maxInstances', 'minFreeBytes', 'python', 'admissionRoot', 'retentionMode', 'remoteRunner', 'capacityPolicyId', 'runnerQualificationRequired'}
+          'maxRunning', 'maxInstances', 'minFreeBytes', 'python', 'admissionRoot', 'retentionMode', 'remoteRunner', 'capacityPolicyId', 'runnerQualificationRequired', 'originSnapshotVersion'}
 INCUS_FIELDS = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir',
                 'admissionDir', 'project', 'image', 'daemonFingerprint', 'maxRunning',
                 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory',
@@ -30,6 +30,10 @@ def directory(home):
     path = Path(home) / 'workspace-resources' / 'backend-configs'
     if any(item.is_symlink() for item in (path, *path.parents)):
         raise ValueError('The retained backend configuration directory was replaced.')
+    if os.name == 'nt':
+        from .test_origin_files import directory as pinned
+        with pinned(path, create=True, private=True):
+            return path
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     info = os.fstat(descriptor)
@@ -42,12 +46,16 @@ def directory(home):
 def read_at(descriptor, identity):
     if not re.fullmatch(r'[a-f0-9]{64}', identity):
         raise ValueError('The retained backend configuration identity is invalid.')
-    handle = os.open(identity + '.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
-    with os.fdopen(handle, 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > MAX_BYTES:
-            raise ValueError('The retained backend configuration is not a private regular file.')
-        value = json.load(stream)
+    if isinstance(descriptor, Path):
+        from .test_origin_files import read
+        value = read(descriptor / (identity + '.json'), MAX_BYTES)
+    else:
+        handle = os.open(identity + '.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+        with os.fdopen(handle, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > MAX_BYTES:
+                raise ValueError('The retained backend configuration is not a private regular file.')
+            value = json.load(stream)
     if not isinstance(value, dict) or set(value) != {'version', 'configuration'} or value['version'] != 1:
         raise ValueError('The retained backend configuration format is invalid.')
     config = value['configuration']
@@ -68,6 +76,12 @@ def retain(home, config):
     if len(content) > MAX_BYTES:
         raise ValueError('The qualified backend configuration exceeds its bound.')
     descriptor = directory(home)
+    if isinstance(descriptor, Path):
+        from .test_origin_files import publish
+        publish(descriptor / (identity + '.json'), {'version': 1, 'configuration': config})
+        if read_at(descriptor, identity) != config:
+            raise ValueError('The retained backend configuration changed.')
+        return identity
     temporary = '.' + uuid.uuid4().hex + '.tmp'
     try:
         try:
@@ -109,7 +123,8 @@ def resolve(app, row, active):
     try:
         config = read_at(descriptor, identity)
     finally:
-        os.close(descriptor)
+        if not isinstance(descriptor, Path):
+            os.close(descriptor)
     if config.get('remoteRunner'):
         from .registered_test_runners import qualify_retained
         return qualify_retained(app, config)

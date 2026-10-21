@@ -45,7 +45,7 @@ for(const transition of ['selected task','inactive workspace','closed panel'])fo
     {action:'workspace.resources.managed',args:{workspaceId:'w',sessionId:'a',limit:25}},
     ...(transition==='selected task'?[
      {action:'workspace.resources.managed',args:{workspaceId:'w',sessionId:'b',limit:25}},
-     {action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'b'}},
+     {action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'b',offset:0}},
     ]:[]),
    ],'only the current page mounts its environment reader; no mutations or stale-owner reads');
   }finally{await act(async()=>root.unmount())}

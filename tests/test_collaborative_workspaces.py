@@ -1031,7 +1031,7 @@ async def test_outstanding_creation_bound_does_not_count_completed_history(app):
         task.update(status="working", collaboration={"creatorSessionId": source["id"]})
     app.state["sessions"].extend(tasks)
     args = {"title": "Next task", "text": "Initial task turn"}
-    with pytest.raises(AppError, match="eight outstanding"):
+    with pytest.raises(AppError, match="8 outstanding"):
         await agent_action(app, source, "coordination.create", args, "bounded-create")
     assert len(app.state["sessions"]) == 10 and not app.runtime.inputs
     assert not app.db.execute("SELECT 1 FROM commands WHERE id='bounded-create'").fetchone()
@@ -1089,7 +1089,7 @@ async def test_creation_cap_counts_dormant_owners_without_admitting_them(app, mo
             return original(metadata)
 
         monkeypatch.setattr(restored, '_admit_session', no_peer_admission)
-        with pytest.raises(AppError, match='eight outstanding'):
+        with pytest.raises(AppError, match='8 outstanding'):
             await agent_action(restored, source, 'coordination.create',
                 {'title': 'Would exceed cap', 'text': 'A ninth helper'}, 'dormant-cap')
         assert not restored.db.execute("SELECT 1 FROM commands WHERE id='dormant-cap'").fetchone()

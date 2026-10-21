@@ -48,6 +48,7 @@ def definitions(schema, string):
             'command': {**string(16384), 'minLength': 1},
             'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS},
             'waitSeconds': {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS},
+            'independent': {'type': 'boolean', 'description': 'Allow this check to overlap other independent checks in this chat within the global environment limit. Use only when no earlier check result is required. Default false preserves ordered execution.'},
             'notify': {'type': 'boolean'}}, [*scope, 'requestId', 'profileId', 'command'])),
         'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. Does not execute or replay a check.', schema({**scope,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, list(scope))),
@@ -106,31 +107,57 @@ class TestQueue:
         return self.app.db.execute("SELECT COUNT(*) FROM commands WHERE json_extract(receipt,'$.commandAction')=? AND " + clause, params).fetchone()[0]
 
     def chat_available(self, receipt):
-        """FIFO admission across all targets, with retained ownership as the fence.
+        """Ordered barriers plus explicit independent work; retained owners count once.
 
-        A terminal queue outcome does not prove the environment was removed.
-        Remote environments also have an origin allocation before source transfer;
-        checking that ledger preserves their exact target through lost responses.
+        Target selection never changes the per-chat budget. The allocator repeats
+        the capacity check atomically across queue and manual environment actions.
         """
         identity, sid = receipt['requestId'], receipt['senderSessionId']
-        earlier = self.app.db.execute("""SELECT 1 FROM commands
+        independent = receipt['job'].get('independent') is True
+        limits = execution_settings.concurrency(self.app)
+        limit = limits['maxEnvironmentsPerChat']
+        entries = self.app.db.execute("""SELECT id,coalesce(json_extract(receipt,'$.job.attempt'),0),
+            coalesce(json_extract(receipt,'$.job.independent'),0) FROM commands
             WHERE json_extract(receipt,'$.commandAction')=?
             AND json_extract(receipt,'$.senderSessionId')=? AND id!=?
             AND json_extract(receipt,'$.job.status') IN ('queued','starting','checking','stopping','removing')
             AND (rowid<(SELECT rowid FROM commands WHERE id=?)
-                 OR json_extract(receipt,'$.job.status')!='queued') LIMIT 1""",
-            (ACTION, sid, identity, identity)).fetchone()
-        reason = 'Waiting for an earlier check in this chat to finish and clean up.' if earlier else None
-        if reason is None:
-            with closing(environments.storage.connect(self.app.data_dir)) as db:
-                owned = db.execute("""SELECT body FROM allocations WHERE root=?
-                    AND status!='retired' AND json_extract(body,'$.kind')=?""", (sid, environments.KIND)).fetchall()
-            command = identity+':start:'+str(receipt['job'].get('attempt', 0))
-            # Preserve recovery of the allocation-before-queue-link crash gap.
-            # prepare still validates every immutable field before reusing it.
-            if any((row := json.loads(encoded[0])).get('commandId') != command
-                   or row.get('backendAdmitted') for encoded in owned):
-                reason = 'Waiting for this chat’s previous test environment cleanup to be confirmed.'
+                 OR json_extract(receipt,'$.job.status')!='queued')""",
+            (ACTION, sid, identity, identity)).fetchall()
+        earlier = [{'requestId': item[0], 'attempt': item[1], 'independent': item[2] == 1} for item in entries]
+        reason = None
+        if earlier and (not independent or any(not row['independent'] for row in earlier)):
+            reason = 'Waiting for an earlier check in this chat to finish and clean up.'
+        with closing(environments.storage.connect(self.app.data_dir)) as db:
+            owned = [dict(zip(('id', 'commandId', 'backendAdmitted'), row)) for row in db.execute("""SELECT id,json_extract(body,'$.commandId'),json_extract(body,'$.backendAdmitted') FROM allocations WHERE root=?
+                AND status!='retired' AND json_extract(body,'$.kind')=?""", (sid, environments.KIND))]
+            total, root_total = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
+        command = identity+':start:'+str(receipt['job'].get('attempt', 0))
+        own = [row for row in owned if row.get('commandId') == command and not row.get('backendAdmitted')]
+        other_owners = [row for row in owned if row not in own]
+        # Earlier queued checks reserve FIFO positions. Once allocated, count
+        # the same command only once, even before its resourceId is linked.
+        occupants = {row.get('commandId', row['id']) for row in other_owners}
+        occupants.update(row['requestId']+':start:'+str(row['attempt']) for row in earlier)
+        # A terminal queue receipt can still own a live/unknown environment.
+        # Preserve its ordinary ordering barrier until that exact owner retires;
+        # overlap requires the original check, not only the new one, to opt in.
+        if reason is None and independent and other_owners:
+            barrier = self.app.db.execute("""SELECT 1 FROM commands
+                WHERE json_extract(receipt,'$.commandAction')=?
+                AND json_extract(receipt,'$.senderSessionId')=? AND id!=?
+                AND coalesce(json_extract(receipt,'$.job.independent'),0)!=1
+                AND id||':start:'||coalesce(json_extract(receipt,'$.job.attempt'),0)
+                    IN (SELECT value FROM json_each(?)) LIMIT 1""",
+                (ACTION, sid, identity, json.dumps([row.get('commandId') for row in other_owners]))).fetchone()
+            if barrier:
+                reason = 'Waiting for an earlier check in this chat to finish and clean up.'
+        if reason is None and other_owners and not independent:
+            reason = 'Waiting for this chat’s previous test environment cleanup to be confirmed.'
+        if reason is None and not own and len(occupants) >= limit:
+            reason = 'Waiting for this chat’s test environment capacity and cleanup to be confirmed.'
+        if reason is None and not own and (total >= limits['maxOwnedResources'] or root_total >= limits['maxOwnedResourcesPerChat']):
+            reason = 'Waiting for retained resource owner capacity. Inspect retained resources or adjust Advanced execution limits in Settings.'
         if reason:
             if receipt['job'].get('detail') != reason:
                 receipt['job']['detail'] = reason
@@ -168,7 +195,7 @@ class TestQueue:
     def public(self, receipt):
         job = receipt['job']
         value = {key: copy.deepcopy(job[key]) for key in ('id', 'status', 'createdAt', 'updatedAt', 'expiresAt',
-            'resourceId', 'capacity', 'testMachine', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'resourceRequest', 'timingRequest', 'guestJob') if key in job}
+            'resourceId', 'independent', 'capacity', 'testMachine', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'resourceRequest', 'timingRequest', 'guestJob') if key in job}
         # Full output lives in the existing exact operation receipt. Queue lists
         # cannot multiply a 32 KiB command result by the page size.
         for phase in ('launch', 'check', 'cleanup', 'removal'):
@@ -194,8 +221,9 @@ class TestQueue:
             raise ValueError('The assignment stopped; its queued check will not start.')
         self.app.configuration_authority.check(job.get('authority'))
         config, _, _ = environments.configuration(self.app)
-        if job.get('runnerCandidates') and job.get('targetBound'):
-            config = registered_runners.resolve_job(self.app, job, config)
+        retained = registered_runners.resolve_job(self.app, job, config) if job.get('runnerCandidates') else None
+        if retained and (job.get('targetBound') or retained.get('originSnapshotVersion') == 1):
+            config = retained
         elif not config or environments.config_key(config) != job['backendKey']:
             raise ValueError('The approved test backend changed; this request will not start on another backend.')
         capacity_settings.load(self.app)
@@ -361,7 +389,7 @@ class TestQueue:
                 'causalDepth': owner.causal_depth(source, lineage, origin),
                 'assignmentId': source.get('assignmentId'),
                 'subscription': owner.saved_wait(source, identity, status='waiting' if notify else 'disabled'),
-                'job': {'id': args['requestId'], 'status': 'queued', 'createdAt': now, 'updatedAt': now,
+                'job': {'id': args['requestId'], 'independent': args.get('independent', False), 'status': 'queued', 'createdAt': now, 'updatedAt': now,
                     'expiresAt': now + wait_seconds if wait_seconds else None,
                     'source': source.get('workingDirectory') or source['workspace'],
                     'binding': binding(source), 'authority': authority,
@@ -523,8 +551,10 @@ class TestQueue:
             args['previousRequestId'] = previous_request
         if action == 'execute' and job.get('durableVersion') == 1:
             args['durableJob'] = True
-        request, fresh = app.operations.requests.begin(receipt['senderSessionId'],
-            'workspace.environments.'+action, args, job['actor'])
+        request, fresh = (environments.begin_removal(app, row, 'workspace.environments.'+action, args, job['actor'])
+                          if action in {'remove', 'finishCleanup'} else
+                          app.operations.requests.begin(receipt['senderSessionId'],
+                              'workspace.environments.'+action, args, job['actor']))
         if not fresh:
             return request
         loop = asyncio.get_running_loop()

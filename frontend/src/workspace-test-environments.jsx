@@ -49,18 +49,18 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
  current.current={key,active,page};
  const pending=useRef(draft.pending);
  const retain=(value,required=false)=>{try{sessionStorage.setItem(key,JSON.stringify(value))}catch{if(required)return false}pending.current=value.pending;if(mounted.current)setDraft(value);return true};
- const refresh=async()=>{
+ const refresh=async(offset=page?.offset||0)=>{
   inspectionEpoch.current++;setInspection(null);
   const token=++visit.current;
-  try{const value=unwrap(await act('workspace.environments.read',{workspaceId,sessionId}));if(live.current&&token===visit.current){inspectionEpoch.current++;setInspection(null);pageScope.current=key;setPage(value);setRequest(null);setError('')}}
+  try{const value=unwrap(await act('workspace.environments.read',{workspaceId,sessionId,offset}));if(live.current&&token===visit.current){inspectionEpoch.current++;setInspection(null);pageScope.current=key;setPage(value);setRequest(null);setError('')}}
   catch(e){if(live.current&&token===visit.current)setError(e.message)}
  };
  // Hidden panels still own pending requests; only unmount ends their UI lifetime.
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
- useEffect(()=>{live.current=active;if(active)refresh();return()=>{live.current=false;visit.current++}},[active,workspaceId,sessionId]);
+ useEffect(()=>{live.current=active;if(active)refresh(0);return()=>{live.current=false;visit.current++}},[active,workspaceId,sessionId]);
  useEffect(()=>{inspectionEpoch.current++;setInspection(null);return()=>{inspectionEpoch.current++}},[active,workspaceId,sessionId]);
  const waiting=(page?.checks||[]).some(row=>['queued','starting','preparing','checking','stopping','removing'].includes(row.status))||['accepted','running'].includes(page?.setup?.operation?.state)||['accepted','running'].includes(page?.setup?.operation?.cleanup?.state);
- useEffect(()=>{if(!active||!waiting)return;const timer=setInterval(()=>{if(!inFlight.current)refresh()},5000);return()=>clearInterval(timer)},[active,waiting,workspaceId,sessionId]);
+ useEffect(()=>{if(!active||!waiting)return;const timer=setInterval(()=>{if(!inFlight.current)refresh()},5000);return()=>clearInterval(timer)},[active,waiting,workspaceId,sessionId,page?.offset]);
  const mutate=async(action,args={})=>{
   if(inFlight.current||!active||readOnly)return;
   const saved=pending.current||{action,args:{workspaceId,sessionId,...args,requestId:args.requestId||crypto.randomUUID()},id:crypto.randomUUID()};
@@ -156,15 +156,16 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     <details><summary>Check details</summary><pre className="a-state-view">{JSON.stringify(check,null,2)}</pre></details>
    </li>)}</ul>
   </section>}
-  {!readOnly&&capability?.status==='ready'&&!waiting&&!rows.some(row=>row.status!=='removed')&&<form aria-label="Queue isolated check" onSubmit={event=>{event.preventDefault();mutate('workspace.tests.submit',{profileId:profile.id,command:draft.command,timeoutSeconds:profile.defaultTimeoutSeconds,notify:false})}}>
+  {!readOnly&&capability?.status==='ready'&&<form aria-label="Queue isolated check" onSubmit={event=>{event.preventDefault();mutate('workspace.tests.submit',{profileId:profile.id,command:draft.command,timeoutSeconds:profile.defaultTimeoutSeconds,independent:draft.independent===true,notify:false})}}>
    <label htmlFor={form+'-queued-profile'}>Check environment</label><select id={form+'-queued-profile'} disabled={blocked} value={profile?.id||''} onChange={event=>retain({...draft,profileId:event.target.value})}>{profiles.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}</select>
    <label htmlFor={form+'-queued-command'}>Check command</label><textarea id={form+'-queued-command'} value={draft.command} maxLength={16000} disabled={blocked} placeholder="python -m unittest discover" onChange={event=>retain({...draft,command:event.target.value})}/>
    <p>Runs once in a snapshot of the working folder taken when the check starts. The host saves the working folder and artifacts before removing the test environment. {profile?.defaultTimeoutSeconds?`The check has a ${Math.ceil(profile.defaultTimeoutSeconds/60)}-minute limit.`:''} {profile?.preparationRequired?'The first check prepares this project’s locked dependencies before running; preparation may download packages.':''}</p>
+   <label><input type="checkbox" checked={draft.independent===true} disabled={blocked} onChange={event=>retain({...draft,independent:event.target.checked})}/> This check can run independently of other checks</label><p>Independent checks may overlap when the global limits and test machine have room. Leave this off if the check must wait for earlier results.</p>
    <button type="submit" className="a-soft" disabled={blocked||!draft.command.trim()||!profile?.defaultTimeoutSeconds}>Queue check</button>
   </form>}
   {page&&rows.length===0&&<p>No test environment for this chat.</p>}
   <ul>{rows.map(row=>{const cleanupBlocked=controlsBlocked||row.recovery?.available!==true,failedCleanup=['workspace.environments.remove','workspace.environments.finishCleanup'].includes(row.lastOperation?.action)&&row.lastOperation?.state==='failed'&&row.lastOperation?.result?.effectAdmitted===false&&['preserving','verifying'].includes(row.lastOperation?.result?.phase)&&['preservation_failed','archive_verification_failed'].includes(row.lastOperation?.result?.code)?row.lastOperation:null,accounting=row.retention?.accounting,savedBytes=accounting?.verified?storageSize(accounting.totalBytes):null;return <li key={row.id} data-test-environment={row.id} style={{overflowWrap:'anywhere'}}>
-   <strong>{row.label||'Test environment'}</strong><p role="status">{row.observation?.status==='unverified'?'Last known environment':'Environment'}: {row.status?.replaceAll('_',' ')||'unknown'}</p>
+   <strong>{row.label||'Test environment'}</strong><p>Environment {row.id} · {row.testMachine?.name||'Local test runner'}</p><p role="status">{row.observation?.status==='unverified'?'Last known environment':'Environment'}: {row.status?.replaceAll('_',' ')||'unknown'}</p>
    {row.reason&&<p>{row.reason}</p>}
    {row.preparation&&<p role="status">Dependency preparation: {row.preparation.status?.replaceAll('_',' ')}. {row.preparation.phase} {row.preparation.reason}</p>}
    {row.observation?.status==='unverified'&&<p>Current state could not be verified. This is a saved observation.</p>}
@@ -215,8 +216,10 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     </div>}
    </>}
   </li>})}</ul>
+  {page?.offset>0&&<button type="button" className="a-link" disabled={busy||!active} onClick={()=>refresh(Math.max(0,page.offset-10))}>Newer environments</button>}
+  {page?.nextOffset!=null&&<button type="button" className="a-link" disabled={busy||!active} onClick={()=>refresh(page.nextOffset)}>Older environments</button>}
   {last&&<div data-part="environment-result">
-   <p role="status">Last request: {last.state?.replaceAll('_',' ')||'unknown'}</p>
+   <p role="status">Last request: {last.state?.replaceAll('_',' ')||'unknown'}</p><p>Request: {last.requestId}{last.resourceId?` · Environment: ${last.resourceId}`:''}</p>
    {output?.exit_code!=null&&<p>Exit code: {output.exit_code}</p>}
    {output?.stdout&&<pre className="a-state-view">{output.stdout}</pre>}
    {output?.stderr&&<pre className="a-state-view">{output.stderr}</pre>}
@@ -225,7 +228,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    <details><summary>Request details</summary><pre className="a-state-view">{JSON.stringify(last,null,2)}</pre></details>
   </div>}
   <button type="button" className="a-soft" disabled={busy||!active} onClick={()=>refresh()}>Refresh test environments</button>
-  {!readOnly&&capability?.status==='ready'&&!waiting&&!rows.some(row=>row.status!=='removed')&&<form aria-label="Start test environment" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.start',{profileId:profile?.id||draft.profileId})}}>
+  {!readOnly&&capability?.status==='ready'&&!waiting&&(capability.ownedEnvironments??rows.filter(row=>row.status!=='removed').length)<(capability.maxEnvironmentsPerChat??1)&&<form aria-label="Start test environment" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.start',{profileId:profile?.id||draft.profileId})}}>
    <label htmlFor={form+'-profile'}>Environment</label><select id={form+'-profile'} disabled={blocked} value={profile?.id||draft.profileId} onChange={event=>retain({...draft,profileId:event.target.value})}>{profiles.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}</select>
    <button type="submit" className="a-soft" disabled={blocked}>Start test environment</button>
   </form>}

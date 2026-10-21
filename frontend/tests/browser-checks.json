@@ -97,6 +97,7 @@
     {"id": "session-health-module-failure", "command": ["node", "tests/session-health-browser.mjs", "--module-failure"]},
     {"id": "activity-feedback", "command": ["node", "tests/activity-feedback-browser.mjs"]},
     {"id": "capacity", "command": ["node", "tests/capacity-browser.mjs"]},
+    {"id": "request-cancellation", "command": ["node", "tests/request-cancellation-browser.mjs"]},
     {"id": "coordination", "command": ["node", "tests/coordination-browser.mjs"]},
     {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]},
     {"id": "test-environments", "command": ["node", "tests/test-environments-browser.mjs"], "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python", "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/test-environments"}},

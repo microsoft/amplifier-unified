@@ -436,7 +436,7 @@ async def test_unknown_root_with_actual_work_still_occupies_single_cap_slot(app,
             app.state.setdefault("runtimeControl", {})[root["id"]] = {
                 "task.get": {"task": {"id": str(index), "status": "active"}}}
     args = {"title": "Ninth", "text": "new work"}
-    with pytest.raises(AppError, match="eight outstanding"):
+    with pytest.raises(AppError, match="8 outstanding"):
         await agent(app, source, "coordination.create", args, "bounded")
     # Release one actual slot; the unknown creation must not double-count it.
     roots[0].update(status="idle", collaborationGeneration={"terminal": True}, task=None)
@@ -465,7 +465,7 @@ async def test_concurrent_pending_creations_are_bounded_before_roots_exist(app, 
             {"title": str(index), "text": "bounded"}, f"pending-{index}") for index in range(8)))
         assert len({row["sessionId"] for row in receipts}) == 8
         assert len(app.state["sessions"]) == 2
-        with pytest.raises(AppError, match="eight outstanding"):
+        with pytest.raises(AppError, match="8 outstanding"):
             await agent(app, source, "coordination.create", {"title": "Ninth", "text": "bounded"}, "ninth")
     finally:
         release.set()
