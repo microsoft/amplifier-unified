@@ -209,3 +209,25 @@ def test_native_index_keeps_bounded_hints_when_raw_previews_cut_before_code(tmp_
     index.refresh()
     node=next(iter(index.nodes.values()))
     assert node['inputSummary']=={'code':'print("next")'} and not node['outcomeSummary']
+
+def test_old_native_index_checkpoint_cannot_hide_new_tool_hints(tmp_path):
+    import gzip
+    from amplifier_web.event_log_view import EventIndex
+    from amplifier_web.event_index_checkpoint import Checkpoints, encode
+    path=tmp_path/'events.jsonl'
+    write(path,tool_records(name='tool_exec',arguments={'description':'prefix '*100,'code':'print("retained")'}))
+    original=EventIndex(path,'s');original.refresh()
+    cache=Checkpoints(tmp_path/'host')
+    cache.directory.mkdir(parents=True)
+    old=encode(original);old['schema']=2
+    for _,node in old['nodes']:
+        node.pop('inputSummary',None);node.pop('outcomeSummary',None)
+    cache.path(path,'s').write_bytes(gzip.compress(json.dumps(old).encode()))
+    restored=EventIndex(path,'s')
+    assert not cache.load(restored)
+    restored.refresh()
+    assert next(iter(restored.nodes.values()))['inputSummary']['code']=='print("retained")'
+    cache.save(restored)
+    current=EventIndex(path,'s')
+    assert cache.load(current)
+    assert next(iter(current.nodes.values()))['inputSummary']['code']=='print("retained")'
