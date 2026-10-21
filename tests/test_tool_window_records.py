@@ -188,3 +188,24 @@ async def test_saved_content_io_failure_does_not_claim_source_changed(tmp_path,m
     monkeypatch.setattr(owner.projector,'project',refused)
     with pytest.raises(ValueError,match=wording):await owner.read_text('s',row['inputDetail'])
     await owner.close()
+
+def test_native_index_keeps_bounded_hints_when_raw_previews_cut_before_code(tmp_path):
+    from amplifier_web.event_log_view import EventIndex
+    path=tmp_path/'events.jsonl'
+    events=tool_records(name='tool_exec',arguments={'description':'leading detail '*100,'code':'print("visible code")'},
+        result={'success':False,'output':{'stdout':'long output '*100,'stderr':'Saved validation error','returncode':7}})
+    events[-1]['data'].pop('tool_input') # Legacy terminal retains original native input.
+    write(path,events)
+    index=EventIndex(path,'s');index.refresh()
+    node=next(iter(index.nodes.values()))
+    assert 'visible code' not in node['input']
+    assert node['inputSummary']['code']=='print("visible code")'
+    assert len(node['inputSummary']['description'])==180
+    assert node['outcomeSummary']=={'exitCode':7,'error':'Saved validation error'}
+    assert node['inputDetail'] and node['outputDetail']
+    with path.open('a') as stream:
+        stream.write(json.dumps({'event':'tool:pre','timestamp':3,'data':{'session_id':'s',
+            'tool_call_id':'call','tool_name':'tool_exec','tool_input':{'code':'print("next")'}}})+'\n')
+    index.refresh()
+    node=next(iter(index.nodes.values()))
+    assert node['inputSummary']=={'code':'print("next")'} and not node['outcomeSummary']
