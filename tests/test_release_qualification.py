@@ -555,10 +555,10 @@ def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate()
     assert 'always()' in upload['if'] and upload['with']['if-no-files-found'] == 'error'
     source = (ROOT / 'scripts/canvas_qualification.py').read_text()
     assert 'from browser_check_runner import run_scenarios' in source
-    assert \"BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs')\" in source
-    assert \"raise ValueError('Qualification already started; no replay')\" in source
-    assert \"'installed-harness'\" in source and \"'installed-identity.json'\" in source
-    assert \"assert static == json.loads((OUT / 'static.json').read_text())\" in source
+    assert "BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs')" in source
+    assert "raise ValueError('Qualification already started; no replay')" in source
+    assert "'installed-harness'" in source and "'installed-identity.json'" in source
+    assert "assert static == json.loads((OUT / 'static.json').read_text())" in source
 
 
 def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
