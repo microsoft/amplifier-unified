@@ -591,6 +591,8 @@ async def test_task_read_rejects_missing_caller_and_cross_workspace(tmp_path, mo
             await app.dispatch(action, args, origin='agent')
         with pytest.raises(AppError, match='history scope'):
             await app.dispatch(action, args, origin='agent', caller_session_id=reader)
+        with pytest.raises(AppError, match='calling conversation'):
+            await app.app_bridge('dispatch', {'action': action, 'args': args}, reader)
         with pytest.raises(AppError, match='native project'):
             await app.dispatch(action, {**args, 'nativeProject': 'not-this-project'})
     finally:
@@ -787,7 +789,8 @@ async def test_public_get_alias_is_bounded_and_does_not_change_canonical_cache(
 
 
 @pytest.mark.parametrize('fault', ['missing', 'malformed', 'oversized'])
-async def test_cold_saved_control_failure_is_unavailable_not_empty(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize('via', ['ui', 'agent'])
+async def test_cold_saved_control_failure_is_unavailable_not_empty(tmp_path, monkeypatch, fault, via):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     app = AppService(tmp_path / 'app', None, workspace=tmp_path)
     try:
@@ -801,7 +804,14 @@ async def test_cold_saved_control_failure_is_unavailable_not_empty(tmp_path, mon
             monkeypatch.setattr('amplifier_web.task_continuity.CONTROL_BYTES', 256)
         monkeypatch.setattr(app.history, 'ensure_loaded',
                             AsyncMock(side_effect=AssertionError('No transcript recovery')))
-        result = await app.dispatch('task.get', {'sessionId': sid})
+        def no_admission(*args, **kwargs):
+            pytest.fail('Passive failure must not admit a worker or publish state')
+        monkeypatch.setattr(app, '_admit_session', no_admission)
+        monkeypatch.setattr(app, '_publish_changes', no_admission)
+        if via == 'agent':
+            result = await app.app_bridge('dispatch', {'action': 'task.get', 'args': {'sessionId': sid}}, sid)
+        else:
+            result = await app.dispatch('task.get', {'sessionId': sid})
         assert result['result']['status'] == 'unavailable'
         assert result['result']['coverage'] == 'unknown'
         assert result['result']['detailRequired'] is True

@@ -223,11 +223,10 @@ class CoordinationDelivery:
 
     def begin_work(self, request):
         saved = self._request(request)
-        if not saved or saved['required']['status'] != 'available':
-            return None
-        required = saved['required']
-        generation = (required['rootSessionId'], required['generationId'])
-        if generation != self.binding_generation:
+        required = saved['required'] if saved else _unavailable_work()['required']
+        available = required['status'] == 'available'
+        generation = (required['rootSessionId'], required['generationId']) if available else None
+        if available and generation != self.binding_generation:
             self.attempts.clear()
             self.calls.clear()
             self.seen_calls.clear()
@@ -287,6 +286,9 @@ class CoordinationDelivery:
             self.calls = {key: row for key, row in self.calls.items() if row['attemptId'] != attempt['id']}
             return
         attempt['status'] = 'returned'
+        if attempt['required']['status'] != 'available':
+            self.finish_work(None, response)
+            return
         if attempt['native'] or streaming:
             # Native calls may already have executed; never assign the final
             # aggregate response identity to all returned tool calls.
@@ -341,6 +343,11 @@ class CoordinationDelivery:
         Nested provenance is not qualified by this direct-call implementation.
         """
         unavailable = {'complete': False, 'effectAuthorized': False, 'status': 'unavailable'}
+        active = WORK_ATTEMPT.get()
+        if active and active[1] and active[1]['status'] != 'returned':
+            # Early native/stream calls need their own proven transport origin.
+            # They cannot consume a completed ordinary request's same call ID.
+            return {**unavailable, 'reason': 'Early transport origin is not qualified.'}
         if data.get('parent_tool_call_id') or data.get('dispatch_source'):
             return {**unavailable, 'reason': 'Nested causal delivery is not qualified.'}
         row = self.calls.get(data.get('tool_call_id'))
