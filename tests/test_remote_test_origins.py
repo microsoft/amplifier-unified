@@ -118,7 +118,7 @@ def test_snapshot_preserves_symlink_text_never_destination(repository, tmp_path)
         pytest.skip('Creating native symlinks requires Windows developer mode or privilege')
     with tarfile.open(snapshots.export_archive(repository, tmp_path / 'source.tar')['path']) as archive:
         assert archive.getmember('link').issym()
-        assert archive.getmember('link').linkname == str(secret)
+        assert archive.getmember('link').linkname == os.readlink(link)
         assert 'secret' not in archive.getnames()
 
 
