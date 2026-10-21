@@ -215,7 +215,11 @@ class SurfaceProvider:
                         WORK_ATTEMPT.reset(token)
                 iterator = None
                 try:
-                    iterator = method(request, **kwargs)
+                    token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+                    try:
+                        iterator = aiter(method(request, **kwargs))
+                    finally:
+                        WORK_ATTEMPT.reset(token)
                     while True:
                         try:
                             event = await within_attempt(iterator.__anext__)

@@ -825,6 +825,7 @@ async def test_stream_attempt_context_does_not_cross_yield_or_aclose_task(work_b
             try:
                 seen.append(WORK_ATTEMPT.get())
                 yield 'first'
+                seen.append(WORK_ATTEMPT.get())
                 yield 'second'
             finally:
                 closed.append(WORK_ATTEMPT.get())
@@ -836,10 +837,77 @@ async def test_stream_attempt_context_does_not_cross_yield_or_aclose_task(work_b
         assert WORK_ATTEMPT.get() is None
         return value
     assert await asyncio.create_task(next_in_child()) == 'first'
+    assert await asyncio.create_task(next_in_child()) == 'second'
     assert WORK_ATTEMPT.get() is None
     await asyncio.create_task(iterator.aclose())
     assert WORK_ATTEMPT.get() is None
-    assert len(seen) == len(closed) == 1
-    assert seen[0][1] is closed[0][1]
+    assert len(seen) == 2 and len(closed) == 1
+    assert seen[0][1] is seen[1][1] is closed[0][1]
     assert seen[0][1]['status'] == 'unknown'  # Closed before a terminal response.
     assert not delivery.calls
+
+
+@pytest.mark.parametrize('work_bound', [False, True])
+@pytest.mark.parametrize('ending', ['completed', 'error', 'cancelled'])
+async def test_stream_attempt_restores_caller_and_closes_on_terminal_paths(work_bound, ending):
+    import asyncio
+    from amplifier_web.coordination_delivery import WORK_ATTEMPT
+    required = available_requirements() if work_bound else unavailable_requirements()
+    entered = asyncio.Event()
+    observed, closed = [], []
+    async def bridge(operation, args):
+        if operation == 'work.invocation.revalidate':
+            return {'current': True, 'required': required, 'effectAuthorized': False}
+        return {'work': {'available': True, 'discovery': empty_discovery(), 'required': required}}
+    class Provider:
+        async def stream(self, value, **kwargs):
+            try:
+                observed.append(WORK_ATTEMPT.get())
+                yield 'first'
+                observed.append(WORK_ATTEMPT.get())
+                entered.set()
+                if ending == 'error':
+                    raise RuntimeError('Synthetic stream failure')
+                if ending == 'cancelled':
+                    await asyncio.Event().wait()
+            finally:
+                closed.append(WORK_ATTEMPT.get())
+    delivery = CoordinationDelivery(Previous(), bridge)
+    iterator = SurfaceProvider(Provider(), delivery).stream(request())
+    sentinel = ('unrelated-caller', {'status': 'caller-state'})
+    token = WORK_ATTEMPT.set(sentinel)
+    pending = None
+    try:
+        assert await anext(iterator) == 'first'
+        assert WORK_ATTEMPT.get() is sentinel
+        async def consume():
+            try:
+                return await anext(iterator)
+            finally:
+                assert WORK_ATTEMPT.get() is sentinel
+        pending = asyncio.create_task(consume())
+        if ending == 'cancelled':
+            await entered.wait()
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        elif ending == 'error':
+            with pytest.raises(RuntimeError, match='Synthetic stream failure'):
+                await pending
+        else:
+            with pytest.raises(StopAsyncIteration):
+                await pending
+        assert WORK_ATTEMPT.get() is sentinel
+        await asyncio.create_task(iterator.aclose())
+        assert WORK_ATTEMPT.get() is sentinel
+        assert len(closed) == 1 and len(observed) == 2
+        attempt = observed[0][1]
+        assert observed[1][1] is closed[0][1] is attempt
+        assert attempt['status'] == ('returned' if ending == 'completed' else 'unknown')
+        assert not delivery.calls
+    finally:
+        if pending and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await iterator.aclose()
+        WORK_ATTEMPT.reset(token)
