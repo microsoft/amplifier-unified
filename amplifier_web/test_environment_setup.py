@@ -199,6 +199,11 @@ def discover():
 
 async def readiness(app, *, force=False):
     from .task_environments import configuration, invoke
+    config, state, reason = await settled_thread(configuration, app)
+    if config and config.get('remoteRunner'):
+        return {'status': 'ready', 'reason': reason, 'remote': True, 'backend': 'incus'}
+    if not sys.platform.startswith('linux'):
+        return {'status': state, 'reason': reason}
     raw = read_json(Path(app.data_dir) / 'test-environments.json')
     installs = [{'id': row.get('id'), 'status': row.get('status'), 'commit': row.get('commit'), 'python': row.get('python')} for row in getattr(getattr(app, 'smart_tools', None), 'state', {}).get('installations', [])]
     key = hashlib.sha256(json.dumps([raw, installs], sort_keys=True).encode()).hexdigest()
@@ -229,6 +234,13 @@ async def readiness(app, *, force=False):
 
 
 async def read(app):
+    from .task_environments import configuration
+    config, state, reason = await settled_thread(configuration, app)
+    if config and config.get('remoteRunner'):
+        return {'status': 'ready', 'reason': reason, 'remote': True, 'backend': 'incus',
+                'requestId': None, 'backends': [], 'operation': None}
+    if not sys.platform.startswith('linux'):
+        return {'status': state, 'reason': reason, 'requestId': None, 'backends': [], 'operation': None}
     cached = getattr(app, '_test_setup_discovery', None)
     if cached and time.monotonic() - cached['at'] < 60:
         choices = cached['value']

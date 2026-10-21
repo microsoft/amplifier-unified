@@ -176,13 +176,13 @@ try{
   else throw Error('Unexpected target action '+action);
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:true,result})});
  });
- const targetsRegion=page.getByRole('region',{name:'Other test machines',exact:true});
+ const targetsRegion=page.getByRole('region',{name:'Connected test machines',exact:true});
  await targetsRegion.getByRole('button',{name:'Refresh test machines',exact:true}).click();
  await targetsRegion.getByText('Connect a test machine',{exact:true}).click();
- await targetsRegion.getByLabel('Machine name',{exact:true}).fill('Office testing machine');
+ await targetsRegion.getByLabel('Name to show',{exact:true}).fill('Office testing machine');
  await targetsRegion.getByLabel('Saved SSH connection',{exact:true}).fill('office-tests');
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
- await expect(page.getByRole('alertdialog')).toContainText('Other test machines');
+ await expect(page.getByRole('alertdialog')).toContainText('Connected test machines');
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await targetsRegion.getByRole('button',{name:'Connect test machine',exact:true}).click();
  await expect(targetsRegion.getByRole('status').first()).toContainText('saved test machine matches');

@@ -149,3 +149,44 @@ manifest; adjacent bytecode cannot substitute for those sources, including when
 an older controller bootstraps into its qualified interpreter. These checks bind
 application-owned execution evidence; they are not an OS security boundary.
 
+
+## Remote testing from Mac, Windows, WSL or Linux
+
+A registered Linux machine can be the first and only testing backend. In global
+Settings → Testing → Connected test machines, choose an existing SSH connection
+to a machine whose native Incus runner is already configured. The origin needs
+Git and an SSH client with non-interactive authentication and a trusted host key.
+It does not need Docker, Incus, a Linux runtime or a managed DTU installation.
+Registration installs only the app's fixed, verified controller in the target
+account; it does not initialize a daemon, network, image or project. There is no
+new per-check permission prompt.
+
+The origin creates a deterministic snapshot of the selected Git working area,
+including dirty tracked and nonignored untracked files. Git metadata, ignored
+files, host configuration and credentials are not injected into the guest.
+Tracked source remains source: this is not a secret scanner. Source links are
+copied as link text without reading their destinations; submodule entries do not
+recursively copy other working areas. Snapshot output stays outside the source;
+no index, refs, hooks or source files are modified. A changing source, unmerged
+index or unsupported file fails before environment creation.
+
+The snapshot exporter is bundled with the app. Native Windows uses pinned Win32
+handles, rejects parent junctions/reparse points, and verifies retained authority
+records' owner and ACL. The current Windows account must own those records;
+ordinary other users cannot have write access (SYSTEM and Administrators retain
+normal OS authority). POSIX reads and writes remain relative to pinned directory
+descriptors, so replacing a parent cannot redirect a source read or receipt.
+Git for Windows link-text checkouts and executable index modes are preserved.
+
+Accepted checks retain their original controller, exact target, resource limits,
+source hash and cleanup identity. Pausing a machine prevents new selection;
+existing work and lost responses retain their original route. A waiting check
+may choose another of its already accepted targets before admission. It never
+moves after an uncertain effect. Remote capacity, execution and cleanup use the
+existing per-machine account authority; no origin-wide pool replaces it.
+
+The origin retains source and downloads verified evidence after target cleanup.
+If a download is interrupted, the authoritative target export remains available.
+Removing or pausing a current registration does not remove an admitted owner's
+retained recovery descriptor. A target whose SSH identity changes must be repaired
+through normal host trust; the app never silently accepts a new host key.
