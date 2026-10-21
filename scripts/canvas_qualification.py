@@ -100,6 +100,15 @@ def verify_installed():
     wheel, = sorted((OUT / 'dist').glob('*.whl'))
     venv = OUT / 'installed-venv'
     harness = OUT / 'installed-harness'
+    toolchain = (harness / 'frontend/node_modules').resolve(strict=True)
+    assert toolchain == (ROOT / 'frontend/node_modules').resolve(strict=True)
+    assert (toolchain / 'playwright/package.json').is_file()
+    assert shutil.which('node'), 'Installed renderer validation requires the prepared Node executable'
+    write(OUT / 'installed-toolchain.json', {
+        'nodeModules': str(toolchain), 'node': shutil.which('node'),
+        'packageLockSha256': sha(ROOT / 'frontend/package-lock.json'),
+        'playwrightPackageSha256': sha(toolchain / 'playwright/package.json'),
+    })
     probe = '''import amplifier_web,hashlib,json,pathlib,sys,zipfile
 package=pathlib.Path(amplifier_web.__file__).resolve().parent
 assert package.is_relative_to(pathlib.Path(sys.prefix).resolve())
