@@ -67,7 +67,11 @@ try{
  // Persisted presentation may reopen, but reload is not a local request to steal focus.
  await composer.waitFor();
  assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('.a-composer-options-panel')),false);
- if(await menu.isVisible())await menu.getByRole('button',{name:'Done',exact:true}).click();
+ if(await menu.isVisible()){
+  await expect.poll(()=>menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.left>=0&&r.bottom<=innerHeight+1&&r.right<=innerWidth+1})).toBe(true);
+  await page.screenshot({path:output+'/restored-options-mobile.png'});
+  await menu.getByRole('button',{name:'Done',exact:true}).click();
+ }
  await options.click();await expect(menu).toBeVisible();
  await menu.getByRole('button',{name:'Manage connections'}).click();
  await expect(menu).toHaveCount(0);

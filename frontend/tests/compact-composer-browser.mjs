@@ -75,8 +75,14 @@ try{
  await input.evaluate((el,text)=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain',text);el.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}));},quoteDraft);
  await expect(input).toHaveDraft(quoteDraft);
  await page.reload();await input.waitFor();await expect(input).toHaveDraft('Before\n\n> First reference\n\nBetween\n\n> Second reference\n\nAfter');await expect(primary).toBeInViewport();
- // CSS zoom is a layout stress check, not a claim about physical browser zoom shortcuts.
- await page.setViewportSize({width:800,height:1000});await page.locator('#amp-one').evaluate(el=>el.style.zoom='2');await expect(primary).toBeInViewport();assert.equal((await measure()).pageOverflow,false);await page.screenshot({path:output+'/compact-zoom2.png'});await page.locator('#amp-one').evaluate(el=>el.style.zoom='');
+ // Emulate the CSS viewport and pixel density of an 800x1000 display at 200%.
+ // CSS zoom alone leaves vh unchanged and doubles the app height; it is not browser zoom.
+ const cdp=await page.context().newCDPSession(page);
+ await cdp.send('Emulation.setDeviceMetricsOverride',{width:400,height:500,deviceScaleFactor:2,mobile:false});
+ await expect(primary).toBeInViewport();assert.equal((await measure()).pageOverflow,false);
+ evidence.zoomReflow={kind:'CDP 2x pixel-density / half CSS viewport, not physical browser zoom',cssViewport:await page.evaluate(()=>({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})),geometry:await measure()};
+ await page.screenshot({path:output+'/compact-zoom-reflow2.png'});
+ await cdp.send('Emulation.clearDeviceMetricsOverride');await cdp.detach();await page.setViewportSize({width:800,height:1000});
  await clearComposer(input);await input.fill('A retained first message');await primary.click();await page.getByText('Synthetic first response',{exact:true}).waitFor();assert.equal(sends.length,1);await expect(input).toHaveDraft('');
  assert.deepEqual(errors,[]);await writeFile(output+'/compact-composer.json',JSON.stringify(evidence,null,2));console.log('PASS compact composer: rendered geometry, modes, long text, attachments, quote-shaped Markdown, focus, composition, reload, synthetic send; limits retained.');
 }catch(error){

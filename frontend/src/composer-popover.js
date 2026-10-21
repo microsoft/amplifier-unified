@@ -3,9 +3,13 @@ import {createPortal} from 'react-dom';
 // Container queries make the conversation a containing block for fixed children.
 // Mount menus at the shell root so viewport coordinates remain viewport-relative.
 export function useComposerPopover(open,ref){
- const panelRef=useRef(null),[style,setStyle]=useState({visibility:'hidden'});
+ const panelRef=useRef(null),[style,setStyle]=useState({visibility:'hidden'}),[host,setHost]=useState(null);
+ // On a restored open menu, the shell root may not exist during render yet.
+ // Never fall back to an inline fixed child of the conversation container:
+ // those viewport coordinates would be interpreted relative to that container.
+ useLayoutEffect(()=>{if(open)setHost(document.getElementById('amp-one'))},[open]);
  useLayoutEffect(()=>{
-  if(!open)return;
+  if(!open||!host)return;
   const panel=panelRef.current,anchor=ref.current?.querySelector('button');
   if(!panel||!anchor)return;
   const place=()=>{
@@ -19,7 +23,7 @@ export function useComposerPopover(open,ref){
   window.addEventListener('resize',place);window.addEventListener('scroll',place,true);
   window.visualViewport?.addEventListener('resize',place);window.visualViewport?.addEventListener('scroll',place);
   return()=>{observer.disconnect();window.removeEventListener('resize',place);window.removeEventListener('scroll',place,true);window.visualViewport?.removeEventListener('resize',place);window.visualViewport?.removeEventListener('scroll',place)};
- },[open,ref]);
- const renderPopover=content=>{const host=typeof document!=='undefined'?document.getElementById('amp-one'):null;return host?createPortal(content,host):content};
+ },[open,ref,host]);
+ const renderPopover=content=>host?createPortal(content,host):null;
  return {style,panelRef,renderPopover};
 }
