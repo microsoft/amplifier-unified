@@ -61,7 +61,33 @@ async def main(home):
         service.schedules.store.review(owner['id'], record['id'], 'The user stopped this chat.', now[0])
         service.schedules.changed()
         return web.json_response({'stopped': True})
+    async def empty(request):
+        authorize(request)
+        # Reset only this disposable fixture, never the user's scheduling ledger.
+        with service.schedules.store.transaction():
+            service.schedules.store.db.execute('DELETE FROM schedule_runs')
+            service.schedules.store.db.execute('DELETE FROM schedules')
+        control = controls(current)
+        control.coordinator.config = {'session': {'context': {'module': 'context-simple'}}, 'providers': [{'module': 'synthetic', 'config': {'default_model': 'test-model'}}]}
+        control.selection = {'instance': 'synthetic', 'model': 'test-model'}
+        control.persist(); await control.close()
+        service._session(current)['selection'] = dict(control.selection)
+        service.schedules.changed()
+        return web.json_response({'now': now[0], 'sessionId': current})
+    async def journey(request):
+        authorize(request)
+        return web.json_response({'schedules': service.schedules.store.list(current), 'runs': service.schedules.store.runs(current), 'inputs': runtime.inputs})
+    async def uncertain(request):
+        authorize(request)
+        saved = service.schedules.store.get(current, request.query['id']) if 'id' in request.query else service.schedules.store.list(current)[0]
+        service.schedules.store.put_run({'id': 'uncertain-demo-run', 'sessionId': current, 'scheduleId': saved['id'], 'dueAt': now[0], 'phase': 'unknown', 'revision': 1, 'detail': 'Unconfirmed result; inspect effects, never replay.'})
+        service.schedules.store.review(current, saved['id'], 'A prior run has an uncertain outcome.', now[0])
+        service.schedules.changed()
+        return web.json_response({'unknown': True})
     app.router.add_get('/fixture/inspect', inspect);app.router.add_post('/fixture/tick', tick);app.router.add_post('/fixture/stop', stop)
+    app.router.add_post('/fixture/empty', empty)
+    app.router.add_get('/fixture/journey', journey)
+    app.router.add_post('/fixture/uncertain', uncertain)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins']=app['allowed_origins']|{url}

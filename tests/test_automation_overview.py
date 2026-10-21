@@ -10,6 +10,17 @@ from amplifier_web.session_creation import template, configuration_matches
 from test_schedule_new_tasks import fixture, create
 
 
+def test_focused_schedule_navigation_is_valid_and_repeatable_without_authority_change():
+    from amplifier_web.runtime_navigation import update
+    value = update({}, {'panel': 'chat-work', 'runtimeDraft': {'section': 'schedules'}})
+    assert value['panel'] == 'chat-work'
+    assert value['runtimeDraft'] == {'section': 'schedules', 'tab': 'direction', 'revealRevision': 1}
+    again = update(value, {'runtimeDraft': {'section': 'schedules'}})
+    assert again['panel'] == 'chat-work' and again['runtimeDraft']['revealRevision'] == 2
+    with pytest.raises(AppError, match='different Chat controls tab'):
+        update({}, {'runtimeDraft': {'section': 'schedules', 'tab': 'computer'}})
+
+
 async def test_overview_is_bounded_read_without_owner_loading_or_work(tmp_path, monkeypatch):
     app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
     try:
