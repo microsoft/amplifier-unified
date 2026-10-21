@@ -808,3 +808,38 @@ async def test_effect_observation_rechecks_stop_without_grant_or_replay(app):
     value = await adapter.capabilities['web.work_effect_coverage'](event)
     assert value['complete'] is False and value['effectAuthorized'] is False
     assert len(adapter.delivery.attempts) == 1  # No reread, regrant, or provider retry.
+
+
+@pytest.mark.parametrize('work_bound', [False, True])
+async def test_stream_attempt_context_does_not_cross_yield_or_aclose_task(work_bound):
+    import asyncio
+    from amplifier_web.coordination_delivery import WORK_ATTEMPT
+    required = available_requirements() if work_bound else unavailable_requirements()
+    seen, closed = [], []
+    async def bridge(operation, args):
+        if operation == 'work.invocation.revalidate':
+            return {'current': True, 'required': required, 'effectAuthorized': False}
+        return {'work': {'available': True, 'discovery': empty_discovery(), 'required': required}}
+    class Provider:
+        async def stream(self, value, **kwargs):
+            try:
+                seen.append(WORK_ATTEMPT.get())
+                yield 'first'
+                yield 'second'
+            finally:
+                closed.append(WORK_ATTEMPT.get())
+    delivery = CoordinationDelivery(Previous(), bridge)
+    iterator = SurfaceProvider(Provider(), delivery).stream(request())
+    async def next_in_child():
+        assert WORK_ATTEMPT.get() is None
+        value = await anext(iterator)
+        assert WORK_ATTEMPT.get() is None
+        return value
+    assert await asyncio.create_task(next_in_child()) == 'first'
+    assert WORK_ATTEMPT.get() is None
+    await asyncio.create_task(iterator.aclose())
+    assert WORK_ATTEMPT.get() is None
+    assert len(seen) == len(closed) == 1
+    assert seen[0][1] is closed[0][1]
+    assert seen[0][1]['status'] == 'unknown'  # Closed before a terminal response.
+    assert not delivery.calls

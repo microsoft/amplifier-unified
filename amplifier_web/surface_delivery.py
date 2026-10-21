@@ -205,11 +205,22 @@ class SurfaceProvider:
                 request = await self._prepare(request, commit=True)
                 from .coordination_delivery import WORK_ATTEMPT
                 attempt = self.delivery.begin_work(request) if hasattr(self.delivery, 'begin_work') else None
-                token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+                async def within_attempt(operation):
+                    # __anext__ and aclose may run in different consumer tasks.
+                    # Never carry a ContextVar token across an outward yield.
+                    token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+                    try:
+                        return await operation()
+                    finally:
+                        WORK_ATTEMPT.reset(token)
                 iterator = None
                 try:
                     iterator = method(request, **kwargs)
-                    async for event in iterator:
+                    while True:
+                        try:
+                            event = await within_attempt(iterator.__anext__)
+                        except StopAsyncIteration:
+                            break
                         yield event
                     if attempt:
                         self.delivery.finish_work(attempt, streaming=True)
@@ -218,11 +229,8 @@ class SurfaceProvider:
                         self.delivery.finish_work(attempt, failed=True)
                     raise
                 finally:
-                    try:
-                        if callable(getattr(iterator, "aclose", None)):
-                            await iterator.aclose()
-                    finally:
-                        WORK_ATTEMPT.reset(token)
+                    if callable(getattr(iterator, "aclose", None)):
+                        await within_attempt(iterator.aclose)
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, **kwargs):
