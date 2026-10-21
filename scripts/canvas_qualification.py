@@ -22,7 +22,7 @@ OUT = ROOT / 'output/canvas-qualification'
 PUBLIC = ROOT / 'output/canvas-qualification-public'
 BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs')
 UNITS = ('canvas-overview.test.mjs', 'shell-panels.test.mjs', 'work-shell.test.mjs',
-         'canvas-reload-guard.test.mjs', 'canvas-app-viewer.test.mjs')
+         'canvas-reload-guard.test.mjs', 'canvas-app-viewer.test.mjs', 'navigation-demand.test.mjs')
 
 
 def sha(path):
@@ -81,7 +81,7 @@ def prepare_installed():
                     '--format', 'requirements-txt', '--output-file', str(OUT / 'requirements.txt')], cwd=ROOT, check=True)
     subprocess.run(['uv', 'venv', '--python', sys.executable, str(venv)], check=True)
     subprocess.run(['uv', 'pip', 'install', '--python', str(venv / 'bin/python'),
-                    '--no-build-package', 'amplifier-core', '-r', str(OUT / 'requirements.txt')], check=True)
+                    '--only-binary', 'amplifier-core', '-r', str(OUT / 'requirements.txt')], check=True)
     subprocess.run(['uv', 'pip', 'install', '--python', str(venv / 'bin/python'), '--no-deps', str(wheel)], check=True)
     subprocess.run(['uv', 'pip', 'check', '--python', str(venv / 'bin/python')], check=True)
     (harness / 'frontend').mkdir(parents=True)
