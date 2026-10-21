@@ -68,12 +68,13 @@ def test_cli_normalizes_old_service_environment_before_generation_delegation(iso
     assert result.value.code == 0 and observed == [str(uv)]
 
 
-def test_reset_cli_finds_helper_before_entering_dependency_free_repair(isolated_tools, monkeypatch):
+def test_reset_discovers_helper_without_ordinary_startup_dependencies(isolated_tools, monkeypatch):
     from amplifier_web import cli, reset
     uv = executable(isolated_tools / '.local/bin/uv')
     monkeypatch.setattr(sys, 'argv', ['amplifier-unified', 'reset', '--dry-run'])
     observed = []
-    monkeypatch.setattr(reset, 'run', lambda args: observed.append((shutil.which('uv'), args.dry_run)))
+    monkeypatch.setattr(dependencies, 'prepare_environment', lambda: pytest.fail('Repair must not require ordinary startup'))
+    monkeypatch.setattr(reset, 'run', lambda args: observed.append((reset.find_uv(), args.dry_run)))
     cli.main()
     assert observed == [(str(uv), True)]
 

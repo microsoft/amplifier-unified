@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.207",
+      "title": "Reliable Linux setup and conversation settings",
+      "changes": [
+        "Apply conversation settings correctly when the app starts its worker through uv. Missing worker identity now stops the change before it can leave chat input blocked. Previously unresolved changes still require explicit recovery; nothing is replayed automatically.",
+        "Find uv in its standard installation location during setup and managed service startup, with Linux-specific guidance for missing prerequisites and clearer recovery errors.",
+        "Keep emergency reset usable when the ordinary startup helper is missing or damaged, while still finding uv in its standard location.",
+        "Keep the ChatGPT sign-in button readable across supported themes and interaction states.",
+        "Show the relevant release summary before, during and after an update, including when a newer release replaces a waiting update."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.206",
       "title": "Keep open Work details available as activity arrives",
       "changes": [
