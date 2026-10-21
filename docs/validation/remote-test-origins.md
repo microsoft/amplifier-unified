@@ -12,6 +12,9 @@ registered target's existing admission, operation and cleanup controls.
 - Focused Linux source, receipt, queue, retained-configuration and recovery checks:
   61 passed, two native-Windows-only cases skipped. Local setup regression lane:
   27 passed. The existing task-environment lane also passed during development.
+- Combined with the request-stop and concurrency settings changes: 122 focused
+  backend checks passed, two native-Windows cases skipped. The final combined
+  build passed the mounted Settings browser flow; its repeated build was clean.
 - Native macOS origin: registered an already configured Linux target using its
   existing SSH authentication and strict host-key verification; copied dirty and
   untracked source; excluded an ignored fixture file; executed a normal check
