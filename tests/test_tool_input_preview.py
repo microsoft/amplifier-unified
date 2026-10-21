@@ -48,7 +48,8 @@ def test_huge_values_have_visible_bounded_truncation_without_full_traversal():
 
 
 @pytest.mark.parametrize('key', ['password', 'clientSecret', 'api-key', 'access_token', 'Authorization',
-    'refreshToken', 'cookie', 'private_key', 'credentials', 'service.apiKey', 'x-api-key', 'PASSWORD', 'x' * 200])
+    'refreshToken', 'cookie', 'private_key', 'credentials', 'service.apiKey', 'x-api-key', 'PASSWORD',
+    'secret_key', 'aws_secret_access_key', 'authorization_header', 'password_hash', 'api_key_value', 'x' * 200])
 def test_secret_named_values_are_never_traversed(key):
     class NoTouch(dict):
         def items(self):
@@ -175,3 +176,7 @@ def test_action_path_limits_whitespace_and_string_size():
     assert len(result['actionPath']) == 180 and result['actionPath'].endswith('…')
     result = hints.input_hints('app_control', {'operation': 'dispatch', 'args': {'action': ' ' * 2000 + 'late'}})
     assert result['actionPath'].endswith('…')
+
+
+def test_token_count_and_limits_are_not_hidden_as_credentials():
+    assert hints.input_preview({'max_tokens': 0, 'token_count': 10, 'tokenizer': 'plain'}) == 'max_tokens=0, token_count=10, tokenizer="plain"'

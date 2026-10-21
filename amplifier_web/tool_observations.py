@@ -25,15 +25,15 @@ def input_summary(value):
 PREVIEW_ITEMS = 4
 PREVIEW_NODES = 24
 PREVIEW_DEPTH = 2
-_SECRET_SUFFIXES = ('password', 'passwd', 'secret', 'token', 'apikey', 'privatekey',
-                    'signingkey', 'credential', 'credentials', 'authorization', 'cookie')
+_SECRET_FRAGMENTS = ('password', 'passwd', 'secret', 'apikey', 'privatekey',
+                     'signingkey', 'accesskey', 'credential', 'authorization', 'cookie')
 
 
 def _secret_key(key):
     if not isinstance(key, str) or len(key) > 96:
         return True
     normalized = re.sub(r'[^a-z0-9]', '', key.lower())
-    return normalized.endswith(_SECRET_SUFFIXES)
+    return normalized.endswith('token') or any(part in normalized for part in _SECRET_FRAGMENTS)
 
 
 def input_preview(value):
