@@ -50,7 +50,7 @@ try{
  const updateUnread=(await state()).attention.pages.updates;assert.equal(updateUnread,2,'Fixture supplies two current release notices');
  assert.equal(await page.locator('[data-settings-section=updates] .a-attention-badge').innerText(),String(updateUnread));
  await openSettingsPage(page,'updates');
- const advanced=page.locator('[data-part=ecosystem-update-details]');if(!await advanced.evaluate(el=>el.open))await advanced.locator(':scope > summary').click();await page.getByText('What’s new',{exact:true}).click();
+ const advanced=page.locator('[data-part=ecosystem-update-details]');if(!await advanced.evaluate(el=>el.open))await advanced.locator(':scope > summary').click();await page.locator('[data-part=important-release-changes]>summary').click();
  await page.locator('#available-updates-list > li').first().waitFor();
  assert.equal(await page.locator('#available-updates-list > li').count(),1);
  assert.match(await page.locator('#available-updates-list').innerText(),/×2/);
