@@ -742,6 +742,28 @@ state isolation. The new smoke is a regression owner, not a requirement to rerun
 the unrelated browser census before release. Frozen inventory counts remain
 unchanged; current results must name the actual source/build and cleanup outcome.
 
+### Fresh Linux installation and helper recovery (October 21)
+
+Before the first AI connection, exercise a restricted initial PATH with no uv
+and missing curl/Git. Ubuntu instructions must identify all missing prerequisites
+together and must never prescribe Xcode. The installer provisions its helper
+and passes its directory to the app and generated service without a shell reload
+or reboot. Repeat with uv already in `~/.local/bin`, legacy `~/.cargo/bin`, and a
+custom PATH location; preserve custom executable precedence and dispatcher names.
+
+Start with a stale service PATH, then retry after installing the helper. Both
+ChatGPT sign-in and API-key model discovery must identify an unavailable host
+helper accurately; generic provider errors and secrets remain redacted. Doctor
+checks helper discovery; reset keeps the existing service/data ownership and
+uses the same startup environment. Owners: `test_installer_script.py`,
+`test_host_dependencies.py`, `test_deployment_service.py`, and `test_setup.py`.
+These run in Public readiness; use focused DTU checks for installation changes.
+The maintained `chatgpt-sign-in` browser journey also checks both launch links
+(Open ChatGPT and Continue with ChatGPT) for keyboard focus and at least 4.5:1
+text contrast at desktop/phone widths in light/dark appearance. Accessible names
+alone do not prove the visible text can be read. Synthetic downloads and
+subprocess/browser checks do not prove live account sign-in.
+
 ### Everyday settings draft ownership (October 19)
 
 The existing `settings-everyday-browser.mjs` Public readiness journey starts by

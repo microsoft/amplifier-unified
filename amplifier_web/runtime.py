@@ -301,9 +301,8 @@ class RuntimeManager:
         if self.command:
             return list(self.command)
         worker = Path(__file__).with_name("runtime_worker.py")
-        uv = shutil.which("uv")
-        if not uv:
-            raise RuntimeError("Install uv to prepare the Amplifier runtime.")
+        from .host_dependencies import require_uv
+        uv = require_uv()
         # The packaged manifest is copied to a writable cache: installed package
         # directories may be read-only and uv creates its lock and .venv there.
         from .updates import active_release
