@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {resizeComposer,composerPrimaryAction} from '../src/composer.js';
+import {resizeComposer,composerPrimaryAction,composerExpanded} from '../src/composer.js';
+test('compact presentation expands content without altering it or action priority',()=>{
+ assert.equal(composerExpanded({draft:''}),false);
+ assert.equal(composerExpanded({draft:'Ready to send'}),false);
+ for(const value of [{draft:'First\nSecond'},{draft:'x'.repeat(81)},{attachments:[{id:'file'}]},{quote:{id:'quote'}}]){
+  const before=structuredClone(value);
+  assert.equal(composerExpanded(value),true);assert.deepEqual(value,before);
+ }
+ assert.equal(composerExpanded({draft:'x'.repeat(80)}),false);
+});
 test('composer starts compact, expands with content, and scrolls only at its bound',()=>{
  const element={style:{},scrollHeight:28};resizeComposer(element);assert.equal(element.style.height,'44px');assert.equal(element.style.overflowY,'hidden');
  element.scrollHeight=112;resizeComposer(element);assert.equal(element.style.height,'112px');
