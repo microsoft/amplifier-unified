@@ -249,6 +249,32 @@ async def test_unbounded_or_body_bearing_work_projection_fails_closed():
     assert projected['discovery'].get('total') is None  # Failed projection is not trusted.
 
 
+@pytest.mark.parametrize('change', ['small_body', 'claimed_grant', 'false_complete'])
+async def test_work_projection_rejects_invalid_semantics_even_below_byte_limit(change):
+    work = {'available': True, 'discovery': empty_discovery(),
+            'required': unavailable_requirements()}
+    if change == 'small_body':
+        work['discovery']['total'] = 1
+        work['discovery']['items'] = [{
+            'id': 'work-1', 'revision': 1, 'promiseRevision': 1,
+            'originalSource': {'text': 'SOURCE_BODY_SHOULD_NOT_BE_IN_PREFIX'},
+            'readRef': {'action': 'workspace.work.read',
+                        'args': {'workspaceId': 'workspace-1', 'id': 'work-1'}}}]
+    elif change == 'claimed_grant':
+        work['required']['effectAuthorized'] = True
+    else:
+        work['required']['coverage']['complete'] = True
+    assert len(json.dumps(work).encode()) < WORK_CONTEXT_BYTES
+    async def bridge(operation, args):
+        return {'work': work}
+    value = await CoordinationDelivery(Previous(), bridge).prepare(request(), None)
+    result = observation(value)['work']
+    assert result['available'] is False
+    assert result['required']['coverage']['complete'] is False
+    assert result['required']['effectAuthorized'] is False
+    assert 'SOURCE_BODY_SHOULD_NOT_BE_IN_PREFIX' not in value.model_dump_json()
+
+
 @pytest.mark.parametrize('stream', [False, True])
 async def test_work_observation_is_measured_and_transported_once_per_request(stream):
     calls, measured, transported = [], [], []
