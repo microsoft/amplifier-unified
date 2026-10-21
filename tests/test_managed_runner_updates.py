@@ -717,3 +717,63 @@ def test_public_tool_inventory_on_platform_without_posix_capabilities(tmp_path, 
         assert all(row['status'] == 'not_checked' and not row['eligible'] for row in rows)
     else:
         assert rows == []
+
+
+@pytest.mark.parametrize('policy_case',['disabled','grace','eligible'])
+async def test_update_trigger_uses_global_cleanup_policy_and_guarded_owner(app,monkeypatch,policy_case):
+    import asyncio
+    import sqlite3
+    from amplifier_web import storage_cleanup, update_retention
+    from amplifier_web.smart_tool_lifecycle import Lifecycle
+    from test_storage_cleanup_runner import git
+    folder=app.data_dir/'smart-tools/installs'/('d'*24)
+    checkout=folder/'source';checkout.mkdir(parents=True)
+    git(checkout,'init','-q');git(checkout,'config','user.name','Fixture');git(checkout,'config','user.email','fixture@example.invalid')
+    (checkout/'code.py').write_text('answer=42\n');git(checkout,'add','.');git(checkout,'commit','-qm','Installed source')
+    oldest={'id':'d'*24,'commit':git(checkout,'rev-parse','HEAD'),
+            'runnerCandidate':True,'repository':environments.REPOSITORY}
+    app.smart_tools.state['installations'].append(oldest)
+    private.write_json(updates.record_path(app,'e'*32),{'state':'superseded',
+        'candidate':{'installationId':oldest['id']},'runtime':RUNTIME})
+    app.state['updates']={'phase':'installed'}
+    app.db=sqlite3.connect(':memory:')
+    app.db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,fingerprint TEXT,receipt TEXT)')
+    app.lock=asyncio.Lock()
+    app.update_manager=SimpleNamespace(service=app,home=app.data_dir,directory=app.data_dir/'updates',
+        wakeup=asyncio.Event(),lock=asyncio.Lock(),awaiting_restart=lambda:False)
+    settings={**storage_cleanup.DEFAULTS,'enabled':policy_case!='disabled',
+              'keepDays':3650 if policy_case=='grace' else 0,'maxUnusedBytes':0}
+    storage_cleanup.store(app,storage_cleanup.POLICY,settings)
+    app.smart_tools.root=app.data_dir/'smart-tools';app.smart_tools.service=app
+    app.smart_tools.install_lock=asyncio.Lock()
+    async def mutate(function):function(app.smart_tools.state)
+    app.smart_tools._change=mutate
+    calls=[]
+    async def uninstall(identity,**kwargs):
+        calls.append((identity,kwargs))
+        return await Lifecycle.uninstall(app.smart_tools,identity,**kwargs)
+    app.smart_tools.uninstall=uninstall
+    original=update_retention._probe
+    async def synthetic_runtime_only(operation,values,**kwargs):
+        if operation=='runner':return None
+        return await original(operation,values,**kwargs)
+    monkeypatch.setattr(update_retention,'_probe',synthetic_runtime_only)
+    async def no_process_references(*args,**kwargs):return ''
+    monkeypatch.setattr(update_retention,'inspect_references',no_process_references)
+    staged=await updates.stage(app,source(app))
+    monkeypatch.setattr(probe,'advance',qualified)
+    assert (await updates.advance(app,staged['runnerUpdate']))['complete']
+    # Completion schedules the existing maintenance owner; it must not call
+    # unselected retirement before that owner evaluates the global policy.
+    assert not calls and folder.exists()
+    assert app.update_manager.wakeup.is_set() and app.update_manager._storage_policy_due
+    result=await storage_cleanup.run(app,'after-update-'+policy_case,automatic=True)
+    if policy_case=='eligible':
+        assert len(calls)==1 and calls[0][0]==oldest['id']
+        assert calls[0][1]['cleanup_inventory']['id']==oldest['id']
+        assert callable(calls[0][1]['cleanup_guard'])
+        assert not folder.exists() and oldest not in app.smart_tools.state['installations']
+        assert result['effects'][0]['status']=='completed' and result['removedFileBytes']>0
+    else:
+        assert not calls and folder.exists() and oldest in app.smart_tools.state['installations']
+    assert updates.referenced(app.data_dir,selected(app)['installationId'])

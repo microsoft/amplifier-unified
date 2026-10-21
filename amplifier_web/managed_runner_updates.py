@@ -242,6 +242,8 @@ async def advance(app, identity):
                 raise RunnerUpdateError('managed-runner-package-changed')
             record.update(state='selected', selectedAt=record.get('selectedAt', time.time()))
             private.write_json(path, record)
+            from .storage_cleanup import request_maintenance
+            request_maintenance(app)
             return {'complete': True}
         config = record['normalized']
         changed = (selected != record['previous'] or
@@ -294,7 +296,8 @@ async def advance(app, identity):
             private.write_json(Path(app.data_dir) / 'test-environments.json', record['candidate'])
             record.update(state='selected', selectedAt=time.time())
             private.write_json(path, record)
-        await retire(app)
+        from .storage_cleanup import request_maintenance
+        request_maintenance(app)
         return {'complete': True}
 
 

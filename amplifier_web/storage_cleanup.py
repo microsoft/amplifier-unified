@@ -52,6 +52,14 @@ def read(app):
             'preserved': 'Chats, working folders, saved test sources and results, shared dependency stores, current and rollback versions, and uncertain work are kept.'}
 
 
+def request_maintenance(app):
+    """Wake the single policy owner; a standalone qualifier never removes code."""
+    manager = getattr(app, 'update_manager', None)
+    if manager is not None:
+        manager._storage_policy_due = True
+        manager.wakeup.set()
+
+
 def lock(app):
     if not hasattr(app, '_storage_cleanup_lock'):
         app._storage_cleanup_lock = asyncio.Lock()
@@ -244,6 +252,5 @@ async def dispatch(app, action, args, origin, command_id):
         except BaseException:
             app.db.rollback()
             raise
-        app.update_manager._storage_policy_due = True
-        app.update_manager.wakeup.set()
+        request_maintenance(app)
         return receipt

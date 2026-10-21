@@ -220,6 +220,9 @@ The size target currently applies to the fully measured eligible batch, not a
 hard ceiling on all host storage. The age policy reaches other candidates in
 later batches. Automatic checks run hourly while the app is open and after
 existing updater maintenance triggers; update/activation work takes priority.
+Successful runner selection only wakes this policy owner; it cannot bypass the
+global off setting or retention grace. Explicit user uninstall and Skip actions
+retain their separate existing authorization and exact-owner guards.
 
 The policy never deletes chats, project folders, Git worktrees, saved test source
 or result archives, the only copy of an artifact, shared dependency stores, or
