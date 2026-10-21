@@ -80,8 +80,10 @@ def prepare_installed():
     subprocess.run(['uv', 'export', '--locked', '--no-dev', '--no-emit-project',
                     '--format', 'requirements-txt', '--output-file', str(OUT / 'requirements.txt')], cwd=ROOT, check=True)
     subprocess.run(['uv', 'venv', '--python', sys.executable, str(venv)], check=True)
+    # This is the complete uv.lock export, not a list of direct requirements.
+    # Do not re-resolve transitive Git @main metadata against its pinned commit.
     subprocess.run(['uv', 'pip', 'install', '--python', str(venv / 'bin/python'),
-                    '--only-binary', 'amplifier-core', '-r', str(OUT / 'requirements.txt')], check=True)
+                    '--no-deps', '--only-binary', 'amplifier-core', '-r', str(OUT / 'requirements.txt')], check=True)
     subprocess.run(['uv', 'pip', 'install', '--python', str(venv / 'bin/python'), '--no-deps', str(wheel)], check=True)
     subprocess.run(['uv', 'pip', 'check', '--python', str(venv / 'bin/python')], check=True)
     (harness / 'frontend').mkdir(parents=True)

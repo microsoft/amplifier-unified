@@ -292,15 +292,21 @@ try{
    });
   }
  }
- await check('200 percent CSS zoom retains navigation and lower content',async()=>{
+ await check('200 percent equivalent layout viewport retains navigation and lower content',async()=>{
   await page.setViewportSize({width:1280,height:900});await overviewTab.click();
-  await page.locator('#amp-one').evaluate(el=>el.style.zoom='2');
+  // Browser zoom reduces the CSS layout viewport. CSS zoom on #amp-one alone
+  // instead doubles its 100dvh box and is not a faithful browser-zoom emulation.
+  // CDP emulates the half-size layout viewport and 2x pixel density; this is not
+  // evidence of an OS/browser-toolbar zoom action or a physical device.
+  const metrics=await context.newCDPSession(page);
+  await metrics.send('Emulation.setDeviceMetricsOverride',{width:640,height:450,deviceScaleFactor:2,mobile:false});
   try{
-   await requireReachable(toggle,'Header toggle at 200 percent CSS zoom');
-   await top();await page.keyboard.press('End');await requireReachable(summary('publishing'),'Publishing at 200 percent CSS zoom');
-   await capture('emulated-css-zoom-200');
-  }finally{await page.locator('#amp-one').evaluate(el=>el.style.removeProperty('zoom'))}
-  return {scale:2,method:'CSS zoom, not physical/browser UI zoom'};
+   await expect.poll(()=>page.evaluate(()=>[innerWidth,innerHeight,devicePixelRatio])).toEqual([640,450,2]);
+   await requireReachable(toggle,'Header toggle at 200 percent equivalent layout');
+   await top();await page.keyboard.press('End');await requireReachable(summary('publishing'),'Publishing at 200 percent equivalent layout');
+   await capture('emulated-layout-zoom-200');
+  }finally{await metrics.send('Emulation.clearDeviceMetricsOverride');await metrics.detach();await page.setViewportSize({width:1280,height:900})}
+  return {scale:2,layout:{width:640,height:450},method:'CDP layout viewport and pixel density, not physical/browser-toolbar zoom'};
  });
  await check('native all-open list, exact counts, close-active/last and saved recovery',async()=>{
   await page.setViewportSize({width:1500,height:850});await action('view.update',{patch:{canvasWidth:720,canvasOverviewWidth:720}});
