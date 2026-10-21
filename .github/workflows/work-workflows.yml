@@ -11,6 +11,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Record the checked-out build source
+        id: build-source
+        run: |
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -31,7 +36,17 @@ jobs:
       - name: Test frontend
         run: npm test --prefix frontend
       - name: Build frontend
+        id: frontend-build
         run: npm run build --prefix frontend
+      - name: Retain the successful production web build
+        if: ${{ steps.frontend-build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: work-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}
+          path: amplifier_web/static/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify committed frontend assets
         run: git diff --exit-code -- amplifier_web/static
       - name: Record frontend proof
