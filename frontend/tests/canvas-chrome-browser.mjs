@@ -8,6 +8,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {acceptedCanvasReceipt} from './canvas-test-receipts.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const base=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-checks');
@@ -20,6 +21,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/empty_host_ui_server.py','--chat-controls'],{stdio:['ignore','pipe','pipe']});
 let browser,context,page,failure,stdout='',stderr='',phase='exercise';
 const pendingReceipts=[];
+const observedReceipts=new Map();
 fixture.stderr.on('data',chunk=>stderr+=chunk);
 const unwrap=body=>body?.action==='shell.command'?(body.args.command||body.args):body;
 const isAction=request=>request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions';
@@ -49,7 +51,8 @@ try{
  page.on('response',response=>{
   if(!isAction(response.request()))return;
   const row={phase,request:unwrap(response.request().postDataJSON()),status:response.status()};report.http.push(row);
-  pendingReceipts.push(response.json().then(body=>{row.body=body},error=>{row.readError=errorText(error)}));
+  const settled=response.json().then(body=>{row.body=body},error=>{row.readError=errorText(error)});
+  observedReceipts.set(response.request(),{row,settled});pendingReceipts.push(settled);
  });
  page.on('requestfailed',request=>{if(isAction(request))report.http.push({phase,request:unwrap(request.postDataJSON()),transportError:request.failure()})});
  const action=async(name,args={})=>{
@@ -349,7 +352,18 @@ try{
   await expect(panel.getByRole('heading',{name:'Document 30',exact:true})).toBeVisible();
   await panel.getByRole('button',{name:'Go to Latest',exact:true}).click();
   await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
-  await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+  await expect(panel.getByRole('button',{name:'Canvas details',exact:true})).toHaveAttribute('aria-expanded','true');
+  const [closedResponse]=await Promise.all([page.waitForResponse(response=>{
+   if(!isAction(response.request()))return false;
+   const command=unwrap(response.request().postDataJSON());
+   return command.action==='view.update'&&command.args.sessionId===sessionId
+    &&JSON.stringify(command.args.patch)===JSON.stringify({canvasControlsExpanded:false});
+  },{timeout:8000}),panel.getByRole('button',{name:'Canvas details',exact:true}).click()]);
+  const command=unwrap(closedResponse.request().postDataJSON());
+  const closedReceipt=await acceptedCanvasReceipt(observedReceipts.get(closedResponse.request()),command.id);
+  await expect(panel.getByRole('button',{name:'Canvas details',exact:true})).toHaveAttribute('aria-expanded','false');
+  await expect(page.locator('#canvas-options')).toBeHidden();
+  report.detailsCloseBeforeReload={commandId:command.id,status:closedReceipt.status,body:closedReceipt.body,bodyReadBeforeReload:true,closed:true};
   await page.reload();await showFixtureConversation(page,{navPinned:false});
   await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();await expect(page.locator('#canvas-options')).toBeHidden();
   await overviewTab.click();await top();await revealByWheel(overview.getByRole('button',{name:'Open file',exact:true}));
