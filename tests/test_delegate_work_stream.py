@@ -37,12 +37,14 @@ def recorded_delegate(session, path, monkeypatch, *, trailing_tools=0):
 
     def hook(name, data):
         tick[0] += 1
-        record = {'event': name, 'timestamp': tick[0], 'session_id': root,
-                  'data': {'session_id': root, **data}}
+        captured = {'session_id': root, **data}
+        if name.startswith('tool:'):
+            captured = observer.hook(root, name, captured)
+            assert captured['unified_tool_observation_id'] == (
+                observer.calls[(root, captured['tool_call_id'])]['toolObservationId'])
+        record = {'event': name, 'timestamp': tick[0], 'session_id': root, 'data': captured}
         with path.open('a', encoding='utf-8') as stream:
             stream.write(json.dumps(record, ensure_ascii=False) + '\n')
-        if name.startswith('tool:'):
-            observer.hook(root, name, record['data'])
 
     arguments = {'agent': 'review', 'instruction': request}
     hook('tool:pre', {'tool_call_id': 'delegate-one', 'tool_name': 'delegate',
@@ -178,7 +180,26 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
         if trailing_tools:
             assert seen_cursors, 'The out-of-tail case must demand older work explicitly'
         assert all(len(page['items']) <= 100 for page in pages)
-        descriptors = exchanges([row for page in pages for row in page['items']])
+        rows = [row for page in pages for row in page['items']]
+        if mode == 'resident':
+            target = next(row for row in rows if row.get('kind') == 'tool'
+                          and row.get('toolCallId') == 'delegate-one')
+            continuation = {}
+            for _ in range(8):
+                response = await client.get('/api/conversation/detail', params={
+                    **target['toolDetail'], **continuation})
+                assert response.status == 200, await response.text()
+                loaded = await response.json()
+                if loaded['before'] is None:
+                    break
+                continuation = {'lookupKey': loaded['lookupKey'], 'before': loaded['before']}
+            else:
+                pytest.fail('Saved delegate lookup exceeded eight pages')
+            assert loaded['item']['contentAvailability']['status'] == 'linked'
+            assert loaded['item']['toolObservationId'] == target['toolObservationId']
+            descriptors = exchanges([loaded['item']])
+        else:
+            descriptors = exchanges(rows)
 
         async def read_exact(reference):
             value, offset, reads = '', 0, 0

@@ -58,12 +58,11 @@ try{
  const empty=await open('empty');assert.match(await empty.innerText(),/No output/);
  const failed=await open('failed');assert.match(await failed.innerText(),/AssertionError: expected committed/);assert.match(await failed.innerText(),/Exit 1/);assert.equal(await failed.locator('.a-execution-warning').count(),1);
  const malformed=await open('malformed');assert.match(await malformed.innerText(),/unknown/);assert.match(await malformed.innerText(),/Invalid task input/);
- const delegated=await open('delegate');assert.match(await delegated.innerText(),/Review the retry test/);
- assert.equal(await delegated.locator('[data-kind="worker"] > button').count(),0);
- const activity=delegated.getByRole('button',{name:/^Worker activity/});
- assert.equal(await activity.getAttribute('aria-expanded'),'false');
- await activity.click();
- assert.equal(await activity.getAttribute('aria-expanded'),'true');
+ const delegated=turn.getByRole('region',{name:'Request',exact:true});
+ await expect(delegated).toContainText('Review the retry test');
+ await expect(turn.locator('[data-kind="worker"] > button')).toHaveCount(0);
+ await expect(turn.getByRole('button',{name:/^Worker activity/})).toHaveCount(0);
+ await expect(action('nested').locator(':scope > button')).toHaveAttribute('aria-expanded','false');
  const nested=await open('nested');assert.match(await nested.innerText(),/git diff --check/);assert.match(await nested.innerText(),/No output/);
  await page.locator('[data-node-id="legacy"] > button').click();
  assert.match(await page.locator('[data-node-id="legacy"]').innerText(),/Action content is not (?:available|in the loaded saved work)/);assert.ok(!(await turn.innerText()).includes('Tool completed'));

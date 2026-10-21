@@ -8,6 +8,7 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium, expect} from '@playwright/test';
 import {mkdirSync} from 'node:fs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const fixture = spawn(root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
@@ -78,6 +79,7 @@ try {
   for (const [name, viewport] of [['desktop', {width: 1280, height: 1000}], ['mobile', {width: 390, height: 844}]]) {
     await page.setViewportSize(viewport);
     await page.goto(url);
+    await showFixtureConversation(page);
     await page.getByRole('textbox', {name: 'Message Amplifier'}).waitFor();
     const work = page.locator(`[data-group-id="${turnId}@question"]`);
     const toggle = work.locator(':scope > button');
@@ -124,11 +126,43 @@ try {
     await work.scrollIntoViewIfNeeded();
     await page.screenshot({path: root + `test-results/delegate-work-stream-${name}.png`, fullPage: true});
   }
+  // The separate live scenario drives actual metadata-only observer hooks and
+  // UUID-stamped canonical records through the registered-browser UI. The
+  // earlier scene alone is only presentation proof; this is not cold placement.
+  const instruction='OBSERVER REQUEST café\n'+('request body 日本語\n'.repeat(1200))+'REQUEST-END';
+  const reply='OBSERVER REPLY\n'+('reply body café\n'.repeat(1500))+'REPLY-END';
+  await control({op:'delegate-observer',instruction,reply});
+  const fieldRequests=[];
+  page.on('request',request=>{
+    if(request.url().includes('/api/conversation/detail?'))fieldRequests.push({
+      query:new URL(request.url()).searchParams,client:request.headers()['x-amplifier-client']});
+  });
+  await page.setViewportSize({width:1280,height:1000});
+  await page.reload();
+  await showFixtureConversation(page);
+  const observed=page.locator('[data-group-id="observer-turn@observer-question"]');
+  const observedToggle=observed.locator(':scope > button');
+  await expect(observedToggle).toBeVisible();
+  if(await observedToggle.getAttribute('aria-expanded')!=='true')await observedToggle.click();
+  await expect(observed.getByRole('region',{name:'Request',exact:true})).toContainText('OBSERVER REQUEST café');
+  await expect(observed.getByRole('region',{name:'Reply',exact:true})).toContainText('OBSERVER REPLY');
+  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{
+    writeText:async text=>{window.copied=text}
+  }}));
+  await observed.getByRole('button',{name:'Copy request',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.copied)).toBe(instruction);
+  await observed.getByRole('button',{name:'Copy reply',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.copied)).toBe(reply);
+  assert.ok(fieldRequests.some(item=>item.query.get('part')==='tool'&&item.client),'Real browser must follow saved-tool lookup');
+  assert.ok(fieldRequests.some(item=>item.query.get('field')==='delegateResponse'&&Number(item.query.get('offset'))>0),'Long reply must use more than one field chunk');
   assert.deepEqual(errors, []);
   const inspection = await control({op: 'inspect-work-source'});
+  const source=inspection.sessions.find(row=>row.id===alpha);
+  assert.ok(source.execution.nodes.every(row=>!Object.hasOwn(row,'input')&&!Object.hasOwn(row,'output')),
+    'UI inspection must not inject canonical bodies into live observer metadata');
   assert.equal(inspection.runtimeStarts, 0);
   assert.equal(inspection.runtimeSends, 0);
-  console.log('PASS presentation-only: interleaving, independent operation disclosure, narrow layout; NOT capture/persistence acceptance.');
+  console.log('PASS: synthetic interleaving/layout plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
 } finally {
   await browser?.close();
   fixture.kill();
