@@ -739,8 +739,6 @@ class UpdateManager:
                             detail='App update available. Included components will be checked after the new app restarts.' if app_available else 'Component checks are waiting for the application check.')
                         return
                     tier = 'included'
-                from .managed_runner_updates import retire as retire_runner_code
-                await retire_runner_code(self.service)
                 started = time.monotonic()
                 rows = await self.inventory_sources(indexed=True)
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
@@ -1322,6 +1320,10 @@ class UpdateManager:
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
         if self.awaiting_restart():return
+        if (getattr(self, '_storage_policy_due', False) or time.time() - getattr(self, '_storage_last_pass', 0) >= 3600) and (not self.cleanup_task or self.cleanup_task.done()):
+            self._storage_policy_due = False
+            self._storage_last_pass = time.time()
+            self.cleanup_task = asyncio.create_task(self.retire_storage())
         usage = getattr(self.service.runtime, 'generation_usage', lambda: [])()
         adoption = {'activeWorkers': len(usage), 'pendingWorkers': sum(row['updatePending'] for row in usage)}
         if state.get('adoption') != adoption:
@@ -1405,8 +1407,8 @@ class UpdateManager:
             return
         started = time.monotonic()
         try:
-            from .update_retention import reclaim
-            storage = await reclaim(self)
+            from .storage_cleanup import run
+            storage = await run(self.service, uuid.uuid4().hex, automatic=True)
             await self.publish(storage={**storage, 'durationMs': round((time.monotonic() - started) * 1000)})
         except Exception:
             await self.publish(storage={'reason': 'Storage reclamation was deferred; existing files were kept.'})

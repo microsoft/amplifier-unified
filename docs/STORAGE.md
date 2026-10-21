@@ -189,3 +189,52 @@ rollback button changes ecosystem dependencies, not application storage versions
 ### Shared session projection index
 
 Each saved generation builds one transient index of session IDs, direct/native parent candidates, active chats and bounded notification previews. Browser and Terminal projections share those catalog facts while applying their own selection, drafts and notification visibility. Cross-project native aliases still use the canonical parent-matching rules. Every save invalidates this index, even without a revision increment; cached views must never outlive their saved state generation.
+
+
+## Automatic cleanup of unused code
+
+Settings → Storage → **Automatic cleanup** applies to every workspace on this
+app installation. It is enabled by default, with a seven-day period beginning
+when an owned code copy is first verified unused, and a 10 GiB size target.
+Zero days removes the extra waiting period; a zero size target disables size
+pressure. Turning automatic cleanup off leaves explicit, reviewed cleanup
+available. Settings changes use a revision check, and a lost reply is recovered
+with the original request ID rather than submitting another cleanup.
+
+The policy asks the existing ecosystem-generation and purpose-installed test
+runner owners to remove only copies they can still prove unused. Current and
+rollback versions, live generation leases, configurations, observed process
+references, local source edits/untracked files/unpublished commits, and uncertain
+operations protect a copy. Owners repeat their checks at removal admission;
+links are not followed as cleanup targets. Files changed during ecosystem
+retirement remain in an owned quarantine for inspection. Interrupted cleanup
+receipts remain visible and are not permission to repeat an uncertain effect.
+
+**Review unused copies** is an explicit bounded inspection. The ordinary setting
+read performs no scan and starts no worker. Each pass inspects at most four
+ecosystem candidates and eight purpose-installed runner candidates, with time
+limits and a retained cursor. Incomplete inspection is labeled; uninspected
+copies stay put. File-content measurements are not physical disk-allocation
+promises: hard links, shared runtimes and copy-on-write blocks can retain storage.
+The size target currently applies to the fully measured eligible batch, not a
+hard ceiling on all host storage. The age policy reaches other candidates in
+later batches. Automatic checks run hourly while the app is open and after
+existing updater maintenance triggers; update/activation work takes priority.
+Successful runner selection only wakes this policy owner; it cannot bypass the
+global off setting or retention grace. Explicit user uninstall and Skip actions
+retain their separate existing authorization and exact-owner guards.
+
+The policy never deletes chats, project folders, Git worktrees, saved test source
+or result archives, the only copy of an artifact, shared dependency stores, or
+old application-installation generations. Current, previously selected,
+rollback and unknown Incus engine generations also remain retained until their
+shared references can be proved absent. Those categories remain inspectable by
+the existing Storage tools; user-file deletion keeps its explicit review.
+
+Receipts record the selected file-content total, completed removals and
+unconfirmed attempts. They do not claim unknown effects succeeded. Browser
+qualification uses the built client and production service with a small
+synthetic installed graph: global settings, stale concurrent saves, exact retry
+after a lost save/cleanup acknowledgment, real owner removal, saved evidence
+preservation, and desktop/narrow draft protection. It makes no claim that a
+production installation or a remote runner has been cleaned.

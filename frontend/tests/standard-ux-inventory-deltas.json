@@ -1858,6 +1858,74 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#per-chat-test-queue-october-20"
+    },
+    {
+      "id": "delta.960",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/960",
+      "reason": "Add a global consumer cleanup policy with explicit protected data and recoverable mutations; original frozen inventory is unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "settings.automatic-storage-cleanup",
+          "family": "settings",
+          "title": "Review and clean unused component copies safely",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Privacy & files",
+            "Storage",
+            "Automatic cleanup"
+          ],
+          "prerequisites": [
+            "Private production AppService fixture and built client",
+            "Synthetic qualified installed graph; actual disposable files; no provider or production effects"
+          ],
+          "steps": [
+            "Save global retention and size settings",
+            "Reject a stale writer while retaining its private draft",
+            "Lose a save acknowledgement, reopen and check the same request",
+            "Preview eligible and protected copies without removal",
+            "Lose a cleanup acknowledgement, reopen and reobserve the same receipt",
+            "Inspect preserved work and narrow-layout draft protection"
+          ],
+          "expectedResults": [
+            "Saved global policy applies to all workspaces and defaults to enabled, 7 days and 10 GiB.",
+            "Stale revisions cannot overwrite current settings; drafts are retained.",
+            "Lost replies reconcile the same durable request without repeating effects.",
+            "Preview is read-only and labels bounded logical-byte accounting.",
+            "Canonical removal deletes only the proven unused fixture generation while preserving project work, source archives and results.",
+            "No worker starts or stops occur and desktop/narrow controls remain usable."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer",
+            "dirty-close"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/storage-cleanup-settings-browser.mjs",
+              "relation": "Registered production client/service browser owner with actual disposable-file retirement"
+            },
+            {
+              "path": "tests/test_storage_cleanup.py",
+              "relation": "Canonical retirement, late references, exact retries, bounded accounting and uncertainty retention"
+            },
+            {
+              "path": "tests/test_storage_cleanup_runner.py",
+              "relation": "Git work preservation and policy/process races at installation removal locks"
+            }
+          ],
+          "limits": [
+            "Logical file content is not physical reclaimed disk space.",
+            "Batch measurement is bounded; the size target is not a global disk quota.",
+            "Selected and unknown engine generations, shared stores and saved source/result archives are preserved.",
+            "Synthetic installed metadata does not qualify a production runtime or deployment."
+          ]
+        }
+      ],
+      "qualification": "docs/STORAGE.md#automatic-cleanup-of-unused-code"
     }
   ]
 }
