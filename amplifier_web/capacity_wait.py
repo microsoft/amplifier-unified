@@ -7,6 +7,7 @@ import copy
 from .capacity import admission
 from .collaboration import BINDING, PRINCIPAL
 from .management import Management
+from .handoff_admission import finishing_turn
 from .model_capacity_settings import policy
 
 
@@ -45,7 +46,8 @@ async def admit(service, sid, args):
                 or row.get('turnId') not in expected[1]
                 or current.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}):
             return 'The input or generation changed while waiting; no provider request was sent.'
-        if current.get('configurationBusy') or current.get('fileAccessPending') or Management.unresolved_configuration(current):
+        if (current.get('configurationBusy') and not finishing_turn(service, current, row)
+                or current.get('fileAccessPending') or Management.unresolved_configuration(current)):
             return 'Conversation access or configuration changed while waiting; no provider request was sent.'
         if (current.get('failure') or {}).get('category') in {'content_filter', 'computer_capture_stop'}:
             return 'A safety halt prevents this waiting request from continuing.'
