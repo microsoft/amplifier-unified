@@ -483,6 +483,22 @@ async def main():
                 for event in emitted:
                     kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
                 await service.on_runtime_event('execution.event',{'id':'legacy','kind':'tool','turnId':'inspect','label':'legacy.tool','phase':'completed','summary':'Tool completed. Expand any delegated actions below for their progress and results.'})
+            elif op=='inspection-previews':
+                from amplifier_web.runtime import normalize_event
+                emitted=[];events=LoggedEvents(aid,emitted.append);events.turn_id='inspect'
+                examples=json.loads((Path(__file__).parent/'tool-preview-cases.json').read_text())
+                examples += [
+                    {'name':'long-preview','tool':'custom_lookup','input':{'query':'Find the project schedule and next steps. '*150+'QUERY-END'}},
+                    {'name':'nested-failure','tool':'tool_exec','input':{'code':'const result = await tools.inspect(); text(result);'},
+                     'result':{'success':False,'error':{'message':'One or more nested calls did not confirm success'},'output':json.dumps({'error':{'code':'nested_call_failed','message':'One or more nested calls did not confirm success'},'calls':[{'name':'inspect','status':'unknown'}],'notes':'retained detail '*1200+'RESULT-END'},separators=(',',':'))}},
+                ]
+                for example in examples:
+                    identity='preview-'+example['name'];name=example['tool'];arguments=example['input']
+                    events.hook(aid,'tool:pre',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments})
+                    events.hook(aid,'tool:post',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments,
+                        'result':example.get('result',{'success':True,'output':{'matched':3,'next':None}})})
+                for event in emitted:
+                    kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
             elif op=='inspection-finish':
                 now=time.time()
                 model={**service.fixture_inspection_model,'revision':2,'phase':'completed','endedAt':now,

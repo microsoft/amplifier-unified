@@ -319,11 +319,12 @@ class ExecutionEvents:
             # cannot prove which earlier pre belongs to a late terminal.
             token = str(uuid.uuid4())
             data = {**data, 'unified_tool_observation_id': token}
-            from .tool_observations import input_summary, outcome_summary
-            raw_input = next((data[key] for key in ('tool_input', 'arguments', 'input', 'prompt') if key in data), None)
-            row['tool'] = data.get('tool_name')
-            row.update(toolObservationId=token, inputSummary=input_summary(raw_input),
-                       outcomeSummary=outcome_summary(event, data))
+            from .tool_observations import input_hints, metadata, outcome_summary
+            input_key = next((key for key in ('tool_input', 'arguments', 'input', 'prompt') if key in data), None)
+            row['tool'] = data.get('tool_name') or row.get('tool') or row.get('label')
+            row.update(toolObservationId=token, **input_hints(row['tool'], data.get(input_key),
+                       present=input_key is not None), outcomeSummary=outcome_summary(event, data))
+            row.update(metadata(row))
             row["phase"] = {"tool:pre": "running", "tool:post": "completed", "tool:error": "error"}[event]
             # The observer supplies bounded inspection hints. Full tool
             # inputs/results are read from their native event-log records.

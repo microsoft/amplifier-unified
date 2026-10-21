@@ -128,7 +128,7 @@ def ingest(session,event):
                 and safe['toolObservationId'] != node.get('toolObservationId')):
             # A new exact observation cannot inherit another event's details.
             for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail',
-                          'errorDetail', '_eventFields', 'inputSummary', 'outcomeSummary', 'tool'):
+                          'errorDetail', '_eventFields', 'inputSummary', 'outcomeSummary', 'inputPreview', 'actionPath', 'tool'):
                 node.pop(field, None)
         if event.get('liveObservation') and event.get('phase') == 'running':
             for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields', 'imageGeneration'):

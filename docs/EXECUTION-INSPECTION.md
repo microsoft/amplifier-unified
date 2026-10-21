@@ -43,11 +43,30 @@ JSONL records are retried after the next append. Inspection never executes tools
 
 Collapsed tool rows retain the tool name and a bounded command, code, file, or
 action preview, plus an available error and exit status. These are display hints,
-not complete arguments or execution evidence. Expanding reads saved arguments
+not complete arguments or execution evidence. Image-tool lifecycle hints (`image_generate` and
+`nano-banana`, including analysis) omit prompt/path and result-text hints; the
+shared normalizer also clears previously supplied hints. Their original saved
+arguments/results remain available through explicit, scoped detail inspection.
+Other tools without a specialized display also carry `inputPreview`, a deterministic JSON-shaped request hint of at most
+180 characters. It visits at most four entries per container, two container
+levels and 24 values; shortened values end in an ellipsis. Known credential-named
+fields are redacted in this hint. This is not a secret scanner for arbitrary
+free text, and it does not alter the saved input. Zero, false and null remain
+visible; absent input clears the hint. `app_control` dispatch also carries a
+bounded `actionPath` from its actual nested `args.action`, without flattening
+its arguments. Expanding reads saved arguments
 and results; copy controls never treat a shortened hint as the full payload.
 Unrelated log appends do not invalidate an unchanged exact saved field. Source
 replacement or edits still invalidate it; temporary read failures offer retry
 without claiming the content changed.
+
+Expanded tool payloads use whitespace-only JSON layout for bounded complete
+objects and arrays, preserving numeric spelling, duplicate keys and string
+escapes. Copy retains the original saved text. Long text has an explicit preview
+and expansion control; incomplete saved reads stay labeled as previews until
+loading succeeds. A stalled or non-progressing detail read offers Retry; closing
+the step cancels it. Older-detail lookup remains one bounded page per explicit
+request and never starts conversation work.
 
 New tool observations carry a host-generated ID shared by the exact native event
 and its host update. The bounded current window can attach that event's input,
@@ -57,7 +76,7 @@ for complete saved fields. A new observation cannot inherit an earlier input whe
 its own producer omitted it.
 
 Expanding a host tool whose saved fields are outside the current window performs
-one bounded read of that tool's admitted native session. **Look further back**
+one bounded read of that tool's admitted native session. **Search older saved details**
 requests another bounded page; it never scans the whole history or enumerates
 child directories. Lookup leases are bound to the web client, source identity,
 open Work group, admitted row position and observation ID. At most 100 matching

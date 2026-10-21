@@ -1,0 +1,120 @@
+[
+  {
+    "name": "search",
+    "tool": "load_skill",
+    "input": {
+      "search": "coordinate-work"
+    },
+    "inputPreview": "search=\"coordinate-work\"",
+    "actionPath": ""
+  },
+  {
+    "name": "dispatch",
+    "tool": "app_control",
+    "input": {
+      "operation": "dispatch",
+      "args": {
+        "action": "workspace.read",
+        "limit": 0,
+        "active": false
+      }
+    },
+    "inputPreview": "operation=\"dispatch\", args={action: \"workspace.read\", limit: 0, active: false}",
+    "actionPath": "dispatch \u2192 workspace.read"
+  },
+  {
+    "name": "scalars",
+    "tool": "unknown",
+    "input": {
+      "limit": 0,
+      "enabled": false,
+      "cursor": null
+    },
+    "inputPreview": "limit=0, enabled=false, cursor=null",
+    "actionPath": ""
+  },
+  {
+    "name": "array",
+    "tool": "unknown",
+    "input": [
+      "a",
+      0,
+      false,
+      null
+    ],
+    "inputPreview": "[\"a\", 0, false, null]",
+    "actionPath": ""
+  },
+  {
+    "name": "object",
+    "tool": "unknown",
+    "input": {
+      "filter": {
+        "names": [
+          "one",
+          "two"
+        ],
+        "active": true
+      },
+      "limit": 2
+    },
+    "inputPreview": "filter={names: [\u2026], active: true}, limit=2",
+    "actionPath": ""
+  },
+  {
+    "name": "secrets",
+    "tool": "unknown",
+    "input": {
+      "api_key": "SECRET",
+      "options": {
+        "Authorization": "SECRET",
+        "password": "SECRET"
+      },
+      "search": "visible"
+    },
+    "inputPreview": "api_key=\"[redacted]\", options={Authorization: \"[redacted]\", password: \"[redacted]\"}, search=\"visible\"",
+    "actionPath": ""
+  },
+  {
+    "name": "null",
+    "tool": "unknown",
+    "input": null,
+    "inputPreview": "null",
+    "actionPath": ""
+  },
+  {
+    "name": "false",
+    "tool": "unknown",
+    "input": false,
+    "inputPreview": "false",
+    "actionPath": ""
+  },
+  {
+    "name": "zero",
+    "tool": "unknown",
+    "input": 0,
+    "inputPreview": "0",
+    "actionPath": ""
+  },
+  {
+    "name": "short-string",
+    "tool": "unknown",
+    "input": "inspect this",
+    "inputPreview": "\"inspect this\"",
+    "actionPath": ""
+  },
+  {
+    "name": "empty-object",
+    "tool": "unknown",
+    "input": {},
+    "inputPreview": "{}",
+    "actionPath": ""
+  },
+  {
+    "name": "empty-array",
+    "tool": "unknown",
+    "input": [],
+    "inputPreview": "[]",
+    "actionPath": ""
+  }
+]

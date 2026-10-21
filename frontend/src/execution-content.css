@@ -90,3 +90,9 @@
  #amp-one .a-execution-turn-line>.a-execution-usage{order:2}
  #amp-one .a-execution-turn-line>.a-execution-call-counts{order:3;font-size:var(--a-text-sm,13px)}
 }
+
+#amp-one .a-execution-content .a-execution-preview-note{margin:0 12px 6px;color:var(--a-muted);font-size:var(--a-text-sm,13px)}
+@media(max-width:600px){
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-label>span{white-space:normal}
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-label code{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;margin-top:3px;overflow-wrap:anywhere}
+}
