@@ -102,6 +102,7 @@
     {"id": "test-environments", "command": ["node", "tests/test-environments-browser.mjs"], "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python", "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/test-environments"}},
     {"id": "assignment-adoption", "command": ["node", "tests/assignment-adoption-browser.mjs"]},
     {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}},
+    {"id": "storage-cleanup-settings", "command": ["node", "tests/storage-cleanup-settings-browser.mjs"]},
     {"id": "model-capacity-settings", "command": ["node", "tests/model-capacity-settings-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/model-capacity-settings"}}
   ]
 }

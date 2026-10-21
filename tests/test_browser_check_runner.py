@@ -286,7 +286,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 102
+    assert len(original) == 65 and len(rows) == 103
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -424,8 +424,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     attachment = 'tests/attachment-consumption-browser.mjs'
     assert attachment in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', attachment] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment}) == 144
-    assert len(readiness_scripts | extended_scripts) == 145
+    assert len((readiness_scripts | extended_scripts) - {attachment}) == 145
+    assert len(readiness_scripts | extended_scripts) == 146
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

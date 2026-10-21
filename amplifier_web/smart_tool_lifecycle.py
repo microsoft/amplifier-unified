@@ -303,7 +303,7 @@ class Lifecycle:
             await self._change(lambda _: self._server(identity).update(status="auth-required", connectionState="auth-required", authorization=connection.challenge, catalogState="stale", loadedSchemas={}))
             raise
 
-    async def uninstall(self, identity, *, staged_from=None, revision=None):
+    async def uninstall(self, identity, *, staged_from=None, revision=None, cleanup_inventory=None, cleanup_guard=None):
         async with self.install_lock:
             package = next((p for p in self.state["installations"] if p["id"] == identity), None)
             if not package:
@@ -330,7 +330,7 @@ class Lifecycle:
                 raise ValueError("Remove these connection registrations before uninstalling: " + ", ".join(dependents)[:500])
             from .task_environments import remove_installation
             try:
-                await asyncio.to_thread(remove_installation, self.service.data_dir, identity, folder)
+                await asyncio.to_thread(remove_installation, self.service.data_dir, identity, folder, cleanup_inventory=cleanup_inventory, cleanup_guard=cleanup_guard)
             except FileNotFoundError as error:
                 # A crash may follow file removal but precede its durable state
                 # update. Only the exact failed stage can finish that cleanup.

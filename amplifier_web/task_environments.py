@@ -206,7 +206,7 @@ def installation_lock(home, identity):
     return FileLock(str(home / 'workspace-resources' / ('backend-' + identity + '.lock')), timeout=5)
 
 
-def remove_installation(home, identity, folder, *, ignore_errors=False):
+def remove_installation(home, identity, folder, *, ignore_errors=False, cleanup_inventory=None, cleanup_guard=None):
     """Existing install removal cannot orphan a resource's recovery backend."""
     with installation_lock(home, identity), closing(storage.connect(home)) as db:
         from .managed_runner_updates import referenced
@@ -214,6 +214,13 @@ def remove_installation(home, identity, folder, *, ignore_errors=False):
             raise ValueError('This runner is retained for an update, rollback, or an existing test owner.')
         if db.execute("SELECT 1 FROM allocations WHERE status!='retired' AND json_extract(body,'$.kind')=? AND json_extract(body,'$.backendInstallation')=? LIMIT 1", (KIND, identity)).fetchone():
             raise ValueError('This backend still owns test environments. Remove those environments before removing or replacing its installation.')
+        if cleanup_inventory is not None:
+            from .storage_cleanup_measure import measure
+            if (cleanup_inventory.get("id") != identity or cleanup_inventory.get("paths") != [str(folder)]
+                    or measure([str(folder)])["stamp"] != cleanup_inventory.get("stamp")):
+                raise ValueError("The unused runner files changed. Existing files were kept.")
+        if cleanup_guard is not None:
+            cleanup_guard()
         shutil.rmtree(folder, ignore_errors=ignore_errors)
 
 
