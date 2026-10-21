@@ -40,6 +40,8 @@ try{
  await expect(action('code').locator(':scope > button')).toContainText('FixtureError: exact failure detail');
  await expect(action('code').locator(':scope > button')).toContainText('Exit 9');
  assert.equal(fieldReads.length,0,'Skimming collapsed rows must not fetch complete payloads');
+ await action('code').scrollIntoViewIfNeeded();
+ await page.screenshot({path:join(outputDir,'collapsed-action-hints.png')});
  const code=await open('code');
  await expect(code.getByRole('button',{name:/Show all .* lines/}).first()).toBeVisible();
  await code.getByRole('button',{name:/Show all .* lines/}).first().click();

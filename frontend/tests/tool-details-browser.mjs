@@ -28,7 +28,12 @@ try{
  const open=async id=>{const node=row(id),button=node.locator(':scope > button.a-execution-action-line');await button.waitFor();if(await button.getAttribute('aria-expanded')==='false')await button.click();return node};
  await expect(row('older-exact').locator(':scope > button')).toContainText('older-exact-command');
  assert.equal(reads.length,0,'Collapsed host hints do not fetch saved payloads');
+ let failNext=true;
+ await page.route('**/api/conversation/detail?**',async route=>{if(new URL(route.request().url()).searchParams.get('part')==='tool'&&failNext){failNext=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Saved details temporarily unavailable'})})}return route.continue()});
  const older=await open('older-exact');
+ await expect(older.getByRole('button',{name:'Retry saved details'})).toBeVisible();
+ await expect(older.locator(':scope > button')).toContainText('older-exact-command');
+ await older.getByRole('button',{name:'Retry saved details'}).click();
  await expect(older.getByRole('button',{name:'Look further back for this call'})).toBeVisible();
  await older.getByRole('button',{name:'Look further back for this call'}).click();
  await expect(older).toContainText('OLDER-EXACT-RESULT-END');
@@ -52,6 +57,7 @@ try{
  await expect(legacy.getByRole('button',{name:'Look further back for this call'})).toBeVisible();
  if(await legacy.getByRole('button',{name:'Look further back for this call'}).count())await legacy.getByRole('button',{name:'Look further back for this call'}).click();
  await expect(legacy).toContainText('The app cannot confirm which attempt they belong to.');
+ await expect(legacy.locator('.a-related-saved-records > .a-execution-node')).toHaveCount(3);
  for(const button of await legacy.locator('.a-related-saved-records .a-execution-node > button.a-execution-action-line').all())await button.click();
  await expect(legacy).toContainText('LEGACY-INPUT-END');await expect(legacy).toContainText('LEGACY-OUTPUT-END');
  const after=await control({op:'inspect-work-source'});
