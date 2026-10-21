@@ -2,6 +2,8 @@
    the tab viewport invariant while only the Overview button's paint contracts. */
 #amp-one .a-canvas-panel{container:canvas / inline-size}
 #amp-one.a-approachable-shell .a-canvas-head{display:flex;gap:4px;padding:4px;min-height:52px;height:52px;flex:none}
+#amp-one.a-chat-shell .a-canvas-head .a-icon{width:44px;min-width:44px;height:44px;min-height:44px;padding:8px}
+#amp-one.a-chat-shell .a-canvas-panel[data-focused=true] .a-canvas-head{height:52px;min-height:52px;padding:4px}
 #amp-one .a-canvas-navigation{display:flex;position:relative;align-items:stretch;flex:1;min-width:0;height:44px}
 #amp-one .a-canvas-overview-slot{flex:0 0 44px;position:relative;z-index:1}
 #amp-one.a-approachable-shell .a-canvas-panel .a-chat-overview-trigger{position:absolute;inset:0 auto 0 0;width:136px;min-width:44px;min-height:44px;display:flex;align-items:center;gap:8px;padding:10px 12px;margin:0;border:0;border-radius:6px;background:var(--a-soft);color:var(--a-ink);overflow:hidden;transition:width 140ms ease-out}
