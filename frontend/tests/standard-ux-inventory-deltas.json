@@ -2052,6 +2052,67 @@
         }
       ],
       "qualification": "docs/EXECUTION-INSPECTION.md"
+    },
+    {
+      "id": "delta.tool-previews",
+      "sourceCommit": "f0149345",
+      "reason": "Unfamiliar tool requests and long results gain a bounded, readable inspection path with an explicit extended-browser owner; the frozen inventory remains unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.tool-previews",
+          "family": "conversation",
+          "title": "Skim unfamiliar tool requests and inspect long results",
+          "scope": "standard-path",
+          "entryPath": [
+            "Conversation",
+            "Work steps"
+          ],
+          "prerequisites": [
+            "Production bundled client with synthetic recorded tool events",
+            "No live provider or user history"
+          ],
+          "steps": [
+            "Skim single-key and structured requests, nested app actions and errors",
+            "Expand long input or results and switch between the preview and full text",
+            "Recover from an invalid saved-field page",
+            "Copy the original recorded JSON and reopen saved details",
+            "Read the same rows at phone width"
+          ],
+          "expectedResults": [
+            "Collapsed requests expose bounded arguments without fetching full fields.",
+            "Recognizable credential keys are masked in request previews; zero, false and null remain visible.",
+            "Complete JSON is formatted for reading while copy preserves the recorded text.",
+            "Incomplete results are labeled as previews and invalid paging offers retry.",
+            "Phone request previews fit in two lines; inspection starts no runtime work or history writes."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "long-input",
+            "malformed-detail-page",
+            "cold-reopen"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/tool-previews-browser.mjs",
+              "relation": "Registered extended owner for generic previews, readable results, retries and phone layout"
+            },
+            {
+              "path": "frontend/tests/detail-read.test.mjs",
+              "relation": "Timeout, cancellation, Unicode offsets and completion validation"
+            },
+            {
+              "path": "tests/test_tool_input_preview.py",
+              "relation": "Bounded host hints, credential-key masking and shared preview cases"
+            }
+          ],
+          "limits": [
+            "Synthetic functional qualification only; no live-history or latency claim.",
+            "The client does not reconstruct missing or unrecorded payloads."
+          ]
+        }
+      ],
+      "qualification": "docs/EXECUTION-INSPECTION.md"
     }
   ]
 }

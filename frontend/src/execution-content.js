@@ -1,3 +1,4 @@
+import {boundedPreview,retainedInputPreview} from './tool-input-preview.js';
 // Interpret only retained public tool fields. Unknown shapes stay inspectable.
 export const textValue=value=>typeof value==='string'?value:value==null?'':JSON.stringify(value,null,2);
 export function parsed(value){if(typeof value!=='string')return value;try{return JSON.parse(value)}catch{return value}}
@@ -35,7 +36,10 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
  if(tasks)return {...base,kind:'tasks',title:verb('Updated task list','Updating task list','Task list update'),tasks,preview:`${tasks.filter(task=>task?.status==='completed').length} of ${tasks.length} complete`};
  if(/read(_file)?$/.test(name)&&path)return {...base,kind:'read',title:verb('Read','Reading','Read'),target:path,content:typeof output==='string'?output:first(out,['content','text']),preview:args.offset!=null?`From line ${args.offset}${args.limit!=null?` · up to ${args.limit} lines`:''}`:concise(fallback)};
  if(/write(_file)?$/.test(name)&&path)return {...base,kind:'write',title:verb('Wrote','Writing','Write'),target:path,content:first(args,['content','text'])};
- if(typeof args.action==='string'||typeof args.operation==='string')return {...base,kind:'app',title:'App action',target:typeof args.action==='string'?args.action:args.operation,preview:concise(output)};
+ if(typeof args.action==='string'||typeof args.operation==='string'){
+  const nested=name==='app_control'&&args.operation==='dispatch'?first(record(args.args),['action']):'';
+  return {...base,kind:'app',title:'App action',target:nested?`dispatch → ${nested}`:typeof args.action==='string'?args.action:args.operation,preview:concise(output)};
+ }
  if(/delegate|task|agent/.test(name)&&first(args,['instruction','instructions','prompt','task']))return {...base,kind:'delegate',title:verb('Delegated','Delegating','Delegate'),target:first(args,['agent','name','description']),task:first(args,['instruction','instructions','prompt','task'])};
  return {...base,kind:'generic',title:tool,preview:concise(fallback)};
 }
@@ -43,8 +47,11 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
 // Summary hints are presentation only. Never pass them to the expanded payload
 // renderer or its copy controls as if they were complete saved arguments.
 export function actionHeading(node,inputText=node.input,outputText=node.output,errorText=node.error){
- const input=record(parsed(inputText)),hints=record(node.inputSummary);
- const action=actionContent(node,Object.keys(input).length?inputText:Object.keys(hints).length?hints:inputText,outputText);
+ const input=record(typeof inputText==='string'&&inputText.length>16384?null:parsed(inputText)),hints=record(node.inputSummary);
+ const safeInput=Object.keys(input).length?input:Object.keys(hints).length?hints:typeof inputText==='string'&&inputText.length>16384?null:inputText;
+ const action=actionContent(node,safeInput,outputText);
+ const generic=typeof node.inputPreview==='string'?boundedPreview(node.inputPreview):retainedInputPreview(inputText);
+ const actionPath=typeof node.actionPath==='string'&&node.actionPath?node.actionPath:'';
  const bounded=value=>{const text=textValue(value).replace(/\s+/g,' ').trim();return text.length>180?text.slice(0,179)+'…':text};
  const result=record(parsed(outputText)),out=record(resultValue(result)),outcome=record(node.outcomeSummary);
  const exit=out.returncode??out.exit_code??out.exitCode??outcome.exitCode;
@@ -52,7 +59,7 @@ export function actionHeading(node,inputText=node.input,outputText=node.output,e
  const message=typeof error==='string'?error:first(record(error),['message','error_message','error']);
  const failure=bounded(message||(action.failed||exit!=null&&exit!==0?first(out,['stderr']).trim().split('\n').filter(Boolean).at(-1):''));
  const detail=[failure,exit!=null?`Exit ${exit}`:''].filter(Boolean).join(' · ');
- return {...action,target:bounded(action.target||action.task||''),detail,failed:!!failure||exit!=null&&exit!==0,
+ return {...action,target:bounded(action.kind==='app'&&actionPath?actionPath:action.target||action.task||(action.kind==='generic'?generic:'')),detail,failed:!!failure||exit!=null&&exit!==0,
   preview:bounded(action.preview)};
 }
 
@@ -60,7 +67,7 @@ export function contentUnavailable(node,label='Action content'){
  const state=node.contentAvailability?.status;
  if(state==='ambiguous')return `${label} could not be matched to this call. Other saved work may still be available.`;
  if(state==='unverified')return `${label} is available only as related saved records; its exact attempt is unconfirmed.`;
- if(state==='not-loaded')return `${label} is not in the loaded saved work. Load earlier steps to inspect older records.`;
+ if(state==='not-loaded')return `${label} is not in the loaded saved work.`;
  return `${label} is not available in the saved record.`;
 }
 

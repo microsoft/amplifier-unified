@@ -57,6 +57,14 @@ Unrelated log appends do not invalidate an unchanged exact saved field. Source
 replacement or edits still invalidate it; temporary read failures offer retry
 without claiming the content changed.
 
+Expanded tool payloads use whitespace-only JSON layout for bounded complete
+objects and arrays, preserving numeric spelling, duplicate keys and string
+escapes. Copy retains the original saved text. Long text has an explicit preview
+and expansion control; incomplete saved reads stay labeled as previews until
+loading succeeds. A stalled or non-progressing detail read offers Retry; closing
+the step cancels it. Older-detail lookup remains one bounded page per explicit
+request and never starts conversation work.
+
 New tool observations carry a host-generated ID shared by the exact native event
 and its host update. The bounded current window can attach that event's input,
 result, error and typed delegation fields without adopting native lifecycle or
@@ -65,7 +73,7 @@ for complete saved fields. A new observation cannot inherit an earlier input whe
 its own producer omitted it.
 
 Expanding a host tool whose saved fields are outside the current window performs
-one bounded read of that tool's admitted native session. **Look further back**
+one bounded read of that tool's admitted native session. **Search older saved details**
 requests another bounded page; it never scans the whole history or enumerates
 child directories. Lookup leases are bound to the web client, source identity,
 open Work group, admitted row position and observation ID. At most 100 matching
