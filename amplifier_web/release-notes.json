@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.204",
+      "title": "Useful saved work details and steadier navigation",
+      "changes": [
+        "See useful command, code, action and failure hints in work steps, then expand saved tool and delegate arguments, results and errors. Older and child-session details load in bounded pages; uncertain historical matches remain clearly labeled.",
+        "Read unchanged saved model fields while other work appends to the same log, without false content-changed errors.",
+        "Keep navigation usable when queued catalog requests disappear while an earlier read is shutting down."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.203",
       "title": "Consistent Home, chat and workspace browsing",
       "changes": [

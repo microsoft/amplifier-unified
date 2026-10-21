@@ -1993,6 +1993,65 @@
         }
       ],
       "qualification": "docs/ux/decisions/20261020-landing-pages.md"
+    },
+    {
+      "id": "delta.972",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/972",
+      "reason": "Saved tool detail inspection gains an explicit extended-browser owner; the frozen standard inventory remains unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.saved-tool-details",
+          "family": "conversation",
+          "title": "Inspect saved tool and delegate details",
+          "scope": "standard-path",
+          "entryPath": [
+            "Conversation",
+            "Work steps"
+          ],
+          "prerequisites": [
+            "Production bundled client with synthetic saved root and child events",
+            "No live provider or user history"
+          ],
+          "steps": [
+            "Read a collapsed command and failure hint without loading payloads",
+            "Expand older saved details, recover from a temporary read failure and request the next bounded page",
+            "Expand delegate request/response and child code/error details",
+            "Inspect legacy records without assuming their attempt identity",
+            "Use the same details at narrow width"
+          ],
+          "expectedResults": [
+            "Collapsed hints do not fetch full fields.",
+            "Retry and explicit older paging recover exact retained content.",
+            "Delegate and child details stay in their admitted session scope.",
+            "Legacy observations remain separate and explicitly unverified.",
+            "Inspection changes no runtime counts or saved source bytes; the narrow view fits."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "temporary-read-failure",
+            "older-record-page"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/tool-details-browser.mjs",
+              "relation": "Registered extended owner for bounded saved details, child/delegate content and unverified legacy observations"
+            },
+            {
+              "path": "tests/test_tool_payload_windows.py",
+              "relation": "Owner, scope, lifetime and bounded continuation controls"
+            },
+            {
+              "path": "tests/test_event_field_stability.py",
+              "relation": "Unrelated append acceptance and exact-content/replacement refusal"
+            }
+          ],
+          "limits": [
+            "Synthetic functional qualification only; no live-history or performance claim."
+          ]
+        }
+      ],
+      "qualification": "docs/EXECUTION-INSPECTION.md"
     }
   ]
 }
