@@ -79,6 +79,30 @@ try{
  await expect(updates).toContainText('Amplifier kept the current components active.');
  await expect(updates).toContainText('amplifier-foundation');
  await page.screenshot({path:output+'-source-mismatch.png'});
+ // A later component failure cannot erase a verified app result. Reload keeps
+ // both outcomes; a stale install identity or unconfirmed restart cannot claim it.
+ await stage('application-confirmed');
+ await expect(overview).toContainText('Application updated successfully');
+ await stage('component-source-changed');
+ await expect(overview).toContainText('Some components were not updated');
+ await expect(overview).toContainText('Application updated successfully');
+ await expect(overview).toContainText('amplifier-foundation');
+ await expect(overview).toContainText('Check for updates again before retrying');
+ await expect(check).toBeEnabled();
+ await page.reload();await page.waitForSelector('#amp-one');
+ if(!await overview.isVisible())await openSettingsPage(page,'updates');
+ await expect(overview).toContainText('Application updated successfully');
+ await expect(overview).toContainText('Some components were not updated');
+ await page.setViewportSize({width:320,height:844});
+ await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+ await page.screenshot({path:output+'-partial-success-mobile.png'});
+ await stage('app-result-stale');
+ await expect(overview).not.toContainText('Application updated successfully');
+ await expect(overview).toContainText('Updates need attention');
+ await stage('application-confirmed');await stage('unconfirmed-restart');
+ await expect(overview).toContainText('Waiting for restart confirmation');
+ await expect(overview).not.toContainText('Application updated successfully');
+ await stage('clear-app-result');await page.setViewportSize({width:1280,height:950});
  await stage('adopting');await expect(overview).toContainText('Ready for new work');await expect(overview).toContainText('No app restart');await expect(check).toBeEnabled();
  await stage('installed');await expect(updates).toContainText('Other components installed at');
  await expect(updates).toContainText('Included components installed at');
@@ -125,6 +149,6 @@ try{
  // Explicit checks carry their own outcome. A failed attempt cannot remain green.
  await check.click();await expect(overview).toContainText('Updates need attention');await expect(updates).toContainText('Synthetic update lookup failed. Check again.');assert.equal((await observations()).calls.check,1);
  await check.click();await expect(overview).toContainText('You’re up to date');await expect(updates.getByText('Synthetic update lookup failed. Check again.',{exact:true})).toHaveCount(0);assert.deepEqual((await observations()).calls,{check:2,install:0,rollback:0});
- assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,savedPreferences:true,unknownIntervalPreserved:true,explicitCheckFailureRetry:true,noInstallEffects:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
+ assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,partialSuccess:true,partialSuccessReload:true,staleAppResultExcluded:true,unconfirmedRestartExcluded:true,savedPreferences:true,unknownIntervalPreserved:true,explicitCheckFailureRetry:true,noInstallEffects:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
 }catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:output+'-failed.png'});throw error}
 finally{try{await browser?.close()}finally{fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});result.fixtureLog=log;await writeFile(output+'.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));}}
