@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.205",
+      "title": "Clearer tool details and more useful chat names",
+      "changes": [
+        "See bounded input hints for unfamiliar tools and nested app actions, including readable two-line previews on phones. Image prompts and paths stay out of compact previews while remaining available through explicit saved-detail inspection.",
+        "Read long saved tool results with clear retry controls and formatted JSON, while Copy preserves the exact original text.",
+        "Give chats useful names after substantive work begins, ignoring short acknowledgments and allowing an early automatic title to improve as the task becomes clear."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.204",
       "title": "Useful saved work details and steadier navigation",
       "changes": [
