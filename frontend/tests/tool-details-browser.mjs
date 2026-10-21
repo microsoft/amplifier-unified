@@ -36,6 +36,7 @@ try{
  await expect(older).toContainText('OLDER-EXACT-INPUT-END');
  assert.equal(await older.locator('.a-related-saved-records').count(),0,'Exact observation has directly associated fields');
  const delegate=await open('older-delegate');
+ await expect.poll(()=>delegate.innerText()).toMatch(/Look further back for this call|Review retained request/);
  if(await delegate.getByRole('button',{name:'Look further back for this call'}).count())await delegate.getByRole('button',{name:'Look further back for this call'}).click();
  await expect(delegate).toContainText('Review retained request.');
  for(const label of ['Show full request','Show full response']){const button=delegate.getByRole('button',{name:label,exact:true});if(await button.count())await button.click()}
@@ -48,6 +49,7 @@ try{
  await child.getByRole('button',{name:/Show all .* lines/}).first().click();
  await expect(child).toContainText('CHILD-CODE-END');await expect(child).toContainText('CHILD-OUTPUT-END');
  const legacy=await open('older-legacy');
+ await expect(legacy.getByRole('button',{name:'Look further back for this call'})).toBeVisible();
  if(await legacy.getByRole('button',{name:'Look further back for this call'}).count())await legacy.getByRole('button',{name:'Look further back for this call'}).click();
  await expect(legacy).toContainText('The app cannot confirm which attempt they belong to.');
  for(const button of await legacy.locator('.a-related-saved-records .a-execution-node > button.a-execution-action-line').all())await button.click();
