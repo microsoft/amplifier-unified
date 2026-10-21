@@ -161,6 +161,7 @@ async def install_app_access(coordinator, bridge):
                 if input['operation'] == 'context.focus':
                     return ToolResult(success=True, output=await delivery.interest(input.get('args', {})))
                 result = await bridge(input['operation'], input.get('args', {}))
+                delivery.remember_work(result, input)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') in {'voice.visual.capture', 'computer.visual.capture'}:
                     result = delivery.remember(result)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') == 'outputs.image':
@@ -190,6 +191,7 @@ async def install_app_access(coordinator, bridge):
 
     async def bind_image_pair(event, data):
         delivery.bind_pair(data)
+        delivery.bind_work(data)
         return HookResult()
 
     await coordinator.mount('tools', AppControl(), name='app_control')

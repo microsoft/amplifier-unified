@@ -449,3 +449,164 @@ async def test_outer_delivery_preserves_inner_final_boundary(stream, stale):
     assert reads == [('context.manifest', {}), ('coordination.current', {}),
                      ('memory.context', {})]
     assert original.model_dump_json().encode('utf-8') == original_bytes
+
+
+class InstalledWorkAdapter:
+    """Real mounted app tool + real loop tool dispatch, no model service.
+
+    This is host-request coverage, not native transport or effect admission.
+    """
+    async def setup(self, app, child):
+        from types import SimpleNamespace
+        from amplifier_core import HookRegistry
+        from amplifier_web.app_guidance import install_app_access
+        from amplifier_module_loop_live import BundleLiveOrchestrator
+        from test_work_invocation import transport
+        self.tools, self.capabilities, self.messages = {}, {}, []
+        self.hooks = HookRegistry()
+        self.loop = BundleLiveOrchestrator({})
+        self.loop._tool_calls_this_turn = 0
+        self.counter = 0
+        async def mount(kind, tool, name):
+            self.tools[name] = tool
+        coordinator = SimpleNamespace(get_capability=self.capabilities.get,
+            get=lambda kind: self.tools if kind == 'tools' else None,
+            register_capability=self.capabilities.__setitem__, mount=mount, hooks=self.hooks)
+        async def bridge(operation, args):
+            if operation == 'context.manifest':
+                return {'surfaces': [], 'inputIds': child['collaborationGeneration']['inputIds']}
+            if operation == 'memory.context':
+                return {'items': []}
+            return await app.app_bridge(operation, {**args, **transport(child)}, child['id'])
+        await install_app_access(coordinator, bridge)
+        self.delivery = self.capabilities['web.surface_delivery']
+        return self
+
+    def request(self):
+        return request(*self.messages)
+
+    async def read(self, ref, **patch):
+        from amplifier_core.message_models import ToolCall
+        self.counter += 1
+        args = {'operation': 'dispatch', 'args': {
+            'action': ref['action'], 'args': {**ref['args'], **patch}}}
+        call = ToolCall(id=f'work-read-{self.counter}', name='app_control', arguments=args)
+        self.messages.append(Message(role='assistant', content='', tool_calls=[{
+            'id': call.id, 'tool': call.name, 'arguments': call.arguments}]))
+        identity, name, content = await self.loop._execute_tool_only(
+            call, self.tools, self.hooks, None)
+        self.messages.append(Message(role='tool', name=name, tool_call_id=identity, content=content))
+        from amplifier_web.output_image_delivery import successful_output
+        return successful_output(content)['result']
+
+    async def fill(self, required):
+        rows, cursor = [], None
+        while True:
+            page = await self.read(required['requirementsRef'], limit=1,
+                                   **({'after': cursor} if cursor else {}))
+            rows.extend(page['items'])
+            cursor = page['nextAfter']
+            if cursor is None:
+                break
+        for row in rows:
+            offset = 0
+            while True:
+                value = await self.read(row['readRef'], offset=offset, limit=700)
+                page = value['source'] if row['kind'] == 'source' else value
+                offset = page['nextOffset']
+                if offset is None:
+                    break
+
+
+async def installed_work_adapter(app):
+    from test_work_invocation import prepared_work, commissioned, current_work
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'delivered-pages', constraints=['Preserve \u03bb caf\u00e9. ' * 250])
+    _, child = await commissioned(app, owner, item)
+    required = (await current_work(app, child))['required']
+    assert required['status'] == 'available'
+    return await InstalledWorkAdapter().setup(app, child), child, required
+
+
+@pytest.mark.parametrize('fault', ['none', 'partial', 'forged_id', 'changed_body', 'compacted', 'same_call', 'reopened'])
+async def test_installed_adapter_requires_genuine_complete_retained_pages(app, fault):
+    adapter, child, required = await installed_work_adapter(app)
+    before = await adapter.delivery.prepare(adapter.request(), None)
+    assert adapter.delivery.request_coverage(before)['complete'] is False
+    await adapter.fill(required)
+    assert adapter.counter >= 4  # Manifest and Unicode content paging both occurred.
+    # A read occurring after a request was fitted cannot acknowledge that request.
+    if fault == 'same_call':
+        prepared = before
+    else:
+        if fault == 'partial':
+            adapter.messages.pop()
+        elif fault == 'forged_id':
+            tool = next(m for m in adapter.messages if m.role == 'tool')
+            tool.tool_call_id = 'forged-result-id'
+        elif fault == 'changed_body':
+            tool = next(m for m in reversed(adapter.messages) if m.role == 'tool')
+            tool.content = tool.content[:100] + ' [truncated]'
+        elif fault == 'compacted':
+            adapter.messages = [Message(role='user', content='Summary claims all details were read.')]
+        elif fault == 'reopened':
+            old_messages = adapter.messages
+            adapter = await InstalledWorkAdapter().setup(app, child)
+            adapter.messages = old_messages  # History without genuine local observations.
+        prepared = await adapter.delivery.prepare(adapter.request(), None)
+    coverage = adapter.delivery.request_coverage(prepared)
+    assert coverage['complete'] is (fault == 'none'), coverage
+    assert coverage['effectAuthorized'] is False  # Not native/effect acceptance.
+    if fault == 'none':
+        assert coverage['coveredCount'] == required['requirementCount']
+        assert coverage['scope'] == 'fitted_host_request_only'
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('change', ['none', 'stop', 'outer_await', 'changed_bytes'])
+async def test_installed_work_final_boundary_checks_after_outer_awaits(app, stream, change):
+    adapter, child, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    measured, transported = [], []
+    class Provider:
+        async def request_budget(self, value, **kwargs):
+            measured.append(value.model_dump_json())
+            return {'tokens': 100}
+        async def complete(self, value, **kwargs):
+            transported.append(value.model_dump_json())
+            return 'done'
+        async def stream(self, value, **kwargs):
+            transported.append(value.model_dump_json())
+            yield 'done'
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    original = adapter.request()
+    await wrapped.request_budget(original)
+    async def stop():
+        # Explicit fault injection at the producer's real root authority fields,
+        # not a fabricated successful guard/observation receipt.
+        child['status'] = 'stopped'
+        child['interruptionRevision'] = child.get('interruptionRevision', 0) + 1
+    if change == 'stop':
+        await stop()
+    elif change in {'outer_await', 'changed_bytes'}:
+        previous = adapter.delivery.revalidate
+        async def outer(value):
+            value = await previous(value)
+            if change == 'outer_await':
+                await stop()
+            else:
+                value = value.model_copy(update={'messages': [*value.messages,
+                    Message(role='user', content='Unmeasured substitution')]})
+            return value
+        adapter.delivery.revalidate = outer
+    async def send():
+        if stream:
+            return [row async for row in wrapped.stream(original)]
+        return [await wrapped.complete(original)]
+    if change == 'none':
+        assert await send() == ['done']
+        assert transported == measured
+    else:
+        with pytest.raises(ValueError, match='refit'):
+            await send()
+        assert transported == []

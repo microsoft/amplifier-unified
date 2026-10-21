@@ -186,8 +186,11 @@ class SurfaceProvider:
             cached = await self.delivery.prepare(request, self.original)
             self.prepared = (self.prepared + [(request, cached)])[-4:]
         if commit:
+            fitted = cached.model_dump_json() if hasattr(self.delivery, "finalize_work") else None
             if hasattr(self.delivery, "revalidate"):
                 cached = await self.delivery.revalidate(cached)
+            if fitted is not None:
+                cached = await self.delivery.finalize_work(cached, fitted=fitted)
             self.delivery.commit(cached)
             self.prepared = [(source, value) for source, value in self.prepared if source is not request]
         return cached
