@@ -123,7 +123,9 @@ def test_receipt_failure_precedes_physical_effect_and_caps_are_bounded(tmp_path,
     assert not (home/'workspace-resources'/'owned').exists()
     with owner.connect(home) as db:
         db.execute('DROP TRIGGER receipt_failure')
-    monkeypatch.setattr(owner, 'MAX_ROOT', 1)
+    from amplifier_web.test_execution_settings import write
+    from types import SimpleNamespace
+    write(SimpleNamespace(data_dir=home), {'version': 1, 'queue': {}, 'profiles': {}, 'concurrency': {'maxOwnedResourcesPerChat': 1}})
     row = allocation(home)
     with pytest.raises(ValueError, match='capacity'):
         allocation(home, 'second')

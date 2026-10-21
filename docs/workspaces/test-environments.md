@@ -208,5 +208,9 @@ is reconciled by readback without repeating the mutation.
 
 Numeric encoding bounds and existing metadata/archive/export protection remain
 fixed. These controls do not delete retained source, evidence, or user data and do
-not add automatic retention cleanup. One active owned environment per root and
-physical backend admission still apply.
+not add automatic retention cleanup. The default is one active owned environment per root. Global work concurrency
+settings can raise that ceiling for explicit independent checks or separately
+identified manual environments. Physical backend and machine admission still apply.
+All retained unknown owners count against capacity until exact cleanup or
+reconciliation confirms release. Environment reads support offset/limit paging;
+cleanup always names one exact resource and revision.
