@@ -18,9 +18,15 @@ async def main(home):
     app = await fixture.main(home)
     service = app['service']
     source = service._session()
-    service._message(source, 'user', 'Plan a neighborhood garden')
+    messages = [
+        {'role': 'user', 'content': 'Plan a neighborhood garden'},
+        {'role': 'assistant', 'content': 'The garden plan is ready.'},
+        {'role': 'user', 'content': 'Thanks!'},
+    ]
+    for message in messages:
+        service._message(source, message['role'], message['content'])
     store = SessionStore.for_app(home, source['workspace'])
-    store.save(source['id'], [{'role': 'user', 'content': 'Plan a neighborhood garden'}], {})
+    store.save(source['id'], messages, {})
     transcript = store.directory(source['id']) / 'transcript.jsonl'
     original = transcript.read_bytes()
     # Same leaf folder, distinct parents: exercise real workspace qualifiers.
@@ -36,7 +42,7 @@ async def main(home):
     release_second = asyncio.Event()
     class Context:
         async def get_messages(self):
-            return [{'role': 'user', 'content': 'Plan a neighborhood garden'}]
+            return messages
     class Provider:
         name = 'fixture'
         priority = 1
@@ -45,6 +51,8 @@ async def main(home):
         async def complete(self, request, **kwargs):
             naming_calls.append({'model': request.model, 'prompt': str(request.messages[0].content)})
             assert request.max_output_tokens == 256 and request.metadata['stream'] is False
+            assert 'Plan a neighborhood garden' in naming_calls[-1]['prompt']
+            assert 'Thanks!' in naming_calls[-1]['prompt']
             if len(naming_calls) == 2:
                 await release_second.wait()
             return ChatResponse(content=[TextBlock(text=json.dumps({

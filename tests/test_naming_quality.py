@@ -37,6 +37,107 @@ async def turn(namer, number):
         await namer.pending
 
 
+@pytest.mark.parametrize('operation', ['initial', 'suggest'])
+@pytest.mark.parametrize('structured', [False, True])
+async def test_trailing_acknowledgement_keeps_live_naming_intent(native_home, community, operation, structured):
+    host = await mounted(community, native_home, 'acknowledged-task', count=0)
+    request = 'Fix the Atlas OAuth redirect loop.'
+    acknowledgement = [{'type': 'text', 'text': 'Thanks!'}] if structured else 'Thanks!'
+    host.context.messages = [
+        {'role': 'user', 'content': request},
+        {'role': 'assistant', 'content': 'The redirect handler is corrected.'},
+        {'role': 'user', 'content': acknowledgement},
+    ]
+    reply = {'action': 'set', 'name': 'Synthetic provider title'}
+    calls = recorder(host, [reply])
+    events = []
+    namer = LiveSessionNaming(host.co, native_home / 'app', events.append)
+    before = host.metadata.read()
+    transcript = (namer.directory / 'transcript.jsonl').read_bytes()
+    try:
+        if operation == 'suggest':
+            result = await namer.suggest()
+            assert result['name'] == reply['name']
+            assert host.metadata.read() == before
+            assert not [event for event in events if event['type'] == 'session.naming']
+        else:
+            await turn(namer, 1)
+            assert read(namer.directory)['name'] == reply['name']
+        assert len(calls) == 1
+        assert request in prompt_text(calls[0]) and 'Thanks!' in prompt_text(calls[0])
+        assert len(prompt_text(calls[0]).encode()) <= 24000
+        assert (namer.directory / 'transcript.jsonl').read_bytes() == transcript
+    finally:
+        await namer.close()
+
+
+async def test_live_naming_refuses_greetings_despite_assistant_or_injected_task(native_home, community):
+    host = await mounted(community, native_home, 'no-human-intent', count=0)
+    host.context.messages = [
+        {'role': 'user', 'content': '<context_file>Fix Atlas login.</context_file>Hello!'},
+        {'role': 'assistant', 'content': 'Fix the Atlas OAuth redirect loop.'},
+        {'role': 'tool', 'content': 'Repair the callback.'},
+        {'role': 'user', 'content': 'Thanks!'},
+    ]
+    calls = recorder(host, [{'action': 'set', 'name': 'Must not be requested'}])
+    namer = LiveSessionNaming(host.co, native_home / 'app', lambda _: None)
+    before = host.metadata.read()
+    try:
+        await turn(namer, 1)
+        with pytest.raises(ValueError, match='No new name was returned'):
+            await namer.suggest()
+        assert not calls and host.metadata.read() == before
+    finally:
+        await namer.close()
+
+
+@pytest.mark.parametrize('has_task', [True, False])
+async def test_discovered_acknowledgement_uses_only_retained_human_intent(app_factory, tmp_path, has_task):
+    from test_automatic_naming import imported, tick
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_web.naming import directory_for
+
+    app, naming, clock, calls = await imported(app_factory, tmp_path)
+    session = app.directory.select('history_managed AND native_project IS NOT NULL', limit=1)[0]
+    directory = directory_for(app.data_dir, session)
+    history = SessionHistoryStore(directory)
+    request = 'Fix the Atlas OAuth redirect loop.'
+    history.save([
+        {'role': 'user', 'content': request if has_task else 'Hello!'},
+        {'role': 'assistant', 'content': 'I corrected the Atlas OAuth redirect loop.'},
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'Thanks!'}]},
+    ], history.load_metadata())
+    before = (directory / 'transcript.jsonl').read_bytes()
+    metadata_before = read(directory)
+    await tick(app, naming, clock)
+    assert len(calls) == int(has_task)
+    if has_task:
+        assert request in calls[0][1] and 'Thanks!' in calls[0][1]
+        assert app.state['namingBackfill']['named'] == [session['id']]
+        assert read(directory)['name_source'] == 'generated'
+    else:
+        assert not app.state['namingBackfill']['named']
+        assert app.state['namingBackfill']['skipped']
+        assert read(directory) == metadata_before
+    assert (directory / 'transcript.jsonl').read_bytes() == before
+    assert app._session(session['id'], hydrate=False)['historyLoaded'] is False
+    assert not app.runtime.started and not app.runtime.sent
+    # A completed/declined unchanged sample must not spend again.
+    await tick(app, naming, clock)
+    assert len(calls) == int(has_task)
+
+
+def test_sample_intent_requires_selected_human_text_not_unretained_middle():
+    from amplifier_web.naming_context import sample
+    rows = [{'role': 'user', 'content': 'Hello!'} for _ in range(3)]
+    rows += [{'role': 'user', 'content': 'Fix the Atlas OAuth redirect loop.'}]
+    rows += [{'role': 'user', 'content': 'Thanks!'} for _ in range(5)]
+    excerpt = sample(rows)
+    assert 'Fix the Atlas' not in excerpt.text
+    assert not excerpt.has_user_intent
+    assert excerpt.latest_user == 'Thanks!'
+
+
 async def test_default_selected_model_keeps_utility_envelope(native_home, community):
     host = await mounted(community, native_home, 'model-identity', count=0)
     calls = recorder(host, [{'action': 'set', 'name': 'Fix Atlas OAuth callback'}])
@@ -281,9 +382,12 @@ async def test_greeting_does_not_consume_early_refinement(native_home, community
     namer = LiveSessionNaming(host.co, native_home / 'app', lambda _: None)
     try:
         await turn(namer, 1)
+        before = read(namer.directory)
+        assert before['naming_refinement']['status'] == 'pending'
         host.context.messages.append({'role': 'user', 'content': 'Thanks!'})
         await turn(namer, 2)
         assert len(calls) == 1
+        assert read(namer.directory) == before
         host.context.messages.append({'role': 'user', 'content': 'The Atlas OAuth redirect loops after sign-in.'})
         await turn(namer, 3)
         assert len(calls) == 2
