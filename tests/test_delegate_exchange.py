@@ -4,7 +4,7 @@ import json
 import pytest
 
 from amplifier_web.browser_detail import owned_nodes, page, read_text
-from amplifier_web.delegate_exchange import descriptor, select
+from amplifier_web.delegate_exchange import descriptor, select, exchange_fields
 from amplifier_web.event_log_view import EventLogView, event_path
 from test_event_log_view import append
 
@@ -24,6 +24,28 @@ def test_typed_envelopes_preserve_empty_and_unicode_content():
     assert select({'instruction': 'Check café\n```py\nx=1\n```'}, 'delegateRequest') == 'Check café\n```py\nx=1\n```'
     assert select({'success': True, 'output': {'response': '', 'session_id': 'child'}}, 'delegateResponse') == ''
     assert select({'output': {'output': 'Complete'}}, 'delegateResponse') == 'Complete'
+
+
+@pytest.mark.parametrize('action', ['message', 'steer'])
+def test_followup_selector_admits_only_request_not_control_receipt(action):
+    arguments = {'action': action, 'session_id': 'child', 'text': 'Follow-up café'}
+    assert exchange_fields('live_worker', arguments) == ('delegateRequest',)
+    row = {'id': 'followup', 'tool': 'live_worker', 'input': json.dumps(arguments),
+           'output': json.dumps({'success': True, 'output': 'Accepted'})}
+    result = descriptor(row, 'root')
+    assert result['delegateRequest'] == arguments['text']
+    assert 'delegateResponse' not in result
+
+
+@pytest.mark.parametrize('arguments', [
+    {'action': 'cancel', 'text': 'Not a message'},
+    {'action': 'message', 'text': {'wrong': 'shape'}},
+    {'action': 'list', 'text': 'Not a message'},
+    {'text': 'No operation'},
+])
+def test_worker_control_without_message_contract_has_no_exchange(arguments):
+    assert exchange_fields('live_worker', arguments) == ()
+    assert exchange_fields('other_tool', arguments) == ()
 
 
 def test_canonical_exchange_exact_and_lazy_after_worker_and_request_are_paged_out(tmp_path, monkeypatch):

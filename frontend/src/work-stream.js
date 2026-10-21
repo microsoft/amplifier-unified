@@ -8,6 +8,7 @@ const workerLabel=node=>`Delegate${node?.label?` · ${node.label.replace(/^Deleg
 export function workStream(data,turnId){
  const tree=treeForTurn(data,turnId),entries=[],statuses=[],undatedReplies=[],seen=new Set(),exchanges=new Set();
  const workers=new Map(),source=new Map(data.nodes.map(node=>[node.id,node]));
+ const local=new Set(data.nodes.filter(node=>node.turnId===turnId).map(node=>node.id));
  // treeForTurn guards cycles; use a separate bounded walk for arbitrary roots.
  const visited=new Set();
  const index=node=>{if(visited.has(node.id))return;visited.add(node.id);if(node.kind==='worker')workers.set(node.id,node);for(const child of tree.children.get(node.id)||[])index(child)};
@@ -15,11 +16,19 @@ export function workStream(data,turnId){
  const append=entry=>entries.push({...entry,sequence:entries.length});
  const addExchange=(node,owner,{followup=false,report=false}={})=>{
   const exchange=node.exchange||node,key=exchange.id||node.id;
+  // Repeated owner headers are context, not another sent/returned message.
+  // Their exchange remains explicitly inspectable in Delegation details.
+  if(node.kind==='worker'&&!local.has(key)&&!local.has(node.ownerId||node.id))return;
   if(exchanges.has(key))return;
   exchanges.add(key);
   const parent=owner&&workers.get(owner.parentId);
   const unverified=node.association==='unverified';
-  const from=unverified?'Recorded sender':parent?workerLabel(parent):'Main chat',to=unverified?'Delegate (association unverified)':parent?workerLabel(owner):'Delegate';
+  const senders=followup&&node.sessionId?[...workers.values()].filter(worker=>worker.sessionId===node.sessionId):[];
+  const sourceParent=source.get(node.id)?.parentId;
+  const sender=senders.find(worker=>(worker.ownerId||worker.id)===sourceParent)||(senders.length===1?senders[0]:null);
+  const followupFrom=sender?workerLabel(sender):senders.length>1||node.sessionId&&node.rootSessionId&&node.sessionId!==node.rootSessionId?'Worker (owner unavailable)':'Main chat';
+  const from=unverified?'Recorded sender':followup?followupFrom:parent?workerLabel(parent):'Main chat';
+  const to=unverified?'Delegate (association unverified)':parent?workerLabel(owner):'Delegate';
   const sourceNode=node.kind==='worker'?node:{...node,exchange};
   const running=isRunning({phase:node.workerPhase||node.phase||exchange.phase});
   const request=hasField(exchange,'delegateRequest'),response=hasField(exchange,'delegateResponse');
@@ -41,9 +50,11 @@ export function workStream(data,turnId){
   if(seen.has(node.id))return;seen.add(node.id);
   if(node.kind==='worker'){
    if(node.exchange)addExchange(node,node);
-   statuses.push({id:`${node.id}:status`,kind:'worker-status',node,owner:node});
+   statuses.push({id:`${node.id}:status`,kind:'worker-status',node,owner:node,
+    context:!!node.exchange&&!local.has(node.exchange.id)&&!local.has(node.ownerId||node.id)});
    for(const child of tree.children.get(node.id)||[])walk(child,node);
-  }else if(node.exchange||hasField(node,'delegateRequest')||hasField(node,'delegateResponse')){
+  }else if(node.exchange||hasField(node,'delegateRequest')||hasField(node,'delegateResponse')||
+    (/(^|[.:])live_worker$/.test(node.tool||node.label||'')&&['message','steer'].includes(node.inputSummary?.action))){
    addExchange(node,owner||node.delegate,{followup:node.kind==='tool'&&!/(^|[.:])delegate$/.test(node.tool||node.label||''),report:node.kind==='exchange'});
    for(const child of tree.children.get(node.id)||[])walk(child,owner);
   }else{

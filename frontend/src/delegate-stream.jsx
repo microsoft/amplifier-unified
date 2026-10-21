@@ -47,15 +47,21 @@ export function DelegateStreamMessage({entry,expanded,toggle}){
 }
 
 export function DelegateStreamStatus({entry,expanded,toggle,act}){
- const node=entry.node,loaded=useContext(SavedExchanges)[sourceKey(node)]?.detail.node;
- const exchange=loaded?.exchange||node.exchange||{id:node.ownerId||node.id},phase=node.workerPhase||node.status||node.phase;
- const key=`exchange:${exchange.id}:details`,open=expanded.has(key),running=isRunning({phase});
+ const node=entry.node,shared=useContext(SavedExchanges)[sourceKey(node)]?.detail;
+ const key=`exchange:${node.id}:details`,open=expanded.has(key);
+ const contextDetail=useToolDetail(node,open&&!shared),loaded=shared?.node||contextDetail.node;
+ const exchange=loaded.exchange||node.exchange||{id:node.ownerId||node.id},phase=node.workerPhase||node.status||node.phase;
+ const running=isRunning({phase});
  const name=(node.label||'Delegate').replace(/^Delegate · /,'');
  return <aside className="a-work-delegate-status" aria-label={`${name} status`}>
   <span className="a-caption">{name}</span>
   {failures.has(phase)&&<p className="a-caption" role="status">Worker {phase}. Earlier replies remain available; they do not establish completion.</p>}
   {running&&<><span className="a-caption">{phase==='idle'?'Delegate is available for follow-up.':'Delegate is working.'}</span>{(node.workerId||node.sessionId)&&<button type="button" className="a-link a-danger" data-action="worker.stop" onClick={()=>act('worker.stop',{id:node.workerId||node.sessionId})}><Square/>Stop worker</button>}</>}
   <button type="button" className="a-link" aria-label={`${name} delegation details`} aria-expanded={open} onClick={()=>toggle(key)}>Delegation details</button>
-  {open&&<div className="a-delegate-details"><p className="a-caption">{delegationRoutingLabel(node.routing)}</p><p className="a-caption">{[node.provider,node.model].filter(Boolean).join(' · ')}</p><p className="a-caption">{exchange.toolCallId&&`Call: ${exchange.toolCallId}`}{node.runId&&` · Run: ${node.runId}`}</p>{node.aggregateUsage&&<UsageDetails usage={node.aggregateUsage} scope="step" record={{...node,phase}} label="Delegate usage" costLabel="Delegate cost"/>}<RawExchange node={exchange}/>{node.summary&&<><p className="a-caption">Saved summary, not the original reply.</p><DelegateMessage node={node} field="summary" label="Saved task summary" direction="Delegate" expanded={expanded} toggle={toggle} partial/></>}</div>}
+  {open&&<div className="a-delegate-details"><ToolDetailStatus detail={shared||contextDetail}/>
+   {entry.context&&<section aria-label="Earlier exchange context"><p className="a-caption">Earlier exchange context, not new messages in this part of the conversation.</p>
+    <DelegateMessage node={exchange} field="delegateRequest" label="Original request" direction="Recorded exchange" expanded={expanded} toggle={toggle}/>
+    <DelegateMessage node={exchange} field="delegateResponse" label="Recorded reply" direction="Recorded exchange" expanded={expanded} toggle={toggle}/></section>}
+   <p className="a-caption">{delegationRoutingLabel(node.routing)}</p><p className="a-caption">{[node.provider,node.model].filter(Boolean).join(' · ')}</p><p className="a-caption">{exchange.toolCallId&&`Call: ${exchange.toolCallId}`}{node.runId&&` · Run: ${node.runId}`}</p>{node.aggregateUsage&&<UsageDetails usage={node.aggregateUsage} scope="step" record={{...node,phase}} label="Delegate usage" costLabel="Delegate cost"/>}<RawExchange node={exchange}/>{node.summary&&<><p className="a-caption">Saved summary, not the original reply.</p><DelegateMessage node={node} field="summary" label="Saved task summary" direction="Delegate" expanded={expanded} toggle={toggle} partial/></>}</div>}
  </aside>;
 }

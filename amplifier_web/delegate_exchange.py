@@ -24,6 +24,19 @@ def tool_name(node):
     return str(node.get('tool') or node.get('label') or '').rsplit(':', 1)[-1].rsplit('.', 1)[-1]
 
 
+def exchange_fields(name, arguments):
+    """Typed fields permitted by the recorded tool contract, not arbitrary text."""
+    if name == 'delegate':
+        return FIELDS
+    arguments = parsed(arguments)
+    if (name == 'live_worker' and isinstance(arguments, dict)
+            and arguments.get('action') in {'message', 'steer'}
+            and isinstance(arguments.get('text'), str)):
+        # A control receipt confirms submission at most, never a child reply.
+        return ('delegateRequest',)
+    return ()
+
+
 def select(value, field):
     """Unwrap only documented delegation envelopes; receipts are never answers."""
     value = parsed(value)
@@ -60,6 +73,8 @@ def field_value(node, field):
     source = source_field(field)
     # A JSON preview is not a complete envelope and cannot be parsed safely.
     if node.get(source + 'Detail') or node.get('_eventFields', {}).get(source):
+        return None
+    if tool_name(node) == 'live_worker' and field not in exchange_fields('live_worker', node.get('input')):
         return None
     return select(node.get(source), field)
 

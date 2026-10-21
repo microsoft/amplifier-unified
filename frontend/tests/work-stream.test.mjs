@@ -65,3 +65,15 @@ test('legacy worker without an exchange gets status only, not invented parent me
  const node={id:'legacy',kind:'worker',turnId:'t',summary:'retained',label:'Worker'};
  assert.deepEqual(workStream({nodes:[node]},'t').entries.map(entry=>entry.kind),['worker-status']);
 });
+test('repeated owner context does not replay messages and remains inspectable',()=>{
+ const exchange={id:'d',startedAt:1,endedAt:30,delegateRequest:'ask',delegateResponse:'answer'};
+ const owner={id:'w',sessionId:'child',label:'Review',phase:'completed',exchange};
+ const first={...owner,kind:'worker',turnId:'t1'};
+ const later={id:'later',kind:'tool',label:'read_file',turnId:'t2',sessionId:'child',startedAt:40,endedAt:41,delegate:owner};
+ const ids=(nodes,turn)=>workStream({nodes},turn).entries.filter(entry=>entry.kind!=='worker-status').map(entry=>entry.id);
+ assert.deepEqual(ids([first,later],'t1'),['d:delegateRequest','d:delegateResponse']);
+ assert.deepEqual(ids([first,later],'t2'),['later']);
+ assert.deepEqual(ids([later],'t2'),['later']);
+ const context=workStream({nodes:[later]},'t2').entries.find(entry=>entry.kind==='worker-status');
+ assert.equal(context.context,true);assert.equal(context.node.exchange.delegateRequest,'ask');
+});
