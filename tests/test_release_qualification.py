@@ -542,7 +542,10 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
-    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption', 'destination_history'}
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
+                           'destination_history', 'settings_close_diagnostic'}
+    assert inputs['settings_close_diagnostic']['type'] == 'boolean'
+    assert inputs['settings_close_diagnostic']['default'] == 'false'
     assert inputs['destination_history']['type'] == 'boolean'
     assert inputs['destination_history']['default'] == 'false'
     assert inputs['attachment_consumption']['type'] == 'boolean'

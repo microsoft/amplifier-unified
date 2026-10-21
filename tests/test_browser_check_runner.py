@@ -543,7 +543,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
