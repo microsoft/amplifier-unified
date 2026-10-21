@@ -57,6 +57,7 @@ async def test_actual_hook_wire_replaces_forgery_and_round_trips_bounded_child_h
         admitted = session['execution']['nodes'][0]
         assert admitted['toolObservationId'] == token
         assert admitted['sessionId'] == 'child'
+        assert admitted['tool'] == 'tool_exec'
         assert admitted['inputSummary'] == {'code': 'x' * 179 + '…'}
         assert 'private-token' not in str(admitted) and 'large secret body' not in str(admitted)
     assert updates[-1]['outcomeSummary'] == {'exitCode': 3, 'error': 'last error'}
@@ -144,3 +145,29 @@ def test_fresh_observation_drops_cached_fields_from_previous_observation():
     assert row['toolObservationId'] == new
     assert 'input' not in row and 'output' not in row
     assert row['inputSummary'] == {}
+
+
+async def test_actual_mounted_context_logger_records_host_token_before_capture(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    ci = pytest.importorskip('amplifier_module_hook_context_intelligence')
+    co, worker, messages, _ = host(monkeypatch)
+    co.config = {}
+    co.collect_contributions = AsyncMock(return_value=[])
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(tmp_path))
+    cleanup = await ci.mount(co, {'base_path': str(tmp_path), 'destinations': {}})
+    try:
+        await ci.on_session_ready(co)
+        data = {'tool_name': 'delegate', 'tool_call_id': 'call', 'session_id': 'root',
+            'tool_input': {'agent': 'reviewer', 'instruction': 'Inspect this change'},
+            'result': {'success': True, 'output': 'reviewed'}}
+        result = await co.hooks.emit('tool:post', data)
+        assert result.data['result'] == data['result']
+        resolver = co.get_capability('context_intelligence.hook_config_resolver')
+        path = resolver.session_dir('root') / 'events.jsonl'
+        saved = [json.loads(line) for line in path.read_text().splitlines()]
+        saved = [row for row in saved if row['event'] == 'tool:post']
+        assert len(saved) == 1
+        assert saved[0]['data']['unified_tool_observation_id'] == rows(messages)[0]['toolObservationId']
+        assert saved[0]['data']['tool_input'] == data['tool_input']
+    finally:
+        await cleanup()

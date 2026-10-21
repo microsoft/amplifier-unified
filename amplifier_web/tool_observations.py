@@ -30,6 +30,9 @@ def metadata(event):
     if event.get('kind') != 'tool':
         return {}
     result = {}
+    tool = event.get('tool')
+    if isinstance(tool, str) and 0 < len(tool) <= 160:
+        result['tool'] = tool
     token = identity(event.get('toolObservationId'))
     if token:
         result['toolObservationId'] = token

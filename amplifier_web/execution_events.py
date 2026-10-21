@@ -321,10 +321,11 @@ class ExecutionEvents:
             data = {**data, 'unified_tool_observation_id': token}
             from .tool_observations import input_summary, outcome_summary
             raw_input = next((data[key] for key in ('tool_input', 'arguments', 'input', 'prompt') if key in data), None)
+            row['tool'] = data.get('tool_name')
             row.update(toolObservationId=token, inputSummary=input_summary(raw_input),
                        outcomeSummary=outcome_summary(event, data))
             row["phase"] = {"tool:pre": "running", "tool:post": "completed", "tool:error": "error"}[event]
-            # The observer supplies transient lifecycle metadata only. Tool
+            # The observer supplies bounded inspection hints. Full tool
             # inputs/results are read from their native event-log records.
             row["liveObservation"] = True
             if event == "tool:pre":

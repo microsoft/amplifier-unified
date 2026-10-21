@@ -476,7 +476,10 @@ class Worker:
                     "runId": activity_run_id, "time": time.time(), **retry})
             return result
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
-            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
+            # Exact tool observation identity must precede the canonical
+            # context-intelligence logger (priority 100), independent of mount order.
+            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event,
+                priority=-100 if event.startswith('tool:') else 0)
 
     async def preparation_progress(self, directory):
         while True:
