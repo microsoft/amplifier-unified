@@ -11,12 +11,13 @@ import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/compact-composer';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--chat-controls'],{stdio:['ignore','pipe','inherit']});
-let browser;
+let browser,page;
 const evidence={geometry:[],negativeControl:null,limits:['Synthetic runtime; no live provider or physical keyboard/audio','Multi-quote implementation is independently owned; Markdown quotes exercise the existing editor, not immutable-node provenance']};
 try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(output,{recursive:true});browser=await chromium.launch({headless:true});
- const page=await browser.newPage({viewport:{width:1000,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[],sends=[];
+ page=await browser.newPage({viewport:{width:1000,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[],sends=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/actions'&&r.postDataJSON()?.action==='conversation.send')sends.push(r.postDataJSON());});
  await page.goto(url);await showFixtureConversation(page,{navPinned:false});
  const input=page.getByRole('textbox',{name:'Message Amplifier'}),surface=page.locator('[data-part="composer-surface"]'),primary=page.locator('[data-part="composer-primary-action"]'),options=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
@@ -78,6 +79,11 @@ try{
  await page.setViewportSize({width:800,height:1000});await page.locator('#amp-one').evaluate(el=>el.style.zoom='2');await expect(primary).toBeInViewport();assert.equal((await measure()).pageOverflow,false);await page.screenshot({path:output+'/compact-zoom2.png'});await page.locator('#amp-one').evaluate(el=>el.style.zoom='');
  await clearComposer(input);await input.fill('A retained first message');await primary.click();await page.getByText('Synthetic first response',{exact:true}).waitFor();assert.equal(sends.length,1);await expect(input).toHaveDraft('');
  assert.deepEqual(errors,[]);await writeFile(output+'/compact-composer.json',JSON.stringify(evidence,null,2));console.log('PASS compact composer: rendered geometry, modes, long text, attachments, quote-shaped Markdown, focus, composition, reload, synthetic send; limits retained.');
+}catch(error){
+ evidence.failure=String(error?.stack||error);
+ await writeFile(output+'/compact-composer.json',JSON.stringify(evidence,null,2));
+ if(page&&!page.isClosed())await page.screenshot({path:output+'/failure.png'}).catch(()=>{});
+ throw error;
 }finally{
  await browser?.close();
  if(fixture.exitCode===null&&fixture.signalCode===null){
