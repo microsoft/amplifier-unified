@@ -87,6 +87,12 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
   }
  },[compact,open,position.visibility]);
  useEffect(()=>{focusRequested.current=false},[sessionId]);
+ const previousPanel=useRef(state.view?.panel);
+ useEffect(()=>{
+  if(previousPanel.current===state.view?.panel)return;
+  previousPanel.current=state.view?.panel;
+  if(compact&&open)close('outside');
+ },[state.view?.panel]);
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:state.modelCatalogs?.[selected?.sharedCatalogKey]||controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map()),modelCacheKey=JSON.stringify([isDraft?draftDefaultsKey(setup):sessionId,configurationRevision,draft.instance,selected?.sharedCatalogKey||entry?.sharedCatalogKey||null]);let models=modelOptions(entry?.models||[]);
@@ -107,7 +113,7 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
  useEffect(()=>{
   if(open&&!touched.current){const instance=effective.instance||effective.id||draft.instance||'',row=providers.find(p=>p.id===instance);edit({instance,model:effective.model||draft.model||row?.info?.defaults?.model||'',effort:effectiveEffort||draft.effort||''})}
  },[open,sessionId,providers.map(row=>row.id).join('|'),effective.instance,effective.id,effective.model,effectiveEffort]);
- function show(){touched.current=false;setError('');if(open){edit({open:false});return}
+ function show(){touched.current=false;setError('');if(open){close();return}
   focusRequested.current=compact;
   edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effectiveEffort||''});
  }

@@ -56,12 +56,22 @@ try{
  await expect(menu.getByRole('button',{name:'Close chat options'})).toBeFocused();
  await expect(page.getByText('Synthetic first response',{exact:true})).toBeVisible();
  await menu.getByRole('button',{name:'Done',exact:true}).click();await page.request.post(url+'/fixture/activity',{data:{sessionId:sid,status:'idle'}});
- await options.click();await expect(menu).toBeVisible();await page.reload();
+ const menuSaved=page.waitForResponse(response=>{
+  if(response.request().method()!=='POST'||new URL(response.url()).pathname!=='/api/actions')return false;
+  const body=response.request().postDataJSON();
+  return body?.action==='view.update'&&body.args?.patch?.composerModel?.open===true&&body.args.patch.composerModel.sessionId===sid;
+ });
+ await options.click();await expect(menu).toBeVisible();
+ const menuReceipt=await menuSaved;assert.equal(menuReceipt.ok(),true);assert.equal((await menuReceipt.json()).accepted,true);
+ await page.reload();
  // Persisted presentation may reopen, but reload is not a local request to steal focus.
- await inputReady();
- assert.equal(await menu.evaluate(el=>el.contains(document.activeElement)),false);
- await menu.getByRole('button',{name:'Done',exact:true}).click();
- async function inputReady(){await composer.waitFor();await expect(menu).toBeVisible();}
+ await composer.waitFor();
+ assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('.a-composer-options-panel')),false);
+ if(await menu.isVisible())await menu.getByRole('button',{name:'Done',exact:true}).click();
+ await options.click();await expect(menu).toBeVisible();
+ await menu.getByRole('button',{name:'Manage connections'}).click();
+ await expect(menu).toHaveCount(0);
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
  assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1,'Opening settings while busy must not send again');
  for(const scheme of ['light','dark']){await page.evaluate(scheme=>window.amplifier.dispatch('view.update',{patch:{scheme}}),scheme);await expect(options).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:`${output}/readiness107-composer-${scheme}.png`});}
  assert.deepEqual(errors,[]);console.log('PASS: one compact model/options menu; real model/bundle/effort selection, preserved draft and reload, viewport resize, exact first submission, light/dark 320px.');
