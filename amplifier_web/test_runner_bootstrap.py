@@ -10,15 +10,30 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import stat
 from pathlib import Path
 import sys
 
 
 def main():
-    controller = Path(sys.argv[1])
+    controller = Path(os.path.abspath(sys.argv[1]))
+    directory = controller.parent
+    if any(path.is_symlink() for path in (directory, *directory.parents)):
+        raise ValueError('The controller manifest directory was redirected.')
     expected = sys.argv[2]
     names = json.loads(sys.argv[3])
-    sources = {name: (controller.parent / name).read_bytes() for name in names}
+    sources = {}
+    for name in names:
+        if not isinstance(name, str) or Path(name).name != name or not name.endswith('.py'):
+            raise ValueError('Invalid controller manifest member.')
+        path = directory / name
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise ValueError('The controller manifest source is not a regular file.')
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(fd, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError('The controller manifest source is not a regular file.')
+            sources[name] = stream.read()
     actual = {'amplifier_web/' + name: base64.b64encode(content).decode()
               for name, content in sources.items()}
     if hashlib.sha256(json.dumps(actual, sort_keys=True).encode()).hexdigest() != expected:
@@ -49,16 +64,16 @@ def main():
     # bytes; they must not reintroduce adjacent cache authority.
     source_get_code = importlib.machinery.SourceFileLoader.get_code
     bytecode_get_code = importlib.machinery.SourcelessFileLoader.get_code
-    directory = controller.parent.resolve()
     def source_code(loader, fullname):
-        path = Path(loader.path).resolve()
-        if path.is_relative_to(directory):
+        path = Path(os.path.abspath(loader.path))
+        if path.is_relative_to(directory) or path.resolve().is_relative_to(directory):
             if path.parent != directory or path.name not in sources:
                 raise ImportError('The controller module is outside its verified manifest.')
             return compile(sources[path.name], str(path), 'exec', dont_inherit=True)
         return source_get_code(loader, fullname)
     def bytecode_code(loader, fullname):
-        if Path(loader.path).resolve().is_relative_to(directory):
+        path = Path(os.path.abspath(loader.path))
+        if path.is_relative_to(directory) or path.resolve().is_relative_to(directory):
             raise ImportError('Controller bytecode is outside its verified source manifest.')
         return bytecode_get_code(loader, fullname)
     importlib.machinery.SourceFileLoader.get_code = source_code
