@@ -681,7 +681,7 @@ def session_registry(config):
         selected = config.resolve_source(reference)
         observer = getattr(config, '_source_policy_observer', None)
         if observer:
-            observer.observe(selected or reference, config)
+            observer.observe(selected or reference, config, explicit_local=selected is not None)
         return selected
     options = dict(home=config.registry_home, strict=True,
                    include_source_resolver=resolve_include)
