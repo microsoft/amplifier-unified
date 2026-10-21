@@ -74,8 +74,10 @@ def settings_lock(path):
     try:
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or info.st_mode & 0o077 or info.st_nlink != 1):
+                or info.st_mode & 0o022 or info.st_nlink != 1):
             raise ValueError('The setup lock changed.')
+        # FileLock, used by normal setup/core publication, creates 0644 locks.
+        # This parent is private 0700; readability is not write authority.
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
     finally:
@@ -480,11 +482,44 @@ def advance(identity):
         return {'complete': False, 'waiting': 'waiting', 'progressed': record['phase'] != before}
 
 
+def publication_recovery(value):
+    """Prove a settled unpublished candidate before a newer controller adopts CAS.
+
+    The original installation, guest effects and controller receipts stay intact.
+    This action cannot install, execute, stop, remove or select an engine.
+    """
+    if set(value) != {'action', 'id', 'intent'}:
+        raise ValueError('Publication recovery needs the exact original intent.')
+    path = folder(value['id'])
+    with controller.locked(path):
+        record = controller.read(path / 'update.json')
+        if not record or record.get('intent') != value['intent']:
+            raise ValueError('The original engine update arguments changed.')
+        completed = selected_result(path, record)
+        if completed:
+            return completed
+        if (record.get('state') != 'qualifying' or record.get('phase') != 'qualified'
+                or record.get('cancelled') or not record.get('checkPassed')):
+            raise ValueError('Only a settled qualified publication can change controller.')
+        generations.verify(record['candidate'])
+        observed = observe(record)
+        if not observed or observed.get('status') != 'absent':
+            return {'complete': False, 'waiting': 'unknown'}
+        current = selected(record)
+        if not current or current['incus'] != record['previous'] or not policy_matches(record):
+            raise ValueError('The selected engine changed before publication recovery.')
+        return {'complete': False, 'publicationReady': True,
+                'intentSha256': generations.digest(record['intent']),
+                'machineId': record['machineId'], 'backendIdentity': record['backendIdentity']}
+
+
 def dispatch(value):
     if not isinstance(value, dict):
         raise ValueError('Unsupported engine update request.')
     if value.get('action') == 'stage':
         return stage(value)
+    if value.get('action') == 'publicationRecovery':
+        return publication_recovery(value)
     if set(value) != {'action', 'id'} or value['action'] not in {'advance', 'skip', 'read', 'cancel'}:
         raise ValueError('Unsupported engine update request.')
     if value['action'] in {'read', 'cancel'}:

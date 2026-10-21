@@ -138,3 +138,79 @@ def test_snapshot_archive_is_outside_fixed_source_checkout(app, monkeypatch):
     assert snapshot == {'archive_sha256': 'fixed'}
     assert base64.b64decode(content) == b'checked snapshot'
     assert len(calls) == 1
+
+
+async def staged_origin(app, monkeypatch):
+    config = {'enabled': True, 'backend': 'incus', 'incus': {'executable': '/owned/old'}}
+    private.write_json(app.data_dir / 'test-environments.json', config)
+    observed = {'configuration': config['incus'], 'revision': 'a' * 40, 'machineId': 'm',
+                'backendIdentity': {'daemon': 'native'},
+                'policy': {'version': 1, 'repository': probe.REPOSITORY, 'ref': 'main'}}
+    monkeypatch.setattr(updates, 'inspect', lambda *args: copy.deepcopy(observed))
+    monkeypatch.setattr(updates, 'source_snapshot', lambda *args: ({'archive_sha256': 'fixed'}, 'eA=='))
+    state = {'phase': 'qualified', 'badProof': False, 'calls': [], 'installs': []}
+    old = {'controller': '/fixed/old/controller.py', 'packageDigest': 'old', 'packageFiles': []}
+    new = {**old, 'controller': '/fixed/new/controller.py', 'packageDigest': 'new'}
+    def install(*args):
+        result = new if state['installs'] else old
+        state['installs'].append(copy.deepcopy(result))
+        return copy.deepcopy(result)
+    monkeypatch.setattr(updates, 'install_controller', install)
+    monkeypatch.setattr(updates.runners, 'bundle', lambda: {'digest': 'new'})
+    def call(target, request, timeout=90):
+        state['calls'].append((copy.deepcopy(target), copy.deepcopy(request)))
+        if request['action'] == 'stage':
+            return {'id': request['id'], 'state': 'qualifying'}
+        if request['action'] == 'read':
+            return {'complete': False, 'state': 'qualifying', 'phase': state['phase']}
+        if request['action'] == 'publicationRecovery':
+            return {'complete': False, 'publicationReady': True, 'intentSha256': updates.runners.digest(request['intent']),
+                    'machineId': 'm', 'backendIdentity': {'daemon': 'changed' if state['badProof'] else 'native'}}
+        if request['action'] == 'advance':
+            if target == old:
+                return {'complete': False, 'waiting': 'unknown'}
+            return {'complete': True, 'incus': {'executable': '/owned/new'}}
+        raise AssertionError(request)
+    monkeypatch.setattr(updates, 'target_call', call)
+    source = updates.update_sources(app)[0]
+    await updates.check_source(app, source)
+    source['latest'] = 'b' * 40
+    result = await updates.stage(app, source)
+    return result['runnerUpdate'], state, old, new
+
+
+async def test_explicit_advance_retains_original_controller_and_publication_lineage(app, monkeypatch):
+    identity, state, old, new = await staged_origin(app, monkeypatch)
+    assert (await updates.advance(app, identity))['complete']
+    record = private.read_json(updates.path_for(app, identity))
+    assert record['target'] == old and record['publicationTarget'] == new
+    assert record['controllerRecoveries'][0]['previous'] == old
+    assert record['controllerRecoveries'][0]['replacement'] == new
+    assert len(state['installs']) == 2
+    assert [request['action'] for _, request in state['calls']] == ['stage', 'read', 'publicationRecovery', 'advance']
+    assert (await updates.advance(app, identity))['complete']
+    assert len(state['calls']) == 4
+
+
+@pytest.mark.parametrize('phase', ['prepare', 'start', 'check', 'stop', 'remove'])
+async def test_controller_is_not_replaced_during_unsettled_effects(app, monkeypatch, phase):
+    identity, state, old, new = await staged_origin(app, monkeypatch)
+    state['phase'] = phase
+    assert (await updates.advance(app, identity))['waiting'] == 'unknown'
+    assert len(state['installs']) == 1
+    assert all(target == old for target, _ in state['calls'])
+
+
+@pytest.mark.parametrize('change', ['intent-path', 'backend'])
+async def test_publication_recovery_rejects_retained_identity_changes(app, monkeypatch, change):
+    identity, state, old, new = await staged_origin(app, monkeypatch)
+    if change == 'intent-path':
+        path = updates.path_for(app, identity); record = private.read_json(path)
+        record['request']['configPath'] = '/different/config.json'; private.write_json(path, record)
+    else:
+        state['badProof'] = True
+    with pytest.raises(updates.RunnerUpdateError):
+        await updates.advance(app, identity)
+    record = private.read_json(updates.path_for(app, identity))
+    assert record['target'] == old and 'publicationTarget' not in record
+    assert all(request['action'] != 'advance' for _, request in state['calls'])

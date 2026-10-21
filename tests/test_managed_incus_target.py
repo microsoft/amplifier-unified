@@ -362,3 +362,63 @@ def test_later_selection_change_never_retires_previously_published_runtime(engin
     controller.write(engine.config_path, engine.config)
     assert target.dispatch({'action': 'skip', 'id': identity})['complete']
     assert (engine.path / 'runtime').exists()
+
+
+def test_publication_uses_real_normal_setup_filelock_and_rejects_writable_or_linked_lock(engine):
+    from filelock import FileLock, Timeout
+    directory = engine.config_path.parent / 'test-runner-setup'
+    directory.mkdir(mode=0o700)
+    path = directory / 'setup.lock'
+    # Normal setup owns the producer semantics, including default0644 mode.
+    with FileLock(str(path), timeout=0):
+        assert path.stat().st_mode & 0o777 == 0o644
+        with pytest.raises(BlockingIOError):
+            with target.settings_lock(engine.config_path):
+                pytest.fail('Ignored the normal setup lock')
+    with target.settings_lock(engine.config_path):
+        with pytest.raises(Timeout):
+            with FileLock(str(path), timeout=0):
+                pytest.fail('Normal setup ignored the updater lock')
+    path.chmod(0o666)
+    with pytest.raises(ValueError, match='setup lock'):
+        with target.settings_lock(engine.config_path):
+            pass
+    path.unlink(); path.symlink_to(directory / 'other')
+    with pytest.raises(OSError):
+        with target.settings_lock(engine.config_path):
+            pass
+
+
+def test_new_controller_can_only_recover_original_settled_publication(engine):
+    identity = started(engine)
+    request = {'action': 'publicationRecovery', 'id': identity,
+               'intent': {key: value for key, value in engine.request.items() if key != 'action'}}
+    with pytest.raises(ValueError, match='settled qualified'):
+        target.dispatch(request)
+    for _ in range(4):
+        target.advance(identity)
+    before = list(engine.effects)
+    result = target.dispatch(request)
+    assert result['publicationReady'] and result['intentSha256'] == generations.digest(request['intent'])
+    assert engine.effects[len(before):] == ['reconcile']
+    with pytest.raises(ValueError, match='arguments changed'):
+        target.dispatch({**request, 'intent': {**request['intent'], 'configPath': '/other/config'}})
+    assert target.advance(identity)['complete']
+    assert target.dispatch(request)['complete']  # publication acknowledgement lost
+    assert engine.effects.count('start') == engine.effects.count('job_start') == 1
+
+
+def test_new_controller_refuses_unknown_or_changed_target_publication(engine, monkeypatch):
+    identity = started(engine)
+    for _ in range(4):
+        target.advance(identity)
+    request = {'action': 'publicationRecovery', 'id': identity,
+               'intent': {key: value for key, value in engine.request.items() if key != 'action'}}
+    original = target.observe
+    monkeypatch.setattr(target, 'observe', lambda record: None)
+    assert target.dispatch(request) == {'complete': False, 'waiting': 'unknown'}
+    monkeypatch.setattr(target, 'observe', original)
+    value = controller.read(engine.config_path); value['incus']['project'] = 'other'
+    controller.write(engine.config_path, value)
+    with pytest.raises(ValueError, match='selected engine changed'):
+        target.dispatch(request)

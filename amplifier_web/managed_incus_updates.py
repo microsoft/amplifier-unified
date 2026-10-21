@@ -214,7 +214,8 @@ async def advance(app, identity):
         # This receipt describes a completed future-selection commit. A later
         # operator pause/change is not permission to reselect the old candidate.
         return {'complete': True}
-    observed = await private.settled_thread(target_call, record['target'], {'action': 'read', 'id': identity}, 90)
+    active_target = record.get('publicationTarget', record['target'])
+    observed = await private.settled_thread(target_call, active_target, {'action': 'read', 'id': identity}, 90)
     if observed.get('complete') and observed.get('incus'):
         record['candidateIncus'] = observed['incus']
         private.write_json(path, record)
@@ -222,11 +223,38 @@ async def advance(app, identity):
     if source['runnerTarget'] == 'local' and current:
         changed = current['incus'] not in (record['previous']['incus'], record.get('candidateIncus'))
     if changed:
-        result = await private.settled_thread(target_call, record['target'], {'action': 'cancel', 'id': identity}, 900)
+        result = await private.settled_thread(target_call, active_target, {'action': 'cancel', 'id': identity}, 900)
         if result.get('complete'):
             raise RunnerUpdateError('managed-runner-selection-changed')
         return result
-    result = observed if observed.get('complete') else await private.settled_thread(target_call, record['target'], {'action': 'advance', 'id': identity}, 900)
+    if (not observed.get('complete') and observed.get('state') == 'qualifying'
+            and observed.get('phase') == 'qualified' and active_target['packageDigest'] != runners.bundle()['digest']):
+        # App upgrades may repair final publication. Never change a controller
+        # during live/unknown guest work, and retain every original descriptor.
+        config_path = str(Path(app.data_dir) / 'test-environments.json') if source['runnerTarget'] == 'local' else record['previous'].get('configPath', '')
+        if config_path != record['request']['configPath']:
+            raise RunnerUpdateError('managed-runner-selection-changed')
+        replacement = await private.settled_thread(install_controller, app, source['runnerTarget'], record['previous'])
+        if replacement.get('connection') != active_target.get('connection'):
+            raise RunnerUpdateError('managed-runner-selection-changed')
+        intent = {key: value for key, value in record['request'].items() if key != 'action'}
+        proof = await private.settled_thread(target_call, replacement,
+            {'action': 'publicationRecovery', 'id': identity, 'intent': intent}, 90)
+        if not proof.get('complete'):
+            if not proof.get('publicationReady'):
+                return proof
+            if (proof.get('intentSha256') != runners.digest(intent)
+                    or proof.get('backendIdentity') != record['request']['backendIdentity']
+                    or record['request']['machineId'] not in (None, proof.get('machineId'))):
+                raise RunnerUpdateError('managed-runner-selection-changed')
+        record.setdefault('controllerRecoveries', []).append({'previous': active_target, 'replacement': replacement,
+            'reason': 'settled-publication', 'proof': proof})
+        record['publicationTarget'] = replacement
+        private.write_json(path, record)
+        active_target = replacement
+        if proof.get('complete'):
+            observed = proof
+    result = observed if observed.get('complete') else await private.settled_thread(target_call, active_target, {'action': 'advance', 'id': identity}, 900)
     if not result.get('complete'):
         return result
     if result.get('cancelled'):
@@ -260,6 +288,6 @@ async def skip(app, identity):
     path = path_for(app, identity)
     record = private.read_json(path)
     if record and record.get('state') != 'selected':
-        await private.settled_thread(target_call, record['target'], {'action': 'skip', 'id': identity}, 90)
+        await private.settled_thread(target_call, record.get('publicationTarget', record['target']), {'action': 'skip', 'id': identity}, 90)
         record['state'] = 'skipped'
         private.write_json(path, record)
