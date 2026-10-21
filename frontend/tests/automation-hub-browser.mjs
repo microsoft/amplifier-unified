@@ -4,9 +4,11 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/unified-automation-hub';await mkdir(output,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/automation_hub_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','pipe']});
-let browser,page,log='',phase='startup';const errors=[],actions=[],timings={},started=Date.now();fixture.stderr.on('data',value=>log+=value);
+const stopFixture=ownFixture(fixture,{label:'Automation fixture',timeoutMs:5000});
+let browser,page,failure,log='',phase='startup';const errors=[],actions=[],timings={},started=Date.now();fixture.stderr.on('data',value=>log+=value);
 try{
  const info=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error(log||'Fixture timeout')),30000);fixture.stdout.on('data',value=>{text+=value;for(const line of text.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data)}}catch{}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error(`Fixture exited ${code}: ${log}`))})});
  browser=await chromium.launch({headless:true});const context=await browser.newContext({locale:'en-US',timezoneId:'Asia/Tokyo',viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
@@ -199,5 +201,13 @@ try{
  await call('view.update',{patch:{panel:null}});await expect(composer).toHaveDraft('Keep my automation test draft');
  assert.deepEqual(await otherView(),otherBefore);assert.deepEqual(errors,[]);
  await writeFile(output+'/result.json',JSON.stringify({passed:true,elapsedMs:Date.now()-started,timings,build:(await state()).client.build,browser:browser.version(),baseline,after,created,createIntent:{beforeCreate,afterCreate,mutations},browserTimezone:'Asia/Tokyo',otherClientPreserved:true,errors,checks:['empty/create/weekday/timezone/review/edit-invalidation/save','exact Los Angeles 08:30 preview and nextDue in Tokyo browser','hub Create after existing edit creates without old ID and leaves old record unchanged','manage/reopen and other-tab same-owner edit preservation','owner navigation/pause/edit','unknown no activation/replay','dirty cancel/Escape/reopen','keyboard stays in panel','390px and desktop light/dark','30-row page boundary','Stop and failed-owner recovery'],limits:['Synthetic recipient; no external work, live model/account, native-device or screen-reader acceptance.','Single-run timings are regression witnesses, not latency percentiles.']},null,2)+'\n');console.log('Automation Option B browser journey passed.');
-}catch(error){await writeFile(output+'/failure.json',JSON.stringify({phase,error:error.stack,log,actions,errors},null,2)+'\n');await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
-finally{await writeFile(output+'/fixture.log',log);await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null||fixture.signalCode!==null)return resolve();const timeout=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},5000);fixture.once('exit',()=>{clearTimeout(timeout);resolve()})})}
+}catch(error){failure=error;await writeFile(output+'/failure.json',JSON.stringify({phase,error:error.stack,log,actions,errors},null,2)+'\n');await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
+finally{
+ const cleanup={completed:false};
+ try{
+  await finishFixture({label:'Automation fixture',close:[['Automation browser',()=>browser?.close()]],
+   stop:async()=>{const result=await stopFixture();cleanup.fixture=result;return result}});
+  cleanup.completed=true;
+ }catch(error){cleanup.error=error.message;if(failure)console.error(error);else throw error}
+ finally{await writeFile(output+'/fixture.log',log);await writeFile(output+'/cleanup.json',JSON.stringify(cleanup,null,2)+'\n')}
+}
