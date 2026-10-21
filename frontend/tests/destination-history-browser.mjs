@@ -9,7 +9,136 @@ import {chromium,expect} from '@playwright/test';
 const out=process.env.AMPLIFIER_TEST_OUTPUT;
 if(!out)throw Error('Set AMPLIFIER_TEST_OUTPUT to an owned evidence directory.');
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls','--navigation-history'],{stdio:['ignore','pipe','inherit']});
-let browser,page,scenarioFailure;
+let browser,page,scenarioFailure,settingsDiagnostic;
+// Observation only: no dispatch replacement, state mutation, retry or changed assertion.
+function observeSettingsClose(page){
+ const started=performance.now(),events=[],requests=new WeakMap();
+ let dropped=0,inflight=0,parsed=0,stopped=false,initialization='pending',binding=null,pinnedReceipt=null;
+ const token=value=>typeof value==='string'&&/^[\w.:-]{1,160}$/.test(value)?value:null;
+ const number=value=>Number.isSafeInteger(value)?value:null;
+ const flag=value=>typeof value==='boolean'?value:null;
+ const record=(kind,data={})=>{if(stopped)return;if(events.length<128)events.push({atMs:performance.now()-started,wallTimeMs:Date.now(),kind,...data});else dropped++};
+ const receipt=value=>({accepted:flag(value?.accepted),revision:number(value?.revision),
+  stateRevision:number(value?.stateRevision),hostInstanceId:token(value?.hostInstanceId),hasEmbeddedState:!!value?.state});
+ const deadline=async promise=>{
+  let timer;
+  try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Diagnostic read deadline')),2000)})])}
+  finally{clearTimeout(timer)}
+ };
+ const requested=request=>{
+  try{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return;
+   const command=request.postDataJSON(),name=command?.action;
+   if(!['canvas.tabClose','canvas.select','canvas.show','canvas.close','canvas.visibility','view.update','session.select'].includes(name))return;
+   const args=command.args||{},patch=args.patch||{};
+   const row={id:token(command.id),action:name,clientId:token(request.headers()['x-amplifier-client']),
+    args:{id:token(args.id),canvasId:token(args.canvasId),sessionId:token(args.sessionId),kind:token(args.kind),open:flag(args.open)},
+    patch:{panel:token(patch.panel),panelPresent:Object.hasOwn(patch,'panel'),settingsCanvas:flag(patch.settingsCanvas),
+     workSurface:token(patch.workSurface),settingsSection:token(patch.settingsSection),library:flag(patch.canvasDraft?.library),
+     settingsExpanded:Array.isArray(patch.settingsExpanded)?patch.settingsExpanded.slice(0,4).map(token):null}};
+   requests.set(request,row);record('request',row);
+  }catch{record('request-observation-unavailable')}
+ };
+ const responded=async response=>{
+  const row=requests.get(response.request());if(!row||stopped)return;
+  record('response-headers',{id:row.id,status:response.status()});
+  if(inflight>=4||parsed>=24){record('receipt-not-read',{id:row.id,reason:'observer-cap'});return}
+  const length=Number(response.headers()['content-length']);
+  if(length>524288){record('receipt-not-read',{id:row.id,reason:'declared-size'});return}
+  inflight++;parsed++;
+  try{
+   const bytes=await response.body();
+   if(bytes.length>524288){record('receipt-not-read',{id:row.id,reason:'actual-size'});return}
+   record('receipt-parsed',{id:row.id,status:response.status(),...receipt(JSON.parse(bytes.toString()))});
+  }catch{record('receipt-unavailable',{id:row.id})}finally{inflight--}
+ };
+ const finished=request=>{const row=requests.get(request);if(row)record('request-finished',{id:row.id})};
+ const failed=request=>{const row=requests.get(request);if(row)record('request-failed',{id:row.id})};
+ const pageError=error=>record('page-error',{name:token(error.name),messageOmitted:true});
+ page.on('request',requested);page.on('response',responded);page.on('requestfinished',finished);
+ page.on('requestfailed',failed);page.on('pageerror',pageError);
+ return {
+  async start(){
+   try{
+    await deadline(page.evaluate(()=>{
+     const started=performance.now(),records=[],initialUrl=new URL(location.href);let dropped=0,expired=false,last='',binding={},observer,unsubscribe;
+     const token=value=>typeof value==='string'&&/^[\w.:-]{1,160}$/.test(value)?value:null;
+     const title=value=>typeof value==='string'?value.slice(0,128):null;
+     const marker=()=>({token:token(history.state?.amplifierSettings?.token),index:Number.isInteger(history.state?.amplifierSettings?.index)?history.state.amplifierSettings.index:null});
+     const snapshot=state=>{
+      const s=state||window.amplifier.getState(),canvas=s.canvas||{},view=s.view||{};
+      const rows=(s.canvasArtifacts||[]).filter(row=>row.sessionId===s.selectedSessionId&&row.workspaceId===s.selectedWorkspaceId);
+      const artifacts=rows.filter(row=>row.kind==='settings'||row.title==='Settings'||[binding.closedId,binding.successorId,canvas.id].includes(row.id));
+      const tabs=[...document.querySelectorAll('#workspace-canvas [role="tablist"][aria-label="Open canvas items"] > .a-canvas-tab')];
+      const openRows=rows.filter(row=>row.tabOpen),currentUrl=new URL(location.href),container=document.querySelector('#workspace-canvas');
+      const metadata=row=>({id:token(row.id),title:title(row.title),kind:token(row.kind),tabOpen:row.tabOpen===true});
+      return {atMs:performance.now()-started,wallTimeMs:Date.now(),revision:s.revision,clientId:token(s.client?.id),hostInstanceId:token(s.client?.hostInstanceId),
+       sessionId:token(s.selectedSessionId),workspaceId:token(s.selectedWorkspaceId),hidden:document.hidden,
+       canvas:{id:token(canvas.id),kind:token(canvas.kind),open:canvas.open===true,visibilityPending:!!canvas.visibilityPending},
+       view:{panel:token(view.panel),settingsCanvas:view.settingsCanvas===true,workSurface:token(view.workSurface),settingsSection:token(view.settingsSection),library:view.canvasDraft?.library===true,
+        settingsExpanded:Array.isArray(view.settingsExpanded)?view.settingsExpanded.slice(0,4).map(token):null},
+       navigationPending:!!s.navigationPending,settingsHistory:marker(),historyLength:history.length,
+       url:{sameOrigin:currentUrl.origin===initialUrl.origin,samePath:currentUrl.pathname===initialUrl.pathname,chat:token(currentUrl.searchParams.get('chat')),shell:token(currentUrl.searchParams.get('shell'))},
+       artifacts:artifacts.slice(0,32).map(metadata),openTabs:openRows.slice(0,32).map(metadata),openTabsOmitted:Math.max(0,openRows.length-32),
+       artifactsOmitted:Math.max(0,artifacts.length-32),
+       dom:{tabs:tabs.slice(0,32).map((node,index)=>({index,label:title(node.querySelector('[role="tab"] span')?.textContent),
+         selected:node.querySelector('[role="tab"]')?.getAttribute('aria-selected'),closeLabel:title(node.querySelector('[data-action="canvas.tabClose"]')?.getAttribute('aria-label')),
+         visible:!!node.getClientRects().length})),tabsOmitted:Math.max(0,tabs.length-32),
+        closeSettingsCount:document.querySelectorAll('button[aria-label="Close tab Settings"]').length,
+        canvasContainer:container?{hidden:container.hidden,inert:container.inert,ariaHidden:container.getAttribute('aria-hidden'),mode:token(container.getAttribute('data-mode'))}:null,
+        settingsSurfaces:[...document.querySelectorAll('.a-settings-experience')].slice(0,8).map(node=>({page:token(node.getAttribute('data-settings-page')),compact:token(node.getAttribute('data-compact')),inCanvas:!!node.closest('#workspace-canvas'),visible:!!node.getClientRects().length})),
+        unsavedDialogs:document.querySelectorAll('[role="alertdialog"]').length},
+       identityLimit:'DOM tabs have no artifact ID attribute; state IDs and ordered labels are separate observations.'};
+     };
+     const capture=(label,state,force=false)=>{
+      try{
+       const value=snapshot(state),key=JSON.stringify({...value,atMs:0,wallTimeMs:0});
+       if(!force&&key===last)return;last=key;
+       if(performance.now()-started>60000)expired=true;
+       if(!expired&&records.length<128)records.push({label,value});else dropped++;
+       return value;
+      }catch{if(records.length<128)records.push({label,unavailable:true});else dropped++;return null}
+     };
+     const pop=event=>capture(event.isTrusted?'popstate-trusted':'popstate-untrusted',null,true);
+     const click=event=>{
+      const button=event.target.closest?.('button'),label=button?.getAttribute('aria-label')||button?.textContent?.trim();
+      if(['Discard changes','Keep settings open','Close tab Settings'].includes(label))capture('click:'+label,null,true);
+     };
+     observer=new MutationObserver(()=>capture('DOM-mutation'));
+     observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-selected','aria-label','data-settings-page']});
+     unsubscribe=window.amplifier.subscribe(state=>capture('state-publication',state));
+     window.addEventListener('popstate',pop,true);document.addEventListener('click',click,true);
+     window.__settingsCloseObservation={
+      mark(label,next){if(next)binding=next;return capture(label,null,true)},
+      finish(label){const final=capture(label,null,true);observer.disconnect();unsubscribe();
+       window.removeEventListener('popstate',pop,true);document.removeEventListener('click',click,true);
+       return {records,dropped,expired,binding,final,clock:'browser performance.now relative to observer installation'}},
+     };
+     capture('installed',null,true);
+    }));initialization='ready';
+   }catch{initialization='unavailable';record('initialization-unavailable')}
+  },
+  async bind(before,closedId,successorId){
+   binding={closedId,successorId,clientId:before.client.id,sessionId:before.selectedSessionId,workspaceId:before.selectedWorkspaceId,beforeRevision:before.revision};
+   try{await deadline(page.evaluate(binding=>window.__settingsCloseObservation?.mark('before-close',binding),binding))}catch{record('binding-snapshot-unavailable')}
+  },
+  closeReceipt(id,value){pinnedReceipt={id:token(id),...receipt(value)};record('original-close-receipt',pinnedReceipt)},
+  async mark(label){
+   try{await deadline(page.evaluate(label=>window.__settingsCloseObservation?.mark(label),label))}catch{record('checkpoint-unavailable',{label})}
+  },
+  async save(label){
+   let observation={unavailable:true};
+   try{observation=await deadline(page.evaluate(label=>window.__settingsCloseObservation?.finish(label),label))||observation}catch{record('final-snapshot-unavailable')}
+   const pendingReceiptObservers=inflight;stopped=true;
+   page.off('request',requested);page.off('response',responded);page.off('requestfinished',finished);
+   page.off('requestfailed',failed);page.off('pageerror',pageError);
+   await writeFile(path.join(out,'settings-close-diagnostic.json'),JSON.stringify({schema:1,label,initialization,binding,pinnedReceipt,events,dropped,pendingReceiptObservers,observation,
+    limits:{nodeClock:'performance.now relative to listener attachment; not the browser clock',maxEvents:128,maxSnapshots:128,bodyObservers:4,bodyReads:24,
+     receiptBodyLimit:'524288 bytes checked after acquisition and Content-Length when present; not a universal acquisition bound',
+     privateBodiesRetained:false,dispatchesAdded:0,diagnosticOnly:true}},null,2));
+  },
+ };
+}
 const pendingGates=new Set();
 function gate(){
  let resolve;const wait=new Promise(done=>{resolve=done});
@@ -213,6 +342,7 @@ try{
  await action('canvas.close');
  // Settings in Canvas leaves the header usable; cancelling Back preserves private edits.
  await action('session.select',{id:a});await action('session.select',{id:b});
+ settingsDiagnostic=observeSettingsClose(page);await settingsDiagnostic.start();
  await action('canvas.show',{kind:'settings'});
  await action('view.update',{patch:{settingsExpanded:['providers'],settingsCanvas:true,panel:null}});
  const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');
@@ -231,6 +361,7 @@ try{
   row.workspaceId===beforeClose.selectedWorkspaceId&&row.tabOpen&&row.id!==closingId).at(-1);
  assert.equal(beforeClose.selectedSessionId,b);assert.equal(beforeClose.canvas.kind,'settings');
  assert.ok(successor,'The earlier retained Canvas tab must remain');
+ await settingsDiagnostic.bind(beforeClose,closingId,successor.id);
  const closedResponse=page.waitForResponse(response=>{
   const request=response.request();
   if(request.method()!=='POST'||new URL(response.url()).pathname!=='/api/actions'||
@@ -241,6 +372,7 @@ try{
  await page.getByRole('button',{name:'Discard changes',exact:true}).click();
  const closeResponse=await closedResponse,closeReceipt=await closeResponse.json();
  const closeCommandId=closeResponse.request().postDataJSON().id;
+ settingsDiagnostic.closeReceipt(closeCommandId,closeReceipt);
  assert.ok(closeCommandId);assert.ok(closeResponse.ok());assert.equal(closeReceipt.accepted,true);
  assert.equal(closeReceipt.hostInstanceId,beforeClose.client.hostInstanceId);
  assert.ok(Number.isSafeInteger(closeReceipt.stateRevision));
@@ -254,9 +386,11 @@ try{
    s.canvas.id===successor.id&&s.canvas.open===true&&
    s.canvasArtifacts.find(row=>row.id===closingId)?.tabOpen===false;
  }).toBe(true);
+ await settingsDiagnostic.mark('close-state-poll-completed');
  await expect(page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Close tab Settings',exact:true})).toHaveCount(0);
  await expect(settings).toHaveCount(0);assert.deepEqual(await saved(),settingsTrail);
+ await settingsDiagnostic.mark('rendered-close-assertions-completed');
  await writeFile(path.join(out,'settings-close-boundary.json'),JSON.stringify({
   commandId:closeCommandId,closedId:closingId,successorId:successor.id,
   clientId:beforeClose.client.id,hostInstanceId:closeReceipt.hostInstanceId,
@@ -295,6 +429,8 @@ try{
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','Home filters','canonical card acceptance and rejection','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390/360 layout','no runtime start or input'],pageErrors:errors}));
 }catch(error){scenarioFailure=error;throw error}finally{
+ if(settingsDiagnostic)try{await settingsDiagnostic.save(scenarioFailure?'failure-before-teardown':'completed-before-teardown')}
+ catch(error){console.error('Settings diagnostic retention failed:',error.name)}
  for(const release of pendingGates)release();
  // Start fixture termination even if browser cleanup itself stalls. Keep the
  // original assertion and a separate cleanup failure instead of replacing it.

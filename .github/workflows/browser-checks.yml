@@ -7,6 +7,10 @@ on:
         description: Run fixed Back/Forward units, build and five navigation browser scenarios
         type: boolean
         default: false
+      settings_close_diagnostic:
+        description: Observe only historical navigation Settings close; requires destination_history
+        type: boolean
+        default: false
       mcp_boundary:
         description: Run only three MCP recovery repeats, adjacent clients and the omit-close control
         type: boolean
@@ -28,7 +32,7 @@ permissions:
   contents: read
 jobs:
   browser:
-    if: ${{ !inputs.mcp_boundary && !inputs.destination_history }}
+    if: ${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -138,7 +142,7 @@ jobs:
             output/selected-context/
           if-no-files-found: warn
   mcp-boundary:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.destination_history }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -281,10 +285,13 @@ jobs:
           assert record['retained'] and not record['rejected'], 'MCP proof evidence incomplete'
           PY
   destination-history:
-    if: ${{ inputs.destination_history }}
+    if: ${{ inputs.destination_history || inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Require the fixed navigation selection for diagnostic mode
+        if: ${{ inputs.settings_close_diagnostic && !inputs.destination_history }}
+        run: exit 1
       - name: Reject mixed navigation selections
         if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
         run: exit 1
@@ -292,15 +299,35 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Freeze the fixed navigation plan before setup
+          fetch-depth: ${{ inputs.settings_close_diagnostic && 2 || 1 }}
+      - name: Refuse diagnostic product changes from the failed historical candidate
+        if: ${{ inputs.settings_close_diagnostic }}
         run: |
           python - <<'PY'
-          import hashlib, json, subprocess
+          import subprocess
+          baseline = '6d88010374ecda5ec5f3102824c5ef6465bf67b4'
+          git = lambda *args: subprocess.check_output(['git', *args]).decode().strip()
+          assert git('rev-parse', 'HEAD^') == baseline
+          assert git('rev-parse', baseline + '^{tree}') == '6e0b636202f0a48aaa04c73f92ac8c548582dcba'
+          assert not git('status', '--porcelain')
+          changed = set(git('diff', '--name-only', baseline, 'HEAD').splitlines())
+          assert changed == {'.github/workflows/browser-checks.yml',
+                             'frontend/tests/destination-history-browser.mjs'}, changed
+          PY
+      - name: Freeze the fixed navigation plan before setup
+        env:
+          SETTINGS_CLOSE_DIAGNOSTIC: ${{ inputs.settings_close_diagnostic }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, subprocess
           from pathlib import Path
           output = Path('output/destination-history')
           output.mkdir(parents=True)
           plan = json.loads(Path('frontend/tests/browser-checks.json').read_text())
           wanted = ('destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch')
+          diagnostic = os.environ.get('SETTINGS_CLOSE_DIAGNOSTIC') == 'true'
+          if diagnostic:
+              wanted = ('destination-history',)
           rows = plan['scenarios']
           assert all(sum(row['id'] == name for row in rows) == 1 for name in wanted)
           selected = [next(row for row in rows if row['id'] == name) for name in wanted]
@@ -312,7 +339,7 @@ jobs:
           (output / 'source.json').write_text(json.dumps({
               'revision': git('rev-parse', 'HEAD').decode().strip(),
               'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
-              'scope': 'Focused source baseline, not full-suite or installed-wheel acceptance',
+              'scope': 'Historical Settings-close diagnostic only; no qualification' if diagnostic else 'Focused source baseline, not full-suite or installed-wheel acceptance',
               'files': hashes}, indent=2))
           PY
           python scripts/browser_check_runner.py --plan output/destination-history/plan.json --output output/browser-checks --initialize
@@ -330,7 +357,7 @@ jobs:
       - id: node_dependencies
         run: npm ci --prefix frontend
       - name: Focused backend and runner contracts
-        if: ${{ !cancelled() && steps.python_dependencies.outcome == 'success' }}
+        if: ${{ !inputs.settings_close_diagnostic && !cancelled() && steps.python_dependencies.outcome == 'success' }}
         run: |
           set -o pipefail
           uv run --no-sync pytest --asyncio-mode=auto -v -ra --tb=short --junitxml=output/destination-history/python.xml \
@@ -338,7 +365,7 @@ jobs:
             tests/test_approachable_shell.py tests/test_new_chat.py tests/test_canvas_files.py tests/test_canvas_views.py \
             tests/test_browser_check_runner.py tests/test_release_qualification.py 2>&1 | tee output/destination-history/python.log
       - name: Focused frontend regressions
-        if: ${{ !cancelled() && steps.node_dependencies.outcome == 'success' }}
+        if: ${{ !inputs.settings_close_diagnostic && !cancelled() && steps.node_dependencies.outcome == 'success' }}
         working-directory: frontend
         run: |
           set -o pipefail
@@ -356,9 +383,31 @@ jobs:
           tar -czf output/destination-history/built-static.tar.gz -C amplifier_web static
           sha256sum output/destination-history/built-static.tar.gz > output/destination-history/built-static.sha256
           git diff --stat -- amplifier_web/static > output/destination-history/derived-assets.txt
+      - name: Verify diagnostic build matches all historical static bytes
+        id: diagnostic_identity
+        if: ${{ inputs.settings_close_diagnostic && steps.build.outcome == 'success' }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, subprocess
+          from pathlib import Path
+          baseline = '6d88010374ecda5ec5f3102824c5ef6465bf67b4'
+          names = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', baseline,
+                                           'amplifier_web/static']).decode().splitlines()
+          actual = list(Path('amplifier_web/static').rglob('*'))
+          assert not any(path.is_symlink() for path in actual)
+          assert {str(path) for path in actual if path.is_file()} == set(names)
+          assert len(names) == 311
+          hashes = {}
+          for name in names:
+              original = subprocess.check_output(['git', 'show', baseline + ':' + name])
+              assert Path(name).read_bytes() == original, name
+              hashes[name] = hashlib.sha256(original).hexdigest()
+          Path('output/destination-history/diagnostic-build-identity.json').write_text(
+              json.dumps({'baseline': baseline, 'files': hashes, 'equal': True}, indent=2))
+          PY
       - name: Install Chromium
         id: browser_runtime
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (!inputs.settings_close_diagnostic || steps.diagnostic_identity.outcome == 'success') }}
         working-directory: frontend
         run: npx playwright install --with-deps chromium
       - name: Run all five fixed navigation scenarios serially
@@ -369,7 +418,7 @@ jobs:
           --output output/browser-checks
           --budget-seconds 1200
       - name: Require executed evidence without skips
-        if: always()
+        if: ${{ always() && !inputs.settings_close_diagnostic }}
         run: |
           python - <<'PY'
           import json, re, xml.etree.ElementTree as ET
@@ -416,7 +465,32 @@ jobs:
           raise SystemExit(0 if verdict['passed'] else 1)
           PY
       - name: Prove navigation controls and installed wheel outside source
+        if: ${{ !inputs.settings_close_diagnostic && success() }}
         run: uv run --no-sync python scripts/navigation_history_qualification.py
+      - name: Retain diagnostic completeness without relabeling the scenario outcome
+        if: ${{ always() && inputs.settings_close_diagnostic }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          output = Path('output/destination-history')
+          plan = json.loads((output / 'plan.json').read_text())['scenarios']
+          result = json.loads(Path('output/browser-checks/results.json').read_text())
+          rows = result['scenarios']
+          assert len(plan) == len(rows) == 1 and plan[0]['id'] == rows[0]['id'] == 'destination-history'
+          assert rows[0]['command'] == plan[0]['command'] and rows[0].get('env', {}) == plan[0].get('env', {})
+          assert result['complete'] and rows[0]['status'] in {'passed', 'failed'}
+          assert rows[0]['cleanup'] == {'remaining': [], 'terminated': 0}
+          diagnostic = json.loads(Path('output/browser-checks/destination-history/settings-close-diagnostic.json').read_text())
+          assert diagnostic['initialization'] == 'ready' and diagnostic['binding'] and diagnostic['pinnedReceipt']
+          assert diagnostic['observation']['final'] and not diagnostic['observation']['expired']
+          assert diagnostic['dropped'] == diagnostic['observation']['dropped'] == 0
+          assert json.loads((output / 'diagnostic-build-identity.json').read_text())['equal']
+          (output / 'diagnostic-result.json').write_text(json.dumps({
+              'diagnosticEvidenceRetained': True, 'scenarioStatus': rows[0]['status'],
+              'scenarioExitCode': rows[0]['exitCode'], 'productQualified': False,
+              'qualificationAttemptsAdded': 0}, indent=2))
+          PY
       - name: Retain focused results including failures and unrun cases
         if: always()
         uses: actions/upload-artifact@v4
