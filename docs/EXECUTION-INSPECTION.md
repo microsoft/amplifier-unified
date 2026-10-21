@@ -43,7 +43,15 @@ JSONL records are retried after the next append. Inspection never executes tools
 
 Collapsed tool rows retain the tool name and a bounded command, code, file, or
 action preview, plus an available error and exit status. These are display hints,
-not complete arguments or execution evidence. Expanding reads saved arguments
+not complete arguments or execution evidence. Tools without a specialized display
+also carry `inputPreview`, a deterministic JSON-shaped request hint of at most
+180 characters. It visits at most four entries per container, two container
+levels and 24 values; shortened values end in an ellipsis. Known credential-named
+fields are redacted in this hint. This is not a secret scanner for arbitrary
+free text, and it does not alter the saved input. Zero, false and null remain
+visible; absent input clears the hint. `app_control` dispatch also carries a
+bounded `actionPath` from its actual nested `args.action`, without flattening
+its arguments. Expanding reads saved arguments
 and results; copy controls never treat a shortened hint as the full payload.
 Unrelated log appends do not invalidate an unchanged exact saved field. Source
 replacement or edits still invalidate it; temporary read failures offer retry

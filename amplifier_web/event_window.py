@@ -235,13 +235,11 @@ def _observation(event, raw, offset, path, identity):
                 row[field + 'Recording'] = recording
         if field not in {'request', 'response'}:
             row[field] = _preview(data[key])
-        if field == 'input' and kind == 'tool' and isinstance(data[key], dict):
+        if field == 'input' and kind == 'tool':
             # Only header hints from the accepted input, never reconstructed
             # arguments or evidence that the operation completed.
-            from .tool_observations import input_summary
-            summary = input_summary(data[key])
-            if summary:
-                row['inputSummary'] = summary
+            from .tool_observations import input_hints
+            row.update(input_hints(data.get('tool_name') or data.get('tool'), data[key]))
     if kind == 'tool':
         from .tool_observations import identity as tool_identity
         token = tool_identity(data.get('unified_tool_observation_id'))

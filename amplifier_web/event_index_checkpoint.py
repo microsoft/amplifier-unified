@@ -15,7 +15,7 @@ import stat
 import tempfile
 import zlib
 
-SCHEMA = 3  # Parsed tool hints must be rebuilt from canonical events after upgrade.
+SCHEMA = 4  # Parsed tool hints must be rebuilt from canonical events after upgrade.
 MAX_DECODED = 64 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_TOTAL = 256 * 1024 * 1024
