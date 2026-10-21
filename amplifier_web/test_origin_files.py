@@ -84,6 +84,8 @@ def _windows_private(handle):
             ace = pointer()
             if not get_ace(acl, index, ctypes.byref(ace)):
                 raise ValueError('The retained file permissions could not be verified.')
+            if ctypes.c_ubyte.from_address(ace.value + 1).value & 0x08:
+                continue  # INHERIT_ONLY_ACE does not grant access to this object.
             kind = ctypes.c_ubyte.from_address(ace.value).value
             if kind in (1, 2, 3, 6, 7, 8, 10, 12, 13, 14, 15, 16, 17):
                 continue  # Deny/audit/label ACEs grant no ordinary write access.
