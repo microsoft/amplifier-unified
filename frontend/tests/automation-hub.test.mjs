@@ -98,7 +98,7 @@ test('hub Create selects a new draft, while manage and Review retain existing ed
  const dispatch=async(action,args)=>{
   calls.push({action,args});
   if(action==='view.update'){panel='editor';root.update(render())}
-  return {accepted:true,result:action==='schedule.overview'?{...page,items:[{...saved,owner:{id,title:session.title}}]}:action==='schedule.preview'?{binding:args,previewHash:'fresh-review',occurrences:[{utc:'2027-01-18T08:30:00Z',dueAt:1800261000}]}:{}};
+  return {accepted:true,result:action==='schedule.overview'?{...page,items:[{...saved,owner:{id,title:session.title}}]}:action==='schedule.preview'?{binding:{...args,...(args.destination==='new_task'?{newTaskConfiguration:{workspace:'/example',bundle:'work',selection:{model:'test-model'}}}:{})},previewHash:'fresh-review',occurrences:[{utc:'2027-01-18T08:30:00Z',dueAt:1800261000}]}:{}};
  };
  const type=async value=>act(async()=>root.root.findByProps({id:'schedule-prompt'}).props.onChange({target:{value}}));
  const navigate=async()=>{panel='automation';await act(async()=>root.update(render()))};
