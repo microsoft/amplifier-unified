@@ -114,7 +114,13 @@ def test_missing_evidence_is_not_success_or_fresh_worker_attestation():
     assert result['conversation']['historyLoaded'] is None
 
 
-async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcast_or_replay(tmp_path, monkeypatch):
+@pytest.mark.parametrize(('error_type', 'category'), [
+    ('RuntimeStartupError', 'worker_startup'),
+    ('WorkerCommunicationError', 'worker_communication'),
+    ('WorkerExitedError', 'worker_exit'),
+])
+async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcast_or_replay(
+        tmp_path, monkeypatch, error_type, category):
     app = AppService(tmp_path, workspace=tmp_path)
     create = AsyncMock(return_value=feedback.ISSUES_URL + '/42')
     monkeypatch.setattr(feedback, 'create_issue', create)
@@ -123,6 +129,13 @@ async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcas
         await app.dispatch('session.create', {'title': 'PRIVATE title'})
         session = app._session()
         session.update(example()['sessions'][0], id=session['id'])
+        session.pop('failure')
+        # Exercise the actual runtime-event owner before the feedback boundary.
+        # Its local raw detail must stay private, while its fixed classification
+        # survives preview, accepted receipt, delivery and application reopen.
+        await app.on_runtime_event('runtime.error', {'sessionId': session['id'],
+            'errorType': error_type, 'error': 'PRIVATE worker detail /workspace'})
+        assert session['failure']['category'] == category
         app.state['updates'] = example()['updates']
         args = {'deviceDiagnostics': {'eventStream': 'reconnecting', 'online': True,
                                     'windowControlsOverlay': 'hidden', 'windowChromeLayout': 'standard'}}
@@ -133,6 +146,8 @@ async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcas
             preview = await app.dispatch('feedback.diagnostics', args)
             agent = await app.app_bridge('dispatch', {'action': 'feedback.diagnostics', 'args': args}, session['id'])
             assert preview['result']['diagnostics']['troubleshooting'] == agent['result']['diagnostics']['troubleshooting']
+            failure = preview['result']['diagnostics']['troubleshooting']['recordedFailure']
+            assert failure['category'] == category and failure['errorType'] == error_type
             assert app.state['revision'] == before
             assert 'state' not in preview and preview['effects'] == []
             assert not app.state['feedback']['requests']
@@ -145,7 +160,8 @@ async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcas
         assert frozen['device']['eventStream'] == 'reconnecting'
         assert frozen['device']['windowControlsOverlay'] == 'hidden'
         assert frozen['device']['windowChromeLayout'] == 'standard'
-        assert frozen['troubleshooting']['recordedFailure']['category'] == 'worker_startup'
+        assert frozen['troubleshooting']['recordedFailure']['category'] == category
+        assert frozen['troubleshooting']['recordedFailure']['errorType'] == error_type
         session['failure'] = {'category': 'authentication'}
         session['messages'].clear()
         app._save()
