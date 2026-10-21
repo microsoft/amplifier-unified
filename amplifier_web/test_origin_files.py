@@ -14,6 +14,11 @@ import stat
 import uuid
 
 
+def supported_private_files():
+    return os.name == 'nt' or (os.name == 'posix' and all(
+        hasattr(os, name) for name in ('getuid', 'O_NOFOLLOW', 'O_DIRECTORY')))
+
+
 def _windows_private(handle):
     """Require this account's object owner and no ordinary shared write grant.
 
@@ -149,6 +154,8 @@ def _windows_handle(path, *, directory=False, private=False):
 
 @contextmanager
 def directory(path, *, create=False, private=False):
+    if not supported_private_files():
+        raise ValueError('Private test records are not supported on this platform.')
     path = Path(path).absolute()
     with ExitStack() as stack:
         if os.name == 'nt':
