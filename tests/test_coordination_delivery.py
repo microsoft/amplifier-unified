@@ -1023,7 +1023,7 @@ async def test_identical_unbound_or_nested_page_does_not_poison_direct_read(app,
     from amplifier_core.message_models import ToolCall
     from amplifier_web.output_image_delivery import successful_output
     adapter, _, required = await installed_work_adapter(app)
-    manifest = await adapter.read(required['requirementsRef'])
+    manifest = await adapter.read(required['requirementsRef'], limit=1)
     ref = next(row['readRef'] for row in manifest['items'] if row['kind'] == 'promise')
     args = {'operation': 'dispatch', 'args': {'action': ref['action'], 'args': {**ref['args'], 'limit': 700, 'offset': 0}}}
     if prior == 'unbound':
@@ -1053,7 +1053,20 @@ async def test_identical_unbound_or_nested_page_does_not_poison_direct_read(app,
     assert earlier['result'] == current  # Deterministic page, identical content.
     await adapter.fill(required)
     prepared = await adapter.delivery.prepare(adapter.request(), None)
-    assert adapter.delivery.request_coverage(prepared)['complete'] is True
+    coverage = adapter.delivery.request_coverage(prepared)
+    assert coverage['complete'] is True, json.dumps(coverage, ensure_ascii=False)
+
+
+async def test_differing_first_manifest_pages_remain_explicitly_ambiguous(app):
+    adapter, _, required = await installed_work_adapter(app)
+    initial = await adapter.read(required['requirementsRef'])  # Preserve old default20 setup.
+    assert len(initial['items']) > 1 and initial['truncated'] is False
+    await adapter.fill(required)  # limit1 starts a conflicting retained first page.
+    prepared = await adapter.delivery.prepare(adapter.request(), None)
+    coverage = adapter.delivery.request_coverage(prepared)
+    assert coverage['complete'] is False, json.dumps(coverage, ensure_ascii=False)
+    assert coverage['reason'] == 'Required manifest page is absent or ambiguous in fitted content.'
+    assert coverage['effectAuthorized'] is False
 
 
 async def test_concurrent_identical_pages_bind_exact_execution_ids_and_reject_forgery(app):
