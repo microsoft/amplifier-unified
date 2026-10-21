@@ -9,6 +9,7 @@ from amplifier_web.host.session import SelectedProvider
 from amplifier_web.naming import read
 
 from test_naming_lifecycle import community, mounted, native_home  # noqa: F401
+from test_automatic_history import app_factory  # noqa: F401
 
 
 def recorder(host, replies):

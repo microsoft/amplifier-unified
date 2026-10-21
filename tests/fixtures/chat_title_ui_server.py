@@ -33,6 +33,7 @@ async def main(home):
     metadata = SessionMetadataStore(store.directory(source['id']))
     metadata.history._save_metadata_unlocked({**metadata.read(), 'name': 'Conversation deadbeef', 'name_source': 'fallback'})
     naming_calls = []
+    release_second = asyncio.Event()
     class Context:
         async def get_messages(self):
             return [{'role': 'user', 'content': 'Plan a neighborhood garden'}]
@@ -44,7 +45,8 @@ async def main(home):
         async def complete(self, request, **kwargs):
             naming_calls.append({'model': request.model, 'prompt': str(request.messages[0].content)})
             assert request.max_output_tokens == 256 and request.metadata['stream'] is False
-            await asyncio.sleep(.2)
+            if len(naming_calls) == 2:
+                await release_second.wait()
             return ChatResponse(content=[TextBlock(text=json.dumps({
                 'action': 'set', 'name': 'Neighborhood garden plan',
                 'description': 'Design a shared neighborhood garden.'}))],
@@ -65,7 +67,11 @@ async def main(home):
     service.runtime.control = control
     async def check(request):
         return web.json_response({'unchanged': original == transcript.read_bytes(), 'namingCalls': len(naming_calls), 'title': service._session(source['id'])['title']})
+    async def release(request):
+        release_second.set()
+        return web.json_response({'released': True})
     app.router.add_get('/fixture/check', check)
+    app.router.add_post('/fixture/release', release)
     service._publish()
     runner = web.AppRunner(app)
     await runner.setup()
@@ -77,6 +83,7 @@ async def main(home):
     try:
         await asyncio.Event().wait()
     finally:
+        release_second.set()
         await namer.close()
         await runner.cleanup()
 

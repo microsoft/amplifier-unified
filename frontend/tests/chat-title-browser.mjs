@@ -39,7 +39,9 @@ try{
  // A second naming cycle preserves a newer manual choice and the Auto setting.
  await act('session.naming',{id:ready.sessionId,automatic:false});
  await act('session.naming',{id:ready.sessionId,regenerate:true});
+ await expect.poll(async()=>(await check()).namingCalls).toBe(2);
  await act('session.rename',{id:ready.sessionId,title:'My chosen garden name'});
+ await page.request.post(ready.url+'/fixture/release');
  await expect(page.locator('.a-work-heading strong')).toHaveText('My chosen garden name');
  await expect.poll(async()=>page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).naming.status,ready.sessionId)).toBe('conflict');
  assert.equal((await check()).namingCalls,2);
