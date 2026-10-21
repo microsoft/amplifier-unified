@@ -877,26 +877,31 @@ class Worker:
             try:
                 return await original(*args, **kwargs)
             except Exception as error:
-                from amplifier_web.support_diagnostics import exception_chain, terminal_exception_capture
-                terminal = self.failed_generation or {}
-                # Only the exact known loop wrapper with its original cause is
-                # supported. No inference from flattened exception messages.
-                if (type(error).__module__ == 'amplifier_module_loop_live.failures'
-                        and type(error).__name__ == 'ManagerTurnError'
-                        and isinstance(getattr(error, 'failure', None), dict)
-                        and all(error.failure.get(key) == terminal.get(key) for key in
-                                ('error_type', 'error_category', 'error_stage'))
-                        and terminal.get('error_category') == 'unknown'
-                        and terminal.get('error_stage') == 'manager_turn'
-                        and error.__cause__ is not None and self.stop_revision == epoch
-                        and not self.runtime.stop_requested
-                        and not self.remounting and not self.ownership.yielding):
-                    capture = terminal_exception_capture({
-                        'generationId': terminal.get('generation_id'), 'inputIds': terminal.get('input_ids'),
-                        'errorType': terminal.get('error_type'), 'exceptionChain': exception_chain(error)})
-                    if capture:
-                        publish({'type': 'runtime.error', 'error': 'The manager turn failed. Work was not replayed.',
-                                 'terminalFailure': capture})
+                try:
+                    from amplifier_web.support_diagnostics import exception_chain, terminal_exception_capture
+                    terminal = self.failed_generation or {}
+                    # Only the exact known loop wrapper with its original cause
+                    # is supported. Never parse flattened exception messages.
+                    if (type(error).__module__ == 'amplifier_module_loop_live.failures'
+                            and type(error).__name__ == 'ManagerTurnError'
+                            and isinstance(getattr(error, 'failure', None), dict)
+                            and all(error.failure.get(key) == terminal.get(key) for key in
+                                    ('error_type', 'error_category', 'error_stage'))
+                            and terminal.get('error_category') == 'unknown'
+                            and terminal.get('error_stage') == 'manager_turn'
+                            and error.__cause__ is not None and self.stop_revision == epoch
+                            and not self.runtime.stop_requested
+                            and not self.remounting and not self.ownership.yielding):
+                        capture = terminal_exception_capture({
+                            'generationId': terminal.get('generation_id'), 'inputIds': terminal.get('input_ids'),
+                            'errorType': terminal.get('error_type'), 'exceptionChain': exception_chain(error)})
+                        if capture:
+                            publish({'type': 'runtime.error', 'error': 'The manager turn failed. Work was not replayed.',
+                                     'terminalFailure': capture})
+                except Exception:
+                    # Observation is optional: closed transport or unsupported
+                    # metadata must not replace the original loop exception.
+                    pass
                 raise
         execute._web_failure_capture = True
         try:

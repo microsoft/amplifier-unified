@@ -25,6 +25,12 @@ PRIVATE = "PRIVATE_MANAGER_MESSAGE_AND_LOCAL"
 
 
 async def test_real_post_provider_manager_exception_reaches_public_inspection(tmp_path, monkeypatch):
+    # The original-code subprocess disables repository conftest discovery.
+    # Apply the same file isolation explicitly to both red and green cases.
+    for key, folder in (("AMPLIFIER_HOME", "amplifier"), ("AMPLIFIER_WEB_HOME", "unified"),
+                        ("AMPLIFIER_SESSION_STATE_HOME", "shared"), ("AMPLIFIER_TERMINAL_HOME", "terminal")):
+        monkeypatch.setenv(key, str(tmp_path / folder))
+    monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", raising=False)
     # Required imports: an unavailable real boundary is a failure, never a skip.
     from amplifier_module_loop_live.runtime import Input, Runtime
 
@@ -76,13 +82,15 @@ async def test_real_post_provider_manager_exception_reaches_public_inspection(tm
             async def complete(self, request, **kwargs):
                 self.calls += 1
                 assert self.calls == 1, "Synthetic effect must not repeat"
+                child = asyncio.create_task(controlled_child())
+                loop.jobs["controlled-child"] = {"task": child, "call_id": "controlled-call", "status": "pending"}
+                await child_started.wait()
                 return ChatResponse(content=[], tool_calls=[ToolCall(id="fixture-call", name="unused", arguments={})],
                                     usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
             def parse_tool_calls(self, response):
                 # Inject at the production post-complete parser boundary.
                 # Do not replace execute(), turn_failure(), or the manager catch.
-                child = asyncio.create_task(controlled_child())
-                loop.jobs["controlled-child"] = {"task": child, "call_id": "controlled-call", "status": "pending"}
+                assert not loop.jobs["controlled-child"]["task"].done()
                 manager_admission_sentinel()
 
         provider = Provider()
@@ -101,9 +109,15 @@ async def test_real_post_provider_manager_exception_reaches_public_inspection(tm
         assert terminal["error_type"] == "ValueError"
         assert terminal["error_category"] == "unknown" and terminal["error_stage"] == "manager_turn"
         assert terminal["input_ids"] == ["boundary-input"]
+        completed_calls = [event["event"] for event in published
+                           if event["type"] == "execution.event" and event["event"].get("kind") == "llm"
+                           and event["event"].get("phase") == "completed"]
+        assert len(completed_calls) == 1 and completed_calls[0]["sessionId"] == root["id"]
+        assert not any(event["type"] == "execution.event" and event["event"].get("failure") for event in published)
         # Record first loss without reconstructing anything from exception text.
         print("BOUNDARY", json.dumps({"rawLoopHasChain": bool(terminal.get("exception_chain")),
             "workerHasChain": bool(exit_event.get("terminalFailure", {}).get("exceptionChain")),
+            "workerFile": runtime_worker.__file__, "captureSupported": hasattr(worker, "capture_manager_failures"),
             "generation": terminal["generation_id"], "inputs": terminal["input_ids"]}))
         # Keep the production JSON-lines reader and its runtime.error branch.
         # Only OS pipes/process effects are replaced; all bytes originate above.
@@ -118,21 +132,29 @@ async def test_real_post_provider_manager_exception_reaches_public_inspection(tm
         process.stdout = stdout
         ready = asyncio.get_running_loop().create_future()
         ready.set_result({})
+        delivered = []
+        async def emit(kind, payload):
+            delivered.append((kind, copy.deepcopy(payload)))
+            await app.on_runtime_event(kind, payload)
         row = {"process": process, "ready": ready, "pending": {}, "closing": False,
-               "runtime_id": root["id"], "inputId": "boundary-input", "emit": app.on_runtime_event}
+               "runtime_id": root["id"], "inputId": "boundary-input", "emit": emit}
         await RuntimeManager()._read(root["id"], row)
         receipt = await app.dispatch("session.inspect", {"id": root["id"]})
         failure = receipt["result"]["failure"]
         assert failure["errorType"] == "ValueError" and failure["category"] == "unknown"
         assert failure["stage"] == "manager_turn" and failure["retryable"] is False
         assert failure["generationId"] == terminal["generation_id"] and failure["inputIds"] == ["boundary-input"]
+        retained_terminal = next(event for event in app._session(root["id"])["generations"] if event["event"] == "generation.failed")
+        assert failure["recordedAt"] == retained_terminal["at"]
         chain = failure.get("exceptionChain", [])
         assert any(item["errorType"] == "ValueError" and
                    any(frame["function"] == "manager_admission_sentinel" for frame in item["frames"]) for item in chain)
         assert failure["effects"] == "not_rolled_back" and failure["replayed"] is False
-        assert PRIVATE not in json.dumps([published, receipt["result"]])
+        supplements = [event for event in published if "terminalFailure" in event]
+        assert PRIVATE not in json.dumps([supplements, delivered, receipt["result"]])
         assert provider.calls == 1 and list(worker.runtime.accepted) == ["boundary-input"]
         assert len(app.state["sessions"]) == 1 and loop.jobs["controlled-child"]["task"].done()
+        assert loop.jobs["controlled-child"]["task"].cancelled()
     finally:
         if task and not task.done():
             task.cancel()
@@ -227,3 +249,27 @@ async def test_unsupported_or_stopped_capture_does_not_change_execution(monkeypa
     with pytest.raises(ManagerTurnError):
         await loop.execute()
     assert not published
+
+
+async def test_capture_transport_failure_cannot_replace_original_error(monkeypatch):
+    from types import SimpleNamespace
+    from amplifier_module_loop_live.failures import ManagerTurnError
+    original = ValueError(PRIVATE)
+    wrapper = ManagerTurnError({"error_type": "ValueError", "error_category": "unknown",
+                               "error_stage": "manager_turn", "error_message": "Safe"})
+    class Loop:
+        async def execute(self):
+            raise wrapper from original
+    worker = runtime_worker.Worker()
+    worker.runtime = SimpleNamespace(stop_requested=False)
+    worker.failed_generation = {"generation_id": "g", "input_ids": ["i"], "error_type": "ValueError",
+                                "error_category": "unknown", "error_stage": "manager_turn"}
+    loop = Loop()
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name: loop))
+    def broken_transport(row):
+        raise BrokenPipeError("closed")
+    monkeypatch.setattr(runtime_worker, "publish", broken_transport)
+    worker.capture_manager_failures()
+    with pytest.raises(ManagerTurnError) as caught:
+        await loop.execute()
+    assert caught.value is wrapper and caught.value.__cause__ is original

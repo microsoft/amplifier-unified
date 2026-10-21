@@ -150,8 +150,9 @@ jobs:
           test "${#targets[@]}" -gt 0
           set -o pipefail
           if [ "$CHECK_SUITE" = manager-exception-boundary ]; then
+            git fetch --no-tags --depth=1 origin 8a326ee890e43fa30b59ca8f4654d1ca598c0af2
             mkdir -p output/python-checks/original
-            git archive 8a326ee890e43fa30b59ca8f4654d1ca598c0af2 amplifier_web amplifier_operations amplifier_kernels amplifier_scheduling amplifier_recall amplifier_outputs amplifier_worktrees amplifier_publishing amplifier_portability | tar -x -C output/python-checks/original
+            git archive 8a326ee890e43fa30b59ca8f4654d1ca598c0af2 | tar -x -C output/python-checks/original
             set +e
             (cd output/python-checks/original && "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest \
               -c /dev/null -o asyncio_mode=auto --import-mode=importlib -v --tb=short \
@@ -161,6 +162,7 @@ jobs:
             set -e
             test "$red" -eq 1
             grep -q 'chain = failure.get' output/python-checks/original-red.log || grep -q 'assert any' output/python-checks/original-red.log
+            grep -q '/original/amplifier_web/runtime_worker.py' output/python-checks/original-red.log
           fi
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml "${targets[@]}" 2>&1 | tee output/python-checks/pytest.log
       - name: Build the exact manager-boundary candidate wheel
@@ -168,6 +170,21 @@ jobs:
         run: |
           uv build --wheel --out-dir output/python-checks/dist
           sha256sum output/python-checks/dist/*.whl > output/python-checks/wheel-sha256.txt
+          uv pip install --python .venv/bin/python --no-deps --target output/python-checks/wheel-install output/python-checks/dist/*.whl
+          cd output/python-checks
+          PYTHONPATH="$PWD/wheel-install" "$GITHUB_WORKSPACE/.venv/bin/python" - <<'PY' > wheel-imports.json
+          import hashlib, importlib, json
+          from pathlib import Path
+          root = (Path.cwd() / "wheel-install").resolve()
+          result = {}
+          for name in ("amplifier_web.runtime_worker", "amplifier_web.runtime", "amplifier_web.session_health",
+                       "amplifier_web.support_diagnostics", "amplifier_web.service"):
+              module = importlib.import_module(name)
+              path = Path(module.__file__).resolve()
+              assert path.is_relative_to(root), (name, path)
+              result[name] = {"file": str(path.relative_to(root)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+          print(json.dumps(result, indent=2))
+          PY
       - name: Retain complete and partial Python results
         if: always()
         uses: actions/upload-artifact@v4
