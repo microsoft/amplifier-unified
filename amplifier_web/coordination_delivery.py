@@ -31,6 +31,32 @@ MAX_READS = 512
 READ_BYTES = 4 * 1024 * 1024
 WORK_ATTEMPT = ContextVar('unified_work_delivery_attempt', default=None)
 
+def _same_json(left, right):
+    # Python equality alone treats False == 0 and True == 1. Transport proof
+    # requires the same JSON types as well as values.
+    return json.dumps(left, sort_keys=True, ensure_ascii=False) == json.dumps(right, sort_keys=True, ensure_ascii=False)
+
+
+def _work_pair_retained(request, row):
+    from .output_image_delivery import pair_retained, successful_output
+    if not pair_retained(request, row):
+        return False
+    for message in request.messages:
+        if message.role == 'tool' and message.tool_call_id == row['tool_call_id']:
+            if not _same_json(successful_output(message.content), row['receipt']):
+                return False
+        if message.role == 'assistant':
+            for call in getattr(message, 'tool_calls', None) or []:
+                call = call.model_dump() if hasattr(call, 'model_dump') else call
+                if isinstance(call, dict) and call.get('id') == row['tool_call_id']:
+                    if not _same_json(call.get('arguments'), row['input']):
+                        return False
+            for block in message.content if isinstance(message.content, list) else []:
+                if block.type == 'tool_call' and block.id == row['tool_call_id']:
+                    if not _same_json(block.input, row['input']):
+                        return False
+    return True
+
 
 def _unavailable_work():
     return {'available': False,
@@ -208,8 +234,8 @@ class CoordinationDelivery:
             self.reads = [row for row in self.reads if row['execution_id'] != data['tool_call_id']]
             return
         matches = [row for row in self.reads if row['execution_id'] == data['tool_call_id']
-                   and row['input'] == data.get('tool_input')
-                   and row['receipt'] == successful_output(data.get('result'))]
+                   and _same_json(row['input'], data.get('tool_input'))
+                   and _same_json(row['receipt'], successful_output(data.get('result')))]
         if len(matches) == 1:
             matches[0]['tool_call_id'] = data['tool_call_id']
 
@@ -420,7 +446,6 @@ class CoordinationDelivery:
         Effect admission additionally needs an authenticated causal request
         binding and supported actual-transport proof from that adapter.
         """
-        from .output_image_delivery import pair_retained
         saved = self._request(request)
         result = {'status': 'unavailable', 'complete': False, 'effectAuthorized': False,
                   'scope': 'fitted_host_request_only', 'reason': 'No bound available Work observation.'}
@@ -430,7 +455,7 @@ class CoordinationDelivery:
         result.update(version=required['version'], rootSessionId=required['rootSessionId'],
                       generationId=required['generationId'], inputIds=required['inputIds'],
                       requirementCount=required['requirementCount'], coveredCount=0)
-        retained = [row for row in self.reads if pair_retained(request, row)]
+        retained = [row for row in self.reads if _work_pair_retained(request, row)]
         try:
             requirements, cursor, visited = [], None, set()
             while True:

@@ -1058,7 +1058,7 @@ async def test_identical_unbound_or_nested_page_does_not_poison_direct_read(app,
 
 async def test_concurrent_identical_pages_bind_exact_execution_ids_and_reject_forgery(app):
     import asyncio
-    from amplifier_web.output_image_delivery import pair_retained
+    from amplifier_web.coordination_delivery import _work_pair_retained as pair_retained
     adapter, _, required = await installed_work_adapter(app)
     manifest = await adapter.read(required['requirementsRef'])
     ref = next(row['readRef'] for row in manifest['items'] if row['kind'] == 'promise')
@@ -1068,17 +1068,22 @@ async def test_concurrent_identical_pages_bind_exact_execution_ids_and_reject_fo
     rows = [r for r in adapter.delivery.reads if r['input']['args']['action'] == ref['action']]
     assert len(rows) == 2 and len({r['tool_call_id'] for r in rows}) == 2
     assert all(pair_retained(adapter.request(), r) for r in rows)
-    for change in ('id', 'input', 'body'):
+    for change in ('id', 'input', 'body', 'input_type', 'body_type'):
         forged = adapter.request().model_copy(deep=True)
         tool = next(m for m in forged.messages if m.role == 'tool' and m.tool_call_id == rows[0]['tool_call_id'])
         if change == 'id':
             tool.tool_call_id = 'forged'
         elif change == 'body':
             tool.content += ' modified'
+        elif change == 'body_type':
+            value = json.loads(tool.content)
+            from amplifier_web.output_image_delivery import successful_output
+            successful_output(value)['result']['offset'] = False
+            tool.content = json.dumps(value)
         else:
             assistant = next(m for m in forged.messages if m.role == 'assistant'
                              and any(c.get('id') == rows[0]['tool_call_id'] for c in m.tool_calls or []))
-            assistant.tool_calls[0]['arguments']['args']['args']['offset'] = 1
+            assistant.tool_calls[0]['arguments']['args']['args']['offset'] = False if change == 'input_type' else 1
         assert not pair_retained(forged, rows[0])
 
 
