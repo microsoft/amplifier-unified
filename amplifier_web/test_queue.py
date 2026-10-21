@@ -221,8 +221,9 @@ class TestQueue:
             raise ValueError('The assignment stopped; its queued check will not start.')
         self.app.configuration_authority.check(job.get('authority'))
         config, _, _ = environments.configuration(self.app)
-        if job.get('runnerCandidates') and job.get('targetBound'):
-            config = registered_runners.resolve_job(self.app, job, config)
+        retained = registered_runners.resolve_job(self.app, job, config) if job.get('runnerCandidates') else None
+        if retained and (job.get('targetBound') or retained.get('originSnapshotVersion') == 1):
+            config = retained
         elif not config or environments.config_key(config) != job['backendKey']:
             raise ValueError('The approved test backend changed; this request will not start on another backend.')
         capacity_settings.load(self.app)

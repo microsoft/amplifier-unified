@@ -177,6 +177,9 @@ def open_parent(home, row, *, create=False, admission=None):
 
 def observe(home, row):
     """Read identity only: no content scan, repair, creation or process probe."""
+    if os.name == 'nt' and row.get('testMachine'):
+        from .test_origin_storage import observe
+        return observe(home, row)
     if not row.get('directoryIdentity'):
         return {**row, 'observation': 'unverified'}
     try:
@@ -249,6 +252,9 @@ def suppress(home, row, reason):
 
 def allocate(home, initial, admit=None):
     """One admitted local effect; any retry only observes its durable state."""
+    if os.name == 'nt' and initial.get('testMachine'):
+        from .test_origin_storage import allocate
+        return allocate(home, initial, admit)
     lock = home / 'workspace-resources' / ('allocation-' + initial['id'] + '.lock')
     with FileLock(str(lock), timeout=5), closing(connect(home)) as db:
         admission = None
