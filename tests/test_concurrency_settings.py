@@ -116,7 +116,8 @@ async def test_serial_barrier_blocks_later_independent_work(app,queue,backend):
     await drive(queue);await drive(queue);await drive(queue)
     assert all(record(queue,app,name)['job']['status']=='passed' for name in ('first','barrier','last'))
 
-async def test_unknown_owner_counts_after_restart_without_replaying(app,queue,backend,monkeypatch):
+@pytest.mark.parametrize('original_independent', [False, True])
+async def test_unknown_owner_counts_after_restart_without_replaying(app,queue,backend,monkeypatch,original_independent):
     await configure(app,maxEnvironmentsPerChat=2)
     invoke=environments.invoke
     def uncertain(config,home,row,action,args):
@@ -126,10 +127,22 @@ async def test_unknown_owner_counts_after_restart_without_replaying(app,queue,ba
             return {'ok':True,'job':{'id':args['requestId'],'state':'unknown','terminal':False}}
         return invoke(config,home,row,action,args)
     monkeypatch.setattr(environments,'invoke',uncertain)
-    await submit(app,'unknown',independent=True,command='unknown');await drive(queue)
+    await submit(app,'unknown',independent=original_independent,command='unknown');await drive(queue)
     assert record(queue,app,'unknown')['job']['status']=='unknown'
     recovered=app.test_queue=TestQueue(app);recovered.start=lambda:None
     await submit(app,'independent',independent=True);await drive(recovered)
+    if not original_independent:
+        assert record(recovered,app,'independent')['job']['status']=='queued'
+        assert 'earlier check' in record(recovered,app,'independent')['job']['detail']
+        assert [args['command'] for action,args in backend if action=='execute']==['unknown']
+        unknown_row=environments.get(app.data_dir,scope(app)['sessionId'],record(recovered,app,'unknown')['job']['resourceId'])
+        stopped=await act(app,'stop',unknown_row,'stop-original')
+        await act(app,'remove',stopped['resource'],'remove-original')
+        await drive(recovered)
+        assert record(recovered,app,'independent')['job']['status']=='passed'
+        assert record(recovered,app,'unknown')['job']['status']=='unknown'
+        assert [args['command'] for action,args in backend if action=='execute'].count('unknown')==1
+        return
     assert record(recovered,app,'independent')['job']['status']=='passed'
     unknown_row=environments.get(app.data_dir,scope(app)['sessionId'],record(recovered,app,'unknown')['job']['resourceId'])
     assert unknown_row['status']!='retired'

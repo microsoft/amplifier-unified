@@ -139,6 +139,19 @@ class TestQueue:
         # the same command only once, even before its resourceId is linked.
         occupants = {row.get('commandId', row['id']) for row in other_owners}
         occupants.update(row['requestId']+':start:'+str(row['attempt']) for row in earlier)
+        # A terminal queue receipt can still own a live/unknown environment.
+        # Preserve its ordinary ordering barrier until that exact owner retires;
+        # overlap requires the original check, not only the new one, to opt in.
+        if reason is None and independent and other_owners:
+            barrier = self.app.db.execute("""SELECT 1 FROM commands
+                WHERE json_extract(receipt,'$.commandAction')=?
+                AND json_extract(receipt,'$.senderSessionId')=? AND id!=?
+                AND coalesce(json_extract(receipt,'$.job.independent'),0)!=1
+                AND id||':start:'||coalesce(json_extract(receipt,'$.job.attempt'),0)
+                    IN (SELECT value FROM json_each(?)) LIMIT 1""",
+                (ACTION, sid, identity, json.dumps([row.get('commandId') for row in other_owners]))).fetchone()
+            if barrier:
+                reason = 'Waiting for an earlier check in this chat to finish and clean up.'
         if reason is None and other_owners and not independent:
             reason = 'Waiting for this chat’s previous test environment cleanup to be confirmed.'
         if reason is None and not own and len(occupants) >= limit:
