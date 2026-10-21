@@ -22,6 +22,14 @@ def git(source, *args):
     return subprocess.check_output(['git', '-C', str(source), *args])
 
 
+@pytest.fixture(autouse=True)
+def windows_fixture_permissions(tmp_path):
+    if os.name == 'nt':
+        # Captured only on test failure; distinguishes a genuinely shared CI
+        # temporary directory from a failure in the handle-based ACL reader.
+        print(subprocess.check_output(['icacls', str(tmp_path)], text=True))
+
+
 @pytest.fixture
 def repository(tmp_path):
     path = tmp_path / 'source'
