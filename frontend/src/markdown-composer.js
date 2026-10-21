@@ -1,6 +1,6 @@
 import {Schema,Slice} from 'prosemirror-model';
-import {EditorState,TextSelection} from 'prosemirror-state';
-import {schema as markdownSchema,MarkdownParser,defaultMarkdownParser,defaultMarkdownSerializer} from 'prosemirror-markdown';
+import {EditorState,TextSelection,Plugin} from 'prosemirror-state';
+import {schema as markdownSchema,MarkdownParser,MarkdownSerializer,defaultMarkdownParser,defaultMarkdownSerializer} from 'prosemirror-markdown';
 import {InputRule,inputRules,wrappingInputRule,textblockTypeInputRule,undoInputRule} from 'prosemirror-inputrules';
 import {keymap} from 'prosemirror-keymap';
 import {baseKeymap,chainCommands,newlineInCode,createParagraphNear,liftEmptyBlock,splitBlock,toggleMark,setBlockType} from 'prosemirror-commands';
@@ -12,13 +12,67 @@ import {splitListItem,liftListItem,sinkListItem,wrapInList} from 'prosemirror-sc
 export const composerSchema=new Schema({nodes:markdownSchema.spec.nodes.update('image',{
  ...markdownSchema.spec.nodes.get('image'),
  toDOM:node=>['span',{'class':'a-composer-image-reference',title:node.attrs.src},node.attrs.alt||'Image reference'],
+}).addToEnd('reference',{
+ group:'block',atom:true,selectable:true,draggable:false,
+ attrs:{instanceId:{},quote:{}},
+ // Never parse pasted HTML into an attributed quote.
+ toDOM:node=>['blockquote',{'data-quote-instance':node.attrs.instanceId},node.attrs.quote.excerpt],
 }),marks:markdownSchema.spec.marks});
 // Give the composer its own tokenizer; raw web links and labeled Markdown
 // links share the parser's URL validation without changing other consumers.
 const tokenizer=new defaultMarkdownParser.tokenizer.constructor('commonmark',{html:false,linkify:true}).enable('linkify');
 export const composerParser=new MarkdownParser(composerSchema,tokenizer,defaultMarkdownParser.tokens);
-export const composerMarkdown=doc=>defaultMarkdownSerializer.serialize(doc);
+const serializer=new MarkdownSerializer({...defaultMarkdownSerializer.nodes,
+ reference(state,node){state.write('From '+node.attrs.quote.speaker+' (historical reference):\n');for(const line of node.attrs.quote.excerpt.split('\n'))state.write('> '+line+'\n');state.closeBlock(node);}
+},defaultMarkdownSerializer.marks);
+export const composerMarkdown=doc=>serializer.serialize(doc);
 export const parseComposer=text=>composerParser.parse(text||'');
+export function composerDocument(doc){
+ const segments=[];let quoted=false;
+ doc.forEach(node=>{
+  if(node.type.name==='reference'){quoted=true;segments.push({type:'quote',instanceId:node.attrs.instanceId,quote:node.attrs.quote});}
+  else segments.push({type:'text',text:composerMarkdown(composerSchema.nodes.doc.create(null,node))});
+ });
+ return quoted?{version:1,segments}:null;
+}
+export function parseDocument(text,document){
+ if(!document?.segments)return parseComposer(text);
+ const nodes=[];
+ for(const part of document.segments){
+  if(part.type==='quote')nodes.push(composerSchema.nodes.reference.create({instanceId:part.instanceId,quote:part.quote}));
+  else parseComposer(part.text).forEach(node=>nodes.push(node));
+ }
+ return composerSchema.nodes.doc.create(null,nodes.length?nodes:[composerSchema.nodes.paragraph.create()]);
+}
+export function insertQuote(view,quote,target){
+ if(view.composing||view.state.doc!==target.doc)throw Error('The draft changed. Your text was kept; add the quote again.');
+ const existing=composerDocument(view.state.doc)?.segments.filter(part=>part.type==='quote')||[];
+ if(existing.length>=12||existing.reduce((n,part)=>n+[...part.quote.excerpt].length,0)+[...quote.excerpt].length>24000)throw Error('Keep at most 12 quotes and 24,000 quoted characters. Nothing was shortened.');
+ const node=composerSchema.nodes.reference.create({instanceId:crypto.randomUUID(),quote});
+ if(target.pos===view.state.doc.content.size){
+  const tr=view.state.tr.insert(target.pos,[node,composerSchema.nodes.paragraph.create()]);
+  view.dispatch(tr.setSelection(TextSelection.create(tr.doc,target.pos+node.nodeSize+1)));
+  return;
+ }
+ if(view.state.doc.resolve(target.pos).depth>1)throw Error('Place the quote between paragraphs or choose Add quotes at end. Your draft was kept.');
+ // Collapse at the captured end: never replace selected commentary.
+ let tr=view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(target.pos)));
+ tr=tr.replaceSelectionWith(node);
+ if(tr.doc.lastChild.type.name==='reference')tr.insert(tr.doc.content.size,composerSchema.nodes.paragraph.create());
+ view.dispatch(tr);
+}
+export function changeQuote(view,id,direction){
+ const positions=[];view.state.doc.forEach((node,pos)=>{if(node.type.name==='reference')positions.push({node,pos});});
+ const index=positions.findIndex(row=>row.node.attrs.instanceId===id),here=positions[index];if(!here)return;
+ let tr=view.state.tr;
+ if(direction===0)tr=tr.delete(here.pos,here.pos+here.node.nodeSize);
+ else{
+  const other=positions[index+direction];if(!other)return;
+  // Equal-sized atomic nodes swap; every commentary node stays untouched.
+  tr=tr.replaceWith(here.pos,here.pos+here.node.nodeSize,other.node).replaceWith(other.pos,other.pos+other.node.nodeSize,here.node);
+ }
+ view.dispatch(tr);
+}
 export function composerClipboard(slice){
  const content=slice.content.firstChild?.isInline?composerSchema.nodes.paragraph.create(null,slice.content):slice.content;
  return composerMarkdown(composerSchema.nodes.doc.create(null,content));
@@ -75,6 +129,8 @@ export function composerFormat(state){
 export function formatComposerBlock(view,kind){
  const {nodes}=composerSchema;
  if(!['text','h1','h2','h3','bullet_list','ordered_list'].includes(kind))return;
+ let quoted=false;view.state.doc.nodesBetween(view.state.selection.from,view.state.selection.to,node=>{if(node.type.name==='reference')quoted=true;});
+ if(quoted)return;
  if(!(view.state.selection instanceof TextSelection))view.dispatch(view.state.tr.setSelection(TextSelection.between(view.state.selection.$from,view.state.selection.$to)));
  // Lift just the selected items before converting, leaving their siblings intact.
  while(liftListItem(nodes.list_item)(view.state,view.dispatch)){}
@@ -92,9 +148,10 @@ export function setComposerLink(view,value){
  view.dispatch(tr);view.focus();return true;
 }
 export const composerNewline=chainCommands(newlineInCode,splitListItem(composerSchema.nodes.list_item),createParagraphNear,liftEmptyBlock,splitBlock);
-export function composerState(text){
+export function composerState(text,document){
  const {marks,nodes}=composerSchema;
- return EditorState.create({schema:composerSchema,doc:parseComposer(text),plugins:[
+ return EditorState.create({schema:composerSchema,doc:parseDocument(text,document),plugins:[
+  new Plugin({filterTransaction(tr){let valid=true;tr.doc.descendants((node,pos,parent)=>{if(node.type.name==='reference'&&parent.type.name!=='doc')valid=false;});return valid;}}),
   composerRules(),history(),keymap({
    'Mod-z':undo,'Shift-Mod-z':redo,'Mod-y':redo,
    'Mod-b':toggleMark(marks.strong),'Mod-i':toggleMark(marks.em),'Mod-`':toggleMark(marks.code),

@@ -1,5 +1,5 @@
 import {messageTime} from './message-time';
-import {MessageInteractions,QuoteCard,AssistantReactions} from './message-interactions';
+import {MessageInteractions,QuoteCard,QuotedDocument,AssistantReactions} from './message-interactions';
 import {MessageDelivery} from './message-delivery';
 import {DetailText,readDetail} from './conversation-detail';
 import React,{memo,useEffect,useMemo,useRef,useState} from 'react';
@@ -65,13 +65,13 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  if(isPeerMessage(m))return <PeerMessage message={m} session={session} state={state} act={act} dispatch={dispatch} date={date} label={label} attribution={attribution} newest={newest}/>;
  return <article className={`a-message a-${external?'external-message':m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>
   <div className="a-message-body">
-  <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments} act={act} sessionId={session.id}/>{detailError&&<p role="alert">{detailError}</p>}
+  {m.replyTo?.version!==2&&<QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/>}<AttachmentStrip items={m.attachments} act={act} sessionId={session.id}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" aria-busy={saving||undefined} onSubmit={submit}>
    <textarea data-private="true" data-view-label="Edit message" autoFocus aria-label="Edit your message" value={text} readOnly={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setText(e.target.value);pendingText.current=e.target.value;patch({...edit,text:e.target.value})}} onKeyDown={e=>{if(e.key==='Escape'||e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();if(editLocked||submitting.current||pendingEdit.isPending())return;if(e.key==='Escape')patch(null);else e.currentTarget.form.requestSubmit()}}}/>
    <p className="a-caption">{localDelivery?'Update this unsent message and try again.':edit?.fork?'Create and open a separate edited chat. This original chat and its pin stay unchanged.':'Continue in this chat, keeping its name, workspace and pin. Later messages leave the active conversation; saved event history and earlier tool effects remain.'}</p>
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} disabled={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch({...edit,text,fork:e.target.checked})}}/>Create a separate chat (fork)</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':!localDelivery&&edit?.fork?'Create edited chat':'Save & regenerate'}</button></div>
-  </form>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act} displayOnly={m.displayOnly}/>}
+  </form>:m.replyTo?.version===2?<QuotedDocument document={m.replyTo} sessionId={session.id} dispatch={dispatch}/>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act} displayOnly={m.displayOnly}/>}
   {m.role==='assistant'&&!m.displayOnly&&!m.ephemeral&&!localDelivery&&!editing&&!!m.id&&<ChatReferences key={`${session.id}:${m.id}`} sessionId={session.id} messageId={m.id} revision={session.chatReferenceRevision||''} available={session.linkedChatReferencesAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>}
   {m.role==='assistant'&&!m.displayOnly&&!editing&&!omitMedia&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>}
   </div>

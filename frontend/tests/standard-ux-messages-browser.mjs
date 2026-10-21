@@ -74,10 +74,11 @@ for(const variant of variants){
    await evidence.action('Type independent unsent draft',()=>input.fill('Keep this independent draft'));
    await act('Quote assistant message',assistant().getByRole('button',{name:'Reply to message',exact:true}));
    await expect(page.getByLabel('Quoted reply', {exact:true})).toContainText('Synthetic first response');
-   await expect(input).toHaveDraft('Keep this independent draft');
-   evidence.assertion('Quote binds exact message',(await state()).view.messageReply.messageId,assistantId);
-   evidence.assertion('Quote binds exact chat',(await state()).view.messageReply.sessionId,sessionId);
-   await act('Remove quote',page.getByRole('button',{name:'Remove quoted reply',exact:true}));
+   const quote=(await state()).view.draftDocument.segments.find(row=>row.type==='quote').quote;
+   evidence.assertion('Independent commentary kept',(await state()).view.draftDocument.segments.filter(row=>row.type==='text').map(row=>row.text).filter(Boolean),['Keep this independent draft']);
+   evidence.assertion('Quote binds exact message',quote.messageId,assistantId);
+   evidence.assertion('Quote binds exact chat',quote.sessionId,sessionId);
+   await act('Remove quote',page.getByRole('button',{name:'Remove quote',exact:true}));
    await expect(page.getByLabel('Quoted reply',{exact:true})).toHaveCount(0);
    await expect(input).toHaveDraft('Keep this independent draft');
    evidence.assertion('Quote and clear never send',(await fixtureState()).sent.length,1);

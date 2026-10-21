@@ -52,9 +52,10 @@ try{
  await probe('canonical-older-quote',['messages.reply'],async()=>{
   await click('Reply to exact older canonical message',target().getByRole('button',{name:'Reply to message',exact:true}));
   await expect(page.getByLabel('Quoted reply',{exact:true})).toContainText('Retained message 150');
-  evidence.assertion('Quote targets exact native message',(await state()).view.messageReply.messageId,targetId);
-  evidence.assertion('Quote targets exact chat',(await state()).view.messageReply.sessionId,sourceId);
-  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this old-page draft');
+  const quote=(await state()).view.draftDocument.segments.find(row=>row.type==='quote').quote;
+  evidence.assertion('Quote targets exact native message',quote.messageId,targetId);
+  evidence.assertion('Quote targets exact chat',quote.sessionId,sourceId);
+  evidence.assertion('Older-page commentary retained',(await state()).view.draftDocument.segments.filter(row=>row.type==='text').map(row=>row.text).filter(Boolean),['Keep this old-page draft']);
   await click('Send one explicitly quoted message',page.getByRole('button',{name:'Send message',exact:true}));await expect(page.locator('.a-reply-quote')).toHaveCount(1);
   await click('Reveal exact older quote',page.getByTitle('Go to original message',{exact:true}));
   evidence.assertion('Reveal does not select unrelated conversation',(await state()).selectedSessionId,sourceId);await expect(target()).toBeInViewport();
