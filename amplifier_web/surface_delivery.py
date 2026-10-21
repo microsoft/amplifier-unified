@@ -203,13 +203,26 @@ class SurfaceProvider:
         if name == 'stream' and callable(method):
             async def stream(request, **kwargs):
                 request = await self._prepare(request, commit=True)
-                iterator = method(request, **kwargs)
+                from .coordination_delivery import WORK_ATTEMPT
+                attempt = self.delivery.begin_work(request) if hasattr(self.delivery, 'begin_work') else None
+                token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+                iterator = None
                 try:
+                    iterator = method(request, **kwargs)
                     async for event in iterator:
                         yield event
+                    if attempt:
+                        self.delivery.finish_work(attempt, streaming=True)
+                except BaseException:
+                    if attempt:
+                        self.delivery.finish_work(attempt, failed=True)
+                    raise
                 finally:
-                    if callable(getattr(iterator, "aclose", None)):
-                        await iterator.aclose()
+                    try:
+                        if callable(getattr(iterator, "aclose", None)):
+                            await iterator.aclose()
+                    finally:
+                        WORK_ATTEMPT.reset(token)
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, **kwargs):
@@ -221,4 +234,17 @@ class SurfaceProvider:
 
     async def complete(self, request, **kwargs):
         request = await self._prepare(request, commit=True)
-        return await self.original.complete(request, **kwargs)
+        from .coordination_delivery import WORK_ATTEMPT
+        attempt = self.delivery.begin_work(request) if hasattr(self.delivery, 'begin_work') else None
+        token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+        try:
+            response = await self.original.complete(request, **kwargs)
+            if attempt:
+                self.delivery.finish_work(attempt, response)
+            return response
+        except BaseException:
+            if attempt:
+                self.delivery.finish_work(attempt, failed=True)
+            raise
+        finally:
+            WORK_ATTEMPT.reset(token)

@@ -120,6 +120,9 @@ async def install_app_access(coordinator, bridge):
     # Keep selected visual evidence after general workspace observations.
     delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(SurfaceDelivery(bridge), bridge), bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
+    # Observation only. The service's effect policy must independently decide
+    # applicability and permissions; absent producer wiring is not a grant.
+    coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)
     from .surface_delivery import SurfaceProvider
     from .request_recovery import RecoveringProvider, install as install_recovery
     install_recovery(coordinator)
@@ -169,7 +172,7 @@ async def install_app_access(coordinator, bridge):
                 if input['operation'] == 'context.focus':
                     return ToolResult(success=True, output=await delivery.interest(input.get('args', {})))
                 result = await bridge(input['operation'], input.get('args', {}))
-                delivery.remember_work(result, input)
+                result = delivery.remember_work(result, input)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') in {'voice.visual.capture', 'computer.visual.capture'}:
                     result = delivery.remember(result)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') == 'outputs.image':

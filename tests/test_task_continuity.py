@@ -515,6 +515,76 @@ async def test_saved_task_get_is_cold_and_does_not_return_the_app_snapshot(
             await worker.close()
 
 
+@pytest.mark.parametrize('action', ['task.get', 'task.history', 'task.detail', 'task.receipt'])
+@pytest.mark.parametrize('alias', [False, True])
+async def test_registered_task_reads_leave_dormant_owner_cold(tmp_path, monkeypatch, action, alias):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Dormant saved owner'})
+        sid = app._session()['id']
+        worker = controls(sid)
+        await create(worker)
+        task = copy.deepcopy(worker.tasks.record())
+        app._save_full(reason='Synthetic dormant task read fixture')
+        app.state['sessions'] = [row for row in app.state['sessions'] if row['id'] != sid]
+        app.projections.invalidate()
+        before = copy.deepcopy(app.state['sessions'])
+        def forbidden(*args, **kwargs):
+            pytest.fail('Passive task read admitted or published a dormant owner')
+        monkeypatch.setattr(app, '_admit_session', forbidden)
+        monkeypatch.setattr(app, '_publish_changes', forbidden)
+        monkeypatch.setattr(app.history, 'refresh', AsyncMock(side_effect=forbidden))
+        monkeypatch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=forbidden))
+        values = {
+            'task.get': {}, 'task.history': {'limit': 1},
+            'task.detail': {'taskId': task['id'], 'expectedRevision': task['revision'], 'field': 'objective'},
+            'task.receipt': {'commandId': 'create'},
+        }[action]
+        arguments = ({'sessionId': sid, 'operation': action, 'args': values} if alias
+                     else {'sessionId': sid, **values})
+        result = await app.dispatch('runtime.control' if alias else action, arguments, include_state=True)
+        assert result['accepted'] is True and 'state' not in result
+        assert app.state['sessions'] == before
+        assert encoded_size(result) <= TASK_CONTEXT_BYTES
+    finally:
+        await app.close()
+        if worker is not None:
+            await worker.close()
+
+
+@pytest.mark.parametrize('action', ['task.get', 'task.history', 'task.detail', 'task.receipt'])
+async def test_task_read_rejects_missing_caller_and_cross_workspace(tmp_path, monkeypatch, action):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Reader'})
+        reader = app._session()['id']
+        await app.dispatch('session.create', {'title': 'Other workspace owner'})
+        target = app._session()
+        target['workspace'] = str(tmp_path / 'other')
+        worker = controls(target['id'])
+        await create(worker)
+        task = worker.tasks.record()
+        args = {'sessionId': target['id'], **{
+            'task.get': {}, 'task.history': {},
+            'task.detail': {'taskId': task['id'], 'expectedRevision': task['revision'], 'field': 'objective'},
+            'task.receipt': {'commandId': 'create'},
+        }[action]}
+        with pytest.raises(AppError, match='calling conversation'):
+            await app.dispatch(action, args, origin='agent')
+        with pytest.raises(AppError, match='history scope'):
+            await app.dispatch(action, args, origin='agent', caller_session_id=reader)
+        with pytest.raises(AppError, match='native project'):
+            await app.dispatch(action, {**args, 'nativeProject': 'not-this-project'})
+    finally:
+        await app.close()
+        if worker is not None:
+            await worker.close()
+
+
 async def test_mutation_dispatch_acknowledges_without_serializing_app_state(
         tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))

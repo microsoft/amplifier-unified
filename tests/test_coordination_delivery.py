@@ -497,6 +497,16 @@ class InstalledWorkAdapter:
             call, self.tools, self.hooks, None)
         self.messages.append(Message(role='tool', name=name, tool_call_id=identity, content=content))
         from amplifier_web.output_image_delivery import successful_output
+        from amplifier_web.output_image_delivery import pair_retained
+        observed = [row for row in self.delivery.reads if row['input'] == args]
+        assert observed, f'No captured actual bridge result for {args["args"]["action"]}'
+        bound = [row for row in observed if row['tool_call_id'] == identity]
+        assert bound, json.dumps({
+            'stage': 'tool_post_binding', 'action': args['args']['action'],
+            'saved': observed[-1]['receipt'], 'retained': successful_output(content)}, ensure_ascii=False)
+        assert pair_retained(self.request(), bound[-1]), json.dumps({
+            'stage': 'fitted_pair', 'saved': bound[-1]['receipt'],
+            'retained': successful_output(content)}, ensure_ascii=False)
         return successful_output(content)['result']
 
     async def fill(self, required):
@@ -555,7 +565,7 @@ async def test_installed_adapter_requires_genuine_complete_retained_pages(app, f
             adapter.messages = old_messages  # History without genuine local observations.
         prepared = await adapter.delivery.prepare(adapter.request(), None)
     coverage = adapter.delivery.request_coverage(prepared)
-    assert coverage['complete'] is (fault == 'none'), coverage
+    assert coverage['complete'] is (fault == 'none'), json.dumps(coverage, ensure_ascii=False)
     assert coverage['effectAuthorized'] is False  # Not native/effect acceptance.
     if fault == 'none':
         assert coverage['coveredCount'] == required['requirementCount']
@@ -645,3 +655,90 @@ async def test_bound_work_provider_failure_does_not_retry_without_new_currentnes
         else:
             await wrapped.complete(adapter.request())
     assert calls == ['stream' if stream else 'complete']
+
+
+async def test_interleaved_complete_calls_bind_own_content_not_last_request(app):
+    import asyncio
+    from types import SimpleNamespace
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Provider:
+        async def complete(self, value, **kwargs):
+            label = kwargs['label']
+            if label == 'covered':
+                entered.set()
+                await release.wait()
+            return SimpleNamespace(model_dump=lambda: {'content': [{
+                'type': 'tool_call', 'id': label, 'name': 'write_file', 'input': {'path': label}}]})
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    task = asyncio.create_task(wrapped.complete(adapter.request(), label='covered'))
+    try:
+        await entered.wait()
+        await wrapped.complete(request(), label='uncovered')
+        release.set()
+        await task
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    def event(label):
+        return {'tool_call_id': label, 'tool_name': 'write_file', 'tool_input': {'path': label}}
+    check = adapter.capabilities['web.work_effect_coverage']
+    covered = await check(event('covered'))
+    assert covered['complete'] is True, json.dumps(covered)
+    assert (await check(event('uncovered')))['complete'] is False
+    assert (await check({**event('covered'), 'tool_input': {'path': 'changed'}}))['complete'] is False
+    assert covered['effectAuthorized'] is False
+    assert covered['requirementCount'] == required['requirementCount']
+
+
+async def test_call_id_reuse_and_uncertain_completion_do_not_reuse_origin(app):
+    from types import SimpleNamespace
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    class Provider:
+        async def complete(self, value, **kwargs):
+            if kwargs.get('fail'):
+                raise ConnectionError('Synthetic uncertain send')
+            return SimpleNamespace(model_dump=lambda: {'content': [{
+                'type': 'tool_call', 'id': 'reused', 'name': 'write_file', 'input': {'path': 'same'}}]})
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    event = {'tool_call_id': 'reused', 'tool_name': 'write_file', 'tool_input': {'path': 'same'}}
+    await wrapped.complete(adapter.request())
+    assert adapter.delivery.effect_coverage(event)['complete'] is True
+    await wrapped.complete(adapter.request())  # Same ID/args, different actual request.
+    assert adapter.delivery.effect_coverage(event)['complete'] is False
+    with pytest.raises(ConnectionError):
+        await wrapped.complete(adapter.request(), fail=True)
+    assert adapter.delivery.effect_coverage(event)['complete'] is False
+
+
+async def test_native_callback_observations_never_promote_pre_send_trace_to_grant(app):
+    from amplifier_web.coordination_delivery import WORK_ATTEMPT
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    checked = []
+    class Provider:
+        async def complete(self, value, **kwargs):
+            delivery, attempt = WORK_ATTEMPT.get()
+            delivery.native_work_event(attempt, 'native.send', {
+                'type': 'response.create', 'input': [{'type': 'compaction', 'encrypted_content': 'opaque'}]})
+            for response in ('response-one', 'response-two'):
+                delivery.native_work_event(attempt, 'native.receive', {
+                    'type': 'response.created', 'response': {'id': response}})
+                delivery.native_work_event(attempt, 'native.receive', {
+                    'type': 'response.output_item.done', 'response_id': response, 'item': {
+                        'type': 'function_call', 'call_id': response + '-call',
+                        'name': 'delegate', 'arguments': '{"instruction":"synthetic"}'}})
+                checked.append(delivery.effect_coverage({
+                    'tool_call_id': response + '-call', 'tool_name': 'delegate',
+                    'tool_input': {'instruction': 'synthetic'}}))
+            return {}  # Final aggregate cannot relabel earlier call origins.
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    await wrapped.complete(adapter.request())
+    assert len(checked) == 2 and all(row['complete'] is False for row in checked)
+    assert all(row['effectAuthorized'] is False for row in checked)
+    # Controlled callback fixture only, not a provider-wire/native acceptance claim.
+    assert WORK_ATTEMPT.get() is None

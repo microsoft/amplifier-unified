@@ -165,8 +165,18 @@ async def install_native(loop, coordinator, providers):
         owner = LIVE_OWNER.get()
         return owner if (getattr(owner, "coordinator", None) is coordinator
                          and host.selected_identity() == host.identity) else None
+    def work_trace(kind, value):
+        # Context-local attempt, not CURRENT_CALL or a mutable last request.
+        # The consumer preserves the pre-send/steering callback limitations;
+        # this callback is synchronous because the provider does not await it.
+        from .coordination_delivery import WORK_ATTEMPT
+        active = WORK_ATTEMPT.get()
+        if active:
+            delivery, attempt = active
+            delivery.native_work_event(attempt, kind, value)
     host.identity = identity
-    host.provider = LoopNativeProvider.wrap(original, owner_getter=owned_loop, lifecycle=host.lifecycle)
+    host.provider = LoopNativeProvider.wrap(original, owner_getter=owned_loop,
+                                            lifecycle=host.lifecycle, trace=work_trace)
     if host.state.get("outcome") in {"unknown", "pending"}:
         host.provider.request_uncertain = True
     if host.checkpoint_path.exists():

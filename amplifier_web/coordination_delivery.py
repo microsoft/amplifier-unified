@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import uuid
+from contextvars import ContextVar
 
 WORK_BYTES = 12 * 1024
 STUB_FIELDS = frozenset({
@@ -28,6 +29,7 @@ REQUIRED_FIELDS = frozenset({
 WORK_READS = frozenset({'workspace.work.invocation', 'workspace.work.promise', 'workspace.work.source'})
 MAX_READS = 512
 READ_BYTES = 4 * 1024 * 1024
+WORK_ATTEMPT = ContextVar('unified_work_delivery_attempt', default=None)
 
 
 def _unavailable_work():
@@ -159,6 +161,9 @@ class CoordinationDelivery:
         # reopened observations cannot count as delivered content.
         self.reads = []
         self.requests = {}
+        self.attempts, self.calls, self.seen_calls = {}, {}, set()
+        self.binding_generation = None
+        self.binding_overflow = False
 
     def __getattr__(self, name):
         return getattr(self.previous, name)
@@ -167,16 +172,29 @@ class CoordinationDelivery:
         """Only the actual AppControl bridge result may enter this ledger."""
         args = tool_input.get('args', {})
         if tool_input.get('operation') != 'dispatch' or args.get('action') not in WORK_READS:
-            return
+            return receipt
         if not isinstance(receipt, dict) or receipt.get('accepted') is not True:
-            return
+            return receipt
+        receipt = copy.deepcopy(receipt)
+        # Core's hook JSON roundtrip can change a binary float by one ULP.
+        # These observation-only timestamps have a lossless decimal transport
+        # presentation; compare the entire returned receipt exactly thereafter.
+        # The canonical service records and all content/authority fields stay
+        # unchanged. Never fuzzy-match timestamps, body text, hashes or IDs.
+        result = receipt.get('result', {})
+        if args['action'] == 'workspace.work.invocation' and type(result.get('observedAt')) is float:
+            result['observedAt'] = repr(result['observedAt'])
+        source = result.get('source', {})
+        if args['action'] == 'workspace.work.source' and type(source.get('capturedAt')) is float:
+            source['capturedAt'] = repr(source['capturedAt'])
         size = len(json.dumps(receipt, ensure_ascii=False).encode())
         if size > WORK_BYTES:
-            return  # An unbounded/raw result is not a delivered bounded page.
+            return receipt  # Unbounded/raw output cannot establish delivery.
         self.reads.append({'receipt': copy.deepcopy(receipt), 'input': copy.deepcopy(tool_input),
                            'tool_call_id': None, 'bytes': size})
         while len(self.reads) > MAX_READS or sum(row['bytes'] for row in self.reads) > READ_BYTES:
             self.reads.pop(0)
+        return receipt
 
     def bind_work(self, data):
         from .output_image_delivery import successful_output
@@ -202,6 +220,151 @@ class CoordinationDelivery:
 
     def work_request(self, request):
         return self._request(request)
+
+    def begin_work(self, request):
+        saved = self._request(request)
+        if not saved or saved['required']['status'] != 'available':
+            return None
+        required = saved['required']
+        generation = (required['rootSessionId'], required['generationId'])
+        if generation != self.binding_generation:
+            self.attempts.clear()
+            self.calls.clear()
+            self.seen_calls.clear()
+            self.binding_overflow = False
+            self.binding_generation = generation
+        identity = uuid.uuid4().hex
+        attempt = {'id': identity, 'required': copy.deepcopy(required),
+                   'coverage': self.request_coverage(request), 'status': 'sending',
+                   'requestSha256': hashlib.sha256(request.model_dump_json().encode()).hexdigest(),
+                   'transport': 'host_complete_boundary', 'responses': set(), 'native': False}
+        self.attempts[identity] = attempt
+        while len(self.attempts) > 8:
+            expired = next(iter(self.attempts))
+            self.attempts.pop(expired)
+            self.calls = {key: row for key, row in self.calls.items() if row['attemptId'] != expired}
+        return attempt
+
+    def _bind_call(self, attempt, identity, name, arguments, *, response=None):
+        if self.binding_overflow or attempt['id'] not in self.attempts:
+            return
+        if not _text(identity) or not _text(name) or not isinstance(arguments, dict):
+            return
+        fingerprint = hashlib.sha256(json.dumps([name, arguments], sort_keys=True,
+                                               ensure_ascii=False).encode()).hexdigest()
+        existing = self.calls.get(identity)
+        row = {'attemptId': attempt['id'], 'name': name, 'argsSha256': fingerprint,
+               'responseId': response}
+        if identity in self.seen_calls:
+            # Repeated native terminal reporting is the same observation. Any
+            # competing attempt/content invalidates the call for both requests.
+            if existing != row:
+                self.calls.pop(identity, None)
+            return
+        self.seen_calls.add(identity)
+        if len(self.seen_calls) > 4096 or len(self.calls) >= 128:
+            self.binding_overflow = True
+            self.calls.clear()
+            return
+        self.calls[identity] = row
+
+    def finish_work(self, attempt, response=None, *, failed=False, streaming=False):
+        if attempt is None:
+            return
+        if failed:
+            attempt['status'] = 'unknown'
+            self.calls = {key: row for key, row in self.calls.items() if row['attemptId'] != attempt['id']}
+            return
+        attempt['status'] = 'returned'
+        if attempt['native'] or streaming:
+            # Native calls may already have executed; never assign the final
+            # aggregate response identity to all returned tool calls.
+            if streaming:
+                attempt['transport'] = 'streaming_origin_unavailable'
+            return
+        value = response.model_dump() if hasattr(response, 'model_dump') else response
+        if not isinstance(value, dict):
+            return
+        for block in value.get('content') or []:
+            if isinstance(block, dict) and block.get('type') == 'tool_call':
+                self._bind_call(attempt, block.get('id'), block.get('name'), block.get('input'))
+
+    def native_work_event(self, attempt, kind, value):
+        """Observe existing callbacks without claiming a nonexistent send proof."""
+        if attempt is None or attempt['id'] not in self.attempts:
+            return
+        attempt['native'] = True
+        attempt['transport'] = 'native_immutable_send_proof_unavailable'
+        if kind == 'native.send':
+            attempt['outboundSha256'] = hashlib.sha256(json.dumps(
+                value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            # trace() precedes an awaited lifecycle callback and socket.send.
+            # Its mutable object cannot be promoted to an immutable send receipt.
+            return
+        if kind != 'native.receive' or not isinstance(value, dict):
+            return
+        event = value.get('type')
+        if event == 'response.created':
+            identity = value.get('response', {}).get('id')
+            if _text(identity) and len(attempt['responses']) < 128:
+                attempt['responses'].add(identity)
+            return
+        terminal = value.get('response', {})
+        response = terminal.get('id') if event in {'response.completed', 'response.done'} else value.get('response_id')
+        if response not in attempt['responses']:
+            return  # A mutable "latest response" is not enough attribution.
+        items = terminal.get('output', []) if terminal else [value.get('item')]
+        for item in items:
+            if not isinstance(item, dict) or item.get('type') != 'function_call':
+                continue
+            try:
+                arguments = json.loads(item['arguments'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            self._bind_call(attempt, item.get('call_id'), item.get('name'), arguments, response=response)
+
+    def effect_coverage(self, data):
+        """Private adapter predicate, NOT an execution grant or action policy.
+
+        Backend applicability/current permission must be checked independently.
+        Nested provenance is not qualified by this direct-call implementation.
+        """
+        unavailable = {'complete': False, 'effectAuthorized': False, 'status': 'unavailable'}
+        if data.get('parent_tool_call_id') or data.get('dispatch_source'):
+            return {**unavailable, 'reason': 'Nested causal delivery is not qualified.'}
+        row = self.calls.get(data.get('tool_call_id'))
+        if row is None:
+            return {**unavailable, 'reason': 'No unambiguous originating request.'}
+        attempt = self.attempts.get(row['attemptId'])
+        try:
+            fingerprint = hashlib.sha256(json.dumps([data.get('tool_name'), data.get('tool_input')],
+                                                    sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        except (TypeError, ValueError):
+            return {**unavailable, 'reason': 'Tool arguments are not exact JSON.'}
+        if (not attempt or attempt['status'] != 'returned'
+                or row['argsSha256'] != fingerprint or attempt['native']
+                or attempt['transport'] != 'host_complete_boundary'):
+            return {**unavailable, 'reason': 'Origin, transport or exact tool arguments are unavailable.'}
+        return {**copy.deepcopy(attempt['coverage']), 'attemptId': attempt['id'],
+                'requestSha256': attempt['requestSha256'], 'effectAuthorized': False}
+
+    async def recheck_effect_coverage(self, data):
+        """Host-only observation seam for the existing effect-policy owner."""
+        before = self.effect_coverage(data)
+        if before.get('complete') is not True:
+            return before
+        attempt = self.attempts[before['attemptId']]
+        try:
+            current = await asyncio.wait_for(self.bridge('work.invocation.revalidate',
+                                                        {'version': before['version']}), 1.5)
+            if (current.get('current') is not True or current.get('effectAuthorized') is not False
+                    or current.get('required') != attempt['required']
+                    or self.effect_coverage(data) != before):
+                raise ValueError('Work origin or authority changed during effect check.')
+        except Exception:
+            return {'status': 'unavailable', 'complete': False, 'effectAuthorized': False,
+                    'reason': 'Work currentness or originating request became unavailable.'}
+        return before
 
     def request_coverage(self, request):
         """Inspect exact fitted host bytes; this is NOT native/effect authority.

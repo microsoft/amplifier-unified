@@ -417,7 +417,8 @@ for _access, _actions in {
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
-        "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
+        "diagnostics.records", "task.get", "task.history", "task.detail", "task.receipt",
+        "capacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
@@ -1779,6 +1780,12 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
+        # Four exact passive task actions (including their public alias) use
+        # directory metadata plus canonical control-state only. Keep the normal
+        # validators and caller guards; never refresh history/admit an overlay.
+        passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
+            action == 'runtime.control' and args.get('operation') in
+            {'task.get', 'task.history', 'task.detail', 'task.receipt'})
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
@@ -1813,7 +1820,7 @@ class AppService:
             try:
                 target = self.directory.resolve(args[target_key], scope,
                                                 include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
-                if target is None:
+                if target is None and not passive_task:
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
                                                     include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
@@ -1893,7 +1900,12 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
-        if resolved_target is not None and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
+        if passive_task and origin not in {'ui', 'user'}:
+            if not caller_session_id:
+                raise AppError('Task reads require a registered calling conversation.', 403)
+            from .owned_history import require
+            require(self, caller_session_id, args['sessionId'])
+        if resolved_target is not None and not passive_task and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
