@@ -27,6 +27,34 @@ Ready requires an actual backend probe. Readiness includes its observation time
 and does not claim every project's dependencies are prepared. Upgrading a backend
 does not replace the retained backend of an existing environment.
 
+## Runner update policy
+
+App-managed runner packages follow their declared moving upstream source under
+the global update preference. A resolved commit is an installation identity,
+not a standing update pin. Explicit user pins remain explicit. Existing
+app-generated pins can be migrated only with an owned setup receipt establishing
+their origin; matching a package name or a familiar commit is insufficient.
+
+A runner update installs separately and qualifies the exact package,
+dependencies, adapter protocol and configured execution target before selection.
+The qualification includes a task-owned source snapshot and actual offline
+execution, result retention and owned cleanup. Matching a version number or a
+self-reported schema does not qualify a runner. Updating package code must not
+rerun host setup, alter a daemon/project/network, or reset operator limits.
+
+Selection is an atomic change for future accepted checks. Existing jobs,
+environments, unknown outcomes and rollback references retain their exact
+installation, controller, configuration and execution target. A lost reply or
+restart reconciles the saved operation; it does not repeat a check or replace an
+unknown environment. Old packages remain available until all references are
+settled. Each registered machine qualifies its own configured backend; a probe
+on another machine is not acceptance evidence.
+
+The updater reports a failed qualification plainly and continues using the
+previous runner. Unsupported configured installations remain visible as
+owner-managed or explicitly pinned; they must not be reported as current merely
+because no automatic update path is implemented.
+
 ## Prepared profiles
 
 `linux-python` remains available for short checks without project preparation.
@@ -83,3 +111,12 @@ owned resource cleanup. Linux qualification does not imply native macOS,
 Windows, WSL or a hosted-runner path is supported. Interactive access to an app
 inside the test environment requires a separately qualified preview route;
 headless browser tests inside the environment do not establish that capability.
+
+Executable bytecode is part of a dynamic runtime's exact identity, including
+cached and sourceless Python modules. Managed helper and snapshot exports disable
+bytecode writes so normal use does not alter the qualified generation. The
+registered controller runs only the source bytes in its retained verified
+manifest; adjacent bytecode cannot substitute for those sources, including when
+an older controller bootstraps into its qualified interpreter. These checks bind
+application-owned execution evidence; they are not an OS security boundary.
+

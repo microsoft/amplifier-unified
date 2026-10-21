@@ -70,3 +70,16 @@ test('component adoption is ready only after activation and all update stages fi
  assert.equal(updateOverview({...state,error:'Failed'}).tone,'error');
  assert.equal(updateOverview({...state,adoption:{pendingWorkers:0}}).title,'You’re up to date');
 });
+
+test('runner-only qualification is independent of chat idleness and keeps unknown results explicit',()=>{
+ const runner={runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check'};
+ const base={phase:'staged',pendingSmartTools:[runner],blockers:[{kind:'conversation',sessionId:'one'}]};
+ const result=updateOverview(base);
+ assert.equal(result.title,'Finishing test runner update');
+ assert.match(result.detail,/machine capacity/);assert.match(result.detail,/Existing chats and checks can continue/);
+ assert.equal(result.runnerOnlyPending,true);assert.equal(result.busy,true);
+ assert.match(updateOverview({...base,pendingSmartTools:[{...runner,runnerWaiting:'unknown'}]}).detail,/confirming the isolated check/);
+ assert.match(updateOverview({...base,pendingApp:{}}).title,/chat to finish/);
+ assert.match(updateOverview({...base,pendingSmartTools:[runner,{previous:'ordinary-tool'}]}).title,/chat to finish/);
+ assert.equal(updateOverview({...base,phase:'error',error:'Qualification failed'}).tone,'error');
+});
