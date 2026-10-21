@@ -15,7 +15,7 @@ import uuid
 
 
 def _windows_private(handle):
-    """Require this user's owner SID and no write grant to other ordinary users.
+    """Require this account's object owner and no ordinary shared write grant.
 
     SYSTEM and Administrators retain their normal OS authority. A null DACL,
     an unrecognized allow ACE, or a shared write grant is not private storage.
@@ -57,13 +57,22 @@ def _windows_private(handle):
     try:
         if not open_token(current(), 8, ctypes.byref(token)):
             raise ValueError('The current Windows account could not be verified.')
-        length = wintypes.DWORD()
-        get_token(token, 1, None, 0, ctypes.byref(length))
-        value = ctypes.create_string_buffer(length.value)
-        if not get_token(token, 1, value, length, ctypes.byref(length)):
-            raise ValueError('The current Windows account could not be verified.')
-        user = sid_text(pointer.from_buffer(value).value)
-        if sid_text(owner) != user or not acl:
+        def token_sid(kind):
+            length = wintypes.DWORD()
+            get_token(token, kind, None, 0, ctypes.byref(length))
+            value = ctypes.create_string_buffer(length.value)
+            if not get_token(token, kind, value, length, ctypes.byref(length)):
+                raise ValueError('The current Windows account could not be verified.')
+            return sid_text(pointer.from_buffer(value).value)
+        user = token_sid(1)  # TokenUser
+        # Elevated Windows processes may create objects owned by Administrators.
+        # Accept that only when it is this token's actual default object owner;
+        # never accept an arbitrary owner group or merely group membership.
+        default_owner = token_sid(4)  # TokenOwner
+        valid_owners = {user}
+        if default_owner == 'S-1-5-32-544':
+            valid_owners.add(default_owner)
+        if sid_text(owner) not in valid_owners or not acl:
             raise ValueError('Retained test records require private storage owned by this account.')
         class ACL(ctypes.Structure):
             _fields_ = [('revision', ctypes.c_ubyte), ('reserved', ctypes.c_ubyte),
