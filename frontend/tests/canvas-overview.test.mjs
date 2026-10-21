@@ -4,16 +4,19 @@ import React,{act} from 'react';
 import {create} from 'react-test-renderer';
 import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
-import {acceptedCanvasReceipt} from './canvas-test-receipts.mjs';
+import {acceptedCanvasReceipt,settleCanvasReceipts} from './canvas-test-receipts.mjs';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const source=await readFile(new URL('../src/canvas-library.jsx',import.meta.url),'utf8');
 const oldId=resolve('src/canvas-library-focus-negative.jsx');
+const originGate='if(!fromDialog||dialogGeneration.current!==generation||!dialog.current?.open)return;';
+const intentGate='focusIntent.current!==intent||latest.selectedSessionId';
+assert.ok(source.includes(originGate)&&source.includes(intentGate),'Negative control must mutate the actual guards');
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]},
  plugins:[{name:'canvas-focus-negative-control',resolveId(id){if(id===oldId)return id},
   load(id){if(id!==oldId)return;return source
-   .replace('if(!fromDialog||focusIntent.current!==intent||!dialog.current?.open)return;','')
-   .replace('focusIntent.current!==intent||latest.selectedSessionId','latest.selectedSessionId')}}]});
+   .replace(originGate,'')
+   .replace(intentGate,'latest.selectedSessionId')}}]});
 test.after(()=>vite.close());
 const {overviewSectionOpen,overviewSectionPatch,CanvasOverviewSection}=await vite.ssrLoadModule('/src/canvas-overview-state.jsx');
 const {ChatOverview}=await vite.ssrLoadModule('/src/work-overview.jsx');
@@ -95,7 +98,7 @@ async function controlledTabs(Component,run){
  const flush=async()=>{await act(async()=>{while(frames.length)frames.shift()()})};
  try{
   await act(async()=>{root=create(render(),{createNodeMock:element=>element.type==='dialog'?dialog:element.props.className==='a-canvas-document-tabs'?strip:element.props.role==='tablist'?tabs:element.props['aria-haspopup']==='dialog'?trigger:null})});
-  await run({choose,key,settle,flush,calls,events,dialog,node,findTab,get focused(){return focused},supersede(){listeners.get('pointerdown')?.();trigger.focus()},
+  await run({choose,key,settle,flush,calls,events,dialog,node,findTab,get focused(){return focused},newKey(){listeners.get('keydown')?.()},supersede(){listeners.get('pointerdown')?.();trigger.focus()},
    async cancel(){await act(async()=>root.root.findByType('dialog').props.onCancel({preventDefault(){}}))}});
  }finally{if(root)await act(async()=>root.unmount());for(const key of keys)if(previous[key]===undefined)delete globalThis[key];else globalThis[key]=previous[key]}
 }
@@ -117,13 +120,15 @@ test('actual modal choose closes before focus and keeps an exact selected versio
  assert.deepEqual(h.calls,[{action:'canvas.select',args:{id:'a',version:2}}]);
 }));
 test('actual modal choose never overrides a newer input or Escape',async()=>{
- await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);await h.settle();h.supersede();await h.flush();assert.equal(h.events.at(-1),'focus:trigger')});
+ await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);await h.settle();h.supersede();await h.flush();assert.equal(h.events.at(-1),'focus:trigger');assert.ok(!h.events.includes('focus:b'))});
+ await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);h.newKey();await h.settle();await h.flush();assert.equal(h.dialog.open,false);assert.ok(!h.events.includes('focus:b'))});
  await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);await h.cancel();await h.settle();await h.flush();assert.equal(h.events.at(-1),'focus:trigger');assert.equal(h.dialog.open,false)});
  await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);await h.settle({accepted:false,error:'Unsaved input'});await h.flush();assert.equal(h.dialog.open,true);assert.ok(!h.events.includes('focus:b'))});
 });
 test('receipt barrier accepts only the exact fully read accepted command',async()=>{
  const row={request:{id:'close-details'},status:200,body:{accepted:true}},entry={row,settled:Promise.resolve()};
  assert.equal(await acceptedCanvasReceipt(entry,'close-details'),row);
+ await assert.rejects(()=>acceptedCanvasReceipt(entry,undefined),/must have an id/);
  await assert.rejects(()=>acceptedCanvasReceipt(entry,'different-command'),/clicked command/);
  for(const bad of [{body:{accepted:false}},{readError:'lost body'},{transportError:'disconnected'},{body:undefined}]){
   await assert.rejects(()=>acceptedCanvasReceipt({row:{...row,...bad},settled:Promise.resolve()},'close-details'));
@@ -134,4 +139,10 @@ test('receipt barrier fails an unsettled body at the existing eight-second bound
  const result=acceptedCanvasReceipt({row:{request:{id:'close-details'},status:200},settled:new Promise(()=>{})},'close-details');
  const failed=assert.rejects(result,/remained unsettled/);
  t.mock.timers.tick(8000);await failed;
+});
+test('all-receipt drain records and fails any unsettled response without clearing it',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const row={request:{id:'late-action',action:'view.update'},status:200};
+ const failed=assert.rejects(settleCanvasReceipts([{row,settled:new Promise(()=>{})}]),/Every observed receipt must settle/);
+ t.mock.timers.tick(8000);await failed;assert.match(row.receiptTimeout,/view.update late-action/);assert.equal(row.body,undefined);
 });

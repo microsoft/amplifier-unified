@@ -17,7 +17,7 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  const [focusId,setFocusId]=useState(null),selectedId=overview?'overview':state.canvas?.id;
  const tabFocus=focusId==='overview'||rows.some(row=>row.id===focusId)?focusId:selectedId;
  useEffect(()=>{const focused=tabs.current?.querySelector('[role=tab]:focus');setFocusId(focused?focused.dataset.artifactId||'overview':selectedId)},[selectedId,state.selectedSessionId]);
- const focusIntent=useRef(0);
+ const focusIntent=useRef(0),dialogGeneration=useRef(0);
  useEffect(()=>{
   const advance=()=>{focusIntent.current++};
   document.addEventListener('keydown',advance,true);document.addEventListener('pointerdown',advance,true);
@@ -30,16 +30,16 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  useLayoutEffect(()=>{if(strip.current)setScrolled(strip.current.scrollLeft>4)},[state.selectedSessionId,state.canvas?.open]);
  useEffect(()=>{if(open&&!dialog.current?.open)dialog.current?.showModal();else if(!open&&dialog.current?.open)dialog.current.close()},[open]);
  useEffect(()=>{setOpen(false);setQuery('');setError('')},[state.selectedSessionId]);
- const close=()=>{const intent=++focusIntent.current;setOpen(false);closeCanvasDialog(dialog.current,()=>{if(focusIntent.current===intent)trigger.current?.focus({preventScroll:true})})};
+ const close=()=>{const intent=++focusIntent.current;dialogGeneration.current++;setOpen(false);closeCanvasDialog(dialog.current,()=>{if(focusIntent.current===intent)trigger.current?.focus({preventScroll:true})})};
  async function choose(row){
-  if(pending)return;setPending(true);setError('');const sessionId=state.selectedSessionId,fromDialog=!!dialog.current?.open,intent=focusIntent.current;
+  if(pending)return;setPending(true);setError('');const sessionId=state.selectedSessionId,fromDialog=!!dialog.current?.open,intent=focusIntent.current,generation=dialogGeneration.current;
   try{
    const result=await dispatch('canvas.select',{id:row.id,...(row.id===state.canvas?.id&&state.canvas.selectedVersion!=null?{version:state.canvas.selectedVersion}:{})});
    if(current.current.selectedSessionId!==sessionId)return;
    if(!result?.accepted){setError(String(result?.error?.message||result?.error||'The document was not changed. Your current view was kept.'));return}
    // Direct tabs already have focus. A delayed acceptance must not overtake
    // Home/arrow navigation; only the still-current modal interaction restores it.
-   if(!fromDialog||focusIntent.current!==intent||!dialog.current?.open)return;
+   if(!fromDialog||dialogGeneration.current!==generation||!dialog.current?.open)return;
    setOpen(false);closeCanvasDialog(dialog.current,()=>{
     const latest=current.current;
     // The receipt is accepted; its React state commit may follow this frame.
@@ -65,7 +65,7 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  return <><div ref={tabs} className="a-canvas-navigation" role="tablist" aria-label="Canvas views" data-scrolled={scrolled} onKeyDown={keyboard}>
   <div className="a-canvas-overview-slot"><button type="button" className="a-chat-overview-trigger" role="tab" aria-label="Chat overview" aria-selected={overview} tabIndex={tabFocus==='overview'?0:-1} onClick={()=>{setError('');onOverview?.()}}><Library aria-hidden="true"/><span>Overview</span></button></div>
   <div ref={strip} className="a-canvas-document-tabs" onScroll={event=>setScrolled(event.currentTarget.scrollLeft>4)}>{rows.map(row=><button key={row.id} type="button" role="tab" className="a-canvas-document-tab" aria-selected={!overview&&row.id===state.canvas?.id} tabIndex={tabFocus===row.id?0:-1} data-artifact-id={row.id} title={row.title} data-action="canvas.select" onClick={()=>choose(row)} onMouseDown={event=>{if(event.button===1)event.preventDefault()}} onAuxClick={event=>{if(event.button===1){event.preventDefault();remove(row)}}}>{row.kind==='browser'?<Globe/>:row.kind==='settings'?<Settings/>:<FileText/>}<span>{row.title}</span></button>)}</div>
- </div><button ref={trigger} type="button" className="a-open-documents a-soft" aria-label={`Open documents, ${rows.length} open`} aria-haspopup="dialog" aria-expanded={open} onClick={()=>setOpen(true)}><PanelsTopLeft aria-hidden="true"/><span>Open documents</span><small>{rows.length}</small></button>
+ </div><button ref={trigger} type="button" className="a-open-documents a-soft" aria-label={`Open documents, ${rows.length} open`} aria-haspopup="dialog" aria-expanded={open} onClick={()=>{dialogGeneration.current++;setOpen(true)}}><PanelsTopLeft aria-hidden="true"/><span>Open documents</span><small>{rows.length}</small></button>
  <dialog ref={dialog} className="a-open-documents-dialog" aria-label="Open documents" onClick={event=>{if(event.target===event.currentTarget){const r=event.currentTarget.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)close()}}} onCancel={event=>{event.preventDefault();close()}} onClose={()=>setOpen(false)}>
   <header><h2>Open documents</h2><button type="button" className="a-icon" aria-label="Close open documents" onClick={close}><X/></button></header>
   <input type="search" aria-label="Find an open document" placeholder="Find an open document…" value={query} onChange={event=>setQuery(event.target.value)}/>

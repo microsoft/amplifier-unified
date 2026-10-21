@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-import {acceptedCanvasReceipt} from './canvas-test-receipts.mjs';
+import {acceptedCanvasReceipt,settleCanvasReceipts} from './canvas-test-receipts.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const base=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-checks');
@@ -194,6 +194,7 @@ try{
   }
   await toggle.click();await expect(panel).toBeHidden();await expect(toggle).toHaveAccessibleName('Open canvas');
   await toggle.click();await expect(overview).toBeVisible();
+  await settleCanvasReceipts(observedReceipts.values());
   await page.reload();await showFixtureConversation(page,{navPinned:false});await expect(overview).toBeVisible();
   for(const id of sectionIds)await expect(section(id)).not.toHaveAttribute('open','');
   for(const id of sectionIds){await revealByWheel(summary(id));await summary(id).click();await expect(section(id)).toHaveAttribute('open','')}
@@ -232,10 +233,18 @@ try{
   await expect.poll(async()=>milliseconds((await transition()).width).some(ms=>ms>0)).toBe(true);
   await capture('pinned-overview-far-strip');
   // Arrow/Home/End focus tabs; Enter selects. No scrollIntoView helper.
-  await overviewTab.focus();await page.keyboard.press('End');await expect(lastTab).toBeFocused();
-  await page.keyboard.press('Enter');await expect(lastTab).toHaveAttribute('aria-selected','true');
-  await page.keyboard.press('Home');await expect(overviewTab).toBeFocused();await page.keyboard.press('Enter');
-  await expect(overviewTab).toHaveAttribute('aria-selected','true');
+  await panel.evaluate(el=>{
+   const events=[],describe=node=>({tag:node?.tagName,role:node?.getAttribute?.('role'),label:node?.getAttribute?.('aria-label'),artifactId:node?.dataset?.artifactId});
+   const observe=event=>events.push({event:event.type,key:event.key,...describe(event.target)});
+   el.addEventListener('focusin',observe);el.addEventListener('keydown',observe);
+   window.canvasKeyboardObservation={read:()=>({events,active:describe(document.activeElement)}),stop:()=>{el.removeEventListener('focusin',observe);el.removeEventListener('keydown',observe)}};
+  });
+  try{
+   await overviewTab.focus();await page.keyboard.press('End');await expect(lastTab).toBeFocused();
+   await page.keyboard.press('Enter');await expect(lastTab).toHaveAttribute('aria-selected','true');
+   await page.keyboard.press('Home');await expect(overviewTab).toBeFocused();await page.keyboard.press('Enter');
+   await expect(overviewTab).toHaveAttribute('aria-selected','true');
+  }finally{report.keyboardOrder=await page.evaluate(()=>{const o=window.canvasKeyboardObservation,r=o.read();o.stop();delete window.canvasKeyboardObservation;return r})}
   return {horizontal,vertical,normal,reduced};
  });
  const presentation=async scheme=>{
@@ -364,6 +373,7 @@ try{
   await expect(panel.getByRole('button',{name:'Canvas details',exact:true})).toHaveAttribute('aria-expanded','false');
   await expect(page.locator('#canvas-options')).toBeHidden();
   report.detailsCloseBeforeReload={commandId:command.id,status:closedReceipt.status,body:closedReceipt.body,bodyReadBeforeReload:true,closed:true};
+  await settleCanvasReceipts(observedReceipts.values());
   await page.reload();await showFixtureConversation(page,{navPinned:false});
   await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();await expect(page.locator('#canvas-options')).toBeHidden();
   await overviewTab.click();await top();await revealByWheel(overview.getByRole('button',{name:'Open file',exact:true}));
@@ -372,8 +382,8 @@ try{
   await capture('recovered-file-controls');
   assert.equal((await state()).view.draft,'Retain the Canvas test draft');return {saved:30,open:1,recoveredVersion:2};
  });
- await action('canvas.views.inspect');await Promise.all(pendingReceipts);
- assert.deepEqual(report.http.filter(row=>row.transportError||row.readError||row.status>=400||row.body?.accepted===false),[],'Unexpected action receipt failures');
+ await action('canvas.views.inspect');await settleCanvasReceipts(observedReceipts.values());
+ assert.deepEqual(report.http.filter(row=>row.transportError||row.readError||row.receiptTimeout||row.status>=400||row.body?.accepted===false),[],'Unexpected action receipt failures');
  assert.deepEqual(report.browserErrors,[]);report.status='passed';
 }catch(error){
  failure=error;report.status='failed';report.error=errorText(error);
@@ -386,7 +396,7 @@ try{
   const exited=once(fixture,'exit'),timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);
   fixture.kill('SIGTERM');try{await exited}finally{clearTimeout(timer)}
  }
- await Promise.all(pendingReceipts);
+ try{await settleCanvasReceipts(observedReceipts.values())}catch(error){report.evidenceErrors.push(errorText(error));failure||=error}
  if(failure)report.status='failed';
  await writeFile(join(output,'fixture.stdout.log'),stdout);await writeFile(join(output,'fixture.stderr.log'),stderr);
  await writeFile(join(output,'report.json'),JSON.stringify(report,null,2));
