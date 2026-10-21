@@ -323,7 +323,8 @@ async def test_registered_web_reopen_keeps_observed_turn_and_complete_tool_field
 
 
 @pytest.mark.parametrize('change', ['reference', 'source', 'owner', 'epoch'])
-async def test_saved_work_placement_rechecks_owner_after_resource_read(app, tmp_path, monkeypatch, change):
+@pytest.mark.parametrize('boundary', ['resource', 'cached-stat'])
+async def test_saved_work_placement_rechecks_owner_after_resource_read(app, tmp_path, monkeypatch, change, boundary):
     import threading
     import asyncio
     from amplifier_web import resource_files
@@ -334,6 +335,7 @@ async def test_saved_work_placement_rechecks_owner_after_resource_read(app, tmp_
 
     await app.dispatch('session.create', {})
     session = app._session()
+    app._message(session, 'user', 'Inspect the saved fixture.', 'chat', id='user', inputId='original')
     # Empty canonical source is valid; placement is a separately owned view.
     _host_placed_tool(session)
     reference = execution_reference(app.db, session['execution'])
@@ -341,16 +343,22 @@ async def test_saved_work_placement_rechecks_owner_after_resource_read(app, tmp_
     session['_coldFields'] = {'execution': reference}
     windows = WorkWindows(app)
     windows.projector = FakeProjector(app.data_dir)
+    if boundary == 'cached-stat':
+        await windows.read(session['id'])
+    prior_page = windows.current.get(session['id'])
     entered, release = threading.Event(), threading.Event()
-    original = resource_files.read_detached
-    def held(source, **kwargs):
-        result = original(source, **kwargs)
+    original = resource_files.read_detached if boundary == 'resource' else windows._matches
+    def held(*args, **kwargs):
+        result = original(*args, **kwargs)
         entered.set()
         if not release.wait(5):
             raise TimeoutError('Synthetic saved placement barrier did not release')
         return result
-    monkeypatch.setattr(resource_files, 'read_detached', held)
-    read = asyncio.create_task(windows.read(session['id']))
+    if boundary == 'resource':
+        monkeypatch.setattr(resource_files, 'read_detached', held)
+    else:
+        monkeypatch.setattr(windows, '_matches', held)
+    read = asyncio.create_task(windows.read(session['id'], _initial=boundary == 'cached-stat'))
     try:
         assert await asyncio.to_thread(entered.wait, 5), 'Saved resource read was not reached'
         if change == 'reference':
@@ -367,7 +375,10 @@ async def test_saved_work_placement_rechecks_owner_after_resource_read(app, tmp_
         release.set()
         with pytest.raises(ValueError, match='conversation changed'):
             await asyncio.wait_for(read, 5)
-        assert not windows.current and not windows.pages
+        if boundary == 'resource':
+            assert not windows.current and not windows.pages
+        else:
+            assert windows.current.get(session['id']) == prior_page, 'No replacement page was accepted'
         assert not dict.__contains__(session, 'execution')
     finally:
         release.set()

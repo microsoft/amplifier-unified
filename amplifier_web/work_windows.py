@@ -210,9 +210,16 @@ class WorkWindows:
         from .cold_display import raw
         if (_initial and prior is not None and self.pages.get(prior, {}).get('source') == source
                 and self.pages[prior].get('savedExecutionReference') ==
-                    raw(owner).get('_coldFields', {}).get('execution')):
-            matches = await asyncio.to_thread(self._matches, source, self.pages.get(prior, {}).get('revisions'))
+                    raw(owner).get('_coldFields', {}).get('execution')
+                and ('savedExecution' not in self.pages[prior]
+                     or self.pages[prior].get('savedExecutionFence') == fence)):
+            accepted_page = self.pages[prior]
+            accepted_reference = deepcopy(accepted_page.get('savedExecutionReference'))
+            matches = await asyncio.to_thread(self._matches, source, accepted_page.get('revisions'))
             self._check_current(identity, owner, source, fence)
+            if (self.pages.get(prior) is not accepted_page
+                    or raw(owner).get('_coldFields', {}).get('execution') != accepted_reference):
+                raise _SupersededRead('The requested conversation changed. Open it again.')
             if matches:
                 if prior not in self.pages or self.current.get(identity) != prior:
                     raise _SupersededRead('The requested conversation changed. Open it again.')
@@ -271,7 +278,8 @@ class WorkWindows:
             if (not matches or raw(owner).get('_coldFields', {}).get('execution') != saved_reference
                     or 'execution' in raw(owner)):
                 raise _SupersededRead('The requested conversation changed. Open it again.')
-            page = {**page, 'savedExecution': tree, 'savedExecutionReference': saved_reference}
+            page = {**page, 'savedExecution': tree, 'savedExecutionReference': saved_reference,
+                    'savedExecutionFence': fence}
         page = {**page, 'sessionId': identity, 'source': source}
         group = 'event-window:' + page['generation']
         page['group'] = group
@@ -340,6 +348,7 @@ class WorkWindows:
         page = self.pages.get(self.current.get(session['id']))
         if (page is not None and page['source'] == source_identity(session)
                 and page.get('savedExecutionReference') is not None
+                and page.get('savedExecutionFence') == self.epochs.get(session['id'])
                 and page['savedExecutionReference'] == resident.get('_coldFields', {}).get('execution')):
             if touch:
                 self.pages.move_to_end(page['group'])
