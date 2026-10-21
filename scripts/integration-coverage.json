@@ -62,7 +62,8 @@
         "tests/test_search_read_policy.py",
         "tests/test_default_capability_policy.py",
         "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip",
-        "tests/fixtures/provider_isolation_native.py"
+        "tests/fixtures/provider_isolation_native.py",
+        "tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -118,7 +119,18 @@
         "amplifier_web/provider_environment.py",
         "amplifier_web/image_defaults.py",
         "tests/test_provider_isolation.py",
-        "tests/fixtures/provider_isolation_native.py"
+        "tests/fixtures/provider_isolation_native.py",
+        "amplifier_web/worktrees.py",
+        "amplifier_web/handoff_boundary.py",
+        "amplifier_web/handoff_admission.py",
+        "amplifier_web/capacity.py",
+        "amplifier_web/capacity_wait.py",
+        "amplifier_web/execution_events.py",
+        "tests/test_handoff_native_admission.py",
+        "tests/test_handoff_model_admission.py",
+        "tests/test_handoff_boundary.py",
+        "tests/test_handoff_refusal.py",
+        "tests/test_model_admission_wait.py"
       ]
     },
     "release-runtime": {
@@ -187,7 +199,12 @@
     "root-guest": {
       "runner": "owned-container",
       "mode": "manual",
-      "command": ["python", "scripts/qualify_default_installed.py", "run", "--root-guest"],
+      "command": [
+        "python",
+        "scripts/qualify_default_installed.py",
+        "run",
+        "--root-guest"
+      ],
       "selectors": [
         "tests/test_durable_guest_jobs.py::test_lost_response_repeated_identity_and_fresh_observer_do_not_replay",
         "tests/test_durable_guest_jobs.py::test_cancel_is_prompt_and_terminal_requires_actual_exit",
@@ -1066,6 +1083,13 @@
       "owner": "root-guest",
       "prerequisite": "Explicit isolated Linux root supervisor and UID-65534 workload; fixed --root-guest adapter.",
       "introducedBy": "Root guest qualification adapter"
+    },
+    {
+      "node": "tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Core/Foundation, loop-live and context-simple; deterministic real native handoff and host model admission",
+      "introducedBy": "#963"
     }
   ]
 }

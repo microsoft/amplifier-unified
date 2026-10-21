@@ -160,6 +160,7 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
         'tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged': 'native',
         'tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input': 'native',
         'tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay': 'native',
+        'tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait': 'native',
         **{f'tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[{resumed}]': 'native'
            for resumed in ('False', 'True')},
         'tests/test_search_read_policy.py': 'native',
@@ -281,3 +282,24 @@ def test_root_and_installed_pwa_have_separate_fixed_manual_routes(tmp_path):
     with pytest.raises(ValueError, match='explicit qualification runner'):
         checks.run_lane('root-guest', 'python', tmp_path / 'not-a-host-root-run')
     assert not (tmp_path / 'not-a-host-root-run').exists()
+
+
+def test_handoff_native_admission_has_an_executing_owner_and_coordination_guard():
+    import yaml
+    coverage = checks.manifest()
+    selector = 'tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait'
+    assert selector in coverage['lanes']['native']['selectors']
+    for path in (
+        'amplifier_web/worktrees.py', 'amplifier_web/handoff_boundary.py',
+        'amplifier_web/handoff_admission.py', 'amplifier_web/capacity.py',
+        'amplifier_web/capacity_wait.py', 'amplifier_web/execution_events.py',
+        'tests/test_handoff_native_admission.py', 'tests/test_handoff_model_admission.py',
+        'tests/test_handoff_boundary.py', 'tests/test_handoff_refusal.py',
+        'tests/test_model_admission_wait.py',
+    ):
+        assert 'native' in {job['lane'] for job in checks.select_lanes([path])}
+    workflow = yaml.load((ROOT / '.github/workflows/coordination.yml').read_text(), Loader=yaml.BaseLoader)
+    assert 'tests/test_handoff_model_admission.py' in workflow['on']['pull_request']['paths']
+    steps = workflow['jobs']['contracts']['steps']
+    assert any('uv run --no-sync pytest' in step.get('run', '') and
+               'tests/test_handoff_model_admission.py' in step['run'] for step in steps)

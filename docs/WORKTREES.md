@@ -72,6 +72,22 @@ interruption and shutdown remain available for a still-owned runtime. The guard
 uses the existing handoff records and never treats mutable caller arguments as
 permission to clear an unresolved handoff.
 
+The handoff's own settings fence must not cancel the root turn that requested
+that move. A new receipt binds its current worker instance, native generation,
+input identities and configuration revision. While that exact receipt is pending
+before release, only that same root turn may pass model admission to finish.
+The source folder, checkout association, execution revision, task, latest human
+input and Stop epoch must still match. All model budgets remain enforced; new
+input, child calls, unrelated settings holds, replacement workers, older receipts
+without this binding and unknown handoff effects remain fenced. This exception
+neither releases the worker nor declares a checkpoint: the existing native
+boundary still waits for generation completion, tool replies, children and saved
+history before placement can commit once.
+
+Explicit Stop supersedes an unperformed move. Its receipt becomes rejected, the
+source and completed effects stay intact, and that move's fence is released.
+It does not automatically resume the task or replay the move after updating.
+
 Execution host association is explicit in `worktree.inspect/list` (`currentHost`
 and `executionHost`), newly created/attached checkout records, task execution state,
 and handoff receipts. The host descriptor uses the existing Foundation owner

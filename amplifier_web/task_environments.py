@@ -53,7 +53,7 @@ def definitions(schema, string):
     owned = {**request, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1}}
     return {
         **setup.definitions(schema, string),
-        'workspace.environments.read': ('Inspect this task’s test environments, retained results and current backend availability. Does not launch, resume or replay work.', schema(scope)),
+        'workspace.environments.read': ('Inspect this task’s test environments, retained results and current backend availability. Does not launch, resume or replay work.', schema({**scope, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}, list(scope))),
         'workspace.environments.removal.read': ('Read this root’s exact retained removal binding at the current resource revision. Strictly passive: no backend probe, configuration lookup, repair, operation admission or continuation. Missing original evidence remains held.', schema({
             **scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1},
             'originalRequestId': {**string(200), 'minLength': 1}})),
@@ -73,6 +73,19 @@ def definitions(schema, string):
 
 
 def configuration(app):
+    local, status, reason = local_configuration(app)
+    if local:
+        return local, status, reason
+    try:
+        remote = registered_runners.first_configuration(app)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, 'unavailable', 'The saved test machine settings need attention. Open Settings → Testing.'
+    if remote:
+        return remote, 'ready', 'Checks run on a connected Linux test machine. This computer does not need Docker or a local test environment.'
+    return None, status, 'Test environments have not been enabled. Connect a test machine in Settings → Testing, or set up local testing on Linux.'
+
+
+def local_configuration(app):
     """Operator-owned opt-in, never a request-provided executable or profile."""
     target = app.data_dir / 'test-environments.json'
     if not target.exists():
@@ -171,7 +184,7 @@ def public(home, row):
         'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
         'previousCleanup': row.get('previousCleanup'),
         'artifactExport': row.get('artifactExport'), 'lastArtifactExport': row.get('lastArtifactExport'),
-        'preparation': dependencies.status(storage.directory(home, row)) if row.get('preparationPending') or row.get('preparedDependencies') else None,
+        'preparation': ({'status': 'ready' if row.get('preparedDependencies') else 'pending', 'remote': True} if row.get('testMachine') else dependencies.status(storage.directory(home, row))) if row.get('preparationPending') or row.get('preparedDependencies') else None,
         'preparationCleanup': row.get('preparationCleanup'),
         'reason': row.get('reason'), 'observation': row.get('observation'),
         'recovery': row.get('recovery', {'available': False, 'reason': 'Refresh to inspect the retained recovery backend.'}),
@@ -206,7 +219,7 @@ def installation_lock(home, identity):
     return FileLock(str(home / 'workspace-resources' / ('backend-' + identity + '.lock')), timeout=5)
 
 
-def remove_installation(home, identity, folder, *, ignore_errors=False):
+def remove_installation(home, identity, folder, *, ignore_errors=False, cleanup_inventory=None, cleanup_guard=None):
     """Existing install removal cannot orphan a resource's recovery backend."""
     with installation_lock(home, identity), closing(storage.connect(home)) as db:
         from .managed_runner_updates import referenced
@@ -214,6 +227,17 @@ def remove_installation(home, identity, folder, *, ignore_errors=False):
             raise ValueError('This runner is retained for an update, rollback, or an existing test owner.')
         if db.execute("SELECT 1 FROM allocations WHERE status!='retired' AND json_extract(body,'$.kind')=? AND json_extract(body,'$.backendInstallation')=? LIMIT 1", (KIND, identity)).fetchone():
             raise ValueError('This backend still owns test environments. Remove those environments before removing or replacing its installation.')
+        if cleanup_inventory is not None:
+            from .storage_cleanup_measure import measure
+            if (cleanup_inventory.get("id") != identity or cleanup_inventory.get("paths") != [str(folder)]
+                    or measure([str(folder)])["stamp"] != cleanup_inventory.get("stamp")):
+                raise ValueError("The unused runner files changed. Existing files were kept.")
+        if cleanup_guard is not None:
+            cleanup_guard()
+        # The guard can yield to its event loop for a fresh process/policy
+        # observation. Recheck contents after that wait, adjacent to removal.
+        if cleanup_inventory is not None and measure([str(folder)])["stamp"] != cleanup_inventory.get("stamp"):
+            raise ValueError("The unused runner files changed. Existing files were kept.")
         shutil.rmtree(folder, ignore_errors=ignore_errors)
 
 
@@ -226,24 +250,28 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
         if backend_config is not None and backend_configs.retain(home, backend_config) != backend_key:
             raise ValueError('The approved backend configuration identity changed before allocation.')
         db.execute('BEGIN IMMEDIATE')
-        prior = db.execute("SELECT body FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=? LIMIT 1", (sid, KIND)).fetchone()
+        prior = db.execute("SELECT body FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=? AND json_extract(body,'$.commandId')=? LIMIT 1", (sid, KIND, request_id)).fetchone()
         if prior:
             row = json.loads(prior[0])
-            # A crash can occur after reserving local storage but before the
-            # queue links it. Only the same unadmitted intent may recover it.
-            if (not row.get('backendAdmitted') and row.get('commandId') == request_id
-                    and row['owner'] == actor and row['source'] == source
+            # Only the same unadmitted intent can recover the allocation-before-link gap.
+            if (not row.get('backendAdmitted') and row['owner'] == actor and row['source'] == source
                     and row.get('profileId', PROFILE) == profile_id
                     and row['backendKey'] == backend_key and row['workspaceId'] == workspace):
                 return row
-            raise ValueError('This task already owns an environment. Inspect or remove it before starting another.')
-        if db.execute("SELECT COUNT(*) FROM allocations WHERE status!='retired'").fetchone()[0] >= storage.MAX_ACTIVE:
-            raise ValueError('The resource owner capacity has been reached.')
+            raise ValueError('This environment request already has a different or admitted owner. Inspect its exact receipt.')
+        limits = execution_settings.concurrency(home)
+        count = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
+        if count >= limits['maxEnvironmentsPerChat']:
+            raise ValueError('This task already owns its allowed environments. Inspect or remove one, or adjust Advanced execution limits in Settings.')
+        total, owned = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
+        if total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']:
+            raise ValueError('The resource owner capacity has been reached. Inspect retained owners or adjust Advanced execution limits in Settings.')
         row = {'id': str(uuid.uuid4()), 'kind': KIND, 'workspaceId': workspace, 'sessionId': sid,
                'owner': actor, 'source': source, 'profileId': profile_id, 'backendKey': backend_key,
                'resourceRequest': resource_request, 'timingRequest': timing_request, 'preparationRequired': profile['preparationRequired'],
                'backendInstallation': installation,
                'backendConfigRetained': backend_config is not None,
+               'originSnapshotVersion': backend_config.get('originSnapshotVersion') if backend_config else None,
                'testMachine': ({key: backend_config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if backend_config and backend_config.get('remoteRunner') else None),
                **({'retentionMode': backend_config.get('retentionMode', 'files'),
                    'backendType': backend_config.get('backend', 'docker')} if backend_config is not None else {}),
@@ -258,7 +286,10 @@ def invoke(config, home, row, action, args, *, _qualification=False):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
     if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
         from .managed_runner_updates import validate_execution
-        validate_execution(home, config)
+        if config.get('originSnapshotVersion') == 1:
+            registered_runners.qualify_retained(None, config)
+        else:
+            validate_execution(home, config)
     if action == 'execute' and args.get('durableJob') is True:
         action = 'job_start'
     folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
@@ -419,14 +450,14 @@ def begin_removal(app, row, action, args, actor):
     except LockTimeout:
         # Preserve existing concurrent-admission receipts: effect() will refuse
         # under the same lock without modifying the active owner's resource.
-        return app.operations.requests.begin(row['sessionId'], action, args, actor)
+        return app.operations.requests.begin(row['sessionId'], action, args, actor, resource_id=row['id'])
     try:
         current = get(app.data_dir, row['sessionId'], row['id'])
         if current['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
         legacy = legacy_cleanup_qualification(app, current, action.rsplit('.', 1)[-1], args)
         require_resolved_removal(app, current, args['requestId'], legacy)
-        request, fresh = app.operations.requests.begin(row['sessionId'], action, args, actor)
+        request, fresh = app.operations.requests.begin(row['sessionId'], action, args, actor, resource_id=row['id'])
         if fresh:
             request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'],
                 **({'legacyCleanupQualification': legacy} if legacy else {}))
@@ -867,11 +898,11 @@ def cancel_preparation(app, row):
         os.close(descriptor)
 
 
-def read(app, sid, config):
+def read(app, sid, config, offset=0, limit=10):
     home = app.data_dir
     with closing(storage.connect(home)) as db:
         rows = [json.loads(value[0]) for value in db.execute(
-            "SELECT body FROM allocations WHERE root=? AND json_extract(body,'$.kind')=? ORDER BY rowid DESC LIMIT 10", (sid, KIND))]
+            "SELECT body FROM allocations WHERE root=? AND json_extract(body,'$.kind')=? ORDER BY rowid DESC LIMIT ? OFFSET ?", (sid, KIND, limit, offset))]
     result, configurations = [], {}
     for row in rows:
         selected = None
@@ -1001,13 +1032,19 @@ async def dispatch(app, action, args, origin, caller, authority):
                 value = await operation(app, args, actor, guard=setup_guard)
             return {'accepted': True, 'result': value}
         if action.endswith('.read'):
-            items = await asyncio.to_thread(read, app, sid, config)
+            offset, limit = args.get('offset', 0), args.get('limit', 10)
+            items = await asyncio.to_thread(read, app, sid, config, offset, limit)
+            with closing(storage.connect(app.data_dir)) as db:
+                count = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
+                owned = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
             setup_state = await setup.read(app)
             if captured != tuple(app._session(sid, hydrate=False).get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision')):
                 raise AppError('The task moved; refresh its environments.', 409)
             return {'accepted': True, 'result': {'capability': {'status': availability, 'reason': reason,
                 'profiles': execution_settings.snapshot(app)['effectiveProfiles'],
-                'source': source.get('workingDirectory') or source['workspace']}, 'items': items, 'nextOffset': None,
+                'source': source.get('workingDirectory') or source['workspace'],
+                'maxEnvironmentsPerChat': execution_settings.concurrency(app)['maxEnvironmentsPerChat'], 'ownedEnvironments': owned},
+                'items': items, 'offset': offset, 'nextOffset': offset+limit if offset+limit<count else None,
                 'setup': setup_state,
                 'checks': [app.test_queue.public(item) for item in app.test_queue.rows(sid=sid, limit=20)]}}
         guard()

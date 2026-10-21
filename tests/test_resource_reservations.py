@@ -1,5 +1,6 @@
 """Atomic cooperative claims, independent of external effects and inventory."""
 import copy
+from types import SimpleNamespace
 import sqlite3
 import uuid
 from concurrent.futures import ProcessPoolExecutor
@@ -7,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 import pytest
 
 from amplifier_web import workspace_resources as resources
+from amplifier_web import test_execution_settings as settings
 from amplifier_web.service import AppError
 from test_collaborative_workspaces import app, agent_action
 
@@ -103,8 +105,8 @@ def test_inventory_neither_acquires_nor_releases_claims(tmp_path):
 
 
 def test_limits_count_nested_owners_and_allow_reconciliation(tmp_path, monkeypatch):
-    monkeypatch.setattr(resources, 'MAX_ROOT_RESERVATIONS', 2)
-    monkeypatch.setattr(resources, 'MAX_RESERVATIONS', 3)
+    settings.write(SimpleNamespace(data_dir=tmp_path), {'version':1,'queue':{},'profiles':{},
+        'concurrency':{'maxResourceReservationsPerChat':2,'maxResourceReservations':3}})
     first = reserve(tmp_path, 'one', actor=owner('root', 'child1'), resourceKey='one')['reservation']
     reserve(tmp_path, 'two', actor=owner('root', 'child2'), resourceKey='two')
     assert reserve(tmp_path, 'three', actor=owner('root'), resourceKey='three')['outcome'] == 'limit'
@@ -210,3 +212,27 @@ async def test_context_is_bounded_without_loading_or_starting_other_chats(app, m
     assert len(page['items']) == 16 and page['nextOffset'] == 16
     assert 'Private unsent draft' not in str(context)
     assert not app.runtime.inputs
+
+
+def test_configured_reservation_ceiling_above_default_and_lowering_retains_owners(tmp_path):
+    def configure(maximum):
+        settings.write(SimpleNamespace(data_dir=tmp_path), {'version':1,'queue':{},'profiles':{},
+            'concurrency':{'maxResourceReservationsPerChat':maximum}})
+    configure(70)
+    rows=[reserve(tmp_path,str(i),actor=owner('manager'),resourceKey=str(i))['reservation'] for i in range(65)]
+    unknown=change(tmp_path,rows[0],'uncertain',identity='unknown')['reservation']
+    configure(2)
+    assert reserve(tmp_path,'blocked',actor=owner('manager'),resourceKey='fresh')['outcome']=='limit'
+    current=listing(tmp_path)['items'];assert len(current)==65
+    assert next(row for row in current if row['id']==unknown['id'])['status']=='uncertain'
+    assert change(tmp_path,unknown,identity='release-unknown')['outcome']=='released'
+    assert reserve(tmp_path,'0',actor=owner('manager'),resourceKey='0')['reservation']==rows[0]
+
+
+def test_configured_reservation_limit_is_atomic_across_processes(tmp_path):
+    settings.write(SimpleNamespace(data_dir=tmp_path), {'version':1,'queue':{},'profiles':{},
+        'concurrency':{'maxResourceReservations':2,'maxResourceReservationsPerChat':2}})
+    with ProcessPoolExecutor(max_workers=4) as pool:
+        futures=[pool.submit(reserve,tmp_path,str(i),WORKSPACE,owner('root'),resourceKey=str(i)) for i in range(8)]
+        outcomes=[future.result()['outcome'] for future in futures]
+    assert outcomes.count('reserved')==2 and outcomes.count('limit')==6

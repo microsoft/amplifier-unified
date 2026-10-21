@@ -8,6 +8,10 @@ import stat
 import uuid
 from . import test_environment_profiles as profiles
 
+CONCURRENCY_DEFAULTS = {'maxTaskChatsPerSource': 8, 'maxEnvironmentsPerChat': 1,
+                        'maxOwnedResources': 512, 'maxOwnedResourcesPerChat': 32,
+                        'maxResourceReservations': 1024, 'maxResourceReservationsPerChat': 64}
+
 QUEUE_DEFAULTS = {'maxPending': 64, 'maxPendingPerChat': 1, 'defaultWaitSeconds': 3600}
 PROFILE_FIELDS = (*profiles.RESOURCE_FIELDS, *profiles.TIMING_FIELDS)
 
@@ -19,16 +23,23 @@ def definitions(schema, string):
                           'maximum': 1048576 if key in profiles.RESOURCE_FIELDS else profiles.MAX_SECONDS}
                      for key in PROFILE_FIELDS}, [])
     return {
-        'testing.execution.read': ('Read global execution defaults and effective profiles without starting work.', schema({}, [])),
-        'testing.execution.save': ('Save app-wide queue and test profile limits for future requests. Accepted work retains its saved limits.', schema({
+        'testing.execution.read': ('Read global work concurrency, queue and profile defaults without starting work.', schema({}, [])),
+        'testing.execution.save': ('Save global work concurrency, queue and test profile limits. Concurrency gates new admissions without stopping active work; accepted checks retain their resource and time budgets.', schema({
             'expectedRevision': string(64), 'queue': queue,
+            'concurrency': schema({key: {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS} for key in CONCURRENCY_DEFAULTS}, []),
             'profiles': schema({item['id']: fields for item in profiles.catalog()}, [])}, ['expectedRevision', 'queue', 'profiles'])),
     }
 
 
 def validate(value):
-    if not isinstance(value, dict) or set(value) != {'version', 'queue', 'profiles'} or value['version'] != 1:
+    if (not isinstance(value, dict) or not {'version', 'queue', 'profiles'} <= set(value)
+            or set(value) - {'version', 'queue', 'profiles', 'concurrency'} or value['version'] != 1):
         raise ValueError('Test execution settings have an unsupported format.')
+    concurrency = value.get('concurrency', {})
+    if not isinstance(concurrency, dict) or set(concurrency) - CONCURRENCY_DEFAULTS.keys():
+        raise ValueError('Choose supported work concurrency limits.')
+    if any(type(item) is not int or not 1 <= item <= profiles.MAX_SECONDS for item in concurrency.values()):
+        raise ValueError('Work concurrency limits must be positive whole numbers.')
     queue = value['queue']
     if not isinstance(queue, dict) or set(queue) - QUEUE_DEFAULTS.keys():
         raise ValueError('Choose supported queue limits.')
@@ -47,7 +58,7 @@ def validate(value):
                 raise ValueError('Profile limits must be positive whole numbers within the supported numeric range.')
         profiles.resources(identity, profiles.freeze(identity, fields))
         profiles.freeze_timing(identity, fields)
-    return value
+    return {**value, 'concurrency': concurrency}
 
 
 def load(app):
@@ -58,7 +69,7 @@ def load(app):
             raise ValueError('Test execution settings must be a regular file, not a link.')
         handle = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
     except FileNotFoundError:
-        return {'version': 1, 'queue': {}, 'profiles': {}}
+        return {'version': 1, 'queue': {}, 'profiles': {}, 'concurrency': {}}
     with os.fdopen(handle, 'rb') as stream:
         info = os.fstat(stream.fileno())
         after = path.lstat()
@@ -71,6 +82,12 @@ def load(app):
             raise ValueError('Test execution settings must be a private regular file.')
         value = json.load(stream)
     return validate(value)
+
+
+def concurrency(app_or_home):
+    from types import SimpleNamespace
+    app = app_or_home if hasattr(app_or_home, 'data_dir') else SimpleNamespace(data_dir=app_or_home)
+    return {**CONCURRENCY_DEFAULTS, **load(app)['concurrency']}
 
 
 def accepted(app, profile_id):
@@ -87,8 +104,9 @@ def snapshot(app):
         effective.append({**item, 'preparationTimeoutSeconds': 1800, **fields})
     return {'revision': hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest(),
             'queue': policy['queue'], 'profiles': policy['profiles'],
+            'concurrency': policy['concurrency'], 'effectiveConcurrency': {**CONCURRENCY_DEFAULTS, **policy['concurrency']},
             'effectiveQueue': {**QUEUE_DEFAULTS, **policy['queue']}, 'effectiveProfiles': effective,
-            'scope': 'All workspaces on this Amplifier installation. Only new requests use these values; accepted and recovered work keeps its saved limits.'}
+            'scope': 'All workspaces on this Amplifier installation. Queue and profile settings apply to new requests. Concurrency settings govern new admissions; lowering them never stops admitted work or discards retained owners.'}
 
 
 def write(app, policy):
@@ -125,8 +143,12 @@ async def dispatch(app, action, args, authority):
                 app.configuration_authority.check(authority)
                 if args['expectedRevision'] != current['revision']:
                     raise ValueError('Execution settings changed. Refresh before saving your edits.')
-                value = validate({'version': 1, 'queue': args['queue'], 'profiles': args['profiles']})
+                value = validate({'version': 1, 'queue': args['queue'], 'profiles': args['profiles'],
+                                  'concurrency': args.get('concurrency', current['concurrency'])})
                 write(app, value)
+                app.test_queue.backoff.clear()
+                app.test_queue.wakeup.set()
+                app.test_queue.start()
                 current = snapshot(app)
             return {'accepted': True, 'result': current}
         except (OSError, ValueError, TypeError) as exc:

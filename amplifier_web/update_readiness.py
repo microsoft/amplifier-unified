@@ -262,6 +262,13 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
             state['available'] = sum(row.get('status') == 'update' for row in state['items'])
             state.update(phase='installed', pendingRestart=None, pendingReplacement=None, pendingApp=None, appAvailable=application.get('status')=='update' if selected else False,
                          installedAt=time.time(), error=None, detail=detail)
+            # Keep the confirmed app result independently of subsequent component
+            # attempts and the bounded diagnostic history. Consumers must match
+            # its version/revision to the running installation, never the latest
+            # available release or a prepared candidate.
+            state['applicationResult'] = {'attemptId': target['attemptId'], 'phase': phase,
+                'version': identity['version'], 'revision': identity['revision'],
+                'verifiedAt': time.time()}
             if not selected:
                 # Resume only after this exact restarted installation is healthy.
                 # A manual Install request covers the remaining component phases.

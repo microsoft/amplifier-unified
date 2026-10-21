@@ -51,3 +51,11 @@ Before the PR handoff, main was integrated through
 `0.20.199 / c92bddfe5110354f`. Two builds produced the same 311 client files.
 This version identifies the development base; release publication is handled
 separately from the retained preview and the user's live-instance adoption.
+
+Independent review found that the shared Pick up again control exposed an
+existing catalog filter that the view-update validator did not accept. The
+correction admits that status through the canonical validator for both direct
+workspace updates and nested All chats updates. Regression coverage checks the
+returned activity groups, navigation/reload retention and search preservation.
+The shared-landing journey is also registered in the extended browser plan and
+additive UX ownership ledger so the coverage runs in post-release verification.

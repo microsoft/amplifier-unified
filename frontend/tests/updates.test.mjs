@@ -16,6 +16,23 @@ const component={id:'bundle',label:'Community bundle',status:'update',current:'a
 function state(updates={}){return {view:{},settings:{updates:{}},updates:{application,items:[],...updates}};}
 function render(updates={},view={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:{...state(updates),view},act:()=>{}}));}
 
+test('confirmed app success stays visible beside component failure without opening details',()=>{
+ const result={attemptId:'a'.repeat(32),phase:'restart-ack',version:application.current,revision:'b'.repeat(40),verifiedAt:10};
+ const updates={application:{...application,runningRevision:result.revision},applicationResult:result,
+  phase:'error',error:'Component sources changed.',sequence:{stage:'other'},
+  diagnostics:{attemptId:'component',batch:{attemptId:'component',kind:'ecosystem',components:['foundation']},
+   lastFailure:{attemptId:'component',kind:'ecosystem',phase:'ecosystem-validation',status:'failed',reason:'runtime-source-changed',at:12}}};
+ const html=render(updates);
+ assert.match(html,/Application updated successfully/);
+ assert.match(html,/Some components were not updated/);
+ assert.match(html,/Affected batch: foundation/);
+ assert.match(html,/Check for updates again before retrying/);
+ assert.ok(html.indexOf('Application updated successfully')<html.indexOf('ecosystem-update-details'));
+ assert.doesNotMatch(render({...updates,pendingRestart:{requestStatus:'uncertain'}}),/Application updated successfully|Some components were not updated/);
+ assert.doesNotMatch(render({...updates,applicationResult:{...result,phase:'restart-reconcile'}}),/Application updated successfully/);
+ assert.match(render({...updates,applicationResult:{...result,phase:'restart-reconcile'}}),/Current application verified/);
+});
+
 test('current batch names progress and completed batches remain visible without claiming the new batch installed',()=>{
  const html=render({phase:'validating',sequence:{stage:'other',install:true},
   diagnostics:{attemptId:'new',batch:{attemptId:'new',kind:'ecosystem',tier:'other',components:['amplifier-hooks-approval'],componentCount:1,startedAt:1},

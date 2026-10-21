@@ -24,6 +24,22 @@ missing installations, unresolved checks and waiting phases. Detailed source
 inventory remains below the box. Frontend and agent callers share updates.check,
 updates.install, and the sequence/summary state.
 
+Verified restart readiness retains one application result independently of the
+bounded diagnostic history and later component attempts. The Updates page shows
+that result only for the same running version/revision and without an unresolved
+application replacement or restart. Current-installation reconciliation is
+labeled verification, not a successful historical restart. A later failed
+component batch names its bounded component list separately and asks for a fresh
+check when sources moved. Old attempts and newer app-check failures cannot inherit
+the component-failure summary. This is presentation of confirmed outcomes; it does
+not change installation, retry, rollback, or restart admission.
+
+The maintained `update-progress` browser smoke covers app-success/component-failure
+separation, reload, narrow layout, stale app identity, and unconfirmed restart,
+alongside its existing progress/preferences/no-install-effects checks. Readiness
+tests cover actual result creation and service reload after diagnostic retention
+has advanced beyond the app batch.
+
 Validation covers app-first early return, empty-tier progression, included-check
 failures, explicit install intent after a verified restart, missing-source
 revision validation, read-only inventory, preserved source policies, and a

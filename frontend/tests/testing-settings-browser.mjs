@@ -8,7 +8,7 @@ const {base,stop}=await startSettingsFixture();
 let browser,page,failure;
 const errors=[];
 try{
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{}),...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});
  page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base+'/');await page.waitForSelector('#amp-one');
@@ -75,6 +75,12 @@ try{
  // Execution policy is independent, global, and recovers a lost save receipt.
  const execution=page.getByRole('region',{name:'Test execution limits',exact:true});
  await execution.getByText('Advanced execution limits',{exact:true}).click();
+ await execution.getByLabel('Outstanding task chats per manager',{exact:true}).fill('12');
+ await execution.getByLabel('Owned test environments per chat',{exact:true}).fill('3');
+ await execution.getByLabel('Owned resources across this installation',{exact:true}).fill('700');
+ await execution.getByLabel('Owned resources per chat',{exact:true}).fill('40');
+ await execution.getByLabel('Cooperative reservations across this installation',{exact:true}).fill('1500');
+ await execution.getByLabel('Cooperative reservations per chat',{exact:true}).fill('80');
  await execution.getByLabel('Maximum pending checks',{exact:true}).fill('128');
  await execution.getByLabel('Maximum pending checks per chat',{exact:true}).fill('3');
  await execution.getByLabel('Default queue wait (seconds)',{exact:true}).fill('0');
@@ -90,6 +96,8 @@ try{
  await execution.getByRole('button',{name:'Save execution limits'}).click();
  await expect(execution.getByRole('status')).toContainText('Current execution limits match');
  assert.equal(executionSaves,1);
+ const concurrency=(await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveConcurrency;
+ assert.equal(concurrency.maxTaskChatsPerSource,12);assert.equal(concurrency.maxEnvironmentsPerChat,3);assert.equal(concurrency.maxOwnedResources,700);assert.equal(concurrency.maxOwnedResourcesPerChat,40);assert.equal(concurrency.maxResourceReservations,1500);assert.equal(concurrency.maxResourceReservationsPerChat,80);
  assert.equal((await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveQueue.maxPendingPerChat,3);
  await page.unroute('**/api/actions',lostExecution);
  await expect(execution.getByText('Waiting checks stay queued until stopped or cancelled.',{exact:false})).toBeVisible();
@@ -128,6 +136,7 @@ try{
  await expect(execution.getByLabel('Maximum pending checks per chat',{exact:true})).toHaveValue('5');
  await execution.getByLabel('Maximum pending checks per chat',{exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:`/tmp/per-chat-queue-settings-${page.viewportSize().width}.png`,fullPage:true});
+ for(const [label,value] of [['Outstanding task chats per manager','12'],['Owned test environments per chat','3'],['Owned resources across this installation','700'],['Owned resources per chat','40'],['Cooperative reservations across this installation','1500'],['Cooperative reservations per chat','80']])await expect(execution.getByLabel(label,{exact:true})).toHaveValue(value);
  await expect(execution.getByLabel('Small Python check: CPU cores',{exact:true})).toHaveValue('3');
  await execution.getByLabel('Maximum pending checks',{exact:true}).fill('160');
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
@@ -167,13 +176,13 @@ try{
   else throw Error('Unexpected target action '+action);
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:true,result})});
  });
- const targetsRegion=page.getByRole('region',{name:'Other test machines',exact:true});
+ const targetsRegion=page.getByRole('region',{name:'Connected test machines',exact:true});
  await targetsRegion.getByRole('button',{name:'Refresh test machines',exact:true}).click();
  await targetsRegion.getByText('Connect a test machine',{exact:true}).click();
- await targetsRegion.getByLabel('Machine name',{exact:true}).fill('Office testing machine');
+ await targetsRegion.getByLabel('Name to show',{exact:true}).fill('Office testing machine');
  await targetsRegion.getByLabel('Saved SSH connection',{exact:true}).fill('office-tests');
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
- await expect(page.getByRole('alertdialog')).toContainText('Other test machines');
+ await expect(page.getByRole('alertdialog')).toContainText('Connected test machines');
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await targetsRegion.getByRole('button',{name:'Connect test machine',exact:true}).click();
  await expect(targetsRegion.getByRole('status').first()).toContainText('saved test machine matches');

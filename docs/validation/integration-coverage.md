@@ -87,6 +87,22 @@ prove paid-provider latency, real Microsoft 365 authorization, or live Office
 client acceptance. Their integration claims concern the actual native modules
 and host boundaries exercised by the named tests.
 
+### Checkout handoff admission, October 21
+
+The existing native owner requires
+`tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait`.
+Handoff, model-admission, execution telemetry and related fixture changes select
+this owner. It installs the actual native loop prerequisites and rejects missing
+or skipped execution. The additive record preserves the frozen 87-skip baseline;
+it does not add a publication gate. The coordination host group also runs the
+ordinary handoff admission guard and Stop/provenance regressions.
+
+The native case uses a deterministic provider with actual Core, loop-live,
+AppService and model admission. It verifies the tool reply, next model response,
+generation completion, saved context and one handoff placement, while new input
+remains fenced until settlement. The final process-release boundary is a fixture;
+this is not live-chat or paid-provider qualification.
+
 ### Terminal lifecycle regression, October 16
 
 The PR812 native run `38968575306` timed out waiting for its stop-test provider.

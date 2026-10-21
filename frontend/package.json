@@ -65,6 +65,7 @@
     "test:approval-layout-browser": "node tests/approval-layout-browser.mjs",
     "test:message-outbox-browser": "node tests/message-outbox-browser.mjs",
     "test:task-continuity-browser": "node tests/task-continuity-browser.mjs",
+    "test:request-cancellation-browser": "node tests/request-cancellation-browser.mjs",
     "test:coordination-browser": "node tests/coordination-browser.mjs",
     "test:schedules-browser": "node tests/schedules-browser.mjs",
     "test:voice-visual-browser": "node tests/voice-visual-frame-browser.mjs && node tests/voice-visual-browser.mjs && node tests/computer-visual-browser.mjs",

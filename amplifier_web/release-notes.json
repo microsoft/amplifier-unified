@@ -2,6 +2,35 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.202",
+      "title": "Reliable checkout handoff",
+      "changes": [
+        "Allow the turn arranging a checkout handoff to finish its pending model step without waiting on its own settings change, while preserving task limits and unrelated work guards.",
+        "Already-stopped or unresolved handoffs retain their recovery state; this update does not replay them automatically."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.201",
+      "title": "Safer task controls, test machines and storage cleanup",
+      "changes": [
+        "Cancel an exact queued task request or ask active work to stop cooperatively, preserving its receipt and keeping unrelated work running.",
+        "Configure task, environment and resource limits, with explicit independent checks allowed to overlap while ordinary checks keep their ordering and cleanup guarantees.",
+        "Use approved remote Linux test machines from macOS and Windows, preserving source snapshots, private connection authority and exact cleanup ownership.",
+        "Review unused managed components and runner copies in Storage, with automatic cleanup honoring the global preference and retention period while protecting active work, user changes and rollback copies."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.200",
+      "title": "Clearer update outcomes and worker diagnostics",
+      "changes": [
+        "Keep a verified successful application update visible when a later component update fails, with separate recovery guidance and affected component names.",
+        "Preserve specific worker communication and exit failure labels in feedback diagnostics while keeping private runtime details out of reports."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.199",
       "title": "Qualified Incus engine updates",
       "changes": [

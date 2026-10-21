@@ -34,6 +34,33 @@ def chat(identity,workspace='one',recent=1,**fields):
 def ids(page):return [row['id'] for row in page['items']]
 
 
+@pytest.mark.parametrize('nested', [False, True])
+@pytest.mark.parametrize('scope', ['workspace', 'all'])
+def test_pick_up_again_accepts_direct_and_nested_filters_without_changing_attention(nested, scope):
+    filters = {'navStatusFilter': 'idle'}
+    patch = {'navRecentView': filters} if nested else filters
+    assert chat_navigation.view_patch(patch) == patch
+    state = state_fixture()
+    state['view'].update(navChatScope=scope, **filters)
+    state['sessions'] = [chat('quiet-one', recent=8), chat('quiet-two', 'two', 7),
+                         chat('working', recent=6, status='working'),
+                         chat('approval', recent=5, approvals=[{'status': 'pending'}]),
+                         chat('unread', recent=4), chat('archived', recent=3)]
+    state['attention'] = {'sessions': {'unread': {'kind': 'response'}}}
+    state['conversationOrganization'] = {'archived': {'archived': True}}
+    before = deepcopy(state)
+    page = chat_navigation.snapshot(state, section='search' if scope == 'all' else 'workspace')
+    assert ids(page) == (['quiet-one', 'quiet-two'] if scope == 'all' else ['quiet-one'])
+    assert page['scope']['statusFilter'] == 'idle'
+    assert all(row['activity']['kind'] == 'idle' for row in page['items'])
+    assert page['activityCounts'] == {'attention': 1, 'working': 1, 'unread': 1,
+                                      'idle': 2 if scope == 'all' else 1}
+    assert state == before
+    invalid = {'navStatusFilter': 'unsupported'}
+    with pytest.raises(ValueError):
+        chat_navigation.view_patch({'navRecentView': invalid} if nested else invalid)
+
+
 def test_shared_session_id_search_keeps_app_keys_and_workspace_scope():
     state = state_fixture()
     shared_id = '11111111-1111-4111-8111-111111111111'

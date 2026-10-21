@@ -242,6 +242,8 @@ async def advance(app, identity):
                 raise RunnerUpdateError('managed-runner-package-changed')
             record.update(state='selected', selectedAt=record.get('selectedAt', time.time()))
             private.write_json(path, record)
+            from .storage_cleanup import request_maintenance
+            request_maintenance(app)
             return {'complete': True}
         config = record['normalized']
         changed = (selected != record['previous'] or
@@ -294,7 +296,8 @@ async def advance(app, identity):
             private.write_json(Path(app.data_dir) / 'test-environments.json', record['candidate'])
             record.update(state='selected', selectedAt=time.time())
             private.write_json(path, record)
-        await retire(app)
+        from .storage_cleanup import request_maintenance
+        request_maintenance(app)
         return {'complete': True}
 
 
@@ -330,7 +333,7 @@ def referenced(home, identity):
     return False
 
 
-async def retire(app):
+async def retire(app, *, inspect_only=False, selected=None, evidence=None, inspection=None):
     """Bounded retirement of purpose-installed code, never user data/evidence."""
     from .task_environments import REPOSITORY
     if not supported_private_files():
@@ -338,30 +341,74 @@ async def retire(app):
     folder = root(app, False)
     if not folder.exists():
         return
-    known = set()
+    known, records, candidates = set(), [], []
     for path in folder.glob('*.json'):
         if not re.fullmatch(r'[a-f0-9]{32}\.json', path.name):
             continue
         record = private.read_json(path) or {}
+        records.append(record)
         if record.get('state') in {'selected', 'skipped', 'superseded'} or record.get('probeState') == 'failed':
             known.update(value.get('installationId') for name in ('previous', 'candidate')
                          if isinstance(value := record.get(name), dict))
+    if inspection is not None:
+        inspection.update(protectedIds=[], complete=True)
     attempts = 0
-    for item in list(app.smart_tools.state['installations']):
+    items = sorted(app.smart_tools.state['installations'], key=lambda item:item['id'])
+    cursor = getattr(app, '_runner_retention_cursor', '')
+    items = [item for item in items if item['id'] > cursor] + [item for item in items if item['id'] <= cursor]
+    for item in items:
         if (item.get('runnerCandidate') is not True or item.get('id') not in known
                 or item.get('repository', '').removesuffix('.git') != REPOSITORY
                 or referenced(app.data_dir, item['id'])):
+            if inspection is not None and item.get('runnerCandidate'):
+                inspection['protectedIds'].append(item['id'])
             continue
+        if selected is not None and item['id'] not in selected:
+            continue
+        if attempts >= 8:
+            if inspection is not None:
+                inspection['complete'] = False
+            break
+        attempts += 1
+        app._runner_retention_cursor = item['id']
         try:
+            if inspect_only or selected is not None:
+                from .storage_cleanup_runner import inspect
+                candidate = await inspect(app, item, records)
+                if inspect_only:
+                    candidates.append(candidate)
+                    continue
+                loop = asyncio.get_running_loop()
+                async def admit(candidate=candidate):
+                    from .update_retention import inspect_references
+                    references = await inspect_references(app.update_manager, timeout=2)
+                    if any(path in references for path in candidate['paths']):
+                        raise ValueError('This runner became used before removal.')
+                    if evidence:
+                        evidence('attempting', candidate)
+                def cleanup_guard():
+                    # Called by the canonical owner only after both install locks
+                    # and the initial filesystem measurement. The removal owner
+                    # measures again after this yielding guard. Policy and receipt
+                    # writes stay on their owning event loop.
+                    future = asyncio.run_coroutine_threadsafe(admit(), loop)
+                    try:
+                        future.result(timeout=5)
+                    except BaseException:
+                        future.cancel()
+                        raise
             # Existing guards cover live owners, connections and selected code.
-            await app.smart_tools.uninstall(item['id'])
-        except (OSError, ValueError):
+            await app.smart_tools.uninstall(item['id'], **({'cleanup_inventory': candidate, 'cleanup_guard': cleanup_guard} if selected is not None else {}))
+            if evidence:
+                evidence('completed', {'kind': 'runner', 'id': item['id']})
+        except (OSError, ValueError, TimeoutError, subprocess.SubprocessError):
+            if inspection is not None:
+                inspection['protectedIds'].append(item['id'])
             # A retained owner is a deferral, not update failure. A later
             # availability check retries under the same deletion guards.
             pass
-        attempts += 1
-        if attempts >= 8:
-            break
+    if inspect_only:
+        return candidates
 
 
 async def skip(app, identity):

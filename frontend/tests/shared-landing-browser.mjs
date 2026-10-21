@@ -38,6 +38,16 @@ try{
  const allChats=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Search chats',exact:true}).click();await expect(landing.getByRole('heading',{level:1})).toHaveText('All chats');await settled()};
  const allWorkspaces=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Browse',exact:true}).click();await sidebar.getByRole('button',{name:'All workspaces',exact:true}).click();await expect(landing).toHaveAttribute('data-landing','workspaces');await settled()};
  const focusRow=()=>landing.locator('.a-landing-chat[data-session-id]');
+ const pickUpAgain=()=>landing.getByRole('group',{name:'Filter work'}).getByRole('button',{name:/^Pick up again/});
+ const checkIdle=async section=>{
+  await expect(pickUpAgain()).toHaveAttribute('aria-pressed','true');await settled();
+  await expect.poll(async()=>(await shell()).sidebarNavigation[section]?.scope?.statusFilter).toBe('idle');
+  const result=(await shell()).sidebarNavigation[section];
+  assert.ok(result.total>0);assert.equal(result.total,result.activityCounts.idle);
+  assert.ok(result.items.every(row=>row.activity.kind==='idle'));
+  assert.ok(result.items.every(row=>!['alpha-200','alpha-199','alpha-198','alpha-197'].includes(row.id)));
+  assert.deepEqual(await landing.locator('.a-landing-chat').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId)),result.items.map(row=>row.id));
+ };
  await page.goto(`http://127.0.0.1:${port}`);await expect(landing).toHaveAttribute('data-landing','home');await settled();
  const initial=await info();
  await openSidebar();
@@ -99,6 +109,15 @@ try{
  await choose('Studio');await page.screenshot({path:join(output,'all-chats-studio.png')});
  report.checks.push('All chats supports the shared layouts, saved Focus position, search-preserving status reset, existing sort/archive/location filters and shared chat action flyout');
 
+ await pickUpAgain().click();await checkIdle('search');
+ await home();await allChats();await checkIdle('search');
+ await page.reload();await expect(landing).toHaveAttribute('data-landing','chats');await checkIdle('search');
+ await landing.getByRole('searchbox',{name:'Search chats',exact:true}).fill('Beta');await checkIdle('search');
+ await expect(landing.locator('.a-landing-chat')).toHaveCount(3);
+ await landing.getByRole('button',{name:'Clear status filter'}).click();await settled();
+ await expect(landing.getByRole('searchbox',{name:'Search chats',exact:true})).toHaveValue('Beta');
+ await landing.getByRole('button',{name:'Clear search',exact:true}).click();await settled();
+
  await allWorkspaces();await expect(page).toHaveTitle('All workspaces - Amplifier');
  await landing.getByRole('button',{name:'Recent',exact:true}).click();await settled();
  await choose('Brief');await expect.poll(()=>landing.locator('.a-landing-workspace').count()).toBeGreaterThan(1);
@@ -137,6 +156,14 @@ try{
  await expect(landing).toHaveAttribute('data-view','focus');await expect(focusRow()).toHaveAttribute('data-session-id',workspaceChat);
  await page.screenshot({path:join(output,'workspace-focus.png')});
  report.checks.push('All workspaces keeps search, archive, folder browsing and workspace action menus; workspace landing keeps Chats/Files/Details/Workspace work; Focus cursors and layouts survive leaving and returning');
+
+ await choose('Brief');await pickUpAgain().click();await checkIdle('workspace');
+ await landing.locator('.a-landing-chat .a-nav-chat-select').first().click();
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button').last().click();await checkIdle('workspace');
+ await page.reload();await expect(landing).toHaveAttribute('data-landing','workspace');await checkIdle('workspace');
+ await landing.getByRole('button',{name:'Clear status filter'}).click();await settled();
+ report.checks.push('Pick up again is accepted through All chats and workspace controls, returns only quiet read chats, survives navigation/reload, and clears without losing search');
 
  for(const destination of [home,allChats,allWorkspaces]){
   await destination();await choose('Brief');
