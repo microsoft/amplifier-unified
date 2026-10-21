@@ -307,6 +307,8 @@ class ShellQueryOwner:
                 if self.retiring is not None:
                     await asyncio.shield(self.retiring)
                     self.retiring = None
+                    # Navigation can remove queued demand while close yields.
+                    continue
                 key = next(iter(self.jobs))
                 job = self.jobs[key]
                 if not any(self._current(item) for item in job['interests'].values()):

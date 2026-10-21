@@ -297,6 +297,58 @@ async def test_returning_demand_waits_for_its_retiring_query_without_retry(servi
         release_close.set()
 
 
+@pytest.mark.parametrize('resource', ['recentNavigation', 'workStatusIdle'])
+async def test_departing_queued_demand_during_retirement_leaves_owner_usable(service, resource):
+    owner = prepare(service)
+    closing, release_close = asyncio.Event(), asyncio.Event()
+    projectors = []
+
+    class GatedClose(ProcessProjector):
+        async def close(self):
+            await super().close()
+            closing.set()
+            await release_close.wait()
+
+    def factory(home, **kwargs):
+        kwargs['_command'] = (sys.executable, str(Path(__file__).resolve()), 'worker')
+        projector = GatedClose(home, **kwargs)
+        projectors.append(projector)
+        return projector
+
+    owner.queries.factory = factory
+    try:
+        snapshot(service, wanted=(resource,))
+        await started(service)
+        process, spool = projectors[0]._process, projectors[0]._root
+        replacement = 'workStatusIdle' if resource == 'recentNavigation' else 'recentNavigation'
+        snapshot(service, wanted=(replacement,), demand=2)
+        runner = owner.queries.runner
+        await asyncio.wait_for(closing.wait(), 5)
+        async with asyncio.timeout(5):
+            while owner.queries.active is not None:
+                await asyncio.sleep(0)
+        # The old child has exited and the owner is awaiting its held close.
+        # Remove the queued replacement while that await yields to navigation.
+        assert process.returncode == 0 and not spool.exists()
+        assert owner.queries.jobs and not runner.done()
+        snapshot(service, wanted=(), demand=3)
+        assert not owner.queries.jobs
+        release_close.set()
+        await asyncio.wait_for(asyncio.shield(runner), 5)
+        assert owner.queries.runner is None and owner.queries.active is None
+        assert len(projectors) == 1
+        assert not owner.queries.failures
+        assert service.performance_diagnostics.counters.get('shell.query.retry', 0) == 0
+
+        # A later visit still creates one replacement and returns current rows.
+        (service.data_dir / 'query-release').touch()
+        result = await settle(service, wanted=(resource,), demand=4)
+        page = result['instances']['chats']['resources'][resource]['value'][resource]
+        assert page['total'] == 2 and len(projectors) == 2
+    finally:
+        release_close.set()
+
+
 async def test_queue_is_bounded_and_input_has_no_transcript_or_private_draft(service):
     owner = prepare(service)
     owner.queries.factory = held_projector
