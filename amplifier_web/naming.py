@@ -5,7 +5,7 @@ from pathlib import Path
 
 from amplifier_foundation.session.metadata import NAMING_FIELDS, SessionMetadataStore
 
-FIELDS = (*NAMING_FIELDS, 'naming_completed_inputs', 'name_auto', 'name_auto_revision', 'name_policy_revision')
+FIELDS = (*NAMING_FIELDS, 'naming_completed_inputs', 'name_auto', 'name_auto_revision', 'name_policy_revision', 'naming_refinement')
 PLACEHOLDERS = {'New chat', 'New conversation', 'A new conversation', 'Untitled conversation'}
 
 
@@ -78,7 +78,7 @@ def set_automatic(home, session, enabled):
     session['autoName'] = enabled
 
 
-def accept_generated(directory, candidate, *, explicit=False):
+def accept_generated(directory, candidate, *, explicit=False, refinement=None):
     """CAS both the name and its policy; a late result never wins over edits."""
     from amplifier_foundation.session.metadata import metadata_lock
     from datetime import datetime, UTC
@@ -94,15 +94,39 @@ def accept_generated(directory, candidate, *, explicit=False):
         title = candidate.get('name')
         if not isinstance(title, str) or not title.strip():
             raise ValueError('The naming model did not return a chat name.')
+        title = title.strip()[:200]
+        description = candidate.get('description', current.get('description'))
+        if (title == current.get('name') and description == current.get('description')
+                and current.get('name_source') == ('generated' if enabled else 'manual')):
+            return current, False
         now = datetime.now(UTC).isoformat()
-        current.update(name=title.strip()[:200], name_source='generated' if enabled else 'manual',
+        current.update(name=title, name_source='generated' if enabled else 'manual',
                        name_revision=revision + 1, name_updated_at=now, name_generated_at=now)
+        if refinement is not None:
+            current['naming_refinement'] = refinement
         if 'name_auto' in current:
             current['name_auto_revision'] = revision + 1
         if isinstance(candidate.get('description'), str):
             current.update(description=candidate['description'][:1000], description_updated_at=now)
         store.history._save_metadata_unlocked(current)
         return current, True
+
+
+def claim_refinement(directory, base, user_digest):
+    """Consume the one early attempt before inference; unknown calls never replay."""
+    from amplifier_foundation.session.metadata import metadata_lock
+    store = SessionMetadataStore(directory)
+    with metadata_lock(store.history.session_dir):
+        current = store.read()
+        marker = current.get('naming_refinement') or {}
+        if (not automatic_metadata(current) or marker.get('status') != 'pending'
+                or marker.get('user_digest') == user_digest
+                or any(current.get(key, 0) != base.get(key, 0)
+                       for key in ('name_revision', 'name_policy_revision'))):
+            return False
+        current['naming_refinement'] = {**marker, 'status': 'consumed'}
+        store.history._save_metadata_unlocked(current)
+        return True
 
 
 def legacy(directory):

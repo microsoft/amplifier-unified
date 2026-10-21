@@ -1,16 +1,16 @@
 """Adapt Foundation's naming hook to foreground and ongoing work lifecycles.
 
-The community hook owns prompting, context sampling, routing, parsing and retry
-policy. This adapter supplies lifecycle scheduling and app-owned metadata I/O.
+The community hook owns initial generation, parsing, timeouts and deferral.
+This adapter supplies bounded context, title refresh and app-owned scheduling.
 """
 import asyncio
 import importlib
 import logging
-import hashlib
 import math
 from pathlib import Path
 
-from ..naming import read, automatic_metadata, accept_generated
+from ..naming import read, automatic_metadata, accept_generated, claim_refinement
+from ..naming_context import sample, saved_sample, substantive, clip, TITLE_UPDATE_PROMPT
 from amplifier_foundation.session.metadata import has_generated_or_manual_name
 
 log=logging.getLogger(__name__)
@@ -120,30 +120,32 @@ class LiveSessionNaming:
                     return super()._select_session_provider(providers)
                 async def _call_provider(self, prompt, *args, **kwargs):
                     if getattr(self, 'refresh_title', False):
-                        prompt = ('Keep the current title when it still describes the conversation. '
-                                  'Only change it when the main topic or goal has meaningfully changed.\n\n' + prompt)
-                    return await super()._call_provider(prompt, *args, **kwargs)
+                        prompt = TITLE_UPDATE_PROMPT.format(
+                            name=clip(self.base_metadata.get('name', ''), 800),
+                            description=clip(self.base_metadata.get('description', ''), 1000),
+                            reason='early clarification' if self.early_refinement else 'periodic review',
+                            context=self.naming_sample.text)
+                    from .naming_provider import complete
+                    return await complete(self, prompt)
                 def _get_session_dir(self,session_id):return adapter.directory
                 def _load_metadata(self,session_dir):
-                    from .storage import SessionStore
-                    saved=adapter.store.load(coordinator.session_id)
-                    return {**(saved[1] if saved else {}),**read(session_dir)}
+                    return read(session_dir)
                 def _save_metadata(self,session_dir,metadata):
-                    # Cached bundles can still supply an older naming hook.
-                    # Enforce the shared writer even before that cache updates.
-                    from amplifier_foundation.session.metadata import SessionMetadataStore
-                    store=SessionMetadataStore(session_dir)
                     if metadata.get('name'):
-                        if 'name_auto' in store.read():
-                            return accept_generated(session_dir, metadata)[0]
-                        return store.set_name(metadata['name'],source='generated',
-                            description=metadata.get('description'),
-                            expected_revision=metadata.get('name_revision',0))
-                    return store.update({key:metadata[key] for key in ('description','description_updated_at') if key in metadata})
+                        refinement = None
+                        if not getattr(self,'refresh_title',False) and getattr(self, 'initial_count', 0) >= 1:
+                            refinement = {'status': 'pending', 'completed': self.initial_count,
+                                          'user_digest': self.naming_sample.user_digest}
+                        accepted, changed = accept_generated(session_dir, metadata, refinement=refinement)
+                        adapter.accepted_change = changed
+                        return accepted
+                    return read(session_dir)
             self.hook=AppNamingHook(coordinator,settings)
+            self.accepted_change=False
             async def result(event,data):
                 from amplifier_core import HookResult
-                if data.get('session_id')==coordinator.session_id:
+                if data.get('session_id')==coordinator.session_id and self.accepted_change:
+                    self.accepted_change=False
                     accepted=read(adapter.directory)
                     self.publish({'type':'session.naming','name':accepted.get('name'),'description':accepted.get('description'),'nameRevision':accepted.get('name_revision')})
                 return HookResult()
@@ -195,7 +197,10 @@ class LiveSessionNaming:
         config=self.hook.config
         initial=not named and count>=config.initial_trigger_turn and self.hook._defer_counts.get(self.coordinator.session_id,0)<config.max_retries
         update=named and count>=config.initial_trigger_turn and (periodic or (count>=config.update_interval_turns and count//config.update_interval_turns>self.last_attempt//config.update_interval_turns))
-        if not (initial or update):return
+        marker=metadata.get('naming_refinement') or {}
+        early=(not periodic and named and marker.get('status')=='pending'
+               and count>marker.get('completed',count))
+        if not (initial or update or early):return
         self.last_attempt=count
         async def generate():
             try:
@@ -203,6 +208,16 @@ class LiveSessionNaming:
                 hook=await self._snapshot_hook(metadata, skip_unchanged=True)
                 if self.closed or (periodic and not self.active):return
                 if hook is not None:
+                    hook.initial_count=count
+                    hook.early_refinement=False
+                    if early:
+                        excerpt=hook.naming_sample
+                        if not substantive(excerpt.latest_user) or excerpt.user_digest==marker.get('user_digest'):
+                            if not update:return
+                        elif claim_refinement(self.directory,metadata,excerpt.user_digest):
+                            hook.early_refinement=True
+                        else:
+                            return
                     await self._generate(hook)
             except Exception:
                 log.warning('Session naming failed; keeping the existing title.',exc_info=True)
@@ -216,23 +231,34 @@ class LiveSessionNaming:
         if hasattr(self.hook, '_stamped_providers'):
             hook._stamped_providers=self.hook._stamped_providers
         hook.refresh_title=has_generated_or_manual_name(metadata)
-        # The naming hook produces a bounded bookend/sample string. Copy it
-        # before the provider call so a concurrent user turn cannot change it.
-        sample=getattr(hook,'_get_conversation_context',None)
-        if callable(sample):
-            context=await sample(self.directory,None,None)
-            digest=hashlib.sha256((context or '').encode()).hexdigest()
-            if not context or (skip_unchanged and digest==self.last_context):return None
-            self.last_context=digest
-            if metadata.get('name'):
-                context=f"Current session name: {metadata['name']}\n\n{context}"
-            async def snapshot(*args):return context
-            hook._get_conversation_context=snapshot
+        hook.explicit_role=any(
+            row.get('module')=='hooks-session-naming' and (row.get('config') or {}).get('model_role')
+            for row in self.coordinator.config.get('hooks',[]))
+        hook.base_metadata=dict(metadata)
+        hook.early_refinement=False
+        context_manager=self.coordinator.get('context') if callable(getattr(self.coordinator,'get',None)) else None
+        if context_manager is None:
+            context_manager=getattr(self.coordinator,'mount_points',{}).get('context')
+        if context_manager is not None:
+            excerpt=sample(await context_manager.get_messages())
+        else:
+            excerpt=await asyncio.to_thread(saved_sample,self.directory,{
+                'project':str(self.directory.parent.parent),'nativeId':self.coordinator.session_id})
+        if not excerpt.text or not excerpt.has_user_intent:return None
+        if skip_unchanged and excerpt.digest==self.last_context:return None
+        self.last_context=excerpt.digest
+        hook.naming_sample=excerpt
+        async def snapshot(*args):return excerpt.text
+        hook._get_conversation_context=snapshot
         hook._load_metadata=lambda _:dict(metadata)
         get=getattr(self.coordinator,'get',None)
         if callable(get) and (providers:=get('providers')):
             selected=hook._select_session_provider(providers)
             hook._select_session_provider=lambda _:selected
+            loop=get('orchestrator')
+            from .session import SelectedProvider
+            pinned=getattr(loop,'root_provider',None)
+            hook.selected_model=pinned.selection.get('model') if isinstance(pinned,SelectedProvider) else None
         return hook
 
     async def _generate(self, hook):
