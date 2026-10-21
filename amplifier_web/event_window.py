@@ -159,30 +159,7 @@ def _time(value):
         return None
 
 
-def _outcome_summary(name, data):
-    """Small terminal hints; never substitute them for the saved result."""
-    if name not in {'tool:post', 'tool:error'}:
-        return {}
-    result = data.get('result', data.get('tool_result'))
-    result = result if isinstance(result, dict) else {}
-    output = result.get('output')
-    output = output if isinstance(output, dict) else result
-    code = next((output[key] for key in ('returncode', 'exit_code', 'exitCode')
-                 if type(output.get(key)) is int), None)
-    errors = [data.get('error'), data.get('error_message'), result.get('error'), output.get('error')]
-    errors = [value.get('message') if isinstance(value, dict) else value for value in errors]
-    error = next((value for value in errors if isinstance(value, str) and value.strip()), None)
-    failed = (name == 'tool:error' or result.get('success') is False
-              or output.get('success') is False or code is not None and code != 0 or bool(error))
-    if failed and error is None:
-        error = next((value for value in (result.get('message'), output.get('message'))
-                      if isinstance(value, str) and value.strip()), None)
-        if error is None and isinstance(output.get('stderr'), str):
-            error = output['stderr'].rstrip().rsplit('\n', 1)[-1]
-    summary = {'exitCode': code} if code is not None else {}
-    if error:
-        summary['error'] = error if len(error) <= 180 else error[:179] + '…'
-    return summary
+from .tool_observations import outcome_summary as _outcome_summary
 
 
 def _observation(event, raw, offset, path, identity):
@@ -261,15 +238,15 @@ def _observation(event, raw, offset, path, identity):
         if field == 'input' and kind == 'tool' and isinstance(data[key], dict):
             # Only header hints from the accepted input, never reconstructed
             # arguments or evidence that the operation completed.
-            summary = {name: value if len(value) <= 180 else value[:179] + '…'
-                for name, value in data[key].items()
-                if name in {'command', 'cmd', 'code', 'action', 'operation',
-                            'file_path', 'path', 'filename', 'instruction',
-                            'instructions', 'prompt', 'task', 'agent', 'name', 'description'}
-                and isinstance(value, str)}
+            from .tool_observations import input_summary
+            summary = input_summary(data[key])
             if summary:
                 row['inputSummary'] = summary
     if kind == 'tool':
+        from .tool_observations import identity as tool_identity
+        token = tool_identity(data.get('unified_tool_observation_id'))
+        if token:
+            row['_hostToolId'] = token
         outcome = _outcome_summary(name, data)
         if outcome:
             row['outcomeSummary'] = outcome

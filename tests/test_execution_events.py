@@ -130,7 +130,9 @@ def test_streaming_hook_transports_lifecycle_without_capturing_alternate_content
     row=normalize_event({'type':'execution.event','event':events.nodes['tool:root:stream']},'root')[1]
     assert row['phase']=='error' and row['liveObservation']
     assert not any(key in row for key in ('input','output','error'))
-    assert 'python -m pytest' not in str(row) and 'line' not in str(row)
+    assert row['inputSummary'] == {'command': 'python -m pytest -q'}
+    assert row['outcomeSummary'] == {'exitCode': 1}
+    assert 'line' not in str(row)
 
 
 def test_post_only_falsey_result_still_has_a_completed_lifecycle():
