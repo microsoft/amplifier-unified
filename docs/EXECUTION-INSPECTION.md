@@ -29,7 +29,7 @@ collapsing a group preserves the individual action expansion choices inside it.
 Group size is measured from the skimmed rows, not the size of unopened payloads.
 Code fences show all content through 15 lines, then preview the
 first 10 lines followed by a separate ellipsis and a preview label, with a single
-expand control. Expansion restores the exact complete text without that display
+expand control. Expansion shows the complete content without the preview marker; structured JSON may be formatted for readability. Copy retains the original saved text without that display
 marker; copying the shortened view still copies the complete saved field.
 Exceptionally long unbroken text is
 also previewed. Commands, output and exit status, file contents, patches, task
@@ -85,6 +85,18 @@ requests another bounded page; it never scans the whole history or enumerates
 child directories. Lookup leases are bound to the web client, source identity,
 open Work group, admitted row position and observation ID. At most 100 matching
 observations and eight window pages are retained in memory.
+
+Already-open resident Work rows retain their accepted exact field references when
+newer events leave the recent 100-observation window. These leases follow the
+existing admitted-row/group lifetime (up to eight groups, each with up to 800
+admitted rows); no complete log, payload, or source page is retained. At most
+seven field descriptors and 512-character previews are retained per row:
+2,867,200 preview characters per maximally admitted group, plus bounded
+descriptors. A different tool observation or provider attempt cannot inherit
+those fields. Reads and downloads still verify the exact canonical bytes and
+the current client, owner, source, admitted position and identity before and
+after asynchronous work. Closing/retiring the group releases its references;
+normal recent-window turnover alone does not erase an open detail.
 
 Older history without an exact host observation ID shows related saved records
 as separately expandable observations. Matching call IDs, tool names or times
