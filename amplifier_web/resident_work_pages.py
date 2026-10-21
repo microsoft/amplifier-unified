@@ -90,7 +90,8 @@ class ResidentWorkPages:
         item = compact(row, session['id'], 'nodes', SUMMARY_LIMIT)
         item.update(anchorMessageId=anchor, detailVersion=str(detail_version(row)))
         for key, value in item.items():
-            if key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes':
+            if (key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes'
+                    and not str(value.get('windowKey', '')).startswith('event-window:')):
                 item[key] = {**value, 'windowKey': entry['key']}
         if row.get('kind') == 'llm':
             # These references belong to the accepted canonical window, not

@@ -240,6 +240,8 @@ class WorkWindows:
         group = 'event-window:' + page['generation']
         page['group'] = group
         page['providerRecords'] = self._provider_records(page)
+        from .tool_window_records import records
+        page['toolRecords'] = records(page)
         page['hasProviderRecords'] = any(row.get('requestDetail') or row.get('responseDetail') for row in page['items'])
         self.pages.pop(group, None)
         self.pages[group] = page
@@ -309,6 +311,11 @@ class WorkWindows:
         return source
 
     def live_node(self, session, node):
+        if node.get('kind') == 'tool':
+            from .tool_window_records import attach, linked
+            page = self.pages.get(self.current.get(session['id']))
+            fields = linked(page, session, node) if page and page['source'] == source_identity(session) else None
+            return attach(node, fields)
         if node.get('kind') != 'llm':
             return node
         from .browser_detail import detail_version
@@ -410,7 +417,7 @@ class WorkWindows:
         for original in page['items']:
             row = {key: deepcopy(value) for key, value in original.items() if not key.startswith('_')}
             row.update(turnId=group, detailVersion=page['generation'], observationWindow=True)
-            for field in ('input', 'output', 'error', 'request', 'response'):
+            for field in ('input', 'output', 'error', 'request', 'response', 'delegateRequest', 'delegateResponse'):
                 if field + 'Detail' in row:
                     row[field + 'Detail'].update(sessionId=identity, windowKey=group)
             if known is None or known.get(row['id']) != row['detailVersion']:
@@ -435,7 +442,12 @@ class WorkWindows:
                 or source_identity(owner) != page['source']):
             raise ValueError('This saved field expired.')
         if result.get('status') != 'complete':
-            raise ValueError('This saved field changed. Reopen its Work window.')
+            reason = result.get('reason')
+            if reason == 'source_changed':
+                raise ValueError('This saved field changed. Reopen its Work window.')
+            if reason in {'queue_full', 'timeout'}:
+                raise ValueError('Saved content is taking longer to read. Try again shortly.')
+            raise ValueError('Saved content could not be read. Try again.')
         value = result['field']
         return {'value': value['text'], 'nextOffset': value['nextOffset'], 'total': value['total']}
 
