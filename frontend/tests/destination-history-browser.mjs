@@ -224,8 +224,45 @@ try{
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
  assert.equal((await state()).selectedSessionId,b);assert.deepEqual(await saved(),settingsTrail);
  await expect(privateEdit).toHaveValue('{"unsaved-history-input":');
+ // Discard resolves the guard, not the asynchronous tab-close command. Observe
+ // that original command and its authoritative successor before hiding Canvas.
+ const beforeClose=await state(),closingId=beforeClose.canvas.id;
+ const successor=beforeClose.canvasArtifacts.filter(row=>row.sessionId===b&&
+  row.workspaceId===beforeClose.selectedWorkspaceId&&row.tabOpen&&row.id!==closingId).at(-1);
+ assert.equal(beforeClose.selectedSessionId,b);assert.equal(beforeClose.canvas.kind,'settings');
+ assert.ok(successor,'The earlier retained Canvas tab must remain');
+ const closedResponse=page.waitForResponse(response=>{
+  const request=response.request();
+  if(request.method()!=='POST'||new URL(response.url()).pathname!=='/api/actions'||
+   request.headers()['x-amplifier-client']!==beforeClose.client.id)return false;
+  const command=request.postDataJSON();return command.action==='canvas.tabClose'&&command.args.id===closingId;
+ });
  await page.getByRole('button',{name:'Close tab Settings',exact:true}).click();
  await page.getByRole('button',{name:'Discard changes',exact:true}).click();
+ const closeResponse=await closedResponse,closeReceipt=await closeResponse.json();
+ const closeCommandId=closeResponse.request().postDataJSON().id;
+ assert.ok(closeCommandId);assert.ok(closeResponse.ok());assert.equal(closeReceipt.accepted,true);
+ assert.equal(closeReceipt.hostInstanceId,beforeClose.client.hostInstanceId);
+ assert.ok(Number.isSafeInteger(closeReceipt.stateRevision));
+ assert.equal(closeReceipt.stateRevision,closeReceipt.revision);
+ assert.ok(closeReceipt.stateRevision>beforeClose.revision);
+ await expect.poll(async()=>{
+  const s=await state();
+  return s.client.id===beforeClose.client.id&&s.client.hostInstanceId===closeReceipt.hostInstanceId&&
+   s.revision>=closeReceipt.stateRevision&&s.selectedSessionId===b&&
+   s.selectedWorkspaceId===beforeClose.selectedWorkspaceId&&!s.navigationPending&&!s.canvas.visibilityPending&&
+   s.canvas.id===successor.id&&s.canvas.open===true&&
+   s.canvasArtifacts.find(row=>row.id===closingId)?.tabOpen===false;
+ }).toBe(true);
+ await expect(page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Close tab Settings',exact:true})).toHaveCount(0);
+ await expect(settings).toHaveCount(0);assert.deepEqual(await saved(),settingsTrail);
+ await writeFile(path.join(out,'settings-close-boundary.json'),JSON.stringify({
+  commandId:closeCommandId,closedId:closingId,successorId:successor.id,
+  clientId:beforeClose.client.id,hostInstanceId:closeReceipt.hostInstanceId,
+  beforeRevision:beforeClose.revision,receiptRevision:closeReceipt.stateRevision,
+  observedRevision:(await state()).revision,originalClickOnly:true,historyUnchanged:true,
+ },null,2));
  await action('canvas.visibility',{open:false});
  // Narrow target dimensions and no reintroduced remembered-chat strip.
  for(const width of [1440,390,360]){
