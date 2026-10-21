@@ -55,6 +55,35 @@ previous runner. Unsupported configured installations remain visible as
 owner-managed or explicitly pinned; they must not be reported as current merely
 because no automatic update path is implemented.
 
+### Incus engine generations
+
+The Incus engine is a separate update source from the deterministic runner core.
+For an app-managed local or registered native Linux target, availability checks
+inspect the installed engine and its retained source policy on that actual
+machine. Explicit pins and installations without setup provenance remain
+protected. Passive discovery does not install a controller or change host setup.
+
+A candidate installs into a private target-owned generation and must finish a
+fixed source-copy, offline command, retained artifact and owned-removal check.
+Only then can the target atomically select it for future tests. An unchanged
+dynamic core can retain its previous proof through a composed receipt recording
+the exact core proof and new engine proof; changed code or unrelated settings
+cannot borrow those proofs. Original core rollback and accepted-work references
+remain valid. Capacity-only edits do not erase a declared moving source policy.
+
+Confirmed no-effect capacity refusals may make a new admission attempt. Unknown
+launch or removal outcomes retain the exact original owner and are observed
+before continuing. A missing retained artifact fails qualification even when
+native absence is confirmed; the proven absent owner releases capacity.
+
+The first implementation removes known settled, unpublished failed or skipped
+private runtimes and retains their receipts. Prior selected generations and
+unknown installer/guest outcomes remain in the private generation store. Finite
+reference-aware retirement of prior Incus generations is not implemented yet.
+This differs from core-package retirement and must be reported as retained
+storage, not completed cleanup. Native Windows automatic Incus updates are
+unsupported; passive Updates inventory still works without POSIX modules.
+
 ## Prepared profiles
 
 `linux-python` remains available for short checks without project preparation.

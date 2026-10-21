@@ -212,13 +212,23 @@ def artifact(root, payload):
             'bytes': archives[index]['bytes'], 'sha256': archives[index]['sha256']}
 
 
-def dispatch(request):
+def dispatch(request, *, _configuration=None, _engine_owner=None):
     if not isinstance(request, dict) or set(request) != {'version', 'machineId', 'backendIdentity', 'payload'} or request['version'] != 1:
         raise ValueError('Unsupported registered runner protocol.')
     payload = request['payload']
     if not isinstance(payload, dict) or set(payload) - PAYLOAD or payload.get('action') not in ACTIONS:
         raise ValueError('Unsupported registered runner operation.')
-    config = configuration()
+    if _configuration is not None:
+        # Private updater invocation only: these arguments are never parsed
+        # from the stdio request and cannot authorize another target owner.
+        if not _engine_owner or (payload.get('action') not in {'capacity', 'describe'}
+                                  and payload.get('rootOwner') != _engine_owner):
+            raise ValueError('The candidate engine requires its exact qualification owner.')
+        config = worker.validate_configuration(_configuration, _engine_owner=_engine_owner)
+    else:
+        if _engine_owner is not None:
+            raise ValueError('An engine qualification configuration is required.')
+        config = configuration()
     base = state()
     identity, target = backend(config, base)
     action = payload['action']
@@ -240,7 +250,7 @@ def dispatch(request):
         return {'ok': True, 'backendPolicy': backend_policy.save(base, identity, config, payload['expectedRevision'], payload['limits'])}
     if action == 'capacity':
         config = backend_policy.apply(base, identity, config)
-        result = worker.execute_call({'action': 'capacity', 'root': str(base), 'incus': config})
+        result = worker.execute_call({'action': 'capacity', 'root': str(base), 'incus': config}, **({'_engine_owner': _engine_owner} if _engine_owner else {}))
         result['machineResources'] = machine.snapshot()
         return result
     original = owner(payload)
@@ -321,7 +331,7 @@ def dispatch(request):
                 runtime_payload['incus'] = {**config, 'image': prepared['image']}
             if action == 'start':
                 write(root / 'launch-dispatched.json', {'requestId': payload['requestId']})
-            result = worker.execute_call(runtime_payload)
+            result = worker.execute_call(runtime_payload, **({'_engine_owner': _engine_owner} if _engine_owner else {}))
             if action == 'start' and result.get('ok'):
                 machine.settle(row)
             if action == 'reconcile':

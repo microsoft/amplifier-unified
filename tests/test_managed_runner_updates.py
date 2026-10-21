@@ -713,6 +713,7 @@ def test_public_tool_inventory_on_platform_without_posix_capabilities(tmp_path, 
     assert len(ordinary) == int(with_mcp)
     rows = [row for row in rows if row.get('installationId') != 'mcp']
     if configured:
-        assert len(rows) == 1 and rows[0]['status'] == 'not_checked' and not rows[0]['eligible']
+        assert {row['runnerKind'] for row in rows} == {'managed-dtu-core', 'managed-incus-engine'}
+        assert all(row['status'] == 'not_checked' and not row['eligible'] for row in rows)
     else:
         assert rows == []

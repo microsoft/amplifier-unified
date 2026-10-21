@@ -19,7 +19,7 @@ FIELDS = {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost
 INCUS_FIELDS = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir',
                 'admissionDir', 'project', 'image', 'daemonFingerprint', 'maxRunning',
                 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory',
-                'preparationNetwork', 'preparationStorage'}
+                'preparationNetwork', 'preparationStorage', 'engineQualification'}
 
 
 def key(config):

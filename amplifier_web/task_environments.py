@@ -39,10 +39,7 @@ REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-uni
 DTU_COMMIT = '5235833098d9a630791452a46558d92f58af0389'
 # New setup selects DTU_COMMIT. Existing owners retain their exact installation
 # so qualifying a new snapshot never strands its predecessor's cleanup.
-QUALIFIED_DTU_COMMITS = frozenset({
-    '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04',
-    DTU_COMMIT,
-})
+from .managed_runner_binding import STATIC_CORE_COMMITS as QUALIFIED_DTU_COMMITS
 APPROVED_IMAGE = 'docker.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f'
 KIND = 'test-environment'
 PROFILE = 'linux-python'
