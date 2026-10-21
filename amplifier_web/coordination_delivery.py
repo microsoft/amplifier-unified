@@ -200,6 +200,9 @@ class CoordinationDelivery:
         # A copied identifier with modified prefix data is not the same request.
         return saved if saved and message.content == saved['content'] else None
 
+    def work_request(self, request):
+        return self._request(request)
+
     def request_coverage(self, request):
         """Inspect exact fitted host bytes; this is NOT native/effect authority.
 
@@ -303,13 +306,13 @@ class CoordinationDelivery:
             request = await self.previous.revalidate(request)
         return request
 
-    async def finalize_work(self, request, *, fitted):
+    async def finalize_work(self, request, *, fitted, binding):
         """Last awaited check after every outer wrapper, before commit/send."""
-        saved = self._request(request)
-        if not saved or saved['required']['status'] != 'available':
+        if not binding or binding['required']['status'] != 'available':
             return request  # Unavailable scope is not a universal deny or grant.
+        saved = self._request(request)
         before = request.model_dump_json()
-        if before != fitted:
+        if saved is not binding or before != fitted:
             raise ValueError('Work request bytes changed after fitting; refit before transport.')
         try:
             check = await asyncio.wait_for(self.bridge('work.invocation.revalidate',

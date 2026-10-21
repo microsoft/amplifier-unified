@@ -123,6 +123,14 @@ async def install_app_access(coordinator, bridge):
     from .surface_delivery import SurfaceProvider
     from .request_recovery import RecoveringProvider, install as install_recovery
     install_recovery(coordinator)
+    class WorkRecoveringProvider(RecoveringProvider):
+        async def _retry(self, error, attempt, scope, generation, request, saved, kwargs, saved_kwargs):
+            observed = delivery.work_request(request)
+            if observed and observed['required']['status'] == 'available':
+                # Recovery is inside SurfaceProvider and cannot refit/revalidate
+                # after its backoff. Do not replay a bound Work request there.
+                return False
+            return await super()._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs)
     transformed = []
     def transform(provider):
         if isinstance(provider, SurfaceProvider) and provider.delivery is delivery:
@@ -131,7 +139,7 @@ async def install_app_access(coordinator, bridge):
         if callable(observe):provider = observe(provider)
         for original, wrapped in transformed:
             if original is provider:return wrapped
-        wrapped = SurfaceProvider(RecoveringProvider(provider, coordinator), delivery)
+        wrapped = SurfaceProvider(WorkRecoveringProvider(provider, coordinator), delivery)
         transformed.append((provider, wrapped))
         del transformed[:-16]
         return wrapped

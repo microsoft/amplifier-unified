@@ -521,7 +521,7 @@ class InstalledWorkAdapter:
 async def installed_work_adapter(app):
     from test_work_invocation import prepared_work, commissioned, current_work
     owner = app.state['sessions'][0]
-    item = await prepared_work(app, owner, 'delivered-pages', constraints=['Preserve \u03bb caf\u00e9. ' * 250])
+    item = await prepared_work(app, owner, 'delivered-pages', constraints=['Preserve \u03bb caf\u00e9. ' * 50] * 5)
     _, child = await commissioned(app, owner, item)
     required = (await current_work(app, child))['required']
     assert required['status'] == 'available'
@@ -563,7 +563,9 @@ async def test_installed_adapter_requires_genuine_complete_retained_pages(app, f
 
 
 @pytest.mark.parametrize('stream', [False, True])
-@pytest.mark.parametrize('change', ['none', 'stop', 'outer_await', 'changed_bytes'])
+@pytest.mark.parametrize('change', [
+    'none', 'stop', 'outer_await', 'changed_bytes', 'remove_prefix', 'change_prefix', 'mutated_measured',
+])
 async def test_installed_work_final_boundary_checks_after_outer_awaits(app, stream, change):
     adapter, child, required = await installed_work_adapter(app)
     await adapter.fill(required)
@@ -588,15 +590,24 @@ async def test_installed_work_final_boundary_checks_after_outer_awaits(app, stre
         child['interruptionRevision'] = child.get('interruptionRevision', 0) + 1
     if change == 'stop':
         await stop()
-    elif change in {'outer_await', 'changed_bytes'}:
+    elif change == 'mutated_measured':
+        original.messages[0].content = 'Changed after measurement'
+    elif change in {'outer_await', 'changed_bytes', 'remove_prefix', 'change_prefix'}:
         previous = adapter.delivery.revalidate
         async def outer(value):
             value = await previous(value)
             if change == 'outer_await':
                 await stop()
-            else:
+            elif change == 'changed_bytes':
                 value = value.model_copy(update={'messages': [*value.messages,
                     Message(role='user', content='Unmeasured substitution')]})
+            elif change == 'remove_prefix':
+                value = value.model_copy(update={'messages': [
+                    m for m in value.messages if not (m.metadata or {}).get('coordinationObservation')]})
+            else:
+                value = value.model_copy(deep=True)
+                message = next(m for m in value.messages if (m.metadata or {}).get('coordinationObservation'))
+                message.content = 'Changed bound prefix'
             return value
         adapter.delivery.revalidate = outer
     async def send():
@@ -610,3 +621,27 @@ async def test_installed_work_final_boundary_checks_after_outer_awaits(app, stre
         with pytest.raises(ValueError, match='refit'):
             await send()
         assert transported == []
+
+
+@pytest.mark.parametrize('stream', [False, True])
+async def test_bound_work_provider_failure_does_not_retry_without_new_currentness(app, stream, monkeypatch):
+    from amplifier_core.llm_errors import LLMTimeoutError
+    adapter, _, _ = await installed_work_adapter(app)
+    calls = []
+    class Provider:
+        async def complete(self, value, **kwargs):
+            calls.append('complete')
+            raise LLMTimeoutError('Synthetic unreturned timeout', retryable=True)
+        async def stream(self, value, **kwargs):
+            calls.append('stream')
+            raise LLMTimeoutError('Synthetic unreturned timeout', retryable=True)
+            yield  # Async generator shape.
+    monkeypatch.setattr('amplifier_web.request_recovery.DELAYS', (0, 0))
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    with pytest.raises(LLMTimeoutError):
+        if stream:
+            async for _ in wrapped.stream(adapter.request()):
+                pass
+        else:
+            await wrapped.complete(adapter.request())
+    assert calls == ['stream' if stream else 'complete']
