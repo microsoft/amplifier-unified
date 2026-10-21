@@ -95,8 +95,9 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
   if(!canvas.open||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;
   const id=draft.delivery==='outputs'?'review':'publishing';
   setOverviewDraft({sections:{...overviewDraft.sections,[id]:true}});
-  patch(actRef.current,{canvasDraft:{...draft,delivery:null}});
-  const timer=requestAnimationFrame(()=>{const section=panel.current?.querySelector(`[data-overview-section="${id}"]`);section?.scrollIntoView({block:'nearest',behavior:'instant'});section?.querySelector('summary')?.focus({preventScroll:true})});
+  // Consume the existing navigation target only after its visible destination
+  // has been reached. Clearing it earlier cancels this frame via optimistic state.
+  const timer=requestAnimationFrame(()=>{const section=panel.current?.querySelector(`[data-overview-section="${id}"]`);section?.scrollIntoView({block:'nearest',behavior:'instant'});section?.querySelector('summary')?.focus({preventScroll:true});patch(actRef.current,{canvasDraft:{...draft,delivery:null}})});
   return()=>cancelAnimationFrame(timer);
  },[canvas.open,draft.library,draft.delivery]);
  if(!mounted.current)return null;
@@ -105,7 +106,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
 
   {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
   <div className="a-canvas-chrome">
-   <header className="a-canvas-head"><CanvasTabs state={state} act={act} overview={overview} onOverview={()=>patch(act,{settingsCanvas:false,canvasDraft:{...draft,library:true,open:false,browser:false}})}/>
+   <header className="a-canvas-head"><CanvasTabs state={state} act={act} dispatch={dispatch} overview={overview} onOverview={()=>patch(act,{settingsCanvas:false,canvasDraft:{...draft,library:true,open:false,browser:false}})}/>
     <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
    </header>
    <div className="a-canvas-artifact-toolbar" hidden={overview||!hasContent}>

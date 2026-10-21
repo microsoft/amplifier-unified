@@ -168,6 +168,15 @@ try{
   }finally{await broken.evaluate(el=>el.remove())}
   await assertBoundedOverflow();return {good,negative};
  });
+ await check('delivery navigation reaches and focuses its real lower section',async()=>{
+  const draft=(await state()).view.canvasDraft||{};
+  await action('view.update',{patch:{canvasDraft:{...draft,library:true,delivery:'publishing'}}});
+  await expect(section('publishing')).toHaveAttribute('open','');
+  await expect(summary('publishing')).toBeFocused();
+  await requireReachable(summary('publishing'),'Publishing navigation destination');
+  await summary('publishing').click();
+  return {destination:'publishing',focused:true};
+ });
  await check('all populated top-level sections collapse, reopen and retain choices',async()=>{
   const sectionIds=await overview.locator('details[data-overview-section]').evaluateAll(nodes=>nodes.map(el=>el.dataset.overviewSection));
   assert.deepEqual(sectionIds,['plan','outputs','sources','agents','workspace','activity','review','publishing']);
@@ -253,9 +262,15 @@ try{
     await page.keyboard.press('PageDown');await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeGreaterThan(100);
     await page.keyboard.press('End');await requireReachable(summary('publishing'),'Lower section by End');
     await action('canvas.select',{id:ids[29]});
+    await wheel(strip,-100000,0);await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeLessThanOrEqual(1);
+    await expect(overviewTab.locator('span')).toBeVisible();
+    await expect.poll(()=>overviewTab.locator('span').evaluate(el=>getComputedStyle(el).opacity)).toBe('1');
     await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
     await expect(page.locator('#canvas-options')).toBeHidden();
-    for(const name of ['Choose artifact version','Copy canvas source','Download canvas source','Canvas details'])await requireReachable(panel.getByRole('button',{name,exact:true}),name);
+    for(const name of ['Choose artifact version','Copy canvas source','Download canvas source','Canvas details','Focus canvas']){
+     const button=panel.getByRole('button',{name,exact:true});await requireReachable(button,name);
+     const box=await button.boundingBox();assert.ok(box.width>=44&&box.height>=44,`${name}: at least 44px target`);
+    }
     await panel.getByRole('button',{name:'Choose artifact version'}).click();
     await expect(panel.getByRole('combobox',{name:'Artifact version',exact:true})).toBeFocused();
     await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(page.locator('#canvas-options')).toBeHidden();
@@ -277,6 +292,16 @@ try{
    });
   }
  }
+ await check('200 percent CSS zoom retains navigation and lower content',async()=>{
+  await page.setViewportSize({width:1280,height:900});await overviewTab.click();
+  await page.locator('#amp-one').evaluate(el=>el.style.zoom='2');
+  try{
+   await requireReachable(toggle,'Header toggle at 200 percent CSS zoom');
+   await top();await page.keyboard.press('End');await requireReachable(summary('publishing'),'Publishing at 200 percent CSS zoom');
+   await capture('emulated-css-zoom-200');
+  }finally{await page.locator('#amp-one').evaluate(el=>el.style.removeProperty('zoom'))}
+  return {scale:2,method:'CSS zoom, not physical/browser UI zoom'};
+ });
  await check('native all-open list, exact counts, close-active/last and saved recovery',async()=>{
   await page.setViewportSize({width:1500,height:850});await action('view.update',{patch:{canvasWidth:720,canvasOverviewWidth:720}});
   await counts(12);await documents().click();await expect(dialog).toBeVisible();

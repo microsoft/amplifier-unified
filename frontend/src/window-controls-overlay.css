@@ -32,7 +32,7 @@
    confines its content to native usable geometry. Bottom padding keeps the
    content centered in the actual OS strip, not the taller 48px paint band.
    This preserves the continuous background below a 38px native strip. */
-#amp-one[data-window-controls-overlay=true]:not([data-window-controls-overlay-stacked=true]) :is(.a-work-header,.a-canvas-panel[data-focused=true] .a-canvas-head) .a-icon{
+#amp-one[data-window-controls-overlay=true]:not([data-window-controls-overlay-stacked=true]) .a-work-header .a-icon{
   height:32px!important;min-height:32px!important;padding:4px!important;box-sizing:border-box!important;
 }
 #amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-work-header{
@@ -67,12 +67,6 @@
 }
 #amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true] .a-canvas-head{
   width:100%!important;max-width:100%!important;margin-left:0!important;height:auto!important;min-height:48px!important;flex-wrap:wrap!important;padding:4px 8px!important;
-}
-#amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true] .a-canvas-tabs{
-  flex:1 1 100%!important;order:1;min-width:0!important;max-width:100%!important;
-}
-#amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true] .a-canvas-tabs button{
-  max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;
 }
 #amp-one[data-window-controls-overlay=true] :is(.a-overlay,.a-work-dialog-backdrop){
   top:var(--wco-safe-top)!important;box-sizing:border-box!important;

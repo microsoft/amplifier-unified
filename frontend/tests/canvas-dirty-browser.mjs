@@ -152,6 +152,17 @@ try {
   report.expectedRejections.push({name:entry.name,status:response.status(),receipt});
   await retained(true);assert.equal((await state()).canvas.id,first.resourceId);
  }
+ await panel.getByRole('button',{name:'Open documents, 2 open',exact:true}).click();
+ const openDocuments=page.getByRole('dialog',{name:'Open documents',exact:true});
+ await openDocuments.getByRole('button',{name:'Close tab Editable artifact',exact:true}).click();
+ await expect(openDocuments.getByRole('alert')).toContainText('viewer edit');
+ await expect(openDocuments).toBeVisible();
+ await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
+ assert.equal(await primary.getAttribute('data-mount'),mount);
+ assert.equal((await state()).canvas.id,first.resourceId);
+ await page.keyboard.press('Escape');
+ await expect(panel.getByRole('button',{name:'Open documents, 2 open',exact:true})).toBeFocused();
+ await retained(true);
  await capture('failed-selection-stays-overview');
  report.checks.push({name:'failed other-artifact selection preserves Overview, source, draft and dirty guard',status:'passed'});
  for(const [name,args] of [

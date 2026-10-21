@@ -1,10 +1,12 @@
 import React,{useRef,useState} from 'react';
+import {useCanvasSectionStatus} from './canvas-overview-state';
 
 export function OutputSettings({session,act}){
  const [listScope,setListScope]=useState(null);
  const [rows,setRows]=useState([]),[next,setNext]=useState(null),[unlinked,setUnlinked]=useState(false),[selected,setSelected]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [kind,setKind]=useState('file'),[title,setTitle]=useState(''),[location,setLocation]=useState(''),[version,setVersion]=useState(''),[writing,setWriting]=useState(''),[variant,setVariant]=useState('document'),[parent,setParent]=useState(null),[reviewMode,setReviewMode]=useState('unstaged'),[base,setBase]=useState(''),[reviewPath,setReviewPath]=useState(''),[comment,setComment]=useState(''),[line,setLine]=useState(''),[side,setSide]=useState('right'),[commentPath,setCommentPath]=useState('');
  const inFlight=useRef(false),sid=session?.id;
+ useCanvasSectionStatus(error?'Needs attention':busy?'Working…':listScope?`${rows.length}${next!==null?'+':''} outputs`:'');
  async function run(action,args,apply){if(inFlight.current)return;inFlight.current=true;setBusy(true);setError('');try{const result=await act(action,{sessionId:sid,...args});if(!result?.accepted)throw Error('The request was not accepted.');apply?.(result.result);return result.result}catch(e){setError(e.message)}finally{inFlight.current=false;setBusy(false)}}
  const list=(offset=0,show=unlinked)=>run('outputs.list',{includeUnlinked:show,offset},value=>{setRows(old=>offset?[...old,...value.items]:value.items);setNext(value.nextOffset);setListScope(JSON.stringify([sid,show]))});
  const read=id=>run('outputs.read',{id},setSelected);
