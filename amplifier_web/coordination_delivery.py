@@ -34,6 +34,85 @@ def _unavailable_work():
                          'coverage': {'complete': False}, 'effectAuthorized': False}}
 
 
+def _text(value, maximum=200, *, empty=False):
+    return isinstance(value, str) and (empty or bool(value)) and len(value) <= maximum
+
+
+def _integer(value, minimum=0, maximum=None):
+    return type(value) is int and value >= minimum and (maximum is None or value <= maximum)
+
+
+def _texts(value, maximum):
+    return isinstance(value, list) and len(value) <= maximum and all(_text(v) for v in value)
+
+
+def _digest(value):
+    return _text(value, 64) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def _valid_required(required):
+    if (not isinstance(required, dict) or set(required) - REQUIRED_FIELDS
+            or required.get('effectAuthorized') is not False
+            or not _text(required.get('status'), 20)
+            or required['status'] not in {'available', 'unavailable'}):
+        return False
+    # Even unavailable headers must not smuggle source bodies in scalar slots.
+    for field in ('reason', 'rootSessionId', 'generationId'):
+        if required.get(field) is not None and not _text(required[field], empty=True):
+            return False
+    for field in ('inputIds', 'associationRequestIds'):
+        if field in required and not _texts(required[field], 16):
+            return False
+    if 'inputCount' in required and not _integer(required['inputCount']):
+        return False
+    coverage = required.get('coverage')
+    if (not isinstance(coverage, dict)
+            or set(coverage) - {'complete', 'supportedInputIds', 'unsupportedInputs', 'reason', 'detail'}
+            or type(coverage.get('complete')) is not bool
+            or not _texts(coverage.get('supportedInputIds', []), 16)
+            or any(not _text(coverage[k]) for k in ('reason', 'detail') if k in coverage)):
+        return False
+    unsupported = coverage.get('unsupportedInputs', [])
+    if (not isinstance(unsupported, list) or len(unsupported) > 16
+            or any(not isinstance(row, dict) or set(row) != {'inputId', 'reason'}
+                   or not _text(row['inputId']) or not _text(row['reason'], empty=True)
+                   for row in unsupported)):
+        return False
+    if required['status'] == 'unavailable':
+        return (coverage['complete'] is False and all(required.get(k) is None for k in
+                ('version', 'workCount', 'requirementCount', 'requirementsRef')))
+    # Available is an exact producer observation, not an optional collection of
+    # optimistic labels. Its read handle and input coverage must agree.
+    inputs = required.get('inputIds')
+    return (REQUIRED_FIELDS - {'inputCount'} <= set(required)
+            and _digest(required['version']) and required['reason'] is None
+            and _text(required['rootSessionId']) and _text(required['generationId'])
+            and _texts(inputs, 16) and bool(inputs) and len(set(inputs)) == len(inputs)
+            and len(required['associationRequestIds']) == len(inputs)
+            and required.get('inputCount', len(inputs)) == len(inputs)
+            and _integer(required['workCount'], 0, 8)
+            and _integer(required['requirementCount'], 2 * required['workCount'],
+                         4097 * required['workCount'])
+            and coverage == {'complete': True, 'supportedInputIds': inputs, 'unsupportedInputs': []}
+            and required['requirementsRef'] == {'action': 'workspace.work.invocation',
+                'args': {'sessionId': required['rootSessionId'], 'expectedVersion': required['version']}})
+
+
+def _valid_stub(row, workspace):
+    if (not isinstance(row, dict) or set(row) != STUB_FIELDS
+            or not _text(row['id']) or not _text(row['originSessionId'])
+            or not _integer(row['revision'], 1) or not _integer(row['promiseRevision'], 1, row['revision'])
+            or not _text(row['title'], 100)
+            or not _text(row['nextAction'], empty=True) or not _text(row['blockedReason'], empty=True)
+            or row['candidate'] is not None and not _text(row['candidate'], 100)
+            or not _text(row['latestOutcome'], 100)
+            or type(row['humanDecisionCurrent']) is not bool
+            or not _texts(row['attentionReasons'], 16)):
+        return False
+    return row['readRef'] == {'action': 'workspace.work.read',
+                              'args': {'workspaceId': workspace, 'id': row['id']}}
+
+
 def _work_reference(value):
     """Validate the existing bounded producer DTO; never retain source bodies.
 
@@ -47,33 +126,22 @@ def _work_reference(value):
             return _unavailable_work()
         discovery, required = value['discovery'], value['required']
         if (value['available'] is not True or not isinstance(discovery, dict)
-                or not isinstance(required, dict) or set(discovery) - DISCOVERY_FIELDS
-                or set(required) - REQUIRED_FIELDS or required.get('effectAuthorized') is not False
-                or required.get('status') not in {'available', 'unavailable'}):
+                or set(discovery) != DISCOVERY_FIELDS or not _valid_required(required)):
             return _unavailable_work()
         items = discovery.get('items')
         if (not isinstance(items, list) or len(items) > 20
-                or type(discovery.get('total')) is not int or discovery['total'] < len(items)
+                or not _text(discovery['workspaceId']) or not _integer(discovery['version'])
+                or not _digest(discovery['snapshotVersion']) or not _digest(discovery['observationVersion'])
+                or not _integer(discovery['total'], len(items))
                 or type(discovery.get('truncated')) is not bool
                 or discovery['truncated'] != bool(discovery.get('nextAfter'))
-                or not discovery.get('coverage') or not isinstance(required.get('coverage'), dict)):
+                or discovery['nextAfter'] is not None and not _text(discovery['nextAfter'], 4096)
+                or type(discovery['observedAt']) not in (int, float) or not 0 <= discovery['observedAt'] < 10**15
+                or not _text(discovery['coverage'], 500) or not _text(discovery['authority'], 500)
+                or discovery['detailRequired'] is not True):
             return _unavailable_work()
-        if (required['status'] == 'unavailable'
-                and (required.get('version') is not None or required['coverage'].get('complete') is not False)):
+        if any(not _valid_stub(row, discovery['workspaceId']) for row in items):
             return _unavailable_work()
-        if (required['status'] == 'available'
-                and (not isinstance(required.get('version'), str)
-                     or required['coverage'].get('complete') is not True)):
-            return _unavailable_work()
-        for row in items:
-            if not isinstance(row, dict) or set(row) - STUB_FIELDS:
-                return _unavailable_work()
-            ref = row.get('readRef', {})
-            if (set(ref) != {'action', 'args'} or ref['action'] != 'workspace.work.read'
-                    or not isinstance(ref['args'], dict)
-                    or set(ref['args']) != {'workspaceId', 'id'}
-                    or any(not isinstance(v, str) for v in ref['args'].values())):
-                return _unavailable_work()
         return copy.deepcopy(value)
     except (TypeError, ValueError, UnicodeError):
         return _unavailable_work()

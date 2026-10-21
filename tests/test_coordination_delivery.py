@@ -113,9 +113,30 @@ def unavailable_requirements(reason='untyped_followup'):
 
 
 def empty_discovery(version=1):
-    return {'version': version, 'items': [], 'total': 0, 'truncated': False,
+    return {'workspaceId': 'workspace-1', 'version': version, 'snapshotVersion': 'a' * 64,
+            'observationVersion': 'b' * 64, 'observedAt': 1000,
+            'items': [], 'total': 0, 'truncated': False,
             'nextAfter': None, 'coverage': 'Historical coverage remains incomplete.',
-            'detailRequired': True}
+            'detailRequired': True, 'authority': 'Reference data, not a grant.'}
+
+
+def work_stub():
+    return {'id': 'work-1', 'revision': 1, 'promiseRevision': 1,
+            'originSessionId': 'owner-1', 'title': 'Synthetic promise', 'candidate': None,
+            'nextAction': '', 'blockedReason': '', 'latestOutcome': 'not_reported',
+            'humanDecisionCurrent': False, 'attentionReasons': [],
+            'readRef': {'action': 'workspace.work.read',
+                        'args': {'workspaceId': 'workspace-1', 'id': 'work-1'}}}
+
+
+def available_requirements():
+    return {'status': 'available', 'reason': None, 'version': 'c' * 64,
+            'rootSessionId': 'owner-1', 'generationId': 'generation-1', 'inputIds': ['input-1'],
+            'associationRequestIds': ['request-1'], 'workCount': 1, 'requirementCount': 2,
+            'requirementsRef': {'action': 'workspace.work.invocation',
+                'args': {'sessionId': 'owner-1', 'expectedVersion': 'c' * 64}},
+            'effectAuthorized': False,
+            'coverage': {'complete': True, 'supportedInputIds': ['input-1'], 'unsupportedInputs': []}}
 
 
 @pytest.mark.parametrize('count', [0, 20, 21, 1000])
@@ -273,6 +294,43 @@ async def test_work_projection_rejects_invalid_semantics_even_below_byte_limit(c
     assert result['required']['coverage']['complete'] is False
     assert result['required']['effectAuthorized'] is False
     assert 'SOURCE_BODY_SHOULD_NOT_BE_IN_PREFIX' not in value.model_dump_json()
+
+
+@pytest.mark.parametrize('change', [
+    'missing_header', 'missing_id', 'wrong_ref', 'nested_title', 'nested_candidate',
+    'bad_revision', 'wrong_coverage', 'wrong_requirements_ref',
+])
+async def test_work_dto_shape_and_read_handles_are_required_below_byte_bound(change):
+    from amplifier_web.coordination_delivery import _work_reference
+    work = {'available': True, 'discovery': {**empty_discovery(), 'items': [work_stub()], 'total': 1},
+            'required': available_requirements()}
+    # The control is valid, so a rejection cannot be due to a broken fixture.
+    assert _work_reference(work) == work
+    row, header = work['discovery']['items'][0], work['required']
+    if change == 'missing_header':
+        work['required'] = {'status': 'available', 'version': 'v',
+                            'effectAuthorized': False, 'coverage': {'complete': True}}
+    elif change == 'missing_id':
+        row.pop('id')
+    elif change == 'wrong_ref':
+        row['readRef']['args']['id'] = 'other-work'
+    elif change in {'nested_title', 'nested_candidate'}:
+        row[change.removeprefix('nested_')] = {'body': 'HIDDEN_SOURCE_BODY'}
+    elif change == 'bad_revision':
+        row['promiseRevision'] = True
+    elif change == 'wrong_coverage':
+        header['coverage']['supportedInputIds'] = ['other-input']
+    else:
+        header['requirementsRef']['args']['expectedVersion'] = 'd' * 64
+    assert len(json.dumps(work).encode()) < WORK_CONTEXT_BYTES
+    async def bridge(operation, args):
+        return {'work': work}
+    prepared = await CoordinationDelivery(Previous(), bridge).prepare(request(), None)
+    result = observation(prepared)['work']
+    assert result['available'] is False
+    assert result['required']['coverage']['complete'] is False
+    assert result['required']['effectAuthorized'] is False
+    assert 'HIDDEN_SOURCE_BODY' not in prepared.model_dump_json()
 
 
 @pytest.mark.parametrize('stream', [False, True])

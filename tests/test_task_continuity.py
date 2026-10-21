@@ -136,6 +136,54 @@ async def test_failed_durable_write_does_not_acknowledge_or_change_task(tmp_path
     await worker.close()
 
 
+@pytest.mark.parametrize('fault', ['continuity', 'publication'])
+async def test_postcommit_observation_failure_preserves_exact_saved_receipt(tmp_path, monkeypatch, fault):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Committed receipt survives'})
+        sid = app._session()['id']
+        worker = controls(sid)
+        await create(worker)
+        def fail(*args, **kwargs):
+            raise OSError('Synthetic observation failure after commit')
+        if fault == 'continuity':
+            worker.coordinator.register_capability('web.continuity.status', fail)
+        else:
+            monkeypatch.setattr(app, '_publish_changes', fail)
+        async def control(target, operation, args):
+            return await worker.perform(operation, args)
+        app.runtime = SimpleNamespace(control=control, close=AsyncMock())
+        app.management = SimpleNamespace(ensure_runtime=AsyncMock(), close=AsyncMock())
+        reply = (await app.dispatch('task.pause', {'sessionId': sid, 'expectedRevision': 1},
+                                   command_id='committed-pause'))['result']
+        saved = json.loads((app.data_dir / 'sessions' / sid / 'control-state.json').read_text())
+        assert reply['receipt'] == saved['taskReceipts']['committed-pause']['receipt']
+        assert reply['receipt']['revision'] == saved['task']['revision'] == 2
+        assert saved['task']['status'] == 'paused'
+        assert not await worker.tasks.continuation_allowed()
+        if fault == 'publication':
+            assert reply['publication']['status'] == 'unavailable'
+            assert reply['status'] == 'unavailable'
+            assert reply['snapshotIsCurrent'] is None
+        else:
+            assert reply['continuity'] == {'supported': False, 'status': 'unavailable'}
+        receipt_read = (await app.dispatch('task.receipt', {
+            'sessionId': sid, 'commandId': 'committed-pause'}))['result']
+        assert receipt_read['receipt'] == reply['receipt']
+        duplicate = (await app.dispatch('task.pause', {'sessionId': sid, 'expectedRevision': 1},
+                                       command_id='committed-pause'))['result']
+        assert duplicate['duplicate'] and duplicate['receipt'] == reply['receipt']
+        assert worker.tasks.record()['revision'] == 2
+        assert encoded_size(reply) <= TASK_CONTEXT_BYTES
+    finally:
+        app.management = None
+        await app.close()
+        if worker is not None:
+            await worker.close()
+
+
 async def test_older_runtime_cannot_claim_durable_pause_support(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     worker = controls()
@@ -676,6 +724,41 @@ async def test_cold_saved_control_failure_is_unavailable_not_empty(tmp_path, mon
         assert encoded_size(result) <= TASK_CONTEXT_BYTES
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('fault', ['incomplete', 'questionIds', 'corrections', 'revision', 'status', 'history'])
+async def test_structurally_invalid_control_is_not_available_authority(tmp_path, monkeypatch, fault):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    app = AppService(tmp_path / 'app', None, workspace=tmp_path)
+    worker = None
+    try:
+        await app.dispatch('session.create', {'title': 'Invalid canonical fixture'})
+        sid = app._session()['id']
+        worker = controls(sid)
+        await create(worker)
+        path = app.data_dir / 'sessions' / sid / 'control-state.json'
+        saved = json.loads(path.read_text())
+        if fault == 'incomplete':
+            saved['task'] = {'id': 'task-one', 'revision': 1}
+        elif fault == 'history':
+            saved['taskHistory'] = [{'id': 'task-old', 'revision': 1}]
+        else:
+            saved['task'][fault] = {
+                'questionIds': 'not-a-list', 'corrections': [{'text': 'missing revision'}],
+                'revision': 0, 'status': {'nested': 'not-a-status'},
+            }[fault]
+        path.write_text(json.dumps(saved))
+        before = path.read_bytes()
+        monkeypatch.setattr(app.history, 'ensure_loaded',
+                            AsyncMock(side_effect=AssertionError('No repair or hydration on read')))
+        result = (await app.dispatch('task.get', {'sessionId': sid}))['result']
+        assert result['status'] == 'unavailable' and result['coverage'] == 'unknown'
+        assert result['detailRequired'] is True
+        assert path.read_bytes() == before
+    finally:
+        await app.close()
+        if worker is not None:
+            await worker.close()
 
 
 async def test_late_mutation_rpc_cannot_replace_a_newer_paused_cache(tmp_path, monkeypatch):

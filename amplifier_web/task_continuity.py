@@ -307,10 +307,19 @@ class TaskController:
     def record(self):
         return self.coordinator.session_state.get("task")
 
-    def snapshot(self):
+    def continuity(self):
         getter = self.coordinator.get_capability("web.continuity.status")
+        try:
+            return getter() if getter else {"supported": False}
+        except Exception:
+            # This observation is not the durable mutation. In particular, a
+            # getter failure after persist must not hide a committed receipt.
+            logging.getLogger(__name__).warning("Task continuity observation unavailable", exc_info=True)
+            return {"supported": False, "status": "unavailable"}
+
+    def snapshot(self):
         return _project(self.record(), self.history, self.coordinator.session_state.get("goal"),
-                        self.controls.session.session_id, continuity=getter() if getter else None,
+                        self.controls.session.session_id, continuity=self.continuity(),
                         supported=bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
     def canonical_snapshot(self):
@@ -319,10 +328,9 @@ class TaskController:
         The service rewrites public runtime.control(task.*) to the same bounded
         task dispatch. Do not remove required question IDs from the scheduler.
         """
-        getter = self.coordinator.get_capability("web.continuity.status")
         return {"task": copy.deepcopy(self.record()), "history": copy.deepcopy(self.history),
                 "goal": copy.deepcopy(self.coordinator.session_state.get("goal")),
-                "continuity": getter() if getter else {"supported": False},
+                "continuity": self.continuity(),
                 "continuationSupported": bool(self.coordinator.get_capability("live.continuation_guard_supported"))}
 
     def apply(self, *, persist=True):
@@ -532,6 +540,31 @@ class TaskController:
         return {**self.canonical_snapshot(), "receipt": copy.deepcopy(self.receipts[identity]["receipt"])}
 
 
+def _valid_saved_task(task):
+    """Validate old canonical invariants, without requiring new provenance fields."""
+    if (not isinstance(task, dict) or not isinstance(task.get("id"), str) or not task["id"]
+            or type(task.get("revision")) is not int or task["revision"] < 1
+            or not isinstance(task.get("status"), str)
+            or task["status"] not in {"active", "paused", "blocked", "completed"}
+            or not isinstance(task.get("objective"), str) or not task["objective"].strip()):
+        return False
+    for field in ("constraints", "questionIds", "operationIds", "artifactRefs", "completionEvidence"):
+        if (not isinstance(task.get(field), list)
+                or any(not isinstance(value, str) or not value.strip() for value in task[field])):
+            return False
+    corrections = task.get("corrections")
+    if not isinstance(corrections, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("text"), str)
+            or type(row.get("revision")) is not int or not 1 <= row["revision"] <= task["revision"]
+            for row in corrections):
+        return False
+    changes = task.get("changes", [])
+    return isinstance(changes, list) and all(
+        isinstance(row, dict) and type(row.get("revision")) is int
+        and 1 <= row["revision"] <= task["revision"] and isinstance(row.get("fields"), dict)
+        for row in changes)
+
+
 def _load_control(service, session):
     """Read only this host-owned canonical control file, never its transcript.
 
@@ -552,11 +585,14 @@ def _load_control(service, session):
         if not isinstance(saved, dict) or "task" not in saved:
             raise ValueError("Saved control state has no task authority field")
         task = saved["task"]
-        if task is not None and (not isinstance(task, dict) or not isinstance(task.get("id"), str)
-                                 or type(task.get("revision")) is not int):
+        if task is not None and not _valid_saved_task(task):
             raise ValueError("Saved task authority is malformed")
-        if not isinstance(saved.get("taskHistory", []), list) or not isinstance(saved.get("taskReceipts", {}), dict):
+        history = saved.get("taskHistory", [])
+        if (not isinstance(history, list) or any(not _valid_saved_task(row) for row in history)
+                or not isinstance(saved.get("taskReceipts", {}), dict)):
             raise ValueError("Saved task history or receipts are malformed")
+        if saved.get("goal") is not None and not isinstance(saved["goal"], dict):
+            raise ValueError("Saved goal state is malformed")
         return saved
     except (OSError, ValueError, UnicodeError) as exc:
         raise ValueError("Saved task state unavailable; no worker was started: " + str(exc)) from None
@@ -606,6 +642,7 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         result = await service.runtime.control(sid, operation, forwarded)
     except ValueError as exc:
         raise AppError(str(exc), 409) from None
+    receipt = copy.deepcopy(result["receipt"])
     async with service.lock:
         # Keep existing full-record authority projections, never summary nulls.
         # A later command may have returned while this RPC was suspended: don't
@@ -613,24 +650,36 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         controls = service.state.setdefault("runtimeControl", {}).setdefault(sid, {})
         current = controls.get("task.get", {}).get("task") or {}
         returned = result.get("task") or {}
-        if returned.get("revision", 0) >= current.get("revision", 0):
-            canonical = {key: result.get(key) for key in
-                         ("task", "history", "goal", "continuity", "continuationSupported")}
-            controls["task.get"] = canonical
-            service._session(sid)["task"] = result.get("task")
-            service._session(sid)["continuity"] = result.get("continuity")
-            service._publish_changes(sessions={sid})
+        publication = {"status": "superseded"}
+        try:
+            if returned.get("revision", 0) >= current.get("revision", 0):
+                canonical = {key: result.get(key) for key in
+                             ("task", "history", "goal", "continuity", "continuationSupported")}
+                controls["task.get"] = canonical
+                service._session(sid)["task"] = result.get("task")
+                service._session(sid)["continuity"] = result.get("continuity")
+                service._publish_changes(sessions={sid})
+                publication = {"status": "published"}
+        except Exception:
+            logging.getLogger(__name__).warning("Committed task publication unavailable", exc_info=True)
+            publication = {"status": "unavailable",
+                           "reason": "The worker committed; host publication could not be confirmed."}
         # Serialization trouble AFTER a commit cannot be a false failed write.
         # Return its exact receipt and an explicit missing current projection.
         try:
+            if publication["status"] == "unavailable":
+                raise ValueError("Host publication unavailable")
             projected = _project(result.get("task"), result.get("history") or [], result.get("goal"),
                                  sid, continuity=result.get("continuity"),
                                  supported=result.get("continuationSupported"))
         except (ValueError, KeyError, TypeError):
             projected = _public_unavailable("The committed task's current projection is unavailable.")
-        projected["receipt"] = copy.deepcopy(result["receipt"])
-        projected["currentRevision"] = max(returned.get("revision", 0), current.get("revision", 0))
-        projected["snapshotIsCurrent"] = returned.get("revision", 0) == projected["currentRevision"]
+        projected["receipt"] = receipt
+        projected["publication"] = publication
+        projected["currentRevision"] = (None if publication["status"] == "unavailable"
+                                        else max(returned.get("revision", 0), current.get("revision", 0)))
+        projected["snapshotIsCurrent"] = (None if projected["currentRevision"] is None
+                                         else returned.get("revision", 0) == projected["currentRevision"])
         projected["currentRef"] = _ref("task.get", sid)
         if result.get("duplicate"):
             projected["duplicate"] = True
