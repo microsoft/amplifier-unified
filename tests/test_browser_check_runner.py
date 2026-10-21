@@ -270,6 +270,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'home-sidebar': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/home-sidebar'},
         'focus-navigation': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/focus-navigation'},
         'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
+        'storage-cleanup-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/storage-cleanup-settings'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
