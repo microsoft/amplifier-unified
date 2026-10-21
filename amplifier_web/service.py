@@ -240,6 +240,9 @@ ACTION_DEFINITIONS = {
 from .voice_settings import definitions as voice_settings_definitions
 ACTION_DEFINITIONS.update(voice_settings_definitions(schema, string))
 
+from .storage_cleanup import definitions as storage_cleanup_definitions
+ACTION_DEFINITIONS.update(storage_cleanup_definitions(schema, string))
+
 from .storage_usage import definitions as storage_definitions
 ACTION_DEFINITIONS.update(storage_definitions(schema, string))
 from .operations import definitions as operation_definitions
@@ -2061,6 +2064,9 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
+        if action in storage_cleanup_definitions(schema, string):
+            from .storage_cleanup import dispatch as cleanup_dispatch
+            return await cleanup_dispatch(self, action, args, origin, command_id)
         if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
             from .managed_deletion import dispatch as delete_history
             selection = {key: args[key] for key in ('project', 'nativeId') if args.get(key)}

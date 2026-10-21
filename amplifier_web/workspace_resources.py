@@ -11,8 +11,6 @@ from filelock import FileLock
 from amplifier_worktrees.git import atomic
 
 
-MAX_ROOT_RESERVATIONS = 64
-MAX_RESERVATIONS = 1024
 HOLDING = {'held', 'uncertain'}
 
 
@@ -86,6 +84,8 @@ def reservation_command(home, workspace_id, action, args, actor, command_id=None
             mode = args.get('mode', 'exclusive')
             if mode not in {'exclusive', 'shared'} or not actor.get('sessionId') or not actor.get('principal'):
                 raise ValueError('Choose a valid resource owner and sharing mode.')
+            from .test_execution_settings import concurrency
+            limits = concurrency(home)
             same = [json.loads(row[0]) for row in db.execute(
                 "SELECT body FROM claims WHERE resource_key=? AND status IN ('held','uncertain')", (key,))]
             total, owned = db.execute("SELECT count(*),coalesce(sum(root=?),0) FROM claims WHERE status IN ('held','uncertain')", (actor['sessionId'],)).fetchone()
@@ -96,8 +96,8 @@ def reservation_command(home, workspace_id, action, args, actor, command_id=None
             elif any(row['owner'] == actor for row in same):
                 result = {'outcome': 'conflict', 'resourceKey': key,
                           'detail': 'This principal already holds this shared resource. Inspect its existing reservation.'}
-            elif total >= MAX_RESERVATIONS or owned >= MAX_ROOT_RESERVATIONS:
-                result = {'outcome': 'limit', 'detail': 'Resource reservation capacity is full. Inspect and release unused reservations before acquiring more.'}
+            elif total >= limits['maxResourceReservations'] or owned >= limits['maxResourceReservationsPerChat']:
+                result = {'outcome': 'limit', 'detail': 'Resource reservation capacity is full. Inspect and release unused reservations or adjust Advanced execution limits in Settings.'}
             else:
                 row = {'id': str(uuid.uuid4()), 'workspaceId': workspace_id, 'resourceKey': key,
                        'owner': dict(actor), 'mode': mode, 'status': 'held', 'revision': 1,

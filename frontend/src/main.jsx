@@ -373,7 +373,7 @@ function App(){
  const canvasSettingsVisible=settingsRoute==='settings-canvas',panel=canvasSettingsVisible?null:settingsRoute;
  useEffect(()=>{
   const surface=workSurface(state),workspace=state?.workspaces?.find(row=>row.id===state.view?.workWorkspaceId);
-  const title=surface==='home'?'':surface==='workspaces'?'All projects':surface==='chats'?'Search chats':surface==='workspace'?workspace?.name||'Project':session?.title?.trim();
+  const title=surface==='home'?'':surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':session?.title?.trim();
   document.title=title?title+' - Amplifier':'Amplifier';
  },[session?.id,session?.title,state?.view?.workSurface,state?.view?.workWorkspaceId,state?.workspaces]);
  useReadCompletion(state,act,messagesPane,shell.ready);

@@ -114,7 +114,7 @@ try{
  await next.click();await next.click();await expect(next).toHaveText('Start again');
  await next.click();await expect(card).toHaveAttribute('data-session-id',scopedFirst);
  await next.click();const scopedSecond=await identity();
- await page.getByRole('button',{name:'Open project',exact:true}).click();
+ await page.getByRole('button',{name:'Open workspace',exact:true}).click();
  await expect(page.getByRole('group',{name:'Workspace view',exact:true})).toBeVisible();
  await expect(page.locator('.a-nav-chat.is-selected')).toHaveCount(0);
  await home();await expect(card).toHaveAttribute('data-session-id',scopedSecond);
@@ -139,7 +139,7 @@ try{
  await expect(page.locator('.a-focus-navigation [role=status]')).toContainText('1 of 3');
  await next.click();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workHomeScope:'focus-unavailable-project',workHomePages:{}}}));
- await expect(page.getByRole('alert')).toContainText('This project is unavailable.');
+ await expect(page.getByRole('alert')).toContainText('This workspace is unavailable.');
  await page.evaluate(id=>window.amplifier.dispatch('view.update',{patch:{workHomeScope:id,workHomePages:{}}}),project.id);
  await ready();await expect(page.locator('.a-focus-navigation [role=status]')).toContainText('1 of 3');
  report.checks.push('Empty searches survive reload without reviving an old pass; empty and unavailable scopes reset even when changed from Brief');

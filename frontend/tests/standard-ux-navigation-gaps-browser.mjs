@@ -61,7 +61,7 @@ try{
   await click('Return to exact Alpha',choose(a));await agree(a,'Alpha 201','Saved response for alpha-201');await expect(composer).toHaveDraft('Alpha private draft');
  });
  await probe('workspace-hierarchy-and-page-scope',['nav.workspace-browse'],async()=>{
-  await click('Open All workspaces',page.getByRole('button',{name:'All projects',exact:true}));
+  await click('Open All workspaces',page.getByRole('button',{name:'All workspaces',exact:true}));
   const explorer=page.locator('.a-work-browser .a-workspace-explorer'),filter=explorer.getByRole('searchbox',{name:'Filter workspaces',exact:true});
   await filter.fill('*/paged/team-*');
   // The old unfiltered page also has100 rows and two pages. Wait for the exact

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {actionContent,diffRows,cleanSummary} from '../src/execution-content.js';
+import {actionContent,actionHeading,contentUnavailable,diffRows,cleanSummary} from '../src/execution-content.js';
 const node=(label,input,output,phase='completed')=>({label,input:JSON.stringify(input),output:JSON.stringify(output),phase});
 test('stopped tool keeps retained output without presenting it as successful completion',()=>{
  const action=actionContent(node('bash',{command:'bounded-effect'},{stdout:'partial result'},'stopped'));
@@ -38,4 +38,29 @@ test('unknown, missing, truncated, string and malicious-looking content remain l
  const unknown=actionContent(node('custom_tool',{thing:'<script>bad()</script>'},{success:true,output:'<img src=x onerror=bad()>'}));
  assert.equal(unknown.kind,'generic');assert.match(unknown.output,/onerror/);
  assert.equal(actionContent(node('bash',{command:'true'},'')).output,'');
+});
+test('collapsed command and code hints survive truncated input without replacing full payloads',()=>{
+ const code='const result = await tools.search({query: "review"});\n'+ '/* long */'.repeat(300);
+ const row={label:'tool_exec',phase:'completed',input:'{"code": "truncated',inputSummary:{code:code.slice(0,179)+'…'}};
+ const heading=actionHeading(row);
+ assert.equal(heading.kind,'code');assert.equal(heading.tool,'tool_exec');assert.ok(heading.target.length<=180);assert.match(heading.target,/tools.search/);
+ assert.equal(actionContent(row).kind,'generic','A header hint is not the complete input');
+ const full=actionContent(row,JSON.stringify({code}));assert.equal(full.code,code);
+ assert.equal(actionHeading(row,JSON.stringify({code})).target.length,180);
+ const command=actionHeading(node('bash',{command:'echo first\nprintf second'},null));
+ assert.equal(command.target,'echo first printf second');
+});
+test('collapsed failures show the actual error and exit beside the command',()=>{
+ const row=node('bash',{command:'python checks.py'},{success:false,output:{stdout:'noise'.repeat(1000),stderr:'trace\nAssertionError: missing result',returncode:7}},'error');
+ const header=actionHeading(row);assert.equal(header.target,'python checks.py');assert.equal(header.detail,'AssertionError: missing result · Exit 7');
+ assert.equal(actionHeading({...row,error:JSON.stringify({message:'worker timed out'})}).detail,'worker timed out · Exit 7');
+ const compact={...row,output:'{"stdout": "truncated',outcomeSummary:{error:'AssertionError: missing result',exitCode:7}};
+ assert.equal(actionHeading(compact).detail,header.detail);
+ assert.equal(actionHeading(node('bash',{command:'true'},{stdout:'',returncode:0})).detail,'Exit 0');
+ assert.equal(actionHeading({label:'tool_exec',phase:'error'}).detail,'','Do not invent a missing error');
+});
+test('bounded misses and ambiguous calls do not claim a request was never recorded',()=>{
+ assert.match(contentUnavailable({contentAvailability:{status:'not-loaded'}},'Request'),/not in the loaded saved work/);
+ assert.match(contentUnavailable({contentAvailability:{status:'ambiguous'}},'Request'),/could not be matched/);
+ assert.doesNotMatch(contentUnavailable({},'Request'),/not recorded/);
 });

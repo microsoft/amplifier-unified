@@ -89,14 +89,14 @@ try{
  await page.locator('button[aria-label="Close panel"]:visible, button[aria-label="Close Settings"]:visible').click();await expect(settings).toHaveCount(0);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Retain this draft through starter setup');
  await action('attachment.add',{sessionId:null,name:'notes.txt',base64:'aGVsbG8='});
- await page.getByRole('button',{name:'Choose project',exact:true}).click();
- await page.getByRole('dialog',{name:'Choose a project',exact:true}).getByRole('button',{name:'New project',exact:true}).click();
- let form=page.getByRole('form',{name:'Create project'});
+ await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
+ await page.getByRole('dialog',{name:'Choose a workspace',exact:true}).getByRole('button',{name:'New workspace',exact:true}).click();
+ let form=page.getByRole('form',{name:'Create workspace'});
  await form.getByLabel('Project name',{exact:true}).fill('Team project');
  await expect(form.getByLabel('Start from…',{exact:true}).locator('option').filter({hasText:'My team starter'})).toHaveCount(1);
  await form.getByLabel('Start from…',{exact:true}).selectOption({label:'My team starter'});
  await page.screenshot({path:out+'/start-from.png'});
- await form.getByRole('button',{name:'Create project',exact:true}).click();
+ await form.getByRole('button',{name:'Create workspace',exact:true}).click();
  await expect(form).toHaveCount(0);await expect(composer).toHaveDraft('Retain this draft through starter setup');
  let current=await state();assert.equal(current.draftAttachments.length,1);assert.equal(current.sessions.length,0);
  const folder=current.view.newSessionDraft.workspace;

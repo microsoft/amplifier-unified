@@ -1,7 +1,7 @@
 # Adaptive work views — implementation and review notes
 
 These notes record the web client's Home/sidebar design progression, concrete
-behavior, and bounded acceptance evidence. The current released baseline is
+behavior, and bounded acceptance evidence. The recorded Home/sidebar baseline is
 [v0.20.188](https://github.com/microsoft/amplifier-unified/releases/tag/v0.20.188).
 The [Home/sidebar contract](work-discovery.v1.md) owns the observable promises;
 these notes supply implementation detail and historical context.
@@ -9,6 +9,29 @@ these notes supply implementation detail and historical context.
 Dated trial restrictions below describe their original checkpoints. Publication,
 live adoption, and designer acceptance remain separate facts. This work does
 not adopt the separate AHP/ACP architecture or change conversation execution.
+
+## Shared landing pages — October 20 follow-up
+
+Home, All chats, All workspaces and individual workspace pages now share the
+landing frame, stable Layout switch, Display controls, status filters and Focus
+paging. Existing chat/workspace rows own their actions. Files, Details, plans,
+and Workspace work remain in the workspace page; archive, sort, folder browsing,
+creation and attachment remain with their existing controls.
+
+Each destination stores its layout, scroll and Focus cursor in the current tab.
+Home retains its existing view owner. Other landing pages reuse their existing
+bounded catalogs; returning to a later Focus page requests that page once when
+selection-based catalog hints no longer match. This adds no workers, model calls,
+summary processing or relationship inference.
+
+The sidebar includes a Home icon beside Browse/Status. The header Home control
+has an icon and a visible button boundary elsewhere; Home itself has no redundant
+header label. Visible status filters remain reachable in every layout, and clearing
+status does not clear search or scope. New chat/workspace remains labeled on phones.
+
+See the [accepted scope](../ux/decisions/20261020-landing-pages.md) and
+[designer review journeys](../ux/review.md). The retained DTU preview and synthetic
+checks qualify implementation; they do not establish human usability or live adoption.
 
 ## Three independent choices
 
@@ -44,11 +67,12 @@ finished work. Reviewing a response uses its exact attention fingerprint and doe
 not answer a question, approve an action, or declare a project complete. Existing
 chat and Canvas controls own conversation/result interaction.
 
-Projects in this preview are human-facing views of registered workspaces, with
-recent/pinned projects offered before the complete folder inventory. Choosing a
+Workspaces are registered folders, with recent/pinned workspaces offered before
+the complete folder inventory. The October 20 follow-up restores this name in UI
+labels, replacing the earlier Projects wording. Choosing a
 scope only filters the view. It never moves files, changes instructions, assigns
-a conversation to a new folder, or grants access. On its own means managed chats.
-Project Work opens the existing workspace goal/work projection; it is not a fourth
+a conversation to a new folder, or grants access. No workspace means managed chats.
+Workspace work opens the existing workspace goal/work projection; it is not a fourth
 global mode. Logical cross-folder project membership remains future work.
 
 If the Chats component is pinned to one project, Home keeps that boundary: its
@@ -86,7 +110,7 @@ screen. Keep the warm typography and independent Appearance/view choices.
   request. Home is now the first breadcrumb in the header, followed by the project
   and chat when applicable. It stays visible on phones when away from Home;
   Home itself shows only app identity. The shell owns opening/closing Browse.
-- Navigation labels say Projects. Folder-backed workspace ownership, creation,
+- Navigation labels say Workspaces. Folder-backed workspace ownership, creation,
   permissions and history contracts are unchanged; this is not logical regrouping.
 - Returning Home preserves the last view and an explicitly opened or closed
   desktop sidebar. Narrow navigation closes when choosing Home. Appearance

@@ -97,3 +97,51 @@ async def test_unavailable_remote_observation_uses_existing_queue_backoff(app, q
     assert calls == ['runner']
     await queue.tick()  # Neither time nor capacity notification changed.
     assert calls == ['runner'], 'Unavailable targets should back off, not open another connection for every queued check'
+
+
+# Preserve the real configuration chooser before fixture monkeypatches it.
+_real_origin_configuration = environments.configuration
+
+
+async def test_first_remote_runner_submits_and_cleans_up_without_local_backend(app, queue, backend, monkeypatch):
+    runner = {'id': 'remote-only', 'name': 'Remote only', 'enabled': True, 'connection': 'fixture', 'configPath': '',
+              'machineId': 'a'*32, 'profiles': ['linux-python'], 'incus': {'project': 'test'}}
+    runners.publish(app, {'version': 1, 'runners': [runner]})
+    monkeypatch.setattr(environments, 'configuration', _real_origin_configuration)
+    monkeypatch.setattr(environments, 'SUPPORTED_HOST', False)
+    original_invoke = environments.invoke
+    def invoke(config, home, row, action, args):
+        assert config['originSnapshotVersion'] == 1
+        assert 'python' not in config and 'installationId' not in config
+        value = original_invoke(config, home, row, action, args)
+        return {**value, 'backendIdentity': {'backend': 'incus', 'daemon': 'remote', 'project': 'test'}}
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    monkeypatch.setattr(runners, 'call', lambda *a, **kw: {'ok': True, 'available': True})
+    await submit(app)
+    await queue.tick()
+    await asyncio.gather(*queue.tasks.values())
+    saved = record(queue, app)
+    assert saved['job']['status'] == 'passed', saved
+    assert saved['job']['targetBound']
+    assert saved['job']['runnerCandidates']
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']
+    row = environments.get(app.data_dir, scope(app)['sessionId'], saved['job']['resourceId'])
+    assert row['status'] == 'retired' and row['backendInstallation'] is None
+
+
+async def test_remote_only_waiting_check_can_choose_second_frozen_machine_after_pause(app, queue, backend, monkeypatch):
+    first = {'id': 'first', 'name': 'First', 'enabled': True, 'connection': 'fixture', 'configPath': '',
+             'machineId': 'a'*32, 'profiles': ['linux-python'], 'incus': {'project': 'first'}}
+    second = {**first, 'id': 'second', 'name': 'Second', 'incus': {'project': 'second'}}
+    runners.publish(app, {'version': 1, 'runners': [first, second]})
+    monkeypatch.setattr(environments, 'configuration', _real_origin_configuration)
+    await submit(app)
+    runners.publish(app, {'version': 1, 'runners': [{**first, 'enabled': False}, second]})
+    saved = record(queue, app)
+    config = queue.guard(saved)
+    calls = []
+    monkeypatch.setattr(runners, 'call', lambda runner, *a, **kw: calls.append(runner['id']) or {'ok': True, 'available': True})
+    selected = runners.select(app, saved['job'], config)
+    assert selected['remoteRunner']['id'] == 'second'
+    assert calls == ['second']
+    assert backend == []

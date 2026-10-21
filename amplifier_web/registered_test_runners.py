@@ -7,7 +7,7 @@ import copy
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
@@ -83,29 +83,19 @@ def definitions(schema, string):
 
 def store(app):
     path = Path(app.data_dir) / 'test-runners.json'
+    from .test_origin_files import read
     try:
-        info = path.lstat()
+        value = read(path, 1024 * 1024)
     except FileNotFoundError:
         return {'version': 1, 'runners': []}
-    if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024 or (hasattr(os, 'getuid') and info.st_uid != os.getuid()) or (os.name != 'nt' and info.st_mode & 0o077):
-        raise ValueError('The test machine settings must be a private bounded file.')
-    value = json.loads(path.read_text())
     if value.get('version') != 1 or not isinstance(value.get('runners'), list) or len(value['runners']) > 16:
         raise ValueError('The test machine settings are invalid.')
     return value
 
 
 def publish(app, value):
-    path = Path(app.data_dir) / 'test-runners.json'
-    temporary = path.with_name('.test-runners-' + uuid.uuid4().hex)
-    try:
-        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_EXCL | os.O_CREAT, 0o600), 'w') as stream:
-            json.dump(value, stream, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    from .test_origin_files import replace
+    replace(Path(app.data_dir) / 'test-runners.json', value)
 
 
 def snapshot(app):
@@ -117,7 +107,7 @@ def snapshot(app):
 def ssh(connection, command, payload, timeout=60, maximum=2*1024*1024):
     if not isinstance(connection, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,199}', connection):
         raise ValueError('Choose an existing SSH connection name without command options.')
-    executable = shutil.which('ssh', path=os.defpath)
+    executable = shutil.which('ssh', path=os.environ.get('PATH', os.defpath))
     if not executable:
         raise ValueError('SSH is unavailable on this computer.')
     result = subprocess.run([executable, '-oBatchMode=yes', '-oStrictHostKeyChecking=yes', '-oForwardAgent=no', '-oClearAllForwardings=yes', '-oConnectTimeout=10', connection, shlex.join(command)], input=json.dumps(payload).encode(), capture_output=True, timeout=timeout)
@@ -140,7 +130,7 @@ def call(runner, payload, timeout=60):
     if not re.fullmatch(r'[a-f0-9]{64}', runner.get('packageDigest', '')):
         raise ValueError('The registered controller identity is invalid.')
     controller = runner['controller']
-    if not Path(controller).is_absolute() or '..' in Path(controller).parts or runner['packageDigest'] not in Path(controller).parts or not controller.endswith('/amplifier_web/test_runner_controller.py'):
+    if not PurePosixPath(controller).is_absolute() or '..' in PurePosixPath(controller).parts or runner['packageDigest'] not in PurePosixPath(controller).parts or not controller.endswith('/amplifier_web/test_runner_controller.py'):
         raise ValueError('The registered controller path changed.')
     names = runner.get('packageFiles')
     if not isinstance(names, list) or not 1 <= len(names) <= 64 or len(set(names)) != len(names) or not {'__init__.py', 'test_runner_controller.py'} <= set(names) or any(not isinstance(name, str) or not re.fullmatch(r'[a-z_]+\.py', name) for name in names):
@@ -164,13 +154,21 @@ def register(connection, name, config_path=''):
 
 
 def configuration(app, base, runner):
-    # Source export continues using the origin's exact qualified snapshot core.
-    return {key: value for key, value in {**base, 'backend': 'incus', 'incus': runner['incus'], 'remoteRunner': copy.deepcopy(runner)}.items()
-            if key not in {'dockerHost', 'image', 'admissionRoot', 'maxRunning', 'maxInstances', 'minFreeBytes'}}
+    # Source packaging is an app capability on every origin, not a local Linux
+    # runner. All execution authority remains on the registered target.
+    return {'enabled': True, 'backend': 'incus', 'incus': copy.deepcopy(runner['incus']),
+            'remoteRunner': copy.deepcopy(runner), 'originSnapshotVersion': 1,
+            'retentionMode': (base or {}).get('retentionMode', 'files')}
+
+
+def first_configuration(app):
+    runner = next((item for item in store(app)['runners'] if item.get('enabled')), None)
+    return configuration(app, None, runner) if runner else None
 
 
 def candidates(app, base, profile):
-    return [base] + [configuration(app, base, runner) for runner in store(app)['runners'] if runner['enabled'] and profile in runner['profiles']]
+    local = [base] if base and not base.get('remoteRunner') else []
+    return local + [configuration(app, base, runner) for runner in store(app)['runners'] if runner['enabled'] and profile in runner['profiles']]
 
 
 def enabled(app, config):
@@ -187,11 +185,19 @@ def qualify_retained(app, config):
     runner = config.get('remoteRunner')
     if not isinstance(runner, dict) or config.get('backend') != 'incus' or capacity.execution_key({'incus': runner.get('incus')}) != capacity.execution_key({'incus': config.get('incus')}):
         raise ValueError('The retained remote runner configuration changed.')
+    if config.get('originSnapshotVersion') is not None:
+        expected = configuration(app, config, runner)
+        # Only admission budgets may change at guarded dispatch.
+        if config.get('originSnapshotVersion') != 1 or capacity.execution_key(config) != capacity.execution_key(expected):
+            raise ValueError('The origin snapshot or retained runner settings changed.')
     return config
 
 
 def export_source(config, folder, source):
-    script = "import json,dataclasses;from pathlib import Path;from digital_twin_universe import lib;s=lib.export_repository_snapshot(Path(__import__('sys').argv[1]),Path(__import__('sys').argv[2]));print(json.dumps(s.model_dump(mode='json')))"
+    if config.get('originSnapshotVersion') == 1:
+        from .test_origin_snapshot import export_archive
+        return export_archive(Path(source), folder / 'source.tar')
+    script = "import json,dataclasses;from pathlib import Path, PurePosixPath;from digital_twin_universe import lib;s=lib.export_repository_snapshot(Path(__import__('sys').argv[1]),Path(__import__('sys').argv[2]));print(json.dumps(s.model_dump(mode='json')))"
     result = subprocess.run([config['python'], '-I', '-B', '-c', script, source, str(folder / 'source.tar')], capture_output=True, timeout=300)
     if result.returncode or len(result.stdout) > 65536:
         raise ValueError('The exact source snapshot could not be exported.')
@@ -216,8 +222,8 @@ def invoke(config, folder, payload):
         result = call(runner, safe)
         if result.get('ok'):
             # Retain the original backend binding locally as well as on target.
-            from . import test_environment_worker as common
-            common.verify_binding({**payload, 'snapshot': snapshot}, result['universeId'], result['backendIdentity'], prepare=True)
+            from .test_origin_storage import verify_binding
+            verify_binding(payload, result['universeId'], result['backendIdentity'])
         return result
     from . import test_environment_profiles as profiles
     timeout = profiles.timing(safe.get('profileId'), safe.get('timingRequest'))['preparationTimeoutSeconds'] + 200 if safe['action'] == 'prepareDependencies' else 800 if safe['action'] in {'start', 'remove', 'finishCleanup', 'exportArtifacts'} else 180 if safe['action'] in {'stop', 'cleanupDependencies'} else safe.get('timeoutSeconds', 30) + 30
@@ -304,7 +310,7 @@ def retain_candidates(app, base, profile):
     from . import test_environment_configs as configs
     registered = candidates(app, base, profile)
     # Preserve legacy semantics when there are no additional approved targets.
-    return [configs.retain(app.data_dir, config) for config in registered] if len(registered) > 1 else []
+    return [configs.retain(app.data_dir, config) for config in registered] if len(registered) > 1 or (registered and registered[0].get('remoteRunner')) else []
 
 
 def resolve_job(app, job, active):
@@ -393,8 +399,15 @@ def fetch_archives(runner, folder, payload, archives):
                     raise ValueError('The retained archive transfer changed.')
                 stream.write(content); offset += len(content)
             stream.flush(); os.fsync(stream.fileno())
-        from .incus_environment_worker import file_digest
-        if file_digest(path, 8*1024**3) != (archive['sha256'], archive['bytes']):
+        from .test_origin_files import file
+        sha, size = hashlib.sha256(), 0
+        with file(path) as stream:
+            while chunk := stream.read(1024*1024):
+                size += len(chunk)
+                if size > archive['bytes']:
+                    raise ValueError('The retained download exceeds its bound.')
+                sha.update(chunk)
+        if (sha.hexdigest(), size) != (archive['sha256'], archive['bytes']):
             raise ValueError('The retained archive download is incomplete.')
         downloaded.append({**archive, 'destination': str(path)})
     return downloaded

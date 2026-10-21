@@ -140,7 +140,7 @@ try{
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');
- await page.getByRole('button',{name:'Choose project',exact:true}).click();
+ await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
  const attach=page.getByRole('form',{name:'Use existing folder',exact:true});
  await attach.getByRole('button',{name:'Browse',exact:true}).click();

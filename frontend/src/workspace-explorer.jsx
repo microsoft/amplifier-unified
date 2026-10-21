@@ -5,9 +5,11 @@ import {ArrowLeft,ChevronRight,Folder,FolderDot,MoreHorizontal,Search,FolderPlus
 import {NavigationRow,NavigationStatus,WorkspaceDetails,useActivityClock,navigationDetailsContext} from './navigation-details';
 import {workspaceContext,parentPath} from './navigation-presentation';
 import {movePin} from './chat-navigation';
+import {LandingCollection} from './work-landing';
 
-export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compact=false,pinnedShortcut=false,handle,floating=false}){
+export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compact=false,pinnedShortcut=false,handle,floating=false,landing=false}){
  const workspace=!!row.workspaceId;
+ const count=(workspace?row.chatCount:row.descendantWorkspaceCount)||0,noun=workspace?(count===1?'chat':'chats'):(count===1?'workspace':'workspaces');
  const selectedWorkspace=state.view?.workSurface==='workspace'?state.view.workWorkspaceId||state.selectedWorkspaceId:null;
  const selected=workspace&&row.workspaceId===selectedWorkspace;
  const canDraft=workspace&&row.available!==false&&typeof row.path==='string'&&row.path.length>0&&row.path.length<=4000&&!row.path.includes('\0')&&(/^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(row.path))&&!row.path.split(/[\\/]/).includes('..');
@@ -18,13 +20,13 @@ export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compa
  const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',attentionType:counts.error?'error':counts.decision?'decision':counts.blocked?'blocked':'error',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:null;
  const content=<>{handle}
   <button type="button" className="a-workspace-select" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action={workspace?'workspace.select':'view.update'} aria-label={workspace?'Open chats in '+row.path:browseLabel} aria-pressed={workspace?selected:undefined} onClick={()=>workspace?open(row):browse(row.path)}>
-   {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span data-scroll-title><span>{row.customName||row.name}</span></span><small className="a-workspace-result-path" data-scroll-title><span>{state.settings?.workspaces?.showPaths?row.path:'in '+workspaceContext(row)}</span></small></span>{row.pinned&&!pinnedShortcut&&<Pin className="a-workspace-pin-mark" aria-label="Pinned workspace"/>}
-   {!pinnedShortcut&&<span className="a-workspace-count" aria-label={`${workspace?row.chatCount:row.descendantWorkspaceCount} ${workspace?'chats':'workspaces'}`}>{workspace?row.chatCount:row.descendantWorkspaceCount}</span>}{!workspace&&row.canBrowse&&<ChevronRight className="a-workspace-arrow"/>}
+   {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span data-scroll-title><span>{row.customName||row.name}</span></span><small className="a-workspace-result-path" data-scroll-title><span>{state.settings?.workspaces?.showPaths?row.path:'in '+workspaceContext(row)}</span></small>{landing&&<small className="a-landing-status">{workspace&&summary?summary.label:`${count} ${noun}`}</small>}</span>{row.pinned&&!pinnedShortcut&&<Pin className="a-workspace-pin-mark" aria-label="Pinned workspace"/>}
+   {!pinnedShortcut&&<span className="a-workspace-count" aria-label={`${count} ${noun}`}>{count}</span>}{!workspace&&row.canBrowse&&<ChevronRight className="a-workspace-arrow"/>}
   </button>
   {!compact&&workspace&&row.canBrowse&&<button type="button" className="a-workspace-drill" data-action="view.update" aria-label={browseLabel} title={`${row.descendantWorkspaceCount} nested workspaces`} onClick={()=>browse(row.path)}><ChevronRight/></button>}
   {compact&&workspace&&<button type="button" className="a-icon a-workspace-new-chat" data-action="session.draft" aria-label={'New chat in '+row.path} title={canDraft?'New chat in '+row.path:'Workspace folder unavailable'} disabled={!canDraft} onClick={e=>{e.stopPropagation();newChat(row)}}><MessageSquarePlus/></button>}
  </>;
- const className=`a-workspace-row ${workspace?'is-workspace':''} ${selected?'is-selected':''}`;
+ const className=`a-workspace-row ${landing?'a-landing-workspace ':''}${workspace?'is-workspace':''} ${selected?'is-selected':''}`;
  if(floating)return <div className={className} data-show-paths={!!state.settings?.workspaces?.showPaths}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
  if(!workspace)return <div className={className} data-show-paths={!!state.settings?.workspaces?.showPaths} data-workspace-path={row.path}>{content}</div>;
  return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-show-paths={!!state.settings?.workspaces?.showPaths} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
@@ -39,7 +41,7 @@ export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compa
 
 // The server supplies the same bounded folder projection to users and agents.
 // Browsing changes only the view; workspace.select changes the active project.
-export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewLimit=Infinity,compact=false,onSelect}){
+export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewLimit=Infinity,compact=false,onSelect,layout,identity='workspaces'}){
  const now=useActivityClock();
  const explorer=state.workspaceExplorer||{},rows=compact?(state.workspaceShortcuts||[]):explorer.rows||[],crumbs=explorer.breadcrumbs||[];
  const [showAll,setShowAll]=useState(false);
@@ -65,9 +67,9 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
  const page=explorer.page||1,pages=explorer.pages||1;
  const crumbLabel=crumb=>crumb.name===crumb.path?(crumb.path.replace(/[\\/]+$/,'').split(/[\\/]/).at(-1)||crumb.name):crumb.name;
  return <section ref={region} data-activity-region="workspace-folders" className="a-workspace-explorer" data-part="workspace-explorer" data-compact={compact} data-show-paths={!!state.settings?.workspaces?.showPaths} aria-label="Workspace folders">
-  {!compact&&<div className="a-workspace-modes" role="group" aria-label="Project list"><button type="button" aria-pressed={explorer.mode==='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'recent',navWorkspacePage:1})}>Recent</button><button type="button" aria-pressed={!compact&&explorer.mode!=='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'folders',navWorkspacePage:1})}>Browse folders</button></div>}
-  {!compact&&<label className="a-field">Projects<select aria-label="Project archive filter" value={explorer.archive||'active'} onChange={e=>patch({navWorkspaceArchive:e.target.value,navWorkspaceMode:'recent',navWorkspacePage:1})}><option value="active">Active</option><option value="archived">Archived</option><option value="all">All projects</option></select></label>}
-  {heading&&!compact&&<div className="a-workspace-explorer-heading"><strong>Projects</strong><span>{explorer.totalWorkspaces||0}</span></div>}
+  {!compact&&<div className="a-workspace-modes" role="group" aria-label="Workspace list"><button type="button" aria-pressed={explorer.mode==='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'recent',navWorkspacePage:1})}>Recent</button><button type="button" aria-pressed={!compact&&explorer.mode!=='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'folders',navWorkspacePage:1})}>Browse folders</button></div>}
+  {!compact&&<label className="a-field">Workspaces<select aria-label="Workspace archive filter" value={explorer.archive||'active'} onChange={e=>patch({navWorkspaceArchive:e.target.value,navWorkspaceMode:'recent',navWorkspacePage:1})}><option value="active">Active</option><option value="archived">Archived</option><option value="all">All workspaces</option></select></label>}
+  {heading&&!compact&&<div className="a-workspace-explorer-heading"><strong>Workspaces</strong><span>{explorer.totalWorkspaces||0}</span></div>}
   {!compact&&<div className="a-nav-search a-workspace-search"><Search/><input type="search" aria-label="Filter workspaces" placeholder="Find workspace · * ? patterns" value={query} data-action="view.update" onChange={e=>search(e.target.value)}/></div>}
   {!compact&&explorer.mode!=='recent'&&!explorer.filter&&<div className="a-workspace-location">
    <button type="button" className="a-icon" aria-label="Go to parent workspace folder" disabled={explorer.parentPath==null} data-action="view.update" onClick={()=>browse(explorer.parentPath)}><ArrowLeft/></button>
@@ -76,9 +78,9 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
     {visible.map((crumb,index)=><React.Fragment key={crumb.path}>{(index>0||previous.length>0)&&<ChevronRight aria-hidden="true"/>}<button type="button" data-action="view.update" aria-current={index===visible.length-1?'location':undefined} title={crumb.path||'All workspace folders'} aria-label={'Browse '+(crumb.path||'all workspace folders')} onClick={()=>browse(crumb.path)}>{crumbLabel(crumb)}</button></React.Fragment>)}
    </nav>
   </div>}
-  <div className="a-workspace-folders">{shownRows.map(row=><WorkspaceRow key={row.path} {...{row,state,act,now,open,newChat,browse,onEdit,compact}}/>)}</div>
+  {layout&&!compact?<LandingCollection className="a-workspace-folders" layout={layout} identity={identity} queryKey={[explorer.filter,explorer.mode,explorer.archive,explorer.path]} page={{items:shownRows,total:explorer.totalRows||0,index:page-1,pages,start:explorer.start||0,end:explorer.end||shownRows.length}} onPage={index=>patch({navWorkspacePage:index+1})}>{row=><WorkspaceRow {...{row,state,act,now,open,newChat,browse,onEdit}} landing/>}</LandingCollection>:<div className="a-workspace-folders">{shownRows.map(row=><WorkspaceRow key={row.path} {...{row,state,act,now,open,newChat,browse,onEdit,compact}}/>)}</div>}
   {shownRows.length<rows.length&&<button type="button" className="a-link" onClick={()=>setShowAll(true)}>More workspaces<ChevronRight/></button>}
   {!rows.length&&!state.sharedHistory?.loading&&<p className="a-nav-empty">{explorer.filter?'No matching workspaces.':'Create a workspace to start a chat.'}</p>}
-  {!compact&&pages>1&&shownRows.length===rows.length&&<div className="a-nav-pagination a-workspace-pagination"><span>Page {page} of {pages}</span><div><button type="button" className="a-link" aria-label="Show previous workspace folders" data-action="view.update" disabled={page<=1} onClick={()=>patch({navWorkspacePage:page-1})}>Previous</button><button type="button" className="a-link" aria-label="Show more workspace folders" data-action="view.update" disabled={page>=pages} onClick={()=>patch({navWorkspacePage:page+1})}>More<ChevronRight/></button></div></div>}
+  {!compact&&layout!=='focus'&&pages>1&&shownRows.length===rows.length&&<div className="a-nav-pagination a-workspace-pagination"><span>Page {page} of {pages}</span><div><button type="button" className="a-link" aria-label="Show previous workspace folders" data-action="view.update" disabled={page<=1} onClick={()=>patch({navWorkspacePage:page-1})}>Previous</button><button type="button" className="a-link" aria-label="Show more workspace folders" data-action="view.update" disabled={page>=pages} onClick={()=>patch({navWorkspacePage:page+1})}>More<ChevronRight/></button></div></div>}
  </section>;
 }

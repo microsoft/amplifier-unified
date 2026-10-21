@@ -118,9 +118,11 @@ def test_pages_are_bounded_and_reset_after_browsing_or_filtering():
     assert len(snapshot(value)['rows']) == 100
     second = browse(value, navWorkspacePage=2)
     assert second['page'] == 2 and second['pages'] == 3
+    assert (second['start'], second['end']) == (100, 200)
     assert second['rows'][0]['name'] == 'project-100'
     assert len(browse(value, navWorkspacePage=999)['rows']) == 5
     assert snapshot(value)['page'] == 3
+    assert (snapshot(value)['start'], snapshot(value)['end']) == (200, 205)
     filtered = browse(value, navWorkspaceFilter='*-00?')
     assert filtered['page'] == 1 and filtered['totalRows'] == 10
     reset = browse(value, navWorkspacePath='/projects')

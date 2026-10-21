@@ -1858,6 +1858,200 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#per-chat-test-queue-october-20"
+    },
+    {
+      "id": "delta.960",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/960",
+      "reason": "Add a global consumer cleanup policy with explicit protected data and recoverable mutations; original frozen inventory is unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "settings.automatic-storage-cleanup",
+          "family": "settings",
+          "title": "Review and clean unused component copies safely",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Privacy & files",
+            "Storage",
+            "Automatic cleanup"
+          ],
+          "prerequisites": [
+            "Private production AppService fixture and built client",
+            "Synthetic qualified installed graph; actual disposable files; no provider or production effects"
+          ],
+          "steps": [
+            "Save global retention and size settings",
+            "Reject a stale writer while retaining its private draft",
+            "Lose a save acknowledgement, reopen and check the same request",
+            "Preview eligible and protected copies without removal",
+            "Lose a cleanup acknowledgement, reopen and reobserve the same receipt",
+            "Inspect preserved work and narrow-layout draft protection"
+          ],
+          "expectedResults": [
+            "Saved global policy applies to all workspaces and defaults to enabled, 7 days and 10 GiB.",
+            "Stale revisions cannot overwrite current settings; drafts are retained.",
+            "Lost replies reconcile the same durable request without repeating effects.",
+            "Preview is read-only and labels bounded logical-byte accounting.",
+            "Canonical removal deletes only the proven unused fixture generation while preserving project work, source archives and results.",
+            "No worker starts or stops occur and desktop/narrow controls remain usable."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "cold-reopen",
+            "lost-acknowledgement",
+            "stale-writer",
+            "dirty-close"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/storage-cleanup-settings-browser.mjs",
+              "relation": "Registered production client/service browser owner with actual disposable-file retirement"
+            },
+            {
+              "path": "tests/test_storage_cleanup.py",
+              "relation": "Canonical retirement, late references, exact retries, bounded accounting and uncertainty retention"
+            },
+            {
+              "path": "tests/test_storage_cleanup_runner.py",
+              "relation": "Git work preservation and policy/process races at installation removal locks"
+            }
+          ],
+          "limits": [
+            "Logical file content is not physical reclaimed disk space.",
+            "Batch measurement is bounded; the size target is not a global disk quota.",
+            "Selected and unknown engine generations, shared stores and saved source/result archives are preserved.",
+            "Synthetic installed metadata does not qualify a production runtime or deployment."
+          ]
+        }
+      ],
+      "qualification": "docs/STORAGE.md#automatic-cleanup-of-unused-code"
+    },
+    {
+      "id": "delta.954",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/954",
+      "reason": "Shared landing layouts add a standard browsing journey; the frozen inventory remains unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "navigation.shared-work-landings",
+          "family": "navigation",
+          "title": "Browse Home, chats and workspaces with shared layouts",
+          "scope": "standard-path",
+          "entryPath": [
+            "Sidebar Home / Search chats / All workspaces",
+            "Workspace Chats"
+          ],
+          "prerequisites": [
+            "Production bundled client and canonical service with disposable synthetic chat history",
+            "No live provider, user history or production effects"
+          ],
+          "steps": [
+            "Find Home from the sidebar and header",
+            "Switch Focus, Brief and Studio while keeping filters visible",
+            "Browse and return to later-page Focus items",
+            "Select Pick up again in All chats and a workspace; navigate away, return and reload",
+            "Keep search when clearing a status filter",
+            "Open workspace Files, Details and Workspace work",
+            "Use narrow, enlarged-text, keyboard and forced-color layouts"
+          ],
+          "expectedResults": [
+            "Both direct and nested status updates accept Pick up again and return only quiet read chats.",
+            "Status filters and layouts survive navigation and reload; clearing status preserves search.",
+            "Focus position remains bounded and survives returning from a later catalog page.",
+            "Existing chat/workspace actions, folder browsing and workspace tools remain accessible.",
+            "Fresh views start Home; refresh and direct chat links retain their destination.",
+            "Browsing neither starts runtimes nor sends model requests."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "tablet",
+            "enlarged-text",
+            "desktop-keyboard",
+            "forced-colors",
+            "reload",
+            "direct-chat-link"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/shared-landing-browser.mjs",
+              "relation": "Registered extended browser owner for the production client/catalog journey, including both Pick up again paths and retention"
+            },
+            {
+              "path": "tests/test_chat_navigation.py",
+              "relation": "Direct/nested canonical status validation, scoped activity filtering and unchanged attention"
+            },
+            {
+              "path": "tests/test_browser_check_runner.py",
+              "relation": "Maintained scenario registration and environment oracle"
+            }
+          ],
+          "limits": [
+            "Synthetic functional qualification; designer review with live data remains separate.",
+            "No live-provider or latency claims."
+          ]
+        }
+      ],
+      "qualification": "docs/ux/decisions/20261020-landing-pages.md"
+    },
+    {
+      "id": "delta.972",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/972",
+      "reason": "Saved tool detail inspection gains an explicit extended-browser owner; the frozen standard inventory remains unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.saved-tool-details",
+          "family": "conversation",
+          "title": "Inspect saved tool and delegate details",
+          "scope": "standard-path",
+          "entryPath": [
+            "Conversation",
+            "Work steps"
+          ],
+          "prerequisites": [
+            "Production bundled client with synthetic saved root and child events",
+            "No live provider or user history"
+          ],
+          "steps": [
+            "Read a collapsed command and failure hint without loading payloads",
+            "Expand older saved details, recover from a temporary read failure and request the next bounded page",
+            "Expand delegate request/response and child code/error details",
+            "Inspect legacy records without assuming their attempt identity",
+            "Use the same details at narrow width"
+          ],
+          "expectedResults": [
+            "Collapsed hints do not fetch full fields.",
+            "Retry and explicit older paging recover exact retained content.",
+            "Delegate and child details stay in their admitted session scope.",
+            "Legacy observations remain separate and explicitly unverified.",
+            "Inspection changes no runtime counts or saved source bytes; the narrow view fits."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "temporary-read-failure",
+            "older-record-page"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/tool-details-browser.mjs",
+              "relation": "Registered extended owner for bounded saved details, child/delegate content and unverified legacy observations"
+            },
+            {
+              "path": "tests/test_tool_payload_windows.py",
+              "relation": "Owner, scope, lifetime and bounded continuation controls"
+            },
+            {
+              "path": "tests/test_event_field_stability.py",
+              "relation": "Unrelated append acceptance and exact-content/replacement refusal"
+            }
+          ],
+          "limits": [
+            "Synthetic functional qualification only; no live-history or performance claim."
+          ]
+        }
+      ],
+      "qualification": "docs/EXECUTION-INSPECTION.md"
     }
   ]
 }

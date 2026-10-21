@@ -44,7 +44,7 @@ for(const surface of ['chat','chats'])test(`managed delete obtains one confirmat
 });
 test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host})));
- assert.match(html,/All projects/);
+ assert.match(html,/All workspaces/);
  assert.doesNotMatch(html,/All chats|Review chats|View all chats|of 1 recent chats|a-recent-controls/);
  assert.doesNotMatch(html,/Filter conversations|Filter workspaces|Browse folders/);
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
@@ -156,7 +156,7 @@ test('workspace details do not compute the hidden chat page',()=>{
  const scopedHost={...host,getSnapshot:()=>current};
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'details'},workspaces:[workspace]},act:host.dispatch})));
- assert.match(main,/Rename project/);assert.doesNotMatch(main,/Research ideas/);
+ assert.match(main,/Rename workspace/);assert.doesNotMatch(main,/Research ideas/);
 });
 test('omitted scoped workspace page displays loading instead of a false empty result',()=>{
  const current={...snapshot,navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts']};
@@ -353,12 +353,12 @@ test('workspace picker searches the host catalog, pages results, and keeps actio
  await act(async()=>button('Next').props.onClick());
  await act(async()=>await new Promise(resolve=>setTimeout(resolve,20)));
  assert.equal(calls.at(-1).args.offset,40);
- await act(async()=>root.root.findByProps({'aria-label':'Find a project'}).props.onChange({target:{value:'q4'}}));
+ await act(async()=>root.root.findByProps({'aria-label':'Find a workspace'}).props.onChange({target:{value:'q4'}}));
  await act(async()=>await new Promise(resolve=>setTimeout(resolve,180)));
  assert.deepEqual(calls.at(-1).args,{query:'q4',offset:0,limit:40});
  await act(async()=>root.root.findByProps({'aria-label':'Reports · /deep/team/q4/reports'}).props.onClick());
  assert.deepEqual(choices,[{workspace:'/deep/team/q4/reports',location:{kind:'workspace'}}]);
- assert.ok(button('New project'));assert.ok(button('Use existing folder'));
+ assert.ok(button('New workspace'));assert.ok(button('Use existing folder'));
  await act(async()=>root.unmount());
 });
 

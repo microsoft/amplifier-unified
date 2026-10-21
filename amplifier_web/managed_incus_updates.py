@@ -57,7 +57,9 @@ def update_sources(app):
         # Inventory is passive on every host; target-native POSIX helpers are
         # never imported to discover whether a runner has been configured.
         configured = (Path(app.data_dir) / 'test-environments.json').exists()
-        remote = [row for row in runners.store(app)['runners'] if row.get('enabled')]
+        from .test_origin_files import supported_private_files as portable_files
+        remote = (any(row.get('enabled') for row in runners.store(app)['runners'])
+                  if portable_files() else (Path(app.data_dir) / 'test-runners.json').exists())
         if not configured and not remote:
             return []
         return [{'id': 'managed-runner:incus:unsupported', 'kind': 'smart tool', 'runnerKind': KIND,
