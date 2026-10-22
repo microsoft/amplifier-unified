@@ -767,6 +767,12 @@ def execute_call(payload):
     except RemovalFailure:
         raise  # Preserve the inner bounded receipt, including confirmed destruction.
     except DigitalTwinUniverseError as exc:
+        if action == 'prepare' and exc.code == 'repository-source-changed':
+            # This synchronous source export returned before dependency or
+            # guest admission. Never describe it as an uncertain running check.
+            return {'ok': False, 'status': 'not-started', 'effectAdmitted': False,
+                    'universeId': identity, 'snapshot': None, 'code': exc.code,
+                    'message': 'The source changed while its snapshot was being prepared. No environment or test command was started. Keep the source stable and submit a new check.'}
         if action in {'remove', 'finishCleanup'}:
             return {'ok': False, 'status': 'unknown', 'code': 'backend_unconfirmed',
                     'message': 'The original removal could not be confirmed. Inspect retained evidence; do not replay.'}
