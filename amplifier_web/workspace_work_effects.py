@@ -39,6 +39,13 @@ SAFE_ACTIONS = frozenset({
     'workspace.resources.managed', 'session.inspect', 'access.get',
     'schedule.list', 'schedule.read', 'schedule.overview',
     'worktree.inspect', 'worktree.status',
+    'memory.status', 'memory.list', 'memory.read', 'memory.source',
+    'recall.status', 'recall.search', 'recall.read',
+    'permissions.get', 'runtime.dependencies', 'canvas.versions.inspect',
+    'history.list', 'history.shared.list', 'history.shared.view',
+    'assignment.read', 'assignment.tasks.list', 'assignment.tasks.read',
+    'assignment.tasks.wait', 'workspace.environments.removal.read',
+    'workspace.environments.removal.list',
 })
 SAFE_TOOLS = frozenset({'read_file', 'grep', 'glob'})
 
@@ -163,9 +170,11 @@ def check(invocation, sid, args):
         result.update(applicable=applicable, reason=reason)
         if not applicable:
             return {**result, 'allowed': True, 'reason': 'No commissioned Work association in this host input set; ordinary authority still applies.'}
-        target = invocation.bound_root(sid)
         if recovery_read(args['toolName'], args['toolInput']):
+            # Reading grants no Work authority; the actual read tool/domain
+            # still enforces the delegated caller's ordinary permissions.
             return {**result, 'allowed': True, 'reason': 'Exact read or safe reporting; ordinary authority still applies.'}
+        target = invocation.bound_root(sid)
         if args['toolName'] == 'tool_exec' and (BINDING.get() or {}).get('_workDispatchGuarded') is True:
             # Only the installed ProgrammaticTool under the worker's active
             # BoundDispatch supplies this fact. Each inner call stays guarded.

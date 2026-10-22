@@ -295,6 +295,20 @@ async def test_bound_work_keeps_question_reads_and_refuses_self_notify_input(app
     assert retained_bytes(app) == before and app.runtime.inputs == inputs
 
 
+async def test_work_bound_child_can_read_but_cannot_borrow_root_effect_witness(app):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'child-read-authority')
+    _, child = await assert_available_commission(app, owner, item, 'child-read-commission')
+    required = (await current_work(app, child))['required']; args = tool_args()
+    witness = trusted_fixture(child, required, args)
+    envelope = {**transport(child, principal='delegated-runtime'), '_workOrigin': witness}
+    result = await app.app_bridge('work.effect.check', {**args, **envelope}, child['id'])
+    assert not result['allowed'] and result['effectAuthorized'] is False
+    read_args = {'toolName': 'read_file', 'toolInput': {'file_path': 'context.txt'}, 'toolCallId': 'read'}
+    result = await app.app_bridge('work.effect.check', {**read_args, **envelope}, child['id'])
+    assert result['allowed'] and result['effectAuthorized'] is False
+
+
 @pytest.mark.parametrize('fault', ['none', 'uncovered', 'changed_args', 'host_stop', 'promise'])
 @pytest.mark.parametrize('target', ['tool', 'app_control'])
 async def test_real_delivery_worker_and_service_join_at_effect(app, fault, target):

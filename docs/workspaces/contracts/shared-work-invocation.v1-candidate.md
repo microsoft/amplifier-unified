@@ -233,6 +233,22 @@ consume this contract at their actual boundary; the endpoint alone does not
 establish production enforcement. Tests of its trusted-transport fixture are
 service checks, not native origin or effect-execution proof.
 
+The bounded host integration currently rechecks covered Work mutations, chat
+pinning and peer-only `notify` at their synchronous commit boundary under the
+service lock. Other Work-dependent shared-action mutations explicitly refuse
+with `work_effect_owner_unavailable`; a queued job or action with later effects
+must first retain and recheck its own binding. This is an explicit implementation
+limit, not completion of every accepted effect path. Unrelated roots keep ordinary
+policy. Exact reads, receipt inspection, own-request cancellation and attributed
+Work reports remain available through their existing permission owners.
+The worker-local Stop counter is not compared with the persistent host interruption
+counter: the former is rechecked by the worker, the latter by canonical Work
+currentness. A guarded programmatic container conveys no permission to its inner
+calls; the worker verifies the installed tool and dispatch objects before stamping
+its private flag. Generic streaming and unmeasured native steering remain
+unqualified. Native controlled-wire and nested-dispatch checks are not live-provider
+or arbitrary tools' internal-await qualification.
+
 The continuity adapter must independently establish all of the following at the
 actual runtime boundary:
 
