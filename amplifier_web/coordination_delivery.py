@@ -10,6 +10,7 @@ import hashlib
 import json
 import uuid
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 WORK_BYTES = 12 * 1024
 STUB_FIELDS = frozenset({
@@ -29,7 +30,23 @@ REQUIRED_FIELDS = frozenset({
 WORK_READS = frozenset({'workspace.work.invocation', 'workspace.work.promise', 'workspace.work.source'})
 MAX_READS = 512
 READ_BYTES = 4 * 1024 * 1024
+PLAINTEXT_BYTES = 64 * 1024
 WORK_ATTEMPT = ContextVar('unified_work_delivery_attempt', default=None)
+WORK_NESTED = ContextVar('unified_work_nested_origin', default=None)
+WORK_EXECUTION = ContextVar('unified_work_tool_execution', default=None)
+
+@dataclass(frozen=True)
+class InvocationOrigin:
+    """Private host value, never reconstructed from tool arguments."""
+    scope_json: str
+    admitted_call_id: str
+    attempt_id: str
+    fitted_sha256: str
+
+    def public(self):
+        return {**json.loads(self.scope_json), 'schemaVersion': 1,
+                'admittedCallId': self.admitted_call_id, 'attemptId': self.attempt_id,
+                'fittedSha256': self.fitted_sha256}
 
 def _same_json(left, right):
     # Python equality alone treats False == 0 and True == 1. Transport proof
@@ -100,11 +117,33 @@ def _valid_required(required):
         return False
     coverage = required.get('coverage')
     if (not isinstance(coverage, dict)
-            or set(coverage) - {'complete', 'supportedInputIds', 'unsupportedInputs', 'reason', 'detail'}
+            or set(coverage) - {'complete', 'supportedInputIds', 'unsupportedInputs', 'reason', 'detail',
+                               'missingInputIds', 'deliveredInputCount', 'projectedInputCount'}
             or type(coverage.get('complete')) is not bool
             or not _texts(coverage.get('supportedInputIds', []), 16)
             or any(not _text(coverage[k]) for k in ('reason', 'detail') if k in coverage)):
         return False
+    extra = {'missingInputIds', 'deliveredInputCount', 'projectedInputCount'} & set(coverage)
+    if extra:
+        delivered, projected = coverage.get('deliveredInputCount'), coverage.get('projectedInputCount')
+        if (coverage['complete'] or not _integer(delivered, 1, 10**9)
+                or not _integer(projected, 0, delivered)):
+            return False
+        if coverage.get('reason') == 'input_projection_incomplete':
+            missing = coverage.get('missingInputIds')
+            inputs = required.get('inputIds')
+            if (extra != {'missingInputIds', 'deliveredInputCount', 'projectedInputCount'}
+                    or not _texts(missing, 16) or not missing or len(set(missing)) != len(missing)
+                    or not _texts(inputs, 16) or delivered != len(inputs)
+                    or not set(missing) <= set(inputs) or len(missing) != delivered - projected):
+                return False
+        elif coverage.get('reason') == 'input_coverage_overflow':
+            if (extra != {'deliveredInputCount', 'projectedInputCount'}
+                    or delivered <= 16 or required.get('inputCount') != delivered
+                    or required.get('inputIds') != []):
+                return False
+        else:
+            return False
     unsupported = coverage.get('unsupportedInputs', [])
     if (not isinstance(unsupported, list) or len(unsupported) > 16
             or any(not isinstance(row, dict) or set(row) != {'inputId', 'reason'}
@@ -181,8 +220,9 @@ def _work_reference(value):
 
 
 class CoordinationDelivery:
-    def __init__(self, previous, bridge):
+    def __init__(self, previous, bridge, *, origin_scope=None):
         self.previous, self.bridge = previous, bridge
+        self.origin_scope = origin_scope
         # Transient observations, not another canonical Work store. Dropped or
         # reopened observations cannot count as delivered content.
         self.reads = []
@@ -192,6 +232,7 @@ class CoordinationDelivery:
         self.binding_overflow = False
         self.stream_epoch = 0
         self.active_streams = 0
+        self.executed_calls = set()
 
     def __getattr__(self, name):
         return getattr(self.previous, name)
@@ -254,6 +295,42 @@ class CoordinationDelivery:
     def discard_work(self, binding):
         self.requests = {key: row for key, row in self.requests.items() if row is not binding}
 
+    def _scope(self):
+        value = self.origin_scope() if callable(self.origin_scope) else None
+        if (not isinstance(value, dict) or value.get('inputCoverage') != 'complete'
+                or not all(_text(value.get(k)) for k in ('rootSessionId', 'runtimeSessionId', 'generationId'))
+                or not _texts(value.get('inputIds'), 16) or not value['inputIds']
+                or len(set(value['inputIds'])) != len(value['inputIds'])):
+            return None
+        # Membership is a set. Preserve every ID, with the same canonical order
+        # as the service producer rather than delivery chronology.
+        return json.dumps({**value, 'inputIds': sorted(value['inputIds'])},
+                          sort_keys=True, ensure_ascii=False)
+
+    def admit_work(self, attempt, row, *, guarded):
+        """Join only inside the actual post-capacity-admission provider call."""
+        if self.attempts.get(attempt['id']) is not attempt:
+            raise ValueError('Work origin expired before admission.')
+        scope = self._scope()
+        if attempt['scope'] != scope:
+            if attempt['required']['status'] == 'available':
+                raise ValueError('Work origin changed during admission; refit before transport.')
+            return  # Untasked requests may continue, but cannot gain proof.
+        if not guarded or not scope:
+            return  # An observation-only provider wrapper is not an admission.
+        fields = json.loads(scope)
+        if (row.get('sessionId') != fields['runtimeSessionId']
+                or row.get('rootSessionId') != fields['rootSessionId'] or not _text(row.get('id'))):
+            raise ValueError('Work origin changed at provider admission.')
+        if attempt['origin'] is not None:
+            raise ValueError('Work origin already has an admitted call; no automatic replay.')
+        attempt['origin'] = InvocationOrigin(scope, row['id'], attempt['id'], attempt['requestSha256'])
+
+    def origin_current(self, attempt):
+        origin = attempt.get('origin')
+        return (self.attempts.get(attempt['id']) is attempt
+                and isinstance(origin, InvocationOrigin) and self._scope() == origin.scope_json)
+
     def begin_work(self, request, *, streaming=False):
         saved = self._request(request)
         required = saved['required'] if saved else _unavailable_work()['required']
@@ -263,6 +340,7 @@ class CoordinationDelivery:
             self.attempts.clear()
             self.calls.clear()
             self.seen_calls.clear()
+            self.executed_calls.clear()
             self.binding_overflow = False
             self.binding_generation = generation
         if streaming:
@@ -279,13 +357,77 @@ class CoordinationDelivery:
                    'transport': 'streaming_origin_unavailable' if streaming else 'host_complete_boundary',
                    'streaming': streaming, 'stream_epoch': self.stream_epoch,
                    'overlapped_stream': bool(self.active_streams), 'stream_closed': False,
-                   'responses': set(), 'native': False}
+                   'responses': set(), 'native': False, 'scope': self._scope(), 'origin': None}
+        attempt['plaintext'] = saved.get('plaintext') if saved else None
+        attempt['native_send'] = None
         self.attempts[identity] = attempt
         while len(self.attempts) > 8:
             expired = next(iter(self.attempts))
             self.attempts.pop(expired)
             self.calls = {key: row for key, row in self.calls.items() if row['attemptId'] != expired}
         return attempt
+
+    def begin_steer(self):
+        # Steering has no fitted ChatRequest. Record its own admitted call, but
+        # never inherit the parent's current-detail proof or pretend measurement.
+        identity = uuid.uuid4().hex
+        attempt = {'id': identity, 'required': _unavailable_work()['required'],
+                   'coverage': {'complete': False, 'effectAuthorized': False,
+                                'reason': 'Steering has no independently fitted detail request.'},
+                   'status': 'sending', 'requestSha256': None, 'scope': self._scope(),
+                   'origin': None, 'native': True, 'responses': set(), 'plaintext': None,
+                   'native_send': None, 'streaming': False}
+        self.attempts[identity] = attempt
+        while len(self.attempts) > 8:
+            expired = next(iter(self.attempts))
+            self.attempts.pop(expired)
+            self.calls = {k: v for k, v in self.calls.items() if v['attemptId'] != expired}
+        return attempt
+
+    async def prepare_native(self, attempt):
+        if attempt['origin'] is not None and not self.origin_current(attempt):
+            raise ValueError('Native host origin is unavailable or changed.')
+        required = attempt['required']
+        if required['status'] == 'available':
+            check = await asyncio.wait_for(self.bridge('work.invocation.revalidate',
+                                                       {'version': required['version']}), 1.5)
+            if (check.get('current') is not True or check.get('required') != required
+                    or check.get('effectAuthorized') is not False):
+                raise ValueError('Native Work requirements changed.')
+        if attempt['origin'] is not None and not self.origin_current(attempt):
+            raise ValueError('Native host origin changed while checking currentness.')
+
+    def admit_native(self, attempt, envelope, *, send_id):
+        """Observe the exact immutable send argument, not a trace or checkpoint."""
+        if (attempt['origin'] is not None and not self.origin_current(attempt)
+                or envelope.attempt_id != attempt['id']
+                or envelope.kind not in {'response.create', 'response.steer'}
+                or attempt['native_send'] is not None):
+            return False
+        payload = json.loads(envelope.payload)
+        complete = False
+        if envelope.kind == 'response.create' and len(envelope.payload.encode()) <= READ_BYTES:
+            # Only a real text input item counts. A matching string in tool
+            # schemas, encrypted checkpoints or arbitrary JSON is not delivery.
+            texts = [block.get('text') for item in payload.get('input', [])
+                     if isinstance(item, dict) and item.get('role') == 'user'
+                     for block in item.get('content', []) if isinstance(block, dict)
+                     and block.get('type') == 'input_text']
+            complete = bool(self.origin_current(attempt) and attempt['coverage'].get('complete') and
+                            (attempt['required'].get('requirementCount') == 0
+                             or attempt['plaintext'] and texts.count(attempt['plaintext']) == 1))
+        attempt['native'] = True
+        attempt['transport'] = 'native_immutable_send'
+        attempt['native_send'] = {'sendId': send_id, 'kind': envelope.kind,
+            'outboundSha256': hashlib.sha256(envelope.payload.encode()).hexdigest(),
+            'complete': complete, 'entered': False}
+        return True  # Local send admission only; never an effect grant.
+
+    def native_response(self, attempt, response):
+        if (_text(response) and len(attempt['responses']) < 128 and attempt.get('native_send')
+                and self.attempts.get(attempt['id']) is attempt):
+            attempt['native_send']['entered'] = True
+            attempt['responses'].add(response)
 
     def _bind_call(self, attempt, identity, name, arguments, *, response=None):
         if self.binding_overflow or attempt['id'] not in self.attempts:
@@ -354,7 +496,8 @@ class CoordinationDelivery:
         if attempt is None or attempt['id'] not in self.attempts:
             return
         attempt['native'] = True
-        attempt['transport'] = 'native_immutable_send_proof_unavailable'
+        if not attempt.get('native_send'):
+            attempt['transport'] = 'native_immutable_send_proof_unavailable'
         if kind == 'native.send':
             attempt['outboundSha256'] = hashlib.sha256(json.dumps(
                 value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -365,9 +508,8 @@ class CoordinationDelivery:
             return
         event = value.get('type')
         if event == 'response.created':
-            identity = value.get('response', {}).get('id')
-            if _text(identity) and len(attempt['responses']) < 128:
-                attempt['responses'].add(identity)
+            # The installed adapter joins creation/steering lineage through the
+            # awaited lifecycle before any early tool item can be dispatched.
             return
         terminal = value.get('response', {})
         response = terminal.get('id') if event in {'response.completed', 'response.done'} else value.get('response_id')
@@ -390,13 +532,30 @@ class CoordinationDelivery:
         Nested provenance is not qualified by this direct-call implementation.
         """
         unavailable = {'complete': False, 'effectAuthorized': False, 'status': 'unavailable'}
+        nested = WORK_NESTED.get()
+        if nested and nested['delivery'] is self:
+            source = nested['lease']
+            if (not nested['active'] or source.closed or not source.scope.active
+                    or not source.scope.run.active or not nested['verified']
+                    or not _same_json(source.scope.call.arguments, nested['parent']['tool_input'])
+                    or data.get('tool_call_id') != nested['callId']
+                    or data.get('tool_name') != nested['name']
+                    or not _same_json(data.get('tool_input'), nested['arguments'])):
+                return {**unavailable, 'reason': 'Nested call is not its active host dispatch.'}
+            token = WORK_NESTED.set(None)
+            try:
+                parent = self.effect_coverage(nested['parent'])
+            finally:
+                WORK_NESTED.reset(token)
+            if not parent.get('complete'):
+                return parent
+            return {**parent, 'parentToolCallId': nested['parent']['tool_call_id'],
+                    'dispatchRunId': source.scope.run.identity,
+                    'toolCallId': data['tool_call_id'], 'toolName': data['tool_name'],
+                    'argsSha256': hashlib.sha256(json.dumps(
+                        [data['tool_name'], data['tool_input']], sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
         if self.active_streams:
             return {**unavailable, 'reason': 'An unqualified stream can emit tool calls; origin is unavailable.'}
-        active = WORK_ATTEMPT.get()
-        if active and active[1] and active[1]['status'] != 'returned':
-            # Early native/stream calls need their own proven transport origin.
-            # They cannot consume a completed ordinary request's same call ID.
-            return {**unavailable, 'reason': 'Early transport origin is not qualified.'}
         if data.get('parent_tool_call_id') or data.get('dispatch_source'):
             return {**unavailable, 'reason': 'Nested causal delivery is not qualified.'}
         row = self.calls.get(data.get('tool_call_id'))
@@ -408,13 +567,32 @@ class CoordinationDelivery:
                                                     sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         except (TypeError, ValueError):
             return {**unavailable, 'reason': 'Tool arguments are not exact JSON.'}
-        if (not attempt or attempt['status'] != 'returned'
-                or row['argsSha256'] != fingerprint or attempt['native']
-                or attempt['overlapped_stream'] or attempt['stream_epoch'] != self.stream_epoch
-                or attempt['transport'] != 'host_complete_boundary'):
+        native = (attempt or {}).get('native_send')
+        native_ok = bool(native and native['complete'] and native['entered']
+                         and row['responseId'] in attempt['responses']
+                         and attempt['status'] in {'sending', 'returned'})
+        ordinary_ok = bool(attempt and not attempt['native'] and attempt['status'] == 'returned'
+                           and not attempt['overlapped_stream'] and attempt['stream_epoch'] == self.stream_epoch
+                           and attempt['transport'] == 'host_complete_boundary')
+        active = WORK_ATTEMPT.get()
+        if active and active[1] is not attempt and active[1] and active[1]['status'] != 'returned':
+            return {**unavailable, 'reason': 'Executing request is not this call origin.'}
+        if (not attempt or row['argsSha256'] != fingerprint or not (native_ok or ordinary_ok)):
             return {**unavailable, 'reason': 'Origin, transport or exact tool arguments are unavailable.'}
+        if not self.origin_current(attempt):
+            return {**unavailable, 'reason': 'Admitted host origin or full input scope is unavailable.'}
+        origin = attempt['origin'].public()
+        required = attempt['required']
+        if (any(origin[k] != required[k] for k in ('rootSessionId', 'generationId'))
+                or sorted(origin['inputIds']) != sorted(required['inputIds'])):
+            return {**unavailable, 'reason': 'Required input scope differs from the admitted origin.'}
         return {**copy.deepcopy(attempt['coverage']), 'attemptId': attempt['id'],
-                'requestSha256': attempt['requestSha256'], 'effectAuthorized': False}
+                'requestSha256': attempt['requestSha256'], 'origin': origin,
+                'toolCallId': data['tool_call_id'], 'toolName': row['name'],
+                'argsSha256': row['argsSha256'], 'responseId': row['responseId'],
+                'sendId': native['sendId'] if native else None,
+                'outboundSha256': native['outboundSha256'] if native else attempt['requestSha256'],
+                'effectAuthorized': False}
 
     async def recheck_effect_coverage(self, data):
         """Host-only observation seam for the existing effect-policy owner."""
@@ -434,12 +612,100 @@ class CoordinationDelivery:
                     'reason': 'Work currentness or originating request became unavailable.'}
         return before
 
+    async def claim_effect_origin(self, data):
+        """One actual execution consumes its proof; diagnostic reads do not."""
+        identity = data.get('tool_call_id')
+        if identity in self.executed_calls or len(self.executed_calls) >= 4096:
+            return {'complete': False, 'effectAuthorized': False, 'status': 'unavailable',
+                    'reason': 'Tool execution identity was reused or retention is full.'}
+        if _text(identity):
+            self.executed_calls.add(identity)
+        return await self.recheck_effect_coverage(data)
+
+    async def execution_origin(self, data):
+        execution = WORK_EXECUTION.get()
+        if execution and execution['delivery'] is self:
+            if not execution['active'] or not _same_json(execution['data'], data):
+                return {'complete': False, 'effectAuthorized': False, 'status': 'unavailable',
+                        'reason': 'Executing tool changed after its proof was consumed.'}
+            proof = execution['proof']
+            if proof.get('complete') and await self.recheck_effect_coverage(data) != proof:
+                return {'complete': False, 'effectAuthorized': False, 'status': 'unavailable',
+                        'reason': 'Executing tool origin changed during its admission.'}
+            return copy.deepcopy(proof)
+        return await self.claim_effect_origin(data)
+
+    def observe_nested_pre(self, data):
+        nested = WORK_NESTED.get()
+        if not nested or nested['delivery'] is not self:
+            return
+        source = data.get('dispatch_source', {})
+        lease = nested['lease']
+        if (nested['callId'] is None and nested['active'] and not lease.closed
+                and lease.scope.active and lease.scope.run.active
+                and source.get('session_id') == lease.scope.run.coordinator.session_id
+                and source.get('run_id') == lease.scope.run.identity
+                and source.get('parent_tool_call_id') == nested['parent']['tool_call_id']
+                and data.get('parent_tool_call_id') == nested['parent']['tool_call_id']
+                and source.get('tool_call_id') == data.get('tool_call_id')
+                and source.get('tool_name') == data.get('tool_name') == nested['name']
+                and _same_json(data.get('tool_input'), nested['arguments'])):
+            nested['callId'], nested['verified'] = data['tool_call_id'], True
+
+    def install_dispatch(self, coordinator):
+        original = coordinator.get_capability('tools.dispatch')
+        if original is None or getattr(original, '_work_delivery', None) is self:
+            return
+        delivery = self
+        class BoundDispatch:
+            _work_delivery = delivery
+            def __getattr__(self, name):
+                return getattr(original, name)
+            def bind(self):
+                lease = original.bind()
+                from amplifier_module_loop_live.dispatch import DispatchLease
+                if not isinstance(lease, DispatchLease) or lease.scope.run.coordinator is not coordinator:
+                    return lease  # Unknown v1 implementation receives no proof.
+                call = lease.scope.call
+                parent = {'tool_call_id': call.id, 'tool_name': call.name, 'tool_input': copy.deepcopy(call.arguments)}
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
+                execution = WORK_EXECUTION.get()
+                if execution and execution['delivery'] is delivery:
+                    eligible = (execution['active'] and not execution['leaseIssued']
+                                and execution['proof'].get('complete') is True
+                                and _same_json(execution['data'], {**dispatch, **parent}))
+                    execution['leaseIssued'] = True
+                else:
+                    eligible = (dispatch.get('tool_call_id') == call.id
+                                and call.id not in delivery.executed_calls and len(delivery.executed_calls) < 4096)
+                if eligible and not execution:
+                    delivery.executed_calls.add(call.id)
+                class BoundLease:
+                    def __getattr__(self, name):
+                        return getattr(lease, name)
+                    async def call(self, name, arguments, *, request_id=None):
+                        if not eligible:
+                            return await lease.call(name, arguments, request_id=request_id)
+                        nested = {'delivery': delivery, 'lease': lease, 'parent': parent,
+                                  'name': name, 'arguments': copy.deepcopy(arguments),
+                                  'active': True, 'verified': False, 'callId': None}
+                        token = WORK_NESTED.set(nested)
+                        execution_token = WORK_EXECUTION.set(None)
+                        try:
+                            return await lease.call(name, arguments, request_id=request_id)
+                        finally:
+                            nested['active'] = False
+                            WORK_EXECUTION.reset(execution_token)
+                            WORK_NESTED.reset(token)
+                return BoundLease()
+        coordinator.register_capability('tools.dispatch', BoundDispatch())
+
     def close_work_stream(self, attempt):
         if attempt is not None and attempt.get('streaming') and not attempt['stream_closed']:
             attempt['stream_closed'] = True
             self.active_streams -= 1
 
-    def request_coverage(self, request):
+    def request_coverage(self, request, *, used=None):
         """Inspect exact fitted host bytes; this is NOT native/effect authority.
 
         The native adapter can replace history with opaque checkpoint content.
@@ -456,6 +722,15 @@ class CoordinationDelivery:
                       generationId=required['generationId'], inputIds=required['inputIds'],
                       requirementCount=required['requirementCount'], coveredCount=0)
         retained = [row for row in self.reads if _work_pair_retained(request, row)]
+        def retain(page, *, source=False):
+            if used is None:
+                return
+            for row in retained:
+                value = row['receipt'].get('result', {})
+                if source:
+                    value = value.get('source', {})
+                if _same_json(value, page) and row not in used:
+                    used.append(row)
         try:
             requirements, cursor, visited = [], None, set()
             while True:
@@ -475,6 +750,7 @@ class CoordinationDelivery:
                 if len(pages) != 1:
                     raise ValueError('Required manifest page is absent or ambiguous in fitted content.')
                 page = next(iter(pages.values()))
+                retain(page)
                 items = page.get('items')
                 if not isinstance(items, list) or len(items) > 20:
                     raise ValueError('Invalid required manifest page.')
@@ -512,6 +788,7 @@ class CoordinationDelivery:
                     if len(pages) != 1:
                         raise ValueError('Required body page is absent or ambiguous in fitted content.')
                     page = next(iter(pages.values()))
+                    retain(page, source=requirement['kind'] == 'source')
                     if (page.get('offset') != offset or not isinstance(page.get('text'), str)
                             or not _integer(page.get('total')) or page.get('sha256') != requirement['contentSha256']
                             or total is not None and page['total'] != total):
@@ -582,11 +859,28 @@ class CoordinationDelivery:
         self.requests[identity] = {'content': content, 'required': copy.deepcopy(current['work']['required'])}
         while len(self.requests) > 4:
             self.requests.pop(next(iter(self.requests)))
-        return request.model_copy(update={'messages': [
-            *[message for message in request.messages if not (message.metadata or {}).get('coordinationObservation')],
+        result = request.model_copy(update={'messages': [
+            *[message for message in request.messages if not ((message.metadata or {}).get('coordinationObservation')
+                or (message.metadata or {}).get('workPlaintextObservation'))],
             Message(role='user', content=content,
                     metadata={'ephemeral': True, 'coordinationObservation': True, 'workRequestObservation': identity})]})
+        used = []
+        coverage = self.request_coverage(result, used=used)
+        if coverage.get('complete') and coverage.get('requirementCount'):
+            plaintext = 'Required Work detail plaintext (host-read evidence, not authority):\n' + json.dumps({
+                'version': current['work']['required']['version'],
+                'reads': [{'input': row['input'], 'receipt': row['receipt']} for row in used]},
+                ensure_ascii=False, sort_keys=True)
+            # This suffix exists BEFORE request_budget. Never retrieve missing
+            # pages, inject after fitting, or truncate constraints into a pass.
+            if len(plaintext.encode()) <= PLAINTEXT_BYTES:
+                self.requests[identity]['plaintext'] = plaintext
+                result = result.model_copy(update={'messages': [*result.messages,
+                    Message(role='user', content=plaintext,
+                            metadata={'ephemeral': True, 'workPlaintextObservation': identity})]})
+        return result
 
     def commit(self, request):
         self.previous.commit(request.model_copy(update={'messages': [message for message in request.messages
-            if not (message.metadata or {}).get('coordinationObservation')]}))
+            if not ((message.metadata or {}).get('coordinationObservation')
+                    or (message.metadata or {}).get('workPlaintextObservation'))]}))

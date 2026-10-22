@@ -1,5 +1,6 @@
 """Host-owned UI tool and ephemeral guidance, shared by root and worker sessions."""
 import asyncio
+import copy
 import json
 import re
 
@@ -119,11 +120,83 @@ async def install_app_access(coordinator, bridge):
     from .memory_delivery import MemoryDelivery, POLICY as MEMORY_POLICY
     from .coordination_delivery import CoordinationDelivery
     # Keep selected visual evidence after general workspace observations.
-    delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(SurfaceDelivery(bridge), bridge), bridge), bridge), bridge)
+    delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(
+        SurfaceDelivery(bridge), bridge, origin_scope=coordinator.get_capability('web.work_origin_scope')),
+        bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
     # Observation only. The service's effect policy must independently decide
     # applicability and permissions; absent producer wiring is not a grant.
     coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)
+    coordinator.register_capability('web.work_effect_origin', delivery.execution_origin)
+    def guard_tools(incoming=None):
+        check = coordinator.get_capability('web.work_effect_check')
+        if not callable(check):
+            return incoming[1] if incoming else None
+        class WorkCheckedTool:
+            def __init__(self, original, name):
+                self.original, self.mounted_name = original, name
+                self._work_check = check
+                self._work_delivery_guard = delivery
+            def refresh_work_check(self, value):
+                self._work_check = value
+            def __getattr__(self, name):
+                return getattr(self.original, name)
+            async def execute(self, arguments):
+                # The engine has already awaited hooks/approval and installed
+                # its real per-task call ID. Nested dispatch also holds its
+                # original execution lock and validates the live lease first.
+                from .coordination_delivery import WORK_EXECUTION
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
+                data = {**dispatch, 'tool_name': self.mounted_name, 'tool_input': copy.deepcopy(arguments)}
+                proof = await delivery.claim_effect_origin(data)
+                try:
+                    from amplifier_module_tool_exec import ProgrammaticTool
+                    dispatcher = coordinator.get_capability('tools.dispatch')
+                    guarded_program = (type(self.original) is ProgrammaticTool
+                        and self.original.coordinator is coordinator
+                        and getattr(dispatcher, '_work_delivery', None) is delivery.begin_work.__self__
+                        and dispatcher.enabled is True)
+                except ImportError:
+                    guarded_program = False
+                execution = {'delivery': delivery.begin_work.__self__, 'data': data, 'proof': proof,
+                             'active': True, 'leaseIssued': False, 'programmaticGuarded': guarded_program}
+                token = WORK_EXECUTION.set(execution)
+                try:
+                    result = await self._work_check(self.mounted_name, arguments)
+                    if not isinstance(result, dict) or result.get('allowed') is not True:
+                        return ToolResult(success=False, error={
+                            'code': 'work_precondition_unavailable',
+                            'message': 'Current Work requirements or host execution scope are unavailable.'})
+                    return await self.original.execute(arguments)
+                finally:
+                    execution['active'] = False
+                    WORK_EXECUTION.reset(token)
+        def wrapped(name, tool):
+            if getattr(tool, '_work_delivery_guard', None) is delivery:
+                tool.refresh_work_check(check)
+                return tool
+            return (WorkCheckedTool(tool, name)
+                    if name != 'app_control' and getattr(tool, '_work_check', None) is not check else tool)
+        if incoming:
+            return wrapped(*incoming)
+        tools = coordinator.get('tools') or {}
+        for name, tool in list(tools.items()):
+            # AppControl carries its witness into service-owned synchronous
+            # action admission. Avoid consuming that execution twice.
+            tools[name] = wrapped(name, tool)
+    coordinator.register_capability('web.work_guard_tools', guard_tools)
+    original_mount = coordinator.mount
+    async def guarded_mount(mount_point, module, name=None):
+        if mount_point == 'tools':
+            module = guard_tools((name or getattr(module, 'name', None), module))
+        return await original_mount(mount_point, module, name=name)
+    coordinator.mount = guarded_mount
+    def programmatic_guarded():
+        from .coordination_delivery import WORK_EXECUTION
+        execution = WORK_EXECUTION.get()
+        return bool(execution and execution['delivery'] is delivery.begin_work.__self__
+                    and execution['active'] and execution['programmaticGuarded'])
+    coordinator.register_capability('web.work_programmatic_guarded', programmatic_guarded)
     from .surface_delivery import SurfaceProvider
     from .request_recovery import RecoveringProvider, install as install_recovery
     install_recovery(coordinator)
@@ -137,6 +210,8 @@ async def install_app_access(coordinator, bridge):
             return await super()._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs)
     transformed = []
     def transform(provider):
+        delivery.install_dispatch(coordinator)
+        guard_tools()
         if isinstance(provider, SurfaceProvider) and provider.delivery is delivery:
             return provider
         observe = coordinator.get_capability('web.provider_observe')
@@ -211,7 +286,14 @@ async def install_app_access(coordinator, bridge):
         delivery.bind_work(data)
         return HookResult()
 
+    async def bind_nested_pre(event, data):
+        delivery.observe_nested_pre(data)
+        return HookResult()
+
     await coordinator.mount('tools', AppControl(), name='app_control')
+    delivery.install_dispatch(coordinator)
+    guard_tools()
+    coordinator.hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
     coordinator.hooks.register('provider:request', guidance, name='web-canvas-guidance')
     coordinator.hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
     coordinator.register_capability('web.app_access', True)

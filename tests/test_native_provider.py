@@ -298,7 +298,10 @@ async def test_real_native_unsent_callback_reaches_bound_host_disk(tmp_path, mon
         if operation == 'response.create':
             await native._native_response({'input': [{'role': 'user', 'content': 'PRIVATE create'}]})
         else:
-            await native.steer_live(SimpleNamespace(id='input-one'))
+            # This earlier slice tests upstream receipt callbacks, not the new
+            # host admission wrapper (covered separately through installation).
+            from amplifier_module_provider_openai.native import NativeResponsesProvider
+            await NativeResponsesProvider.steer_live(native, SimpleNamespace(id='input-one'))
     if ending == 'send_error':
         socket.send.assert_awaited_once()
         assert 'native.not_sent' not in observed
@@ -552,7 +555,8 @@ async def native_parent_overlap(tmp_path, monkeypatch, *, fail_parent):
     steer_task = None
     try:
         await asyncio.wait_for(parent_created.wait(), 1)
-        steer_task = asyncio.create_task(native.steer_live(SimpleNamespace(id='input-one')))
+        from amplifier_module_provider_openai.native import NativeResponsesProvider
+        steer_task = asyncio.create_task(NativeResponsesProvider.steer_live(native, SimpleNamespace(id='input-one')))
         await asyncio.wait_for(preparing.wait(), 1)
         if fail_parent:
             await events.put(json.dumps({'type': 'error', 'error': {'code': 'synthetic'}}))
@@ -692,7 +696,8 @@ async def test_compaction_capacity_denial_prevents_sdk_and_success_records_usage
 
 
 @pytest.mark.asyncio
-async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(tmp_path, monkeypatch):
+@pytest.mark.parametrize('work_boundary', [False, True])
+async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(tmp_path, monkeypatch, work_boundary):
     pytest.importorskip('amplifier_module_provider_openai.native')
     from amplifier_module_provider_openai import OpenAIProvider
     from amplifier_module_loop_live.scope import LIVE_OWNER
@@ -720,11 +725,20 @@ async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(
     c.telemetry.admission_guard=admit
     pixel='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aJxkAAAAASUVORK5CYII='
     class Delivery:
-        async def prepare(self,request,provider):
+        async def prepare(self,request,provider,**kwargs):
             return request.model_copy(update={'messages':[*request.messages,Message(role='user',metadata={'ephemeral':True},content=[{'type':'image','source':{'type':'base64','media_type':'image/png','data':pixel}}])]})
         def commit(self,request):pass
     observed=c.telemetry.instrument_provider(c.session_id,native)
-    surface=SurfaceProvider(observed,Delivery())
+    from amplifier_web.coordination_delivery import CoordinationDelivery
+    # Production app installation adds this boundary even when the request has
+    # no Work tools/association. Retain the ordinary untasked native path while
+    # exercising the real admitted-call join, not a visual-only legacy fixture.
+    scope = {'rootSessionId': c.session_id, 'runtimeSessionId': c.session_id,
+             'generationId': 'generation-1', 'inputIds': ['ordinary-input'], 'inputCoverage': 'complete'}
+    delivery = CoordinationDelivery(Delivery(), AsyncMock(), origin_scope=lambda: copy.deepcopy(scope)) if work_boundary else Delivery()
+    if work_boundary:
+        c.caps['web.surface_delivery'] = delivery
+    surface=SurfaceProvider(observed,delivery)
     selected.execution_adapter=lambda provider:surface
     def socket(response_id):
         return SimpleNamespace(state=State.OPEN,send=AsyncMock(),close=AsyncMock(),recv=AsyncMock(side_effect=[
