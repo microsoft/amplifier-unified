@@ -7,7 +7,9 @@ import asyncio
 import contextvars
 import hashlib
 import json
+import os
 import time
+from types import SimpleNamespace
 
 from aiohttp import web
 
@@ -51,6 +53,28 @@ async def install(app, runtime, *, manifest_path=None):
             manifest_path.write_text(json.dumps(manifest))
     active_read = contextvars.ContextVar('shared_work_fixture_read', default=False)
     cold_calls = []
+    task_reads, task_controls = [], []
+    if os.environ.get('AMPLIFIER_TEST_COLD_TASK') == '1':
+        assert manifest.get('coldTask'), 'Cold task seed must exist before reopening'
+        original_dispatch = service.dispatch
+        async def observed_task(action, *args, **kwargs):
+            if action != 'task.get':
+                return await original_dispatch(action, *args, **kwargs)
+            token = active_read.set(True)
+            try:
+                response = await original_dispatch(action, *args, **kwargs)
+                value = response.get('result', {})
+                task_reads.append({'action': action, 'accepted': response.get('accepted'),
+                    'status': value.get('status'), 'revision': (value.get('task') or {}).get('revision'),
+                    'broadStateReturned': bool(response.get('state'))})
+                return response
+            finally:
+                active_read.reset(token)
+        async def forbidden_control(*args, **kwargs):
+            task_controls.append('runtime.control')
+            raise AssertionError('Cold saved-task inspection must not control a worker')
+        service.dispatch = observed_task
+        runtime.control = forbidden_control
     if cold:
         # Trap hydration caused by a Work read, without pretending that the
         # ordinary app's chat display is itself forbidden to hydrate history.
@@ -73,6 +97,7 @@ async def install(app, runtime, *, manifest_path=None):
             raise web.HTTPForbidden()
         return web.json_response({**manifest, 'coldReopen': cold, 'coldReadCalls': cold_calls,
             'forbiddenRuntimeCalls': list(calls), 'runtimeCallbackCounts': dict(callback_counts),
+            'taskReadObservations': task_reads, 'taskControlCalls': task_controls,
             'pendingWarmups': len(service.warmup.pending)})
     app.router.add_get('/fixture/shared-work', inspect)
 
@@ -182,6 +207,30 @@ async def seed(service):
         kind='test-container', reportedState='reaped',
         evidenceReference='synthetic-cleanup-receipt')
     rows[1] = resource_row
+    decisions = {}
+    for name in ['fresh', 'later']:
+        row = await command('create', name + '-decision-create',
+            source=source('Synthetic decision scope: ' + name),
+            intentKey=name + '-decision', title='Decision currentness ' + name,
+            commitment='accepted', criteria=[{'id': 'decision', 'text': 'Keep the decision evidence distinct.'}])
+        row = await command('report', name + '-decision-pass', id=row['id'],
+            expectedRevision=row['revision'], promiseRevision=row['promiseRevision'],
+            candidate='synthetic-decision-candidate', outcome='passed',
+            report='Participant report only, not independent verification.', criteria=['decision'])
+        row = await command('decision', name + '-decision-accept', id=row['id'],
+            expectedRevision=row['revision'], promiseRevision=row['promiseRevision'],
+            candidate='synthetic-decision-candidate', decision='accepted')
+        if name == 'later':
+            row = await command('report', name + '-decision-unknown', id=row['id'],
+                expectedRevision=row['revision'], promiseRevision=row['promiseRevision'],
+                candidate='synthetic-decision-candidate', outcome='unknown',
+                report='Later counterevidence must remain visible.', criteria=['decision'])
+        raw = service.workspace_work.load(row['id'], workspace)
+        assert row['humanDecisionCurrent'] is (name == 'fresh')
+        assert ('counterevidenceSequence' in raw) is (name == 'later')
+        assert row['verification'] == 'not_verified'
+        rows.append(row)
+        decisions[name] = row
     source('Synthetic ordinary conversation not yet reviewed for capture.')
     service._save()
     coverage = (await service.dispatch('workspace.work.coverage', {
@@ -191,7 +240,47 @@ async def seed(service):
         'acceptedIds': [row['id'] for row in rows], 'proposal': proposal, 'closed': closed,
         'originalText': original, 'originalSha256': hashlib.sha256(original.encode()).hexdigest(),
         'correctionText': correction, 'synthetic': True,
-        'reportedCleanup': resource_row, 'coverage': coverage,
+        'reportedCleanup': resource_row, 'coverage': coverage, 'decisions': decisions,
     }
+    if os.environ.get('AMPLIFIER_TEST_COLD_TASK') == '1':
+        manifest['coldTask'] = await seed_cold_task(owner['id'])
 
     return manifest
+
+
+async def seed_cold_task(sid):
+    """Use the real task controller to persist a fixture, then close it.
+
+    This is data preparation, not a live worker or a substitute task.get
+    implementation. The reopened HTTP service must read its canonical file.
+    """
+    from amplifier_web.runtime_controls import RuntimeControls
+
+    class Coordinator:
+        def __init__(self):
+            self.session_state = {}
+            self.capabilities = {'live.continuation_guard_supported': True}
+            self.config = {'session': {'context': {'module': 'context-simple'}}, 'providers': []}
+            self.loop = SimpleNamespace(goal_stall_threshold=3)
+        def get(self, name):
+            return {'orchestrator': self.loop, 'providers': {}}.get(name)
+        def get_capability(self, name):
+            return self.capabilities.get(name)
+        def register_capability(self, name, value):
+            self.capabilities[name] = value
+
+    controller = RuntimeControls(SimpleNamespace(session_id=sid, coordinator=Coordinator()),
+                                 SimpleNamespace(generation=None, queued_inputs=0))
+    objective = 'Read the persisted cold task without starting its worker'
+    private_marker = 'UNLOADED-TASK-DETAIL'
+    try:
+        await controller.perform('task.create', {'commandId': 'fixture-cold-task-create',
+            'expectedRevision': 0, 'objective': objective, 'constraints': ['Keep the original evidence'],
+            'artifactRefs': [f'{private_marker}-{index}-' + 'x' * 100 for index in range(80)]})
+        await controller.perform('task.pause', {'commandId': 'fixture-cold-task-pause', 'expectedRevision': 1})
+        task = controller.tasks.record()
+        return {'sessionId': sid, 'id': task['id'], 'revision': task['revision'],
+                'objective': objective, 'privateMarker': private_marker,
+                'producer': 'real RuntimeControls task persistence; no running worker'}
+    finally:
+        await controller.close()
