@@ -75,8 +75,9 @@ Focused checks (run against the candidate in an owned isolated environment):
 owned `AMPLIFIER_TEST_OUTPUT` directory and rebuilt production assets. These
 instructions are not evidence that the checks have passed.
 
-**Canvas** is an icon beside More in the top toolbar. On phones, it fills the
-content area and offers **Back to chat**; the chat's scroll and draft stay intact.
+The container-header **Canvas** button stays reachable on phones, where Canvas
+fills the content area. **Hide canvas** returns to the chat while retaining its
+scroll, draft and selected artifact, as described in [Canvas](canvas.md).
 On larger screens it docks when the chat and panel have usable widths.
 Visibility paints immediately through `canvas.visibility {open,sessionId,canvasId}`;
 it has its own ordered queue and no busy spinner. The host persists only client

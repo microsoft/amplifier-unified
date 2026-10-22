@@ -9,9 +9,9 @@ async function openPublishing(page){
  await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
  const canvas=page.locator('#workspace-canvas');
  if(!await canvas.isVisible())await page.getByRole('button',{name:'Open canvas',exact:true}).click();
- const overview=canvas.getByRole('button',{name:'Chat overview',exact:true});
- if(await overview.getAttribute('aria-pressed')!=='true')await overview.click();
- const delivery=canvas.locator('[data-canvas-delivery="publishing"]');
+ const overview=canvas.getByRole('tab',{name:'Chat overview',exact:true});
+ if(await overview.getAttribute('aria-selected')!=='true')await overview.click();
+ const delivery=canvas.locator('[data-overview-section="publishing"]');
  if(!await delivery.evaluate(el=>el.open))await delivery.locator(':scope > summary').click();
  await expect(canvas.getByRole('region',{name:'Managed publishing'})).toBeVisible();
 }
@@ -43,7 +43,7 @@ try{
  await panel.getByRole('button',{name:'Deploy reviewed release'}).click();const pending=panel.getByLabel('Unconfirmed publishing request');await expect(pending).toContainText('Request outcome unconfirmed');await expect(capture).toBeDisabled();
  const afterLost=await list(),pendingRequest=afterLost.calls.filter(row=>row.action==='publishing.deploy').at(-1).args;
  assert.equal(afterLost.publishing.sites[0].status,'running');
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await openPublishing(page);
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();await openPublishing(page);
  // On reopen only a read runs. An explicit retry keeps the submitted identity.
  await expect(pending).toBeVisible();await pending.getByRole('button',{name:'Retry exact request'}).click();await expect(pending).toHaveCount(0);await expect(status).toContainText('running');
  snapshot=await list();const deploys=snapshot.calls.filter(row=>row.action==='publishing.deploy');assert.equal(deploys.length,2);assert.deepEqual(deploys[1].args,pendingRequest);assert.equal(snapshot.publishing.sites[0].revision,afterLost.publishing.sites[0].revision);
@@ -126,7 +126,7 @@ try{
  // Another client may change the task selection. This pending retry remains
  // bound to the originally submitted target and exact request identity.
  await page.request.post(ready.url+'/api/actions',{data:{action:'publishing.target.select',args:{sessionId:ready.sessionId,targetId:'loopback',expectedRevision:0}}});
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await openPublishing(page);await expect(pending).toContainText('private-fixture');
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();await openPublishing(page);await expect(pending).toContainText('private-fixture');
  await pending.getByRole('button',{name:'Retry exact request'}).click();await expect(pending).toHaveCount(0);await expect(status).toContainText('running');
  snapshot=await list('private-fixture');const remoteDeploys=snapshot.calls.filter(row=>row.action==='publishing.deploy'&&row.args.targetId==='private-fixture');assert.equal(remoteDeploys.length,2);assert.deepEqual(remoteDeploys[1].args,remoteRequest);assert.equal(snapshot.publishing.sites[0].revision,remoteLost.publishing.sites[0].revision);
  await page.unroute('**/api/actions*');siteUrl=await panel.getByRole('link',{name:'Open deployed site'}).getAttribute('href');assert.match(await content(siteUrl),/Second release/);

@@ -137,7 +137,8 @@ Two timing defects were found during those journeys: search blur must not disabl
 New chat when its project is already confirmed, and closing a modal sidebar must
 release its inert background before React reveals a retained Canvas. The latter
 uses layout-effect cleanup in the existing modal-focus owner. Browser acceptance
-includes a phone opening that saved output and using its normal Back to chat.
+includes a phone opening that saved output and using the container-header
+**Hide canvas** control to return to chat, following [Canvas](../canvas.md).
 
 Main was integrated through `b164044ad` (0.20.181), including configuration
 recovery, saved chat-reference navigation, patch placement recovery, passive
