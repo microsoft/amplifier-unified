@@ -271,9 +271,10 @@ The exact observation hook and proof of post-truncation delivery are adapter wor
 not invented by this service contract. Without that proof the service tests below
 cannot qualify actual effect admission.
 
-## 4. Discriminators and present coverage
+## 4. Historical service discriminators and initial baseline
 
-`tests/test_work_invocation.py` proposes synthetic **real AppService/receipt/bridge**
+This section records the initial service-only increment, not current qualification.
+At that checkpoint, `tests/test_work_invocation.py` proposed synthetic **real AppService/receipt/bridge**
 checks using the repository's existing commissioning and transport fixtures. No
 successful invocation association, claim or check receipt is manually inserted to
 make a positive case pass. Fault cases may deliberately corrupt retained state and
@@ -282,7 +283,7 @@ invocation cases: 25 failed at the absent outer `workReferences` schema and one 
 the absent `work` projection. Four added publication controls and the previous
 250-case backend selection passed. That baseline did not reach the deeper invocation
 assertions. The first implementation adds five rollback, bounded multi-item and
-missing/corrupt-lineage controls; its changed-candidate results remain pending.
+missing/corrupt-lineage controls; their changed-candidate results were then pending.
 These tests neither emulate a native worker nor demonstrate dependent tool execution.
 
 | Required boundary case | Authored service discriminator | Still required from continuity/runtime owner |
@@ -296,8 +297,45 @@ These tests neither emulate a native worker nor demonstrate dependent tool execu
 Publication's existing authority guard additionally needs strict unlinked, stale-promise
 and stale-candidate reporter controls. That is test coverage, not a claimed current
 product defect. The frozen backend and all earlier passing/failing evidence remain
-unchanged on their original branch. This increment changes only the commissioning
+unchanged on their original branch. That increment changed only the commissioning
 owner, Work resolver/read projections and their service registration, plus scoped
-tests and this coverage record. Existing UI DTOs and continuity adapters are
-unchanged. No new instance, paid-model probe, provider configuration, publication,
-merge or deployment belongs to this increment.
+tests and this coverage record. Existing UI DTOs and continuity adapters were
+unchanged in that increment. No paid-model probe, provider configuration,
+publication, main merge or deployment was established by that service baseline.
+
+### Subsequent bounded host/native qualification
+
+Checkpoint `6ac9611ddd85205e2781fe2e17f3bc950feee030` joins the Work UI, cold
+continuity and native adapter `83f6f39c09b8badcd38e2afa60bd436910253e4e` to actual
+Worker/AppService `work.effect.check` and the final host mutation boundary.
+Controlled native SDK early-tool calls and real nested JavaScript dispatch reach
+the actual host pin owner, not a synthetic policy endpoint. Missing/opaque
+coverage, same-batch reads, Stop and reused origins refuse before effects. The
+reused-origin test requires explicit `work_coverage_unavailable` before ordinary
+receipt deduplication; it does not identify which internal invalidation made
+the reused witness incomplete.
+
+Retained source and fresh-installed evidence is attributed to its actual inputs:
+466 cases per mode at `56615e9bf2560e7dc5dc9d714410bb1129c3e078`; 49 changed cases
+per mode at `3bf98ec9821d7226a4a9089544262ea4d7ce0948`; and nine corrected cases
+per mode at final `6ac9611d`. The effective unique selection is **476 = 427
+unchanged exact-input cases reused + 49 changed cases**. The final nine replace
+the earlier nine; they are not nine additional unique cases. This is not a fresh
+476-case execution at the final SHA. Original failures and failed controls remain
+historical evidence, including the original 26-case red baseline.
+
+That checkpoint also has source and installed three-client Work journeys covering
+cold tasks, currentness, dirty Canvas/Settings and Work Back/Forward. Its 802 wheel
+payloads match final source and its 311 static files match build
+`0d135f7c3908ed28`. The retained qualification packet is `main022-result.json`
+(SHA-256 `f41acd32f661e9b702c8865d5a2764150d9fee42e9713ec46c1ab868d3e1c40c`);
+raw identities, exact-input reuse and review dispositions accompany that packet.
+These are checkpoint-specific facts, not qualification of the later frozen
+`4351124b443f62cad2d3034d784727852022f10f` integration.
+
+`effectAuthorized:false` remains mandatory. Only the audited synchronous Work
+mutation, pin and peer-notify owners have the stated final-boundary qualification.
+Other applicable shared mutation owners refuse. Generic streaming, unmeasured
+steering, arbitrary tool-internal awaits and later effect owners remain unqualified.
+Controlled provider/socket/runtime fixtures are not live-provider, private-history,
+whole-feature or independent final acceptance.
