@@ -521,7 +521,7 @@ try{
   stage('reference sample');
   await reference.getByRole('button',{name:'Add three-quote example',exact:true}).click();
   stage('sandbox connection guard');
-  await reference.locator('#editor').evaluate((socketUrl)=>{
+  await reference.locator('#editor').evaluate((node,socketUrl)=>{
    window.referenceViolations=[];
    document.addEventListener('securitypolicyviolation',event=>window.referenceViolations.push(event.violatedDirective));
    try{const socket=new WebSocket(socketUrl);socket.onerror=()=>{};}
@@ -530,9 +530,12 @@ try{
   // Routing can reject before CSP dispatches a violation event. Observe the
   // effective blocker, not an assumed order between two independent guards.
   const socketProbe=url.replace('http:','ws:')+'/blocked-reference-check';
-  await expect.poll(async()=>blockedSockets.includes(socketProbe)||(await reference.locator('#editor').evaluate(()=>window.referenceViolations)).includes('connect-src')).toBe(true);
-  writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify({blockedSockets,webSocketRoute:'closes without connectToServer; no forwarding configured',
-   ...await reference.locator('#editor').evaluate(()=>({violations:window.referenceViolations,error:window.referenceSocketError,policy:document.querySelector('meta[http-equiv="Content-Security-Policy"]').content}))},null,2));
+  try{
+   await expect.poll(async()=>blockedSockets.includes(socketProbe)||(await reference.locator('#editor').evaluate(()=>window.referenceViolations)).includes('connect-src')).toBe(true);
+  }finally{
+   writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify({socketProbe,blockedSockets,webSocketRoute:'closes without connectToServer; no forwarding configured',
+    ...await reference.locator('#editor').evaluate(()=>({violations:window.referenceViolations,error:window.referenceSocketError,policy:document.querySelector('meta[http-equiv="Content-Security-Policy"]').content}))},null,2));
+  }
   stage('sample sources');
   const specimen=await reference.locator('#editor').evaluate(()=>({sources:sources(),blocks:draft().blocks}));
   const seeded=await context.request.post(url+'/fixture/quote-comparison',{data:specimen.sources.map(source=>({role:source.role,text:source.text}))});
