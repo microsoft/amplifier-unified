@@ -80,7 +80,8 @@ def overview(state, session_id, *, positions=None):
     return core
 
 
-def read_state(state, args, *, session_id=None, resolve=None, reference_key='$statePath', directory=None):
+def read_state(state, args, *, session_id=None, resolve=None, reference_key='$statePath', directory=None,
+               configuration_projection=False):
     if not isinstance(args,dict):
         raise ValueError('State arguments must be an object.')
     path=args.get('path')
@@ -99,17 +100,33 @@ def read_state(state, args, *, session_id=None, resolve=None, reference_key='$st
         return overview(state, session_id)
     if not isinstance(path,str) or (path and not path.startswith('/')):
         raise ValueError('path must be a JSON Pointer, for example /canvas or /sessions/0/messages.')
+    from .configuration_state import is_configuration, is_provider_metadata, project as public_preview
+    app_state = configuration_projection or session_id is not None or directory is not None
     value=state
+    current_path=''
+    module=None
     try:
         for token in path.split('/')[1:] if path else []:
             if resolve and isinstance(value,dict) and '$resource' in value:
                 value=resolve(value['$resource'])
+            if app_state and is_configuration(current_path):
+                from .runtime_controls import public_config
+                value=public_config(value, module=module, metadata=is_provider_metadata(current_path))
             token=token.replace('~1','/').replace('~0','~')
+            if (app_state and token == '_coldFields'
+                    and len(current_path.split('/')) == 3
+                    and current_path.split('/')[1] in {'sessions', 'runtimeControl'}):
+                raise KeyError(token)  # Internal resource aliases are not public state paths.
+            module=value.get('module') if isinstance(value,dict) and token == 'config' else None
             value=value[int(token)] if isinstance(value,list) else value[token]
+            current_path=_pointer(current_path,token)
     except (KeyError,IndexError,TypeError,ValueError):
         raise ValueError('That state path does not exist.') from None
     if resolve and isinstance(value,dict) and '$resource' in value:
         value=resolve(value['$resource'])
+    if app_state and is_configuration(path):
+        from .runtime_controls import public_config
+        value=public_config(value, module=module, metadata=is_provider_metadata(path))
     offset=args.get('offset',0);limit=args.get('limit',50)
     if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=16000:
         raise ValueError('Use a nonnegative integer offset and a limit between 1 and 16000.')
@@ -118,15 +135,18 @@ def read_state(state, args, *, session_id=None, resolve=None, reference_key='$st
         end=min(len(value),offset+min(limit if 'limit' in args else 16000,16000))
         return {**result,'type':'string','value':value[offset:end],'total':len(value),'nextOffset':end if end<len(value) else None}
     if isinstance(value,(list,dict)):
-        items=list(value.items()) if isinstance(value,dict) else list(enumerate(value))
-        selected=items[offset:offset+min(limit,50)];rows=[];used=0
-        for key,item in selected:
+        keys=list(value) if isinstance(value,dict) else range(len(value))
+        selected=keys[offset:offset+min(limit,50)];rows=[];used=0
+        for key in selected:
+            item=value[key]
+            if app_state:
+                item=public_preview(item,_pointer(path,key),reference_key=reference_key)
             preview=_preview(item,_pointer(path,key),2500,reference_key=reference_key)
             row={'key':key,'path':_pointer(path,key),'value':preview};size=_size(row)
             if rows and used+size>24000:break
             rows.append(row);used+=size
         end=offset+len(rows)
-        return {**result,'type':'object' if isinstance(value,dict) else 'array','items':rows,'total':len(items),'nextOffset':end if end<len(items) else None}
+        return {**result,'type':'object' if isinstance(value,dict) else 'array','items':rows,'total':len(keys),'nextOffset':end if end<len(keys) else None}
     return {**result,'type':'scalar','value':value}
 
 

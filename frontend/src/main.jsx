@@ -62,7 +62,7 @@ import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
-import {createConversationNavigation,isNavigationAction} from './conversation-navigation';
+import {createConversationNavigation,isNavigationAction,usesNavigationQueue} from './conversation-navigation';
 import {createDestinationHistory,destinationCommand} from './destination-history.js';
 import {onAuthenticationChange} from './api';
 import {messageTextForCopy} from './message-copy';
@@ -251,7 +251,9 @@ function App(){
     const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
     if(historyVisit)destinationHistory.current.finish(result);
     if(result.state)acceptState(result.state);
-    else await awaitState(result);
+    // Exact annotation receipts settle locally; all navigation still waits for
+    // its authoritative frame and the history owner's exact confirmation.
+    else if(action!=='message.reaction')await awaitState(result);
     if(historyVisit){
      // awaitState's recovery may return without the receipt's revision. The
      // history model requires its own exact route/host/revision evidence.
@@ -271,7 +273,7 @@ function App(){
   // Optional plan summaries have their own exact read result; they must not
   // hold up browsing or ordered mutations while canonical files are read.
   const planRead=action==='session.plans';
-  const queue=navigation?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  const queue=usesNavigationQueue(action,args)?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
   const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
@@ -471,7 +473,7 @@ function App(){
   const previous=panelReturnFocus.current||document.activeElement;
   const dialog=root.current?.querySelector('.a-overlay [role=dialog]');
   if(!dialog)return;
-  const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')].filter(el=>el.getClientRects().length);
+  const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],summary')].filter(el=>el.getClientRects().length);
   if(!dialog.contains(document.activeElement)||!document.activeElement?.getClientRects().length)controls()[0]?.focus();
   const handler=e=>{
    if(e.key==='Escape'){if(settingsNavigation.current)settingsNavigation.current.close();else {setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})}}

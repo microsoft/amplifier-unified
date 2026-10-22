@@ -96,9 +96,19 @@ function ImageGallery({entries,...props}){
 }
 
 function DocumentOutput({item,state,dispatch,messageId,imageFrame=false}){
- const {row,version}=item,bodyId=useId(),toggle=useRef(),inFlight=useRef(false),restoreFocus=useRef(false);
+ const {row,version}=item,bodyId=useId(),card=useRef(),toggle=useRef(),inFlight=useRef(false),restoreFocus=useRef(null);
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[reset,setReset]=useState(null);
- useEffect(()=>{if(!busy&&restoreFocus.current){restoreFocus.current=false;toggle.current?.focus({preventScroll:true})}},[busy]);
+ useEffect(()=>{
+  const supersede=event=>{if(restoreFocus.current&&!card.current?.contains(event.target))restoreFocus.current.superseded=true};
+  document.addEventListener('focusin',supersede);document.addEventListener('pointerdown',supersede);
+  return()=>{restoreFocus.current=null;document.removeEventListener('focusin',supersede);document.removeEventListener('pointerdown',supersede)};
+ },[]);
+ useEffect(()=>{
+  if(busy||!restoreFocus.current)return;
+  const intent=restoreFocus.current;restoreFocus.current=null;
+  const active=document.activeElement;
+  if(intent.accepted&&!intent.superseded&&(active===document.body||card.current?.contains(active)))toggle.current?.focus({preventScroll:true});
+ },[busy]);
  const choice=state.canvasWorkspace?.presentations?.find(value=>value.id===row.id&&value.version===version);
  const primary=state.canvas,primaryOwns=primary?.id===row.id&&(primary.selectedVersion??primary.revision??1)===version&&!primary._presentationDisposed;
  // Generated images retain their established inline default. Authored artifacts
@@ -107,18 +117,19 @@ function DocumentOutput({item,state,dispatch,messageId,imageFrame=false}){
  const change=async(presentation,resetPreview=false)=>{
   if(inFlight.current)return;
   if((presentation==='canvas'||primaryOwns)&&hasLocalCanvasEdits()){setError('Save or cancel unfinished Canvas edits before changing the preview.');return}
+  restoreFocus.current=presentation==='saved'&&card.current?.contains(document.activeElement)?{accepted:false,superseded:false}:null;
   inFlight.current=true;setBusy(true);setError('');setReset(null);
   try{
    const result=await dispatch('canvas.select',{id:row.id,version,messageId,sessionId:row.sessionId,presentation,...(resetPreview?{resetPreview:true}:{})});
    if(!result?.accepted)throw Error('The presentation was not accepted.');
-   if(presentation==='saved')restoreFocus.current=true;
+   if(restoreFocus.current)restoreFocus.current.accepted=true;
   }catch(error){
    setError(error.message);
    if(error.code==='canvas_preview_reset_required')setReset(presentation);
   }finally{inFlight.current=false;setBusy(false)}
  };
  const Icon=row.kind==='image'?ImageIcon:row.kind==='browser'?Globe:FileText;
- return <section className="a-document-output a-inline-artifact" data-image-frame={imageFrame||undefined} aria-label={titleOf(item)} data-artifact-id={row.id} data-artifact-version={version}>
+ return <section ref={card} className="a-document-output a-inline-artifact" data-image-frame={imageFrame||undefined} aria-label={titleOf(item)} data-artifact-id={row.id} data-artifact-version={version}>
   <button type="button" className="a-document-output-open" data-action="canvas.select" disabled={busy} aria-label={`Open ${titleOf(item)} in canvas`} onClick={()=>change('canvas')}><Icon aria-hidden="true"/><span><strong>{titleOf(item)}</strong><small>{labels[row.kind]||row.kind} · Version {version}</small></span><Maximize2 aria-hidden="true"/></button>
   {supported.has(row.kind)&&<button ref={toggle} type="button" className="a-link a-document-preview-toggle" disabled={busy} aria-expanded={expanded} aria-controls={bodyId} onClick={()=>change(expanded?'saved':'inline')}>{expanded?'Hide preview':'Preview in chat'}</button>}
   {error&&<div role="status" className="a-inline-artifact-notice"><p>{error}</p>{reset&&<div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={()=>{setReset(null);setError('');toggle.current?.focus({preventScroll:true})}}>Keep current preview</button><button type="button" className="a-soft" disabled={busy} onClick={()=>change(reset,true)}>Reset preview and {reset==='saved'?'hide':reset==='inline'?'preview in chat':'open in Canvas'}</button></div>}</div>}

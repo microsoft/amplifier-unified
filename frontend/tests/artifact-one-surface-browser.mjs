@@ -1,5 +1,6 @@
 // Focused presentation acceptance. Run only against the isolated fixture.
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -120,6 +121,33 @@ try{
   lastCard=document;
  }
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveText('Preserve the unsent parent draft');
+ // Delay only the confirmed hide receipt. A later user focus choice must win,
+ // while the preceding keyboard-only hide still restores its own disclosure.
+ const hiddenId=await lastCard.getAttribute('data-artifact-id');
+ for(const destination of ['composer','iframe']){
+  let releaseHide,hideAccepted;
+  const hideGate=new Promise(resolve=>{releaseHide=resolve});
+  const acceptedGate=new Promise(resolve=>{hideAccepted=resolve});
+  const delayHide=async route=>{
+   const data=route.request().postDataJSON();
+   if(data?.action!=='canvas.select'||data.args?.id!==hiddenId||data.args?.presentation!=='saved')return route.continue();
+   const response=await route.fetch();hideAccepted();await hideGate;await route.fulfill({response});
+  };
+  await page.route('**/api/actions',delayHide);
+  await lastCard.getByRole('button',{name:'Hide preview',exact:true}).click();
+  await acceptedGate;
+  const focused=destination==='composer'?page.getByRole('textbox',{name:'Message Amplifier'}):page.locator('.a-canvas-workspace iframe');
+  if(destination==='composer')await focused.focus();
+  else await page.locator('.a-canvas-workspace').frameLocator('iframe').getByLabel('Local note').focus();
+  releaseHide();
+  await expect(lastCard.getByRole('button',{name:'Preview in chat',exact:true})).toBeEnabled();
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await expect(focused).toBeFocused();
+  await page.unroute('**/api/actions',delayHide);
+  await lastCard.getByRole('button',{name:'Preview in chat',exact:true}).click();
+  await lastCard.locator('.a-canvas-viewer').waitFor();
+ }
+ await writeFile(`${evidence}/delayed-hide-focus.json`,JSON.stringify({laterComposerFocusPreserved:true,laterIframeFocusPreserved:true}));
  assert.equal(await page.evaluate(()=>{const s=window.amplifier.getState();return s.sessions.find(v=>v.id===s.selectedSessionId).messages.length}),counts.messages);
  await action('canvas.views.dirty',{...primary,dirty:false});
  await page.screenshot({path:`${evidence}/documents-desktop.png`});
@@ -131,6 +159,27 @@ try{
  // No preview transition above generated another saved definition.
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvasArtifacts.length),counts.artifacts+3);
  await writeFile(`${evidence}/geometry.json`,JSON.stringify(await lastCard.evaluate(node=>({card:node.getBoundingClientRect().toJSON(),viewport:{width:innerWidth,height:innerHeight},controls:[...node.querySelectorAll('button')].map(button=>({label:button.getAttribute('aria-label')||button.textContent,rect:button.getBoundingClientRect().toJSON()}))})),null,2));
+ await page.setViewportSize({width:1400,height:950});
+ await action('canvas.show',{kind:'settings'});
+ await openSettingsPage(page,'providers');
+ await page.locator('[data-part=provider-settings] [data-collection-id=one] button').click();
+ await action('view.update',{patch:{providerEditor:{...(await page.evaluate(()=>window.amplifier.getState().view.providerEditor)),accessOpen:true}}});
+ await page.locator('#provider-key-source').selectOption('private');
+ await page.locator('#provider-key').fill('synthetic-unsaved-preview-test');
+ const settingsId=await page.evaluate(()=>window.amplifier.getState().canvas.id);
+ await lastCard.getByRole('button',{name:'Hide preview',exact:true}).click();
+ await expect(lastCard.getByRole('button',{name:'Preview in chat',exact:true})).toBeEnabled();
+ await expect(page.getByRole('alertdialog')).toHaveCount(0);
+ await expect(page.locator('#provider-key')).toHaveValue('synthetic-unsaved-preview-test');
+ await lastCard.getByRole('button',{name:'Preview in chat',exact:true}).click();
+ await lastCard.locator('.a-canvas-viewer').waitFor();
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.id),settingsId);
+ await expect(page.locator('#provider-key')).toHaveValue('synthetic-unsaved-preview-test');
+ await lastCard.getByRole('button',{name:'Open Short json in canvas',exact:true}).click();
+ await expect(page.getByRole('alertdialog')).toBeVisible();
+ await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await expect(page.locator('#provider-key')).toHaveValue('synthetic-unsaved-preview-test');
+ await writeFile(`${evidence}/settings-draft.json`,JSON.stringify({unrelatedInlineDidNotNavigate:true,unsavedValuePreserved:true,replacementGuarded:true}));
  assert.deepEqual(errors,[]);
  console.log('PASS one-surface default, explicit transitions/reset refusal, hide/reopen/reload/second client, exact version, shared document controls, dirty unrelated Canvas/draft, keyboard and narrow containment');
 }catch(error){if(page)await page.screenshot({path:`${evidence}/failure.png`});throw error}

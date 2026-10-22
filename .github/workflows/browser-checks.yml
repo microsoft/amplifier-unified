@@ -324,7 +324,7 @@ jobs:
           output = Path('output/destination-history')
           output.mkdir(parents=True)
           plan = json.loads(Path('frontend/tests/browser-checks.json').read_text())
-          wanted = ('destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch')
+          wanted = ('destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch', 'automation-hub')
           diagnostic = os.environ.get('SETTINGS_CLOSE_DIAGNOSTIC') == 'true'
           if diagnostic:
               wanted = ('destination-history',)
@@ -363,7 +363,8 @@ jobs:
           uv run --no-sync pytest --asyncio-mode=auto -v -ra --tb=short --junitxml=output/destination-history/python.xml \
             tests/test_history_scope.py tests/test_auth.py tests/test_client_navigation.py tests/test_approachable_shell.py \
             tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage \
-            2>&1 | tee output/destination-history/python.log
+            tests/test_automation_overview.py tests/test_schedules.py tests/test_schedule_new_tasks.py \
+            tests/test_schedule_policy.py 2>&1 | tee output/destination-history/python.log
       - name: Focused frontend regressions
         if: ${{ !inputs.settings_close_diagnostic && !cancelled() && steps.node_dependencies.outcome == 'success' }}
         working-directory: frontend
@@ -373,6 +374,7 @@ jobs:
             tests/api.test.mjs tests/conversation-navigation.test.mjs tests/pending-view.test.mjs \
             tests/settings-drafts.test.mjs tests/work-shell.test.mjs tests/archive-action.test.mjs \
             tests/archive-feedback.test.mjs tests/attention.test.mjs tests/shell-panels.test.mjs \
+            tests/automation-hub.test.mjs tests/schedule-editor.test.mjs tests/submission-reset.test.mjs \
             2>&1 | tee ../output/destination-history/frontend.log
       - name: Build and retain the exact derived assets
         id: build
@@ -410,7 +412,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (!inputs.settings_close_diagnostic || steps.diagnostic_identity.outcome == 'success') }}
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Run all five fixed navigation scenarios serially
+      - name: Run all six fixed navigation and automation scenarios serially
         if: ${{ !cancelled() && steps.python_dependencies.outcome == 'success' && steps.browser_runtime.outcome == 'success' }}
         run: >-
           uv run --no-sync python scripts/browser_check_runner.py
@@ -450,7 +452,7 @@ jobs:
               plan = json.loads((output / 'plan.json').read_text())['scenarios']
               rows = report['scenarios']
               assert [row['id'] for row in rows] == [row['id'] for row in plan]
-              assert len(rows) == 5 and report['complete'] and report['passed']
+              assert len(rows) == 6 and report['complete'] and report['passed']
               for row, expected in zip(rows, plan):
                   assert row['command'] == expected['command'] and row.get('env', {}) == expected.get('env', {})
                   assert row['status'] == 'passed' and row['exitCode'] == 0 and row['reason'] is None

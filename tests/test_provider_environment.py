@@ -39,6 +39,63 @@ def test_optional_exact_reference_blanks_only_declared_nonsecret_and_never_mutat
     assert source["base_url"] == "${OPTIONAL_BASE_URL}"
 
 
+@pytest.mark.parametrize('tool_value,keep_reference', [
+    ('SYNTHETIC_PULSE_INHERITED', False),
+    ('${EXACT_PULSE_KEY}', True),
+    ('prefix-${EXACT_PULSE_KEY}', False),
+])
+def test_inherited_module_credentials_distinguish_literals_references_and_benign_keys(
+        tool_value, keep_reference):
+    pulse = {'module': 'tool-team-pulse', 'instance_id': 'pulse',
+             'config': {'key': tool_value, 'url': 'https://pulse.example.invalid'}}
+    original = {
+        'providers': [
+            {'module': 'provider-fixture', 'instance_id': 'literal',
+             'config': {'api_key': 'SYNTHETIC_PROVIDER_INHERITED', 'model': 'fixture-model'}},
+            {'module': 'provider-fixture', 'instance_id': 'reference',
+             'config': {'api_key': '${EXACT_PROVIDER_KEY}'}},
+            {'module': 'provider-fixture', 'instance_id': 'bound',
+             'config': {'api_key': copy.deepcopy(HOST_CREDENTIAL)}},
+        ],
+        'tools': [pulse, {'module': 'tool-keymap-fixture', 'config': {
+            'key': 'F6', 'read_only': True, 'working_dir': '/workspace/fixture'}}],
+        'agents': {'worker': {'tools': [copy.deepcopy(pulse)]}},
+    }
+    before = copy.deepcopy(original)
+    inherited = credential_bindings(original)
+    expected = copy.deepcopy(original)
+    expected['providers'][0]['config']['api_key'] = copy.deepcopy(HOST_CREDENTIAL)
+    if not keep_reference:
+        del expected['tools'][0]['config']['key']
+        del expected['agents']['worker']['tools'][0]['config']['key']
+    assert original == before
+    assert inherited == expected
+    assert inherited['providers'][0]['config']['api_key'] is not HOST_CREDENTIAL
+    assert inherited['providers'][1]['config']['api_key'] == '${EXACT_PROVIDER_KEY}'
+    assert inherited['providers'][2]['config']['api_key'] == HOST_CREDENTIAL
+    assert inherited['tools'][1] == original['tools'][1]
+    if keep_reference:
+        assert inherited['tools'][0]['config']['key'] == '${EXACT_PULSE_KEY}'
+    else:
+        assert 'key' not in inherited['tools'][0]['config']
+    assert 'SYNTHETIC_' not in json.dumps(inherited)
+
+
+def test_optional_null_credentials_survive_inheritance_without_host_rebinding():
+    original = {'providers': [{'module': 'provider-fixture', 'instance_id': 'optional',
+                              'config': {'api_key': None}}],
+                'tools': [{'module': 'tool-team-pulse', 'config': {'key': None}}]}
+    before = copy.deepcopy(original)
+    inherited = credential_bindings(original)
+    assert inherited == original == before
+    rebound, bound = rebind_provider_credentials(inherited, original)
+    assert rebound == original and bound is False
+    optional_schema = {'fields': [{'id': 'api_key', 'field_type': 'secret', 'required': False}]}
+    assert materialize_provider_config(rebound['providers'][0]['config'], optional_schema, environment={}) == {'api_key': None}
+    with pytest.raises(ValueError, match='required_secret'):
+        materialize_provider_config(rebound['providers'][0]['config'], SCHEMA, environment={})
+
+
 @pytest.mark.parametrize(("config", "identifier"), [
     ({"api_key": "${MISSING_KEY}"}, "MISSING_KEY"),
     ({"api_key": "${EMPTY_KEY}"}, "provider_environment.required_secret:api_key"),
