@@ -172,7 +172,8 @@ def run():
               'tests/test_release_qualification.py::test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate',
               'tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget',
               'tests/test_browser_check_runner.py::test_attachment_focus_workflow_retains_failures_and_default_coverage',
-              'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage')]],
+              'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage',
+              'tests/test_mcp_boundary_checks.py::test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job')]],
               seconds=120)
         if not stage('build', ['npm', 'run', 'build'], seconds=180):
             raise RuntimeError('Production build failed')

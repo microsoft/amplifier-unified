@@ -29,7 +29,7 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  useLayoutEffect(()=>{if(state.canvas?.open&&!overview)reveal(state.canvas?.id)},[state.canvas?.id]);
  useLayoutEffect(()=>{if(strip.current)setScrolled(strip.current.scrollLeft>4)},[state.selectedSessionId,state.canvas?.open]);
  useEffect(()=>{if(open&&!dialog.current?.open)dialog.current?.showModal();else if(!open&&dialog.current?.open)dialog.current.close()},[open]);
- useEffect(()=>{setOpen(false);setQuery('');setError('')},[state.selectedSessionId]);
+ useEffect(()=>{focusIntent.current++;dialogGeneration.current++;setOpen(false);setQuery('');setError('')},[state.selectedSessionId,state.selectedWorkspaceId]);
  const close=()=>{const intent=++focusIntent.current;dialogGeneration.current++;setOpen(false);closeCanvasDialog(dialog.current,()=>{if(focusIntent.current===intent)trigger.current?.focus({preventScroll:true})})};
  async function choose(row){
   if(pending)return;setPending(true);setError('');const sessionId=state.selectedSessionId,fromDialog=!!dialog.current?.open,intent=focusIntent.current,generation=dialogGeneration.current;
@@ -51,8 +51,22 @@ export function CanvasTabs({state,act,dispatch=act,overview=false,onOverview}){
  }
  async function remove(row){
   if(pending)return;setPending(true);setError('');
-  try{const result=await dispatch('canvas.tabClose',{id:row.id});if(result?.accepted)requestAnimationFrame(()=>{if(dialog.current?.open)dialog.current.querySelector('input,button')?.focus({preventScroll:true});else tabs.current?.querySelector('[aria-selected=true]')?.focus({preventScroll:true})});else setError(String(result?.error?.message||result?.error||'The tab was not closed. Your current view was kept.'))}
-  catch(err){setError(err.message)}finally{setPending(false)}
+  const sessionId=state.selectedSessionId,workspaceId=state.selectedWorkspaceId,intent=focusIntent.current,generation=dialogGeneration.current,fromDialog=!!dialog.current?.open;
+  // The receipt may change selection, but it does not own a later interaction.
+  // Fence both errors and deferred focus, including dismiss/reopen of the list.
+  const ownsInteraction=()=>focusIntent.current===intent&&dialogGeneration.current===generation&&
+   current.current.selectedSessionId===sessionId&&current.current.selectedWorkspaceId===workspaceId&&
+   !!current.current.canvas?.open&&!!dialog.current?.open===fromDialog;
+  try{
+   const result=await dispatch('canvas.tabClose',{id:row.id});
+   if(!ownsInteraction())return;
+   if(result?.accepted)requestAnimationFrame(()=>{
+    if(!ownsInteraction())return;
+    if(fromDialog)dialog.current?.querySelector('input,button')?.focus({preventScroll:true});
+    else tabs.current?.querySelector('[aria-selected=true]')?.focus({preventScroll:true});
+   });
+   else setError(String(result?.error?.message||result?.error||'The tab was not closed. Your current view was kept.'));
+  }catch(err){if(ownsInteraction())setError(err.message)}finally{setPending(false)}
  }
  const filtered=filterList(rows,query,row=>[row.title,row.kind]);
  const keyboard=event=>{

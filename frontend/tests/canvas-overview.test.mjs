@@ -10,12 +10,15 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const source=await readFile(new URL('../src/canvas-library.jsx',import.meta.url),'utf8');
 const oldId=resolve('src/canvas-library-focus-negative.jsx');
+const oldRemoveId=resolve('src/canvas-library-remove-negative.jsx');
 const originGate='if(!fromDialog||dialogGeneration.current!==generation||!dialog.current?.open)return;';
 const intentGate='focusIntent.current!==intent||latest.selectedSessionId';
 assert.ok(source.includes(originGate)&&source.includes(intentGate),'Negative control must mutate the actual guards');
+const removeGate='if(!ownsInteraction())return;';
+assert.equal(source.split(removeGate).length-1,2,'Remove negative must disable both actual settlement and frame guards');
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]},
- plugins:[{name:'canvas-focus-negative-control',resolveId(id){if(id===oldId)return id},
-  load(id){if(id!==oldId)return;return source
+ plugins:[{name:'canvas-focus-negative-control',resolveId(id){if(id===oldId||id===oldRemoveId)return id},
+  load(id){if(id===oldRemoveId)return source.replaceAll(removeGate,'');if(id!==oldId)return;return source
    .replace(originGate,'')
    .replace(intentGate,'latest.selectedSessionId')}}]});
 test.after(()=>vite.close());
@@ -77,16 +80,17 @@ async function controlledTabs(Component,run){
  let focused=null,root,pending,model={...state,canvas:{open:true,id:'a',selectedVersion:2},canvasArtifacts:['a','b'].map(id=>({id,title:'Document '+id,kind:'markdown',tabOpen:true,sessionId:'chat-a',workspaceId:'workspace-a'}))};
  const nodes=new Map();
  const node=id=>{if(!nodes.has(id))nodes.set(id,{dataset:id==='overview'?{}:{artifactId:id},focus(){focused=this;events.push('focus:'+id)},closest(){return this},getBoundingClientRect(){return {left:0,right:100}}});return nodes.get(id)};
- const tabNodes=()=>['overview','a','b'].map(node);
+ const tabNodes=()=>['overview',...model.canvasArtifacts.filter(row=>row.tabOpen).map(row=>row.id)].map(node);
  const strip={scrollLeft:0,querySelectorAll:()=>tabNodes().slice(1),getBoundingClientRect:()=>({left:0,right:300}),addEventListener(){},removeEventListener(){}};
- const tabs={querySelectorAll:tabNodes,querySelector:selector=>selector.includes(':focus')&&tabNodes().includes(focused)?focused:null};
- const dialog={open:false,showModal(){this.open=true;events.push('open')},close(){this.open=false;events.push('close')}};
+ const tabs={querySelectorAll:tabNodes,querySelector:selector=>selector==='[aria-selected=true]'?node(model.canvas.id||'overview'):selector.includes(':focus')&&tabNodes().includes(focused)?focused:null};
+ const search={focus(){focused=this;events.push('focus:search')}};
+ const dialog={open:false,showModal(){this.open=true;events.push('open')},close(){this.open=false;events.push('close')},querySelector:()=>search};
  const trigger={focus(){focused=this;events.push('focus:trigger')}};
  globalThis.IS_REACT_ACT_ENVIRONMENT=true;
  globalThis.window={addEventListener(){},removeEventListener(){}};
  globalThis.document={get activeElement(){return focused},addEventListener(type,fn){listeners.set(type,fn)},removeEventListener(type){listeners.delete(type)}};
  globalThis.requestAnimationFrame=fn=>{frames.push(fn);return frames.length};
- const dispatch=(action,args)=>{calls.push({action,args});return new Promise((resolve,reject)=>{pending={resolve,reject,args}})};
+ const dispatch=(action,args)=>{calls.push({action,args});return new Promise((resolve,reject)=>{pending={resolve,reject,args,action}})};
  const render=()=>React.createElement(Component,{state:model,dispatch});
  const findTab=id=>root.root.findAllByType('button').find(n=>id==='overview'?n.props['aria-label']==='Chat overview':n.props['data-artifact-id']===id);
  const key=async(value)=>{listeners.get('keydown')?.();await act(async()=>root.root.findByProps({role:'tablist'}).props.onKeyDown({key:value,target:focused,preventDefault(){}}))};
@@ -95,11 +99,25 @@ async function controlledTabs(Component,run){
    await act(async()=>{root.root.findAllByType('li').find(n=>n.findAllByType('strong')[0].children.join('')==='Document '+id).findAllByType('button')[0].props.onClick()});
   }else{node(id).focus();listeners.get('keydown')?.();await act(async()=>{findTab(id).props.onClick()})}
  };
- const settle=async(receipt={accepted:true})=>{await act(async()=>{if(receipt.accepted){model={...model,canvas:{...model.canvas,id:pending.args.id}};root.update(render())}pending.resolve(receipt)})};
+ const openList=async()=>act(async()=>root.root.findByProps({'aria-haspopup':'dialog'}).props.onClick());
+ const remove=async(id,modal=false)=>{
+  if(modal){await openList();listeners.get('pointerdown')?.();await act(async()=>{root.root.findByProps({'aria-label':'Close tab Document '+id}).props.onClick()})}
+  else{node(id).focus();await key('Delete')}
+ };
+ const settle=async(receipt={accepted:true})=>{await act(async()=>{
+  if(receipt.accepted){
+   if(pending.action==='canvas.tabClose'){const rows=model.canvasArtifacts.map(row=>row.id===pending.args.id?{...row,tabOpen:false}:row);model={...model,canvasArtifacts:rows,canvas:{...model.canvas,id:model.canvas.id===pending.args.id?rows.filter(row=>row.tabOpen).at(-1)?.id:model.canvas.id}}}
+   else model={...model,canvas:{...model.canvas,id:pending.args.id}};
+   root.update(render())
+  }pending.resolve(receipt)
+ })};
  const flush=async()=>{await act(async()=>{while(frames.length)frames.shift()()})};
  try{
   await act(async()=>{root=create(render(),{createNodeMock:element=>element.type==='dialog'?dialog:element.props.className==='a-canvas-document-tabs'?strip:element.props.role==='tablist'?tabs:element.props['aria-haspopup']==='dialog'?trigger:null})});
-  await run({choose,key,settle,flush,calls,events,dialog,node,findTab,get focused(){return focused},newKey(){listeners.get('keydown')?.()},supersede(){listeners.get('pointerdown')?.();trigger.focus()},
+  await run({choose,remove,openList,key,settle,flush,calls,events,dialog,node,findTab,get focused(){return focused},get errors(){return root.root.findAllByProps({role:'alert'}).map(n=>n.children.join(''))},newKey(){listeners.get('keydown')?.()},supersede(){listeners.get('pointerdown')?.();trigger.focus()},
+   async reject(){await act(async()=>pending.reject(Error('Close failed')))},
+   async scope(sessionId,workspaceId=model.selectedWorkspaceId){await act(async()=>{model={...model,selectedSessionId:sessionId,selectedWorkspaceId:workspaceId};root.update(render())})},
+   async hide(){await act(async()=>{model={...model,canvas:{...model.canvas,open:false}};root.update(render())})},
    async cancel(){await act(async()=>root.root.findByType('dialog').props.onCancel({preventDefault(){}}))}});
  }finally{if(root)await act(async()=>root.unmount());for(const key of keys)if(previous[key]===undefined)delete globalThis[key];else globalThis[key]=previous[key]}
 }
@@ -125,6 +143,56 @@ test('actual modal choose never overrides a newer input or Escape',async()=>{
  await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);h.newKey();await h.settle();await h.flush();assert.equal(h.dialog.open,false);assert.ok(!h.events.includes('focus:b'))});
  await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);await h.cancel();await h.settle();await h.flush();assert.equal(h.events.at(-1),'focus:trigger');assert.equal(h.dialog.open,false)});
  await controlledTabs(CanvasTabs,async h=>{await h.choose('b',true);await h.settle({accepted:false,error:'Unsaved input'});await h.flush();assert.equal(h.dialog.open,true);assert.ok(!h.events.includes('focus:b'))});
+});
+const closeRetainsHome=Component=>controlledTabs(Component,async h=>{
+ await h.remove('b');await h.key('Home');await h.settle();await h.flush();
+ assert.equal(h.focused,h.node('overview'),'late close must not steal newer Home focus');
+ assert.equal(h.findTab('overview').props.tabIndex,0);
+ assert.equal(h.findTab('b'),undefined);assert.deepEqual(h.calls,[{action:'canvas.tabClose',args:{id:'b'}}]);
+});
+test('actual Delete preserves newer Home through held acceptance',()=>closeRetainsHome(CanvasTabs));
+test('actual remove negative rejects unconditional late focus',async()=>{
+ const {CanvasTabs:OldTabs}=await vite.ssrLoadModule(oldRemoveId);
+ await assert.rejects(()=>closeRetainsHome(OldTabs),/late close must not steal newer Home focus/);
+});
+test('actual removal restores focus for the still-owned direct and modal close',async()=>{
+ await controlledTabs(CanvasTabs,async h=>{await h.remove('b');await h.settle();await h.flush();assert.equal(h.focused,h.node('a'))});
+ await controlledTabs(CanvasTabs,async h=>{await h.remove('a');await h.settle();await h.flush();assert.equal(h.focused,h.node('b'))});
+ await controlledTabs(CanvasTabs,async h=>{await h.remove('b',true);await h.settle();await h.flush();assert.equal(h.dialog.open,true);assert.equal(h.events.at(-1),'focus:search')});
+ await controlledTabs(CanvasTabs,async h=>{await h.remove('b');await h.settle();await h.flush();await h.remove('a');await h.settle();await h.flush();assert.equal(h.focused,h.node('overview'))});
+});
+test('actual removal respects newer input before receipt and before the frame',async()=>{
+ for(const beforeReceipt of [true,false])for(const input of ['Home','ArrowLeft','pointer']){
+  await controlledTabs(CanvasTabs,async h=>{
+   await h.remove('b');if(!beforeReceipt)await h.settle();
+   if(input==='pointer')h.supersede();else await h.key(input);
+   const focus=h.focused;if(beforeReceipt)await h.settle();await h.flush();
+   assert.equal(h.focused,focus,`${input} owns focus ${beforeReceipt?'before receipt':'before frame'}`);
+  });
+ }
+});
+test('actual removal cannot focus or show old errors in another scope or reopened dialog',async()=>{
+ for(const outcome of ['accepted','refused','thrown'])for(const newer of ['chat','workspace','roundtrip','reopened','hidden','pointer']){
+  await controlledTabs(CanvasTabs,async h=>{
+   await h.remove('b',newer==='reopened');
+   if(newer==='chat')await h.scope('chat-b');
+   if(newer==='workspace')await h.scope('chat-a','workspace-b');
+   if(newer==='roundtrip'){await h.scope('chat-b');await h.scope('chat-a')}
+   if(newer==='reopened'){await h.cancel();await h.flush();await h.openList()}
+   if(newer==='hidden')await h.hide();
+   if(newer==='pointer')h.supersede();
+   const focus=h.focused;
+   if(outcome==='thrown')await h.reject();else await h.settle(outcome==='accepted'?{accepted:true}:{accepted:false,error:'Close refused'});
+   await h.flush();assert.equal(h.focused,focus);assert.deepEqual(h.errors,[]);
+   if(newer==='reopened')assert.equal(h.dialog.open,true);
+  });
+ }
+});
+test('actual current removal surfaces refusal and failure without dropping the tab',async()=>{
+ for(const outcome of ['refused','thrown'])await controlledTabs(CanvasTabs,async h=>{
+  await h.remove('b',true);if(outcome==='thrown')await h.reject();else await h.settle({accepted:false,error:'Close refused'});
+  await h.flush();assert.equal(h.dialog.open,true);assert.ok(h.findTab('b'));assert.deepEqual(h.errors,[outcome==='thrown'?'Close failed':'Close refused']);
+ });
 });
 test('receipt barrier accepts only the exact fully read accepted command',async()=>{
  const row={request:{id:'close-details'},status:200,body:{accepted:true}},entry={row,settled:Promise.resolve()};

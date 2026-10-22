@@ -418,6 +418,55 @@ try{
   }finally{await metrics.send('Emulation.clearDeviceMetricsOverride');await metrics.detach();await page.setViewportSize({width:1280,height:900})}
   return {scale:2,layout:{width:640,height:450},method:'CDP layout viewport and pixel density, not physical/browser-toolbar zoom'};
  });
+ await check('held Delete preserves newer Home while an owned close restores focus',async()=>{
+  await page.setViewportSize({width:1500,height:850});await action('view.update',{patch:{canvasWidth:720,canvasOverviewWidth:720}});
+  const closingId=ids[18],closingTab=()=>strip.getByRole('tab',{name:titles[18],exact:true}),successor=strip.getByRole('tab',{name:titles[29],exact:true});
+  await closingTab().click();await expect(closingTab()).toHaveAttribute('aria-selected','true');await expect(closingTab()).toBeFocused();
+  const start=await state(),events=[];
+  await page.evaluate(()=>{
+   const events=[],record=event=>events.push({type:event.type,key:event.key||null,id:event.target.dataset?.artifactId||event.target.getAttribute?.('aria-label')||event.target.tagName});
+   document.addEventListener('focusin',record);document.addEventListener('keydown',record,true);
+   window.canvasCloseObservation={events,stop(){document.removeEventListener('focusin',record);document.removeEventListener('keydown',record,true)}};
+  });
+  let release,entered,heldRequest;
+  const gate=new Promise(resolve=>release=resolve),held=new Promise(resolve=>entered=resolve);
+  const matches=request=>{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions'||request.headers()['x-amplifier-client']!==start.client.id)return false;
+   const command=request.postDataJSON();return command.action==='canvas.tabClose'&&command.args.id===closingId;
+  };
+  const intercept=async route=>{if(!matches(route.request()))return route.continue();heldRequest=route.request();entered();await gate;await route.continue()};
+  await page.route('**/api/actions',intercept);
+  const response=page.waitForResponse(value=>matches(value.request()),{timeout:8000});
+  try{
+   await page.keyboard.press('Delete');await held;
+   assert.equal(observedReceipts.has(heldRequest),false,'Held close has no acceptance yet');
+   await page.keyboard.press('Home');await expect(overviewTab).toBeFocused();
+   release();const receiptResponse=await response,command=receiptResponse.request().postDataJSON();
+   assert.equal(receiptResponse.request(),heldRequest);
+   await acceptedCanvasReceipt(observedReceipts.get(heldRequest),command.id);
+   await counts(11);await expect(closingTab()).toHaveCount(0);await expect(successor).toHaveAttribute('aria-selected','true');
+   // Let the actual deferred frame run; never force focus or retry a close.
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   await expect(overviewTab).toBeFocused();
+   events.push({phase:'held-close-newer-Home',commandId:command.id,accepted:true,focused:'Chat overview'});
+   await capture('delayed-close-newer-home');
+  }finally{
+   release();await page.unroute('**/api/actions',intercept);
+   report.removeFocus={checks:events,events:await page.evaluate(()=>{const record=window.canvasCloseObservation;record.stop();delete window.canvasCloseObservation;return record.events})};
+  }
+  // Reopen the saved item, then prove the same close without newer input still
+  // recovers to the selected surviving tab. No explicit focus() is used.
+  await action('canvas.select',{id:closingId});await counts(12);
+  await closingTab().click();await expect(closingTab()).toHaveAttribute('aria-selected','true');await expect(closingTab()).toBeFocused();
+  const ownResponse=page.waitForResponse(value=>matches(value.request()),{timeout:8000});
+  await page.keyboard.press('Delete');
+  const own=await ownResponse,command=own.request().postDataJSON();
+  await acceptedCanvasReceipt(observedReceipts.get(own.request()),command.id);
+  await counts(11);await expect(successor).toBeFocused();
+  report.removeFocus.checks.push({phase:'owned-close',commandId:command.id,accepted:true,focused:ids[29]});
+  await action('canvas.select',{id:closingId});await counts(12);
+  return report.removeFocus;
+ });
  await check('native all-open list, exact counts, close-active/last and saved recovery',async()=>{
   await page.setViewportSize({width:1500,height:850});await action('view.update',{patch:{canvasWidth:720,canvasOverviewWidth:720}});
   await counts(12);await documents().click();await expect(dialog).toBeVisible();
