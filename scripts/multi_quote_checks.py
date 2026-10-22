@@ -33,6 +33,19 @@ def main():
     def save():
         (output / 'results.json').write_text(json.dumps(results, indent=2))
 
+    # The managed export is a measured source tree, not a Git checkout. Reuse
+    # the standard scenario executor without inventing a revision or Git repo.
+    if os.environ.get('AMPLIFIER_MULTI_QUOTE_SCENARIOS'):
+        from browser_check_runner import run_scenarios
+        plan_path = Path(os.environ['AMPLIFIER_MULTI_QUOTE_SCENARIOS'])
+        manifest = Path(os.environ['AMPLIFIER_MULTI_QUOTE_SOURCE_MANIFEST'])
+        provenance = {'sourceKind': 'managed-snapshot', 'revision': None, 'tree': None,
+                      'sourceManifestSha256': sha(manifest.read_bytes()),
+                      'planSha256': sha(plan_path.read_bytes()),
+                      'runnerSha256': sha((ROOT / 'scripts/browser_check_runner.py').read_bytes())}
+        return run_scenarios(ROOT, json.loads(plan_path.read_text()), output,
+                             budget=180, provenance=provenance)
+
     def run(name, command, *, cwd=ROOT, env=None, stdin=None, expected=0):
         started = time.monotonic()
         try:
@@ -177,6 +190,7 @@ def main():
             results.append({'name': 'negative-quote-alignment', 'passed': False,
                             'status': 'not-run', 'reason': 'Source browser baseline failed'})
             save()
+            return 1
     else:
         results.append({'name': 'negative-quote-alignment', 'passed': False,
                         'status': 'not-run', 'reason': 'Baseline production build failed'})
@@ -190,25 +204,50 @@ def main():
         assert len(rows) == len(names) and {row['id'] for row in rows} == names
         selected = output / 'automatic-source-plan.json'
         selected.write_text(json.dumps({**plan, 'scenarios': rows}, indent=2))
-        run('automatic-source-smoke', [sys.executable, 'scripts/browser_check_runner.py',
-            '--plan', str(selected), '--output', str(output / 'automatic-source-smoke'),
-            '--budget-seconds', '180'])
+        if managed:
+            run('automatic-source-smoke', [sys.executable, 'scripts/multi_quote_checks.py',
+                '--output', str(output / 'automatic-source-smoke')],
+                env={**os.environ, 'AMPLIFIER_MULTI_QUOTE_SCENARIOS': str(selected),
+                     'AMPLIFIER_MULTI_QUOTE_SOURCE_MANIFEST': str(output / 'source.json')})
+        else:
+            run('automatic-source-smoke', [sys.executable, 'scripts/browser_check_runner.py',
+                '--plan', str(selected), '--output', str(output / 'automatic-source-smoke'),
+                '--budget-seconds', '180'])
     if args.installed and build == 0:
-        wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', *(['--offline'] if managed else []), '--out-dir', str(output / 'wheel')])
+        # The immutable managed image already has the locked dev build backend,
+        # but deliberately has no registry cache or network in the check guest.
+        wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel',
+            *(['--offline', '--no-build-isolation', '--python', sys.executable] if managed else []), '--out-dir', str(output / 'wheel')])
         if wheel_code == 0:
             wheel, = (output / 'wheel').glob('*.whl')
             outside = Path(os.environ.get('RUNNER_TEMP', '/artifacts')) / ('multi-quote-installed-' + output.name)
             outside.mkdir()
             python = outside / 'venv/bin/python'
-            run('installed-venv', ['uv', 'venv', '--python', sys.executable, str(outside / 'venv')])
-            exported, _ = run('locked-dependency-export', ['uv', 'export', '--locked', '--no-dev',
-                '--no-emit-project', '--format', 'requirements-txt', '--output-file', str(outside / 'dependencies.txt')])
-            if exported:
+            venv_code, _ = run('installed-venv', ['uv', 'venv', '--python', sys.executable, str(outside / 'venv')])
+            if venv_code:
                 return 1
-            dependencies, _ = run('installed-dependencies', ['uv', 'pip', 'install', '--python', str(python), '--no-deps',
-                '--requirement', str(outside / 'dependencies.txt')])
-            if dependencies:
-                return 1
+            if managed:
+                # A fresh environment owns the wheel. Dependencies are read
+                # from the immutable preparation after this venv's package
+                # directory. Do not execute the preparation's editable .pth
+                # files, copy its interpreter, or modify its files.
+                import sysconfig
+                site = outside / 'venv/lib' / ('python' + '.'.join(map(str, sys.version_info[:2]))) / 'site-packages'
+                (site / 'prepared-dependencies.pth').write_text(sysconfig.get_path('purelib') + '\n')
+                results.append({'name': 'installed-dependencies', 'passed': True,
+                                'method': 'read-only-prepared-dependency-directory',
+                                'sourcePrefix': sys.prefix,
+                                'limitation': 'Uses locked dev dependencies; not a minimal production-dependency installation'})
+                save()
+            else:
+                exported, _ = run('locked-dependency-export', ['uv', 'export', '--locked', '--no-dev',
+                    '--no-emit-project', '--format', 'requirements-txt', '--output-file', str(outside / 'dependencies.txt')])
+                if exported:
+                    return 1
+                dependencies, _ = run('installed-dependencies', ['uv', 'pip', 'install', '--python', str(python), '--no-deps',
+                    '--requirement', str(outside / 'dependencies.txt')])
+                if dependencies:
+                    return 1
             install, _ = run('wheel-install', ['uv', 'pip', 'install', '--python', str(python), '--no-deps', '--reinstall-package', 'amplifier-unified', str(wheel)])
             if install == 0:
                 expected = {}

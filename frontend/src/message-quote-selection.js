@@ -84,7 +84,7 @@ export function selectedQuote(article,selection){
  const root=[...article.querySelectorAll('.a-detail-text [data-message-quote-source]')].find(node=>node.contains(range.startContainer)&&node.contains(range.endContainer));
  if(!root)return {error:'Choose text within one message. Use Choose passage for other content.'};
  const map=sources.get(root);if(!map)return {error:'The rendered source is not available.'};
- const selected=[],walker=root.ownerDocument.createTreeWalker(root,4);let node;
+ const selected=[],edgeSeparators=[],walker=root.ownerDocument.createTreeWalker(root,4);let node;
  while((node=walker.nextNode())){
   if(!range.intersectsNode(node))continue;
   const leafRange=root.ownerDocument.createRange();leafRange.selectNodeContents(node);
@@ -96,6 +96,10 @@ export function selectedQuote(article,selection){
    // Markdown renderers put newline-only nodes between block elements. Their
    // exact source separators are supplied by the AST flow, never this DOM text.
    if(node.textContent!=='\n'||!['DIV','UL','OL','LI','BLOCKQUOTE'].includes(node.parentElement?.tagName))return {error:'This selection includes controls or unmapped text.',source:map.source};
+   // A separator selected at an endpoint has no pair of selected leaves to
+   // establish its exact raw interval. Never silently shorten that selection.
+   // Leading/trailing list-renderer padding has no two sibling blocks.
+   if(node.previousSibling?.nodeType===1&&node.nextSibling?.nodeType===1)edgeSeparators.push(selected.length);
    continue;
   }
   const index=Number(owner.dataset.messageQuoteLeaf),leaf=map.leaves[index];
@@ -104,6 +108,7 @@ export function selectedQuote(article,selection){
   const from=prefix.toString().length,to=from+leafRange.toString().length;
   selected.push({leaf:index,from,to});
  }
+ if(edgeSeparators.some(at=>at===0||at===selected.length))return {error:'Use Choose passage to include this boundary whitespace exactly.',source:map.source};
  const result=quoteSpans(map,selected);
  return result&&{...result,source:map.source,root,range:range.cloneRange()};
 }

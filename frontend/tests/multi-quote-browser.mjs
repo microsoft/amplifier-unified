@@ -126,6 +126,7 @@ async function expectCompact(stage){
   const rect=el=>{const {x,y,width,height}=el.getBoundingClientRect();return {x,y,width,height};};
   const editor=node.querySelector('[role=textbox]'),writing=node.querySelector('.a-compose-writing');
   return {surface:rect(node),editor:rect(editor),writing:rect(writing),viewportHeight:innerHeight,
+   editorScrollHeight:editor.scrollHeight,messages:rect(document.querySelector('.a-messages')),
    quoteCount:writing.querySelectorAll('[data-quote-instance]').length,
    overflow:node.scrollWidth>node.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
    theme:document.querySelector('#amp-one').dataset.themeScheme,
@@ -136,6 +137,8 @@ async function expectCompact(stage){
  assert.ok(geometry.quoteCount>=2,'Real immutable quotes belong inside the compact writing wrapper');
  assert.ok(geometry.editor.width>=geometry.surface.width-40,'Quotes use the full compact writing width');
  assert.ok(geometry.editor.height<=Math.min(400,geometry.viewportHeight*.45)+1,'Long quote drafts retain a viewport-bounded editor height');
+ if(geometry.editorScrollHeight>181)assert.ok(geometry.editor.height>181,'Overflowing quote drafts gain real reading space beyond the plain editor cap');
+ assert.ok(geometry.messages.height>=80,'The conversation remains usable above the expanded quote editor');
  assert.equal(geometry.overflow,false,'Compact quote surface must not overflow');
  assert.equal(geometry.pageOverflow,false,'Compact quote page must not overflow');
  assert.ok(geometry.primary.width>=44&&geometry.primary.height>=44,'Primary action retains its touch target');
@@ -143,6 +146,11 @@ async function expectCompact(stage){
 }
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
+ let comparisonError=null;
+ if(process.env.AMPLIFIER_QUOTE_REFERENCE&&proof){
+  try{await compareReference();}
+  catch(error){comparisonError=error;writeFileSync(join(proof,'comparison-failure.json'),JSON.stringify({message:error.message},null,2));}
+ }
  await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
  const editor=page.getByRole('textbox',{name:'Message Amplifier'}),quotes=editor.locator('[data-quote-instance]');
  await editor.fill(BEFORE);
@@ -311,6 +319,11 @@ try{
   }
  }
  const enlargedStyle=await page.addStyleTag({content:'#amp-one{--a-text-lg:24px;--a-text-sm:20px} #amp-one .a-composer-quote small{font-size:1rem}'});
+ // Layout stress only: this is the real longest peer caption, not a forged
+ // canonical attribution. Restore the DOM label after measuring both cards.
+ const sourceLabels=await quotes.evaluateAll(cards=>cards.map(card=>card.querySelector('.a-composer-quote-head>button').textContent));
+ await quotes.evaluateAll(cards=>cards.forEach(card=>card.querySelector('.a-composer-quote-head>button').textContent='Sent by Amplifier from another chat'));
+ await visibleCardControls('320px enlarged text long caption short quote',quotes.first());
  await visibleCardControls('320px enlarged text',quotes.nth(1));
  await expectCompact('320px enlarged text');
  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'quotes-320-enlarged.png')});
@@ -318,6 +331,7 @@ try{
  await quotes.nth(1).getByRole('button',{name:/Show all/}).tap();
  await expect(quotes.nth(1).getByRole('button',{name:'Collapse quote'})).toBeVisible();
  await visibleCardControls('320px expanded long quote',quotes.nth(1));
+ await quotes.evaluateAll((cards,labels)=>cards.forEach((card,index)=>card.querySelector('.a-composer-quote-head>button').textContent=labels[index]),sourceLabels);
  const submitted=await documentValue();await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>document.querySelectorAll('.a-message [data-sent-quote]').length===3);
  await expect(quotes).toHaveCount(0);
@@ -337,6 +351,9 @@ try{
  await editor.fill('Adjacent cycle');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>{const s=window.amplifier.getState();return s.sessions.find(c=>c.id===s.selectedSessionId)?.messages.some(m=>m.text==='Adjacent cycle');});
  await page.reload();await expect(quotes).toHaveCount(0);
+ await editor.fill(Array.from({length:30},(_,i)=>'Plain draft line '+i).join('\n'));
+ assert.ok((await editor.boundingBox()).height<=181,'Removing every quote restores the ordinary draft height cap');
+ await editor.fill('');
  // Native transcript selection, not just the source picker.
  await page.setViewportSize({width:1280,height:900});
  await a.locator('.a-detail-text').scrollIntoViewIfNeeded();
@@ -375,6 +392,19 @@ try{
   assert.ok(collected.quote.spans.length>=1);await visibleCardControls('rendered '+selector,quotes.first());
   if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'rendered-'+selector.replace(/\W+/g,'-')+'.png')});
   await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
+ }
+ // A selected separator at either edge cannot be silently discarded.
+ for(const edge of ['trailing','leading']){
+  await c.locator('.a-detail-text p').first().scrollIntoViewIfNeeded();
+  await c.locator('[data-message-quote-source]').evaluate((root,edge)=>{
+   document.activeElement?.blur();
+   const first=root.querySelector('p'),gap=first.nextSibling,next=gap.nextSibling,range=document.createRange();
+   if(edge==='trailing'){range.setStartBefore(first);range.setEndAfter(gap);}
+   else{range.setStartBefore(gap);range.setEndAfter(next);}
+   const selected=window.getSelection();selected.removeAllRanges();selected.addRange(range);document.dispatchEvent(new Event('selectionchange'));
+  },edge);
+  await expect(page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true})).toBeVisible();
+  await expect(quotes).toHaveCount(0);await page.keyboard.press('Escape');
  }
  // Second occurrence, across formatting, with Unicode nearby: no text search
  // may accidentally quote the earlier identical phrase.
@@ -439,35 +469,51 @@ try{
  assert.notEqual(separateSession,originalSession);
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
  await editor.fill('Retain original draft');
- let chatRelease,chatStarted;
- const chatHeld=new Promise(resolve=>chatRelease=resolve),chatWaiting=new Promise(resolve=>chatStarted=resolve);
- await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();chatStarted();await chatHeld;await route.fulfill({response});}else await route.continue();});
+ let chatRelease,chatStarted,chatSettled;
+ const chatHeld=new Promise(resolve=>chatRelease=resolve),chatWaiting=new Promise(resolve=>chatStarted=resolve),chatDone=new Promise(resolve=>chatSettled=resolve);
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();chatStarted();await chatHeld;await route.fulfill({response});chatSettled();}else await route.continue();});
  await b.getByRole('button',{name:'Reply to message',exact:true}).click();await chatWaiting;
  // Navigation paints immediately; its ordered acknowledgement may follow the
  // deliberately held reply. Do not await it before releasing that reply.
  await page.evaluate(id=>{void window.amplifier.dispatch('session.select',{id});},separateSession);
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).not.toBe(originalSession);
- await editor.fill('Separate draft');chatRelease();await page.unroute('**/api/actions');
+ await editor.fill('Separate draft');chatRelease();await chatDone;await page.unroute('**/api/actions');
  await page.getByText('The conversation changed. The quote was not added.',{exact:true}).first().waitFor();
  await expect(editor).toHaveText('Separate draft');await expect(quotes).toHaveCount(0);
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
  await expect(editor).toHaveText('Retain original draft');await expect(quotes).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
  assert.deepEqual(errors,[]);
- if(process.env.AMPLIFIER_QUOTE_REFERENCE&&proof){
+ async function compareReference(){
   // Optional private design comparison. The supplied HTML is data in an opaque
   // script-only sandbox, never product source or a privileged page.
-  const referencePage=await context.newPage();
+  const comparisonContext=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+  const page=await comparisonContext.newPage();
+  await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
+  const editor=page.getByRole('textbox',{name:'Message Amplifier'});
+  const documentValue=()=>page.evaluate(()=>window.amplifier.getState().view.draftDocument);
+  const referenceContext=await browser.newContext();
+  const referencePage=await referenceContext.newPage();
   await referencePage.route('**/*',route=>route.abort());
-  await referencePage.setContent('<iframe id="reference" sandbox="allow-scripts" style="border:0;width:100%;height:1200px"></iframe>');
+  await referencePage.routeWebSocket('**/*',socket=>socket.close());
+  await referencePage.setContent(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src about: 'self'; base-uri 'none'; form-action 'none'"><iframe id="reference" sandbox="allow-scripts" style="border:0;width:100%;height:1200px"></iframe>`);
   await referencePage.locator('iframe').evaluate((node,html)=>node.srcdoc=html,readFileSync(process.env.AMPLIFIER_QUOTE_REFERENCE,'utf8'));
   const reference=referencePage.frameLocator('#reference');
   await reference.getByRole('button',{name:'Add three-quote example',exact:true}).click();
+  const sandboxCheck=await reference.locator('#editor').evaluate(async()=>{
+   const violations=[];document.addEventListener('securitypolicyviolation',event=>violations.push(event.violatedDirective));
+   const socket=new WebSocket('ws://127.0.0.1:1/blocked-reference-check');
+   const blocked=await new Promise(resolve=>{socket.onerror=()=>resolve(true);socket.onopen=()=>{socket.close();resolve(false);};});
+   return {blocked,violations};
+  });
+  assert.ok(sandboxCheck.blocked&&sandboxCheck.violations.includes('connect-src'),'Private reference sandbox blocks WebSocket connections through CSP');
+  writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify(sandboxCheck,null,2));
   const specimen=await reference.locator('#editor').evaluate(()=>({sources:sources(),blocks:draft().blocks}));
   const seeded=await context.request.post(url+'/fixture/quote-comparison',{data:specimen.sources.map(source=>({role:source.role,text:source.text}))});
   assert.equal(seeded.status(),200);const ids=(await seeded.json()).ids;
   await editor.fill('');
-  await page.getByRole('combobox',{name:'Quote insertion'}).selectOption('append').catch(()=>{});
+  await page.locator('.a-file-input').setInputFiles({name:'outline.txt',mimeType:'text/plain',buffer:Buffer.from('Synthetic comparison attachment')});
+  await page.getByRole('button',{name:'Remove outline.txt',exact:true}).waitFor();
   for(const block of specimen.blocks){
    if(block.type==='text'){
     if(block.value){await editor.focus();await editor.press('ControlOrMeta+End');await page.keyboard.insertText(block.value);}
@@ -490,8 +536,9 @@ try{
    await page.locator('.a-composer').screenshot({path:join(proof,`actual-matching-${width}.png`)});
   }
   writeFileSync(join(proof,'comparison-specimen.json'),JSON.stringify({specimen,actual:await documentValue(),scope:'Matching source/excerpts and commentary; prototype-only lab and simulation controls excluded from acceptance'},null,2));
-  await referencePage.close();
+  await referenceContext.close();await comparisonContext.close();
  }
+ if(comparisonError)throw comparisonError;
  if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll},null,2));
  console.log('PASS exact Unicode/multiline passages + whole message, interleaved commentary, attachment, reload, keyboard reorder, removal, captured delayed target, narrow rendering, sent projection and adjacent cycle.');
 }catch(error){
