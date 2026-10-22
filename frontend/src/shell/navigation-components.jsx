@@ -22,7 +22,7 @@ import {useNavigation} from '../../../packages/shell-sdk/index.js';
 import {waitForSnapshot} from './wait-for-snapshot';
 import {hasNavigationResource} from './navigation-demand';
 import {NavigationResourceStatus} from './navigation-resource-status';
-import {usePinOrderSettlement} from './pin-order-settlement';
+import {usePinOrderSettlement,pinOrderPending,pinOrderScope} from './pin-order-settlement';
 import {sidebarReadingSnapshot} from './resources';
 import {ChatShortcutBadge} from '../chat-shortcuts';
 import {workGroups} from '../work-status';
@@ -379,15 +379,49 @@ export function PinnedChats({page,model,now}){
  </>;
 }
 export function PinnedItems({page,model,workspaceModel=model,now,navigation,canEdit=true}){
- const [error,setError]=useState('');
+ const [error,setError]=useState(null),[reading,setReading]=useState(false);
+ const owner=useRef({alive:true,version:0,read:null});
+ useEffect(()=>{const current=owner.current;current.alive=true;return()=>{current.alive=false;current.version++;current.read?.controller.abort()}},[model.host]);
  const settle=usePinOrderSettlement(model.host);
  const items=page.items.map(item=>({...item,label:item.kind==='workspace'?(item.row.customName||item.row.name):(item.row.title||'Untitled conversation')})),visible=items.map(item=>item.id);
- const reorder=async(next,{id,to})=>{
-  setError('');
+ const reorder=async(next,{id,basis,target,contextKey})=>{
+  const version=++owner.current.version;owner.current.read?.controller.abort();setError(null);setReading(false);
   try{
-   const previous=[...(model.state.pinnedItemIds||[])],expected=movePin(previous,id,visible[to]);
+   // A host publication may precede React's next render. Never combine its new
+   // total vector with this render's old page/drag target.
+   const current=model.host?.getSnapshot()||model.state;
+   if(pinOrderPending(current)||pinOrderScope(current)!==contextKey
+    ||current.pinnedNavigation?.items?.map(item=>item.id).join('\0')!==basis.join('\0'))
+    throw Error('The pinned list is updating. Move the item again when it is ready.');
+   const previous=[...(current.pinnedItemIds||[])],expected=movePin(previous,id,target);
    await settle(()=>model.act('navigation.pinOrder',{ids:expected}),previous,expected,next);
-  }catch(err){if(err.name!=='AbortError')setError(err.message||'Could not reorder pins. Please try again.');throw err}
+   return {orderKey:expected.join('\0')};
+  }catch(err){if(err.name!=='AbortError'&&owner.current.alive&&owner.current.version===version)setError({message:err.message||'Could not reorder pins. Please try again.',read:err.pinOrderDisplay===true,previous:err.pinOrderPrevious,expected:err.pinOrderExpected,visible:err.pinOrderVisible});throw err}
+ };
+ const refresh=async()=>{
+  if(owner.current.read)return;
+  const token={version:owner.current.version,scope:pinOrderScope(model.host.getSnapshot()),controller:new AbortController(),error};owner.current.read=token;setReading(true);
+  const current=()=>owner.current.alive&&owner.current.version===token.version&&pinOrderScope(model.host.getSnapshot())===token.scope;
+  try{
+   // One read, one observer/deadline. HTTP can return while the cold page is
+   // pending; only the saved order's completed projection settles this error.
+   // In particular, joining a pre-save read cannot confirm the old coherent page.
+   const select=snapshot=>{
+    if(!current())throw new DOMException('Pinned read superseded','AbortError');
+    if(!pinOrderPending(snapshot)&&snapshot.pinnedItemIds?.join('\0')!==token.error.previous?.join('\0')
+     &&snapshot.pinnedItemIds?.join('\0')!==token.error.expected?.join('\0'))
+     throw Object.assign(Error('Pins changed elsewhere. The current order is shown.'),{superseded:true});
+    return !pinOrderPending(snapshot)&&snapshot.pinnedItemIds?.join('\0')===token.error.expected?.join('\0')
+     &&snapshot.pinnedNavigation?.items?.map(item=>item.id).join('\0')===token.error.visible?.join('\0')?snapshot:null;
+   };
+   if(!select(model.host.getSnapshot())){
+    const waiting=waitForSnapshot(model.host,select,{signal:token.controller.signal,
+     timeoutMessage:'Could not confirm the saved pin order. No pin command was repeated. Refresh the pinned list again.'});
+    await Promise.race([waiting,Promise.resolve().then(()=>model.host.refreshResources()).then(()=>waiting)]);
+   }
+   if(current())setError(null);
+  }catch(err){if(err.name!=='AbortError'&&current())setError({...token.error,message:err.message||'Could not refresh the pinned list.',read:!err.superseded})}
+  finally{token.controller.abort();if(owner.current.read===token)owner.current.read=null;if(owner.current.alive&&owner.current.version===token.version){setReading(false);if(!current())setError(null)}}
  };
  const browse=async path=>{
   navigation?.browse('workspaces');
@@ -396,8 +430,8 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
  };
  const open=row=>navigation?navigation.browse('workspace',row.workspaceId):workspaceModel.act('workspace.select',{id:row.workspaceId});
  const newChat=row=>workspaceModel.act('session.draft',{workspace:row.path,workspaceId:row.workspaceId,location:{kind:'workspace'}});
- return <><ReorderList items={items} ids={visible} busy={!!model.state.navigationResourceRetained?.pinnedNavigation} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
-  {error&&<p role="alert" className="a-danger">{error}</p>}
+ return <><ReorderList items={items} ids={visible} busy={pinOrderPending(model.state)} queueChanges contextKey={pinOrderScope(model.state)} onQueueDiscard={()=>setError(value=>value?{...value,message:value.message+' Later queued moves were not sent.'}:value)} onQueueFull={()=>setError({message:'Move queue is full. Wait for the saved order before moving another item.',read:false})} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
+  {error&&<p role="alert" className="a-danger">{error.message}{error.read&&model.host?.refreshResources&&<> <button type="button" className="a-link" disabled={reading} onClick={refresh}>{reading?'Reading pins…':'Refresh pinned list'}</button></>}</p>}
   <ChatPagination page={page} label="pinned items" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
  </>;
 }

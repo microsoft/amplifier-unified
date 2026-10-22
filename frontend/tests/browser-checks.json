@@ -69,6 +69,7 @@
     {"id": "navigation", "command": ["node", "tests/navigation-browser.mjs"]},
     {"id": "archive-feedback", "command": ["node", "tests/archive-feedback-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/archive-feedback"}},
     {"id": "pin-retention", "command": ["node", "tests/pin-retention-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/pin-retention"}},
+    {"id": "pin-rapid-reorder", "command": ["node", "tests/pin-rapid-reorder-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/pin-rapid-reorder"}},
     {"id": "workspace-shortcuts", "command": ["node", "tests/workspace-shortcuts-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/workspace-shortcuts"}},
     {"id": "chat-title", "command": ["node", "tests/chat-title-browser.mjs"]},
     {"id": "message-outbox", "command": ["node", "tests/message-outbox-browser.mjs"]},
@@ -108,6 +109,8 @@
     {"id": "assignment-adoption", "command": ["node", "tests/assignment-adoption-browser.mjs"]},
     {"id": "access-mode", "command": ["node", "tests/access-mode-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/access-mode"}},
     {"id": "storage-cleanup-settings", "command": ["node", "tests/storage-cleanup-settings-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/storage-cleanup-settings"}},
-    {"id": "model-capacity-settings", "command": ["node", "tests/model-capacity-settings-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/model-capacity-settings"}}
+    {"id": "model-capacity-settings", "command": ["node", "tests/model-capacity-settings-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/model-capacity-settings"}},
+    {"id": "compact-composer", "command": ["node", "tests/compact-composer-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/compact-composer"}},
+    {"id": "peer-preview", "command": ["node", "tests/peer-preview-browser.mjs"], "env": {"AMPLIFIER_PROOF_DIR": "{root}/output/browser-checks/peer-preview"}}
   ]
 }

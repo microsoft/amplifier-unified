@@ -238,6 +238,9 @@ try{
  await expect.poll(async()=>(await saved()).cursor).toBe(baseline.cursor-1);
  await expect(back).toBeEnabled();await expect(back).toBeFocused();
  await forward.click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(c);
+ // Selection is optimistic; keyboard focus requires the confirmed history move.
+ await expect.poll(async()=>(await saved()).cursor).toBe(baseline.cursor);
+ await expect(menu).toBeEnabled();
  assert.equal((await saved()).entries.length,baseline.entries.length);
  // One accessible menu, repeated names disambiguated by workspace/ID, Escape restores focus.
  await menu.focus();await page.keyboard.press('ArrowDown');await expect(page.getByRole('menu',{name:'Visited destinations'})).toBeVisible();

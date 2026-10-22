@@ -21,12 +21,15 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'output/canvas-qualification'
 PUBLIC = ROOT / 'output/canvas-qualification-public'
 BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs',
-            'destination-history-browser.mjs', 'automation-hub-browser.mjs')
+            'destination-history-browser.mjs', 'automation-hub-browser.mjs',
+            'compact-composer-browser.mjs', 'peer-preview-browser.mjs',
+            'pin-rapid-reorder-browser.mjs')
 UNITS = ('canvas-overview.test.mjs', 'shell-panels.test.mjs', 'work-shell.test.mjs',
          'canvas-reload-guard.test.mjs', 'canvas-app-viewer.test.mjs', 'navigation-demand.test.mjs',
          'destination-history.test.mjs', 'destination-history-ui.test.mjs', 'api.test.mjs',
          'settings-drafts.test.mjs', 'automation-hub.test.mjs', 'schedule-editor.test.mjs',
-         'submission-reset.test.mjs')
+         'submission-reset.test.mjs', 'composer.test.mjs', 'peer-groups.test.mjs',
+         'peer-preview-pages.test.mjs', 'pin-order-settlement.test.mjs')
 
 
 def sha(path):
@@ -97,13 +100,17 @@ def prepare_installed():
     shutil.copytree(ROOT / 'frontend/tests', harness / 'frontend/tests')
     # Main's held-frame history oracle imports this pure command encoder in
     # Node. It is test support only: Chromium still loads the wheel's built UI.
-    helper = Path('frontend/src/destination-history.js')
-    (harness / helper).parent.mkdir(parents=True)
-    shutil.copy2(ROOT / helper, harness / helper)
-    assert sha(ROOT / helper) == sha(harness / helper)
+    helpers = ('frontend/src/destination-history.js', 'frontend/src/settings-navigation.js')
+    support = {}
+    for name in helpers:
+        helper = Path(name)
+        (harness / helper).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / helper, harness / helper)
+        assert sha(ROOT / helper) == sha(harness / helper)
+        support[name] = sha(harness / helper)
     write(OUT / 'installed-test-support.json', {
-        'files': {str(helper): sha(harness / helper)},
-        'purpose': 'Node-only held-frame oracle; not browser-served product code',
+        'files': support,
+        'purpose': 'Node-only history/settings test helpers; not browser-served product code',
     })
     shutil.copy2(ROOT / 'frontend/package.json', harness / 'frontend/package.json')
     (harness / 'frontend/node_modules').symlink_to(ROOT / 'frontend/node_modules', target_is_directory=True)
@@ -183,7 +190,11 @@ def run():
               'tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget',
               'tests/test_browser_check_runner.py::test_attachment_focus_workflow_retains_failures_and_default_coverage',
               'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage',
-              'tests/test_mcp_boundary_checks.py::test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job')]],
+              'tests/test_mcp_boundary_checks.py::test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job',
+              'tests/test_release_qualification.py::test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence',
+              'tests/test_peer_qualification.py::test_peer_hosted_route_is_fixed_and_separate',
+              'tests/test_browser_check_runner.py::test_compact_composer_and_peer_preview_keep_automatic_inventory_owners',
+              'tests/test_browser_check_runner.py::test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain')]],
               seconds=120)
         if not stage('build', ['npm', 'run', 'build'], seconds=180):
             raise RuntimeError('Production build failed')
@@ -193,17 +204,23 @@ def run():
             label = 'source-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], seconds=240,
                   env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'),
-                       'AMPLIFIER_TEST_OUTPUT': str(OUT / label / 'artifacts'), 'AMPLIFIER_TEST_PYTHON': python})
+                       'AMPLIFIER_TEST_OUTPUT': str(OUT / label / 'artifacts'),
+                       'AMPLIFIER_PROOF_DIR': str(OUT / label / 'artifacts'),
+                       'AMPLIFIER_TEST_PYTHON': python})
         if not stage('wheel-build', ['uv', 'build', '--wheel', '--project', str(ROOT), '--out-dir', str(OUT / 'dist')], seconds=180):
             raise RuntimeError('Wheel build failed')
         if not stage('installed-setup', [python, str(Path(__file__).resolve()), 'prepare-installed'], seconds=300):
             raise RuntimeError('Installed wheel setup failed')
         harness = OUT / 'installed-harness'
+        package = json.loads((OUT / 'installed-identity.json').read_text())['package']
         for name in BROWSERS:
             label = 'installed-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], root=harness, seconds=240,
                   env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'),
                        'AMPLIFIER_TEST_OUTPUT': str(OUT / label / 'artifacts'),
+                       'AMPLIFIER_PROOF_DIR': str(OUT / label / 'artifacts'),
+                       'AMPLIFIER_TEST_PACKAGE_ROOT': package,
+                       'AMPLIFIER_TEST_INSTALLED_STATIC': '1',
                        'AMPLIFIER_TEST_PYTHON': str(OUT / 'installed-venv/bin/python'), 'PYTHONPATH': '',
                        'AMPLIFIER_SHELL_NODE_MODULES': str(harness / 'frontend/node_modules')})
         stage('installed-final-identity', [python, str(Path(__file__).resolve()), 'verify-installed'], seconds=30)
