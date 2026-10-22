@@ -64,7 +64,7 @@ function Source({source,label}){
  </section>;
 }
 function Facts({item}){
- const decisionCurrent=item.humanDecisionSequence>item.counterevidenceSequence;
+ const decisionCurrent=item.humanDecisionSequence>(item.counterevidenceSequence??0);
  const resources=item.resources||[];
  return <dl className="a-shared-facts">
   <dt>Commitment</dt><dd>{words(item.commitment)} · {words(item.disposition)}{item.dispositionBasis?' · '+words(item.dispositionBasis):''}</dd>
