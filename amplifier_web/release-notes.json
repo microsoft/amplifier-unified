@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.210",
+      "title": "Keep built-in tool updates consistent with their selected sources",
+      "changes": [
+        "Record the selected source of built-in tools during update preparation, so newer filesystem and bash modules can be validated and adopted without conflicting with stale source records. Explicit source choices and integrity checks remain enforced."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.209",
+      "title": "Keep update checks responsive during runner checks",
+      "changes": [
+        "Keep a requested update check queued while the test runner briefly checks capacity, then recheck safely and show available app or component updates.",
+        "Avoid repeatedly polling a capacity-blocked runner merely because chats are idle. Its pending qualification and normal periodic checks are preserved."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.208",
+      "title": "Keep updates moving while the test runner waits",
+      "changes": [
+        "Allow app and component updates to proceed while an updated test runner waits for capacity or confirmation of its isolated check. The runner retains its original work and evidence; normal app restart and component safety checks still apply.",
+        "Keep the newer app release summary and Update Amplifier button available alongside the waiting runner. Preserve component update progress and results when the runner later completes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.207",
       "title": "Reliable Linux setup and conversation settings",
       "changes": [
