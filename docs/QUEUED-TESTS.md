@@ -262,11 +262,13 @@ and unverified guest removal remain held. Restart does not weaken these checks.
 ## Work concurrency settings
 
 The same Advanced execution limits form exposes global limits for outstanding
-task chats per manager (default 8), owned test environments per chat (default 1),
+task chats per manager (default 0: no count ceiling), owned test environments per
+chat (default 0: no count ceiling),
 all non-retired resource owners (default 512), and resource owners per chat
 (default 32), and cooperative reservations per installation (default 1024) and
-per chat including nested workers (default 64). These are positive whole numbers,
-not model-selected overrides.
+per chat including nested workers (default 64). Retained-owner and reservation
+bounds must stay positive; the first two counts accept zero. These are operator
+settings, not model-selected overrides.
 An empty setting restores the default. The host-defaults authority and exact
 settings revision protect changes through either the UI or agent actions.
 Machine CPU, memory, storage and backend limits remain additional admission gates;
