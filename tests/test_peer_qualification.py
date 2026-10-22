@@ -23,7 +23,7 @@ def test_peer_hosted_route_is_fixed_and_separate():
     steps = job['steps']
     reject = steps[0]
     assert reject['run'] == 'exit 1'
-    for selection in ('canvas_qualification', 'compact_composer', 'destination_history', 'settings_close_diagnostic', 'mcp_boundary', 'app004_qualification', 'attachment_consumption'):
+    for selection in ('canvas_qualification', 'multi_quote', 'compact_composer', 'destination_history', 'settings_close_diagnostic', 'mcp_boundary', 'app004_qualification', 'attachment_consumption'):
         assert 'inputs.' + selection in reject['if']
     assert not any(step.get('continue-on-error') for step in steps)
     assert 'secrets.' not in json.dumps(job)

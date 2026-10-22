@@ -263,8 +263,8 @@
           "title": "Archive with truthful progress, guarded navigation, and Undo",
           "scope": "standard-path",
           "entryPath": [
-            "Chat \u2192 Archive",
-            "Row Details \u2192 Archive"
+            "Chat → Archive",
+            "Row Details → Archive"
           ],
           "prerequisites": [
             "Synthetic isolated archive fixture; no real user files or runtime execution"
@@ -284,7 +284,7 @@
             "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
             "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
             "Undo is available after archive confirmation even while the following navigation is stalled.",
-            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
+            "A newer navigation intention, including A→B→A, prevents the old archive from redirecting.",
             "Archiving a different row or invoking the raw public action does not navigate the current view.",
             "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
             "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
@@ -1563,7 +1563,7 @@
           "entryPath": [
             "Settings",
             "Testing & resources",
-            "This machine\u2019s test resources"
+            "This machine’s test resources"
           ],
           "prerequisites": [
             "Isolated synthetic machine authority; no production machine policy or runner effects"
@@ -2176,7 +2176,10 @@
           "family": "navigation",
           "title": "Reorder different sidebar pins while an earlier move settles",
           "scope": "standard-path",
-          "entryPath": ["Sidebar", "Pinned"],
+          "entryPath": [
+            "Sidebar",
+            "Pinned"
+          ],
           "prerequisites": [
             "Production bundled client with synthetic mixed session and workspace pins",
             "Two fixture clients and controlled receipt/projection delivery; no live pins or model calls"
@@ -2195,7 +2198,16 @@
             "One bounded read can recover cold display completion without reconnect, duplicate mutation or model startup.",
             "Externally stale pages block new moves; keyboard and narrow controls remain usable."
           ],
-          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "delayed-receipt", "delayed-projection", "unknown-outcome", "second-client", "reload"],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "delayed-projection",
+            "unknown-outcome",
+            "second-client",
+            "reload"
+          ],
           "existingTests": [
             {
               "path": "frontend/tests/pin-rapid-reorder-browser.mjs",
@@ -2405,6 +2417,66 @@
         }
       ],
       "qualification": "https://github.com/microsoft/amplifier-unified/actions/runs/39749556899"
+    },
+    {
+      "id": "delta.multi-quote",
+      "sourceCommit": "063f6b6dc21d628d2fa3ebecfe8f21d6d9eb2ee4",
+      "reason": "Register the reviewed immutable-quote journey as an ordinary automatic source owner, integrated with compact writing; preserve every frozen and additive owner.",
+      "workflowsAdded": [
+        {
+          "id": "composer.immutable-multi-quote",
+          "family": "composer",
+          "title": "Collect exact references and interleave commentary in the compact composer",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Message actions",
+            "Choose passage or Reply to message"
+          ],
+          "prerequisites": [
+            "Synthetic current-chat messages and attachments; built client; no live history or provider"
+          ],
+          "steps": [
+            "Select two nonadjacent passages and quote a whole message while typing literal commentary before, between and after",
+            "Reload, keyboard-reorder and remove only a quote, preserving exact commentary and attachment",
+            "Hold an addition, move the caret and insertion mode, then verify the new instance at its captured target",
+            "Change commentary while a receipt is held; verify journal ownership and reject the late addition",
+            "Inspect narrow compact layout, send once, copy the exact saved message and repeat a plain cycle"
+          ],
+          "expectedResults": [
+            "Immutable blocks retain exact Unicode, whitespace, source spans and independent identity without replacing earlier content.",
+            "Independently authored DOM, editor and canonical-draft order survives quote manipulation and reload.",
+            "The compact writing wrapper retains full-width references, accessible controls and no horizontal overflow.",
+            "No collection, composition or quote-removal action sends; normal Send preserves exact interleaving and attachments.",
+            "Delayed additions retain their captured target or fail visibly; newer journaled commentary remains owned."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "touch-emulated",
+            "reload",
+            "delayed-receipt"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/multi-quote-browser.mjs",
+              "relation": "Automatic multi-quote source owner; artifacts at output/browser-checks/multi-quote"
+            },
+            {
+              "path": "scripts/multi_quote_checks.py",
+              "relation": "Separate fixed focused source/installed qualification with both meaningful commentary mutants"
+            }
+          ],
+          "limits": [
+            "Registration is not a passing result; current raw run evidence must be inspected.",
+            "No physical device, real OS IME, live provider or screen-reader claim.",
+            "Lost Send acknowledgement and late quote across chat switch remain narrower host/model checks, not this browser journey."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
     }
   ]
 }

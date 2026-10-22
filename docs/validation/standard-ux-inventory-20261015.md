@@ -1024,3 +1024,17 @@ unchanged. The delta ledger records the specific paths, expected results and
 synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
 qualify installed wheels and negative controls; they do not replace these
 automatic ordinary-path owners.
+
+## Immutable multi-quote integration (October 22)
+
+The additive `multi-quote` source journey uses the existing automatic browser
+runner and `output/browser-checks/multi-quote` evidence directory. It retains
+literal, independently expected commentary before/between/after immutable
+references through reload, removal/reorder, delayed addition and normal Send.
+The same journey checks compact writing-wrapper containment and narrow layout;
+it does not substitute quote-shaped Markdown for immutable source identity.
+The Composer and Peer owners above and the frozen baseline remain unchanged.
+The manual multi-quote lane adds two deliberate commentary-loss/misplacement
+controls, byte-exact restoration and installed-wheel proof. Physical-device,
+real OS IME, live-provider and lost-Send-ACK browser coverage remain explicit
+limits; registering this owner is not a new passing result.

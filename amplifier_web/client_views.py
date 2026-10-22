@@ -206,6 +206,7 @@ class ClientViews:
         # it keeps its identity through JSON persistence and reload.
         record["view"]["messageReply"] = copy.deepcopy(record.get("messageReplies", {}).get(record.get("selectedSessionId")))
         draft = record.get("drafts", {}).get(record.get("selectedSessionId") or "", "")
+        record["view"]["draftDocument"] = copy.deepcopy(record.get("draftDocuments", {}).get(record.get("selectedSessionId") or ""))
         if record["view"].get("draft") != draft:
             record["view"]["draft"] = draft
             self.dirty.add(identity)
@@ -237,11 +238,28 @@ class ClientViews:
             self.dirty.add(identity)
         return self.records.get(identity) if identity is not None else None
 
-    def draft(self, session_id, text):
+    def draft(self, session_id, text, document=...):
         record = self.record()
+        if document is ...:
+            previous = record.get("draftDocuments", {}).get(session_id or "")
+            old_text = record.get("drafts", {}).get(session_id or "", "")
+            document = None
+            if previous and text:
+                if not text.startswith(old_text):
+                    from .service import AppError
+                    raise AppError('Quoted content was kept. Edit its commentary in the composer.', 409)
+                document = copy.deepcopy(previous)
+                if text != old_text:
+                    document['segments'].append({'type': 'text', 'text': text[len(old_text):]})
         record.setdefault("drafts", {})[session_id or ""] = text
+        documents = record.setdefault("draftDocuments", {})
+        if document is None:
+            documents.pop(session_id or "", None)
+        else:
+            documents[session_id or ""] = copy.deepcopy(document)
         if session_id == record.get("selectedSessionId"):
             record["view"]["draft"] = text
+            record["view"]["draftDocument"] = copy.deepcopy(document)
 
     def attachments(self, session):
         record = self.record()

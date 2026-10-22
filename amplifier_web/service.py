@@ -134,7 +134,7 @@ ACTION_DEFINITIONS = {
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
-    "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a message to the observed run. Explicit steering stays bound; allowNextTurn lets an ordinary message start the next turn only after that exact run completes normally.", schema({"sessionId":string(200),"text": string(100000), "expectedGenerationId":{**string(128),"minLength":1}, "allowNextTurn":{"type":"boolean"}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a message to the observed run. Explicit steering stays bound; allowNextTurn lets an ordinary message start the next turn only after that exact run completes normally.", schema({"sessionId":string(200),"text": string(100000), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "allowNextTurn":{"type":"boolean"}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
@@ -2163,7 +2163,7 @@ class AppService:
         reveal_message = None
         if action == "message.reveal":
             session = self._session(args["sessionId"])
-            if session.get("nativeProject") and not any(row["id"] == args["messageId"] for row in session.get("messages", [])):
+            if not args.get('loadedOnly') and session.get("nativeProject") and not any(row["id"] == args["messageId"] for row in session.get("messages", [])):
                 # Presentation needs saved bytes/identity, not generation
                 # authority. Native indexes are not visible paging ordinals.
                 from .automatic_history import read_transcript
@@ -2985,6 +2985,8 @@ class AppService:
                         or original.get('via') in {'peer', 'schedule'}
                         or self.peer_attribution.resolve(source, [original])[0].get('attribution')):
                     raise AppError('Choose one of your own messages to edit.')
+                if (original.get('replyTo') or {}).get('version') == 2:
+                    raise AppError('This message contains immutable quotes. Send a reply with your correction; its saved quotations were kept.', 409)
                 text = args['text'].strip()
                 if not text:
                     raise AppError('Enter a message before regenerating.')
@@ -3129,8 +3131,14 @@ class AppService:
                 allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
                 target_generation = steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 text = args["text"].strip()
-                from .message_interactions import resolve_quote
+                from .message_interactions import resolve_quote, resolve_document, document_text
                 quote = resolve_quote(session, args.get("replyId"))
+                if args.get('document') is not None:
+                    if quote:
+                        raise AppError('Choose one quoted document, not a second reply context.')
+                    document = resolve_document(session, args['document'])
+                    quote = {'version': 2, 'segments': document['segments']}
+                    text = document_text(document)
                 requested=args.get('attachmentIds',[])
                 available={row['id']:row for row in self.clients.attachments(session)}
                 if any(identity not in available for identity in requested):raise AppError('An attachment is no longer in this draft. Refresh and retry.')
@@ -3280,6 +3288,9 @@ class AppService:
                 allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor', 'configurationDrafts', 'workWorkspaceSettings'})
                 allowed.update({'workHomeView', 'workHomeFilter', 'workHomeScope', 'workHomeQuery', 'workHomePages'})
                 allowed.update({'navMode', 'navStatusCollapsed', 'navStatusExpanded', 'navStatusPages'})
+                allowed.add('draftDocument')
+                if 'draftDocument' in patch and 'draft' not in patch:
+                    raise AppError('Save quoted content with its draft text.')
                 if 'planExpanded' in patch:
                     choices = patch['planExpanded']
                     if not isinstance(choices, dict) or len(choices) > 500 or any(not isinstance(k, str) or len(k) > 200 or type(v) is not bool for k, v in choices.items()):
@@ -3336,7 +3347,13 @@ class AppService:
                     if client_id is not None:
                         if target is not None:
                             self._session(target, hydrate=False)
-                        self.clients.draft(target, patch.pop('draft'))
+                        from .message_interactions import resolve_document
+                        rich = patch.pop('draftDocument', ...)
+                        if rich is not None and rich is not ...:
+                            if target is None:
+                                raise AppError('Quotes require their current conversation.')
+                            rich = resolve_document(self._session(target), rich)
+                        self.clients.draft(target, patch.pop('draft'), rich)
                     elif target:
                         self._session(target, hydrate=False)['draft'] = patch['draft']
                         if target != self.state.get('selectedSessionId'):
@@ -4088,7 +4105,7 @@ class AppService:
         client = self.clients.record()
         if client is not None:
             quote = sent.get('replyTo')
-            if quote and client.get('messageReplies', {}).get(current['id'], {}).get('id') == quote['id']:
+            if quote and quote.get('id') and client.get('messageReplies', {}).get(current['id'], {}).get('id') == quote['id']:
                 client['messageReplies'].pop(current['id'], None)
                 if client.get('selectedSessionId') == current['id']:
                     client['view']['messageReply'] = None

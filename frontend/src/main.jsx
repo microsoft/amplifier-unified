@@ -36,6 +36,7 @@ import {useMessageOutbox,outboxMessages} from './message-outbox';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
+import {readDetail} from './detail-read.js';
 import {trackAction,setFeedbackEventStream} from './feedback-diagnostics';
 import {ConversationError,ConversationSelect} from './conversation-controls';
 import {useShell,ShellContext,ShellSlot} from './shell/runtime';
@@ -123,6 +124,7 @@ function App(){
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
  const draftJournalEntries=useRef(new WeakMap()),[draftStorageError,setDraftStorageError]=useState(false);
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
+ const quoteApi=useRef(null),addingQuote=useRef(false),[quoteNotice,setQuoteNotice]=useState(''),[quoteReturn,setQuoteReturn]=useState(null);
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const [awayFromBottom,setAwayFromBottom]=useState(false);
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
@@ -212,7 +214,29 @@ function App(){
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,superseded:!!chatReference&&meta.chatReferenceIntent!==archiveRevision.current,error:'Settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
-  const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
+  if(action==='message.reply'&&!meta.quotePrepared){
+   if(addingQuote.current||!quoteApi.current||args.sessionId!==latest.current?.selectedSessionId)return Promise.reject(Error('Choose an available message in this conversation; a quote may already be pending.'));
+   const api=quoteApi.current,target=api.capture(),sessionId=args.sessionId;
+   addingQuote.current=true;setQuoteNotice('Adding quote…');
+   return (async()=>{
+    let prepared={...args,snapshotOnly:true};
+    const source=meta.quoteDetail?await readDetail(meta.quoteDetail,async(url,options)=>{
+     const page=await request(url,options);
+     if(page.total>12000)throw Error('Choose a passage of at most 12,000 characters. Nothing was shortened.');
+     return page;
+    }):meta.quoteSource;
+    if(typeof source==='string'){
+     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source));
+     const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
+     prepared=args.selection?{...prepared,selection:{...args.selection,sourceDigest:digest}}:{...prepared,expectedSourceDigest:digest};
+    }
+    return dispatch(action,prepared,{...meta,quotePrepared:true});
+   })().then(result=>{
+    if(api!==quoteApi.current||latest.current?.selectedSessionId!==sessionId)throw Error('The conversation changed. The quote was not added.');
+    api.insert(result.result.quote,target);setQuoteNotice('Quote added. Earlier quotes, commentary and attachments kept.');return result;
+   }).catch(error=>{setQuoteNotice(error.message);throw error}).finally(()=>{addingQuote.current=false;});
+  }
+  const referenceAction=action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
   if(referenceAction&&!meta.referencePrepared){
    if(referenceDraftLock.current)return Promise.reject(Error('A reference is already being added.'));
    const current=pendingView.current.apply(latest.current),sessionId=current?.selectedSessionId,expectedDraft=current?.view?.draft||'';
@@ -518,7 +542,15 @@ function App(){
   })();
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
- function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};const journalEntry=draftJournal.stage(sessionId,value);draftJournalEntries.current.set(payload,journalEntry);setDraftStorageError(!journalEntry.persisted);stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)}
+ function editDraft(value,documentValue){
+  if(referenceDraftLock.current)return;
+  if(documentValue===undefined&&value&&quoteApi.current?.document()){
+   if(value.startsWith(lastDraft.current)){try{quoteApi.current.append(value.slice(lastDraft.current.length));}catch(error){reportError(error)}return;}
+   setError('Quoted content was kept. Edit its commentary in the composer.');return;
+  }
+  documentValue??=null;
+  const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const patch={draft:value,draftDocument:documentValue},token=pendingView.current.add(patch,sessionId),payload={patch,sessionId};const journalEntry=draftJournal.stage(sessionId,value,documentValue);draftJournalEntries.current.set(payload,journalEntry);setDraftStorageError(!journalEntry.persisted);stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)
+ }
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace&&typeof workspace==='object'?workspace:workspace?{workspace}:{})}
  async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||newChatSetup(pendingView.current.apply(latest.current))),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
   const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
@@ -544,7 +576,7 @@ function App(){
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
   try{
    if(!entry.sessionId){const current=await ensureSession(entry.creation);entry=outbox.update(entry.id,{sessionId:current.id});}
-   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
+   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.document?{document:entry.document}:{}),...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
    const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
@@ -562,6 +594,7 @@ function App(){
  }
  async function retryMessage(message,text){
   const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending')return;
+  if(previous.document&&text!==undefined){setError('Retry this quoted message unchanged, or discard it and compose a correction.');return;}
   if(previous.status==='unknown'&&text!==undefined)return;
   const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}:previous.creation;
   const currentGeneration=latest.current?.sessions?.find(row=>row.id===previous.sessionId)?.collaborationGeneration;
@@ -573,14 +606,15 @@ function App(){
   dictationControl.current?.cancel();
   e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable)return;
   preserveOtherDraft(session?.id??null);
-  const submittedText=draft,id=crypto.randomUUID(),attachments=availableAttachments;
+  const submittedText=draft,editorDocument=quoteApi.current?.document(),id=crypto.randomUUID(),attachments=availableAttachments;
+  const submittedDocument=editorDocument?.segments.some(part=>part.type==='quote')?editorDocument:null;
   const activeGeneration=session?.collaborationGeneration;
   const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
   if(detail.focused)detail.latest(false);
   chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
    const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
    // The outbox already owns this exact submitted text. A slow/ lost draft
@@ -700,11 +734,27 @@ function App(){
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>
     {!session&&<ComposerWorkspace state={state} act={act}/>}
-    <div className="a-compose-surface" data-part="composer-surface" data-expanded={composerExpanded({draft,attachments:availableAttachments,quote:state.view?.messageReply})}>
+    <div className="a-compose-surface" data-part="composer-surface" data-expanded={composerExpanded({draft,attachments:availableAttachments,quote:state.view?.messageReply||state.view?.draftDocument?.segments?.some(part=>part.type==='quote')})}>
     <div className="a-compose-writing">
     <AttachmentStrip privateDraft items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}{dragOver&&<p className="a-upload-status">Drop files or images to attach</p>}
     <ReplyPreview quote={state.view?.messageReply} sessionId={session?.id} dispatch={dispatch}/>
-    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} value={draft} onChange={editDraft} onSend={send} onFiles={files=>{setDragOver(false);addFiles(files)}} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} quoteApi={quoteApi} value={draft} document={state.view?.draftDocument} onChange={editDraft} onSend={send} onReveal={async(quote,button)=>{
+     const sid=session?.id,owner=quoteApi.current;
+     if(quote.sessionId!==sid)throw Error('This source is from another chat. Cross-chat quotation is not available.');
+     const top=messagesPane.current?.scrollTop;
+     const find=()=>[...document.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===quote.messageId);
+     let node=find();if(!node){await interim.ensureVisible?.(quote.messageId);node=find();}
+     if(!node){const found=await detail.around(quote.messageId,{isCurrent:()=>latest.current?.selectedSessionId===sid&&quoteApi.current===owner});if(!found)throw Error('Original unavailable. The saved quotation remains.');}
+     if(latest.current?.selectedSessionId!==sid||quoteApi.current!==owner)return;
+     setQuoteReturn({sid,top,button});if(node){node.tabIndex=-1;node.scrollIntoView({block:'center'});node.focus({preventScroll:true});}
+     const source=session.messages?.find(row=>row.id===quote.messageId);
+     if(!source||source.textDetail)return 'Saved quotation retained; source version could not be compared.';
+     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.text||''));
+     const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
+     return digest===quote.sourceDigest?'Original revealed. Saved quotation is unchanged.':'Source changed since quoting. The earlier snapshot is retained.';
+    }} onFiles={files=>{setDragOver(false);addFiles(files)}} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    {quoteNotice&&<small role="status">{quoteNotice}</small>}
+    {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
     </div>
     <div role="status" aria-live="polite" aria-atomic="true" className="a-sr-only">{sendingHere?'Sending message…':''}</div>
     <div className="a-compose-add"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button></div>

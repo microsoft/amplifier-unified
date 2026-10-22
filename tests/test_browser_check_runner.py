@@ -279,6 +279,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'compact-composer': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/compact-composer'},
         'peer-preview': {'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-preview'},
         'canvas-chrome': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canvas-chrome'},
+        'multi-quote': {'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/multi-quote'},
         'storage-cleanup-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/storage-cleanup-settings'},
     }
     added = [row for row in rows if row['id'] in additions]
@@ -296,7 +297,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 112
+    assert len(original) == 65 and len(rows) == 113
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -337,6 +338,7 @@ def test_compact_composer_and_peer_preview_keep_automatic_inventory_owners():
         'delta.compact-composer': {'compact-composer'},
         'delta.peer-preview': {'peer-preview'},
         'delta.canvas-chrome': {'canvas-chrome'},
+        'delta.multi-quote': {'multi-quote'},
     }
     for identity, names in owners.items():
         delta, = [row for row in ledger['changes'] if row['id'] == identity]
@@ -398,7 +400,7 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     assert diagnostics['if'] == 'always()'
     assert diagnostics['with'] == {
         'name': diagnostics_name,
-        'path': 'output/browser-checks/\noutput/active-client-performance/\noutput/state-transport-browser/\noutput/scoped-navigation/\noutput/selected-context/\n',
+        'path': 'output/browser-checks/\noutput/active-client-performance/\noutput/state-transport-browser/\noutput/scoped-navigation/\noutput/selected-context/\noutput/multi-quote/\n',
         'if-no-files-found': 'warn',
     }
     assert static['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
@@ -516,7 +518,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # New source journeys are automatic; their manual lanes add installed and
     # negative-control proof without replacing any existing ordinary owner.
     feature_additions = {f'tests/{name}-browser.mjs' for name in
-                         ('compact-composer', 'peer-preview', 'canvas-chrome')}
+                         ('compact-composer', 'peer-preview', 'canvas-chrome', 'multi-quote')}
     assert feature_additions <= extended_scripts - readiness_scripts
     # Options already has an automatic installed-readiness owner.
     assert 'tests/composer-options-browser.mjs' in readiness_scripts - extended_scripts
@@ -524,7 +526,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
     assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, pin_reorder} - feature_additions) == 146
-    assert len(readiness_scripts | extended_scripts) == 155
+    assert len(readiness_scripts | extended_scripts) == 156
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

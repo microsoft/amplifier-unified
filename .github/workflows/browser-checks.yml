@@ -31,6 +31,10 @@ on:
         description: Only fixed Canvas source and installed-wheel qualification
         type: boolean
         default: false
+      multi_quote:
+        description: Only fixed multi-quote source, negative-control and installed-wheel checks
+        type: boolean
+        default: false
       compact_composer:
         description: Fixed compact composer source and installed-wheel qualification
         type: boolean
@@ -57,7 +61,11 @@ jobs:
       - name: Reject mixed attachment selections
         if: ${{ inputs.attachment_consumption && inputs.app004_qualification }}
         run: exit 1
+      - name: Reject mixed multi-quote selections
+        if: ${{ inputs.multi_quote && (inputs.attachment_consumption || inputs.app004_qualification || inputs.mcp_boundary) }}
+        run: exit 1
       - name: Record intended coverage before dependency setup
+        if: ${{ !inputs.multi_quote }}
         run: >-
           python scripts/browser_check_runner.py
           --plan frontend/tests/browser-checks.json
@@ -131,6 +139,7 @@ jobs:
           set -o pipefail
           node --test frontend/tests/connection-notice.test.mjs 2>&1 | tee output/browser-checks/attachment-client.tap
       - name: Run all extended browser scenarios serially
+        if: ${{ !inputs.multi_quote }}
         run: >-
           uv run --no-sync python scripts/browser_check_runner.py
           --plan frontend/tests/browser-checks.json
@@ -138,6 +147,9 @@ jobs:
           --budget-seconds 1500
           ${{ inputs.app004_qualification && '--app004-qualification' || '' }}
           ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
+      - name: Run fixed multi-quote source and installed proof
+        if: ${{ inputs.multi_quote }}
+        run: uv run --no-sync python scripts/multi_quote_checks.py --output output/multi-quote --installed
       - name: Preserve failed attachment contracts
         if: ${{ always() && inputs.attachment_consumption && (steps.attachment-contracts.outcome != 'success' || steps.attachment-client-contracts.outcome != 'success') }}
         run: exit 1
@@ -152,6 +164,7 @@ jobs:
             output/state-transport-browser/
             output/scoped-navigation/
             output/selected-context/
+            output/multi-quote/
           if-no-files-found: warn
   mcp-boundary:
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
@@ -168,7 +181,7 @@ jobs:
           echo 'MCP boundary and APP004 qualification are separate selections; neither proof was run.'
           exit 1
       - name: Reject mixed MCP and attachment selection
-        if: ${{ inputs.attachment_consumption }}
+        if: ${{ inputs.attachment_consumption || inputs.multi_quote }}
         run: exit 1
       - name: Record the fixed proof before setup
         run: |
@@ -307,7 +320,7 @@ jobs:
           persist-credentials: false
       - name: Reject mixed selections and bind exact source
         env:
-          MIXED: ${{ inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.destination_history || inputs.settings_close_diagnostic }}
+          MIXED: ${{ inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.destination_history || inputs.settings_close_diagnostic }}
         run: |
           test "$MIXED" != true
           python scripts/canvas_qualification.py initialize
@@ -348,7 +361,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Reject mixed selections
-        if: ${{ inputs.canvas_qualification || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
+        if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
         run: exit 1
       - name: Record fixed coverage before setup
         run: python scripts/compact_composer_checks.py --initialize
@@ -404,7 +417,7 @@ jobs:
         if: ${{ inputs.settings_close_diagnostic && !inputs.destination_history }}
         run: exit 1
       - name: Reject mixed navigation selections
-        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification }}
+        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote }}
         run: exit 1
       - uses: actions/checkout@v4
         with:
@@ -619,7 +632,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Reject incompatible peer selections
-        if: ${{ inputs.canvas_qualification || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
+        if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
         run: exit 1
       - uses: actions/checkout@v4
         with:
