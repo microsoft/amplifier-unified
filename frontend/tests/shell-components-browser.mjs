@@ -77,15 +77,33 @@ try{
  assert.deepEqual(await page.evaluate(()=>({root:window.componentProof.root===document.getElementById('amp-one'),composer:window.componentProof.composer===document.querySelector('[aria-label="Message Amplifier"]'),viewer:window.componentProof.viewer===document.querySelector('.a-canvas-viewer iframe'),session:window.componentProof.session===window.amplifier.getState().selectedSessionId})),{root:true,composer:true,viewer:true,session:true});
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
  const output=root+'output/shell-components-proof/';await mkdir(output,{recursive:true});await page.screenshot({path:output+'contributions.png'});
+ const overflowGeometry=()=>controls.getByRole('button',{name:'Toggle compact spacing'}).evaluate(button=>{
+  const header=document.querySelector('.a-work-header').getBoundingClientRect(),popup=button.closest('.a-slot-overflow-items').getBoundingClientRect(),target=button.getBoundingClientRect();
+  const hit=document.elementFromPoint(target.x+target.width/2,target.y+target.height/2);
+  return {belowHeader:popup.top>=header.bottom,inViewport:popup.left>=0&&popup.right<=innerWidth&&popup.bottom<=innerHeight,receivesPointer:!!hit&&(hit===button||button.contains(hit))};
+ });
+ const usableOverflow={belowHeader:true,inViewport:true,receivesPointer:true};
  for(const width of [320,390,600,760]){
   await page.setViewportSize({width,height:844});
+  await expect(page.locator('.a-layout[data-pane-layout]')).toHaveAttribute('data-narrow','true');
   if(!await page.locator('#workspace-navigation').isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Workspaces and chats',exact:true})).toBeVisible();
   await expect.poll(()=>page.locator('.a-work-footer').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  await page.getByRole('button',{name:'Additional controls',exact:true}).click();
+  await expect.poll(overflowGeometry).toEqual(usableOverflow);
+  await page.getByRole('button',{name:'Additional controls',exact:true}).click();
  }
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'mobile-contributions.png'});
  assert.ok(await page.locator('.a-work-footer').evaluate(el=>el.scrollWidth<=el.clientWidth),'Navigation footer contributions fit a narrow viewport');
  const additional=page.getByRole('button',{name:'Additional controls',exact:true});await additional.click();
  await expect(controls.getByRole('button',{name:'Toggle compact spacing'})).toBeVisible();
+ // Keep the popover usable when the measured header changes while it is open.
+ // This controlled content-height change exercises ResizeObserver without changing app state.
+ const header=page.locator('.a-work-header'),oldMinHeight=await header.evaluate(el=>el.style.minHeight);
+ await header.evaluate(el=>{el.style.minHeight='160px'});
+ await expect.poll(overflowGeometry).toEqual(usableOverflow);
+ await header.evaluate((el,value)=>{el.style.minHeight=value},oldMinHeight);
+ await expect.poll(overflowGeometry).toEqual(usableOverflow);
  await controls.getByRole('button',{name:'Toggle compact spacing'}).click();
  await expect(page.locator('#amp-one')).toHaveAttribute('data-density','comfortable');
  await page.screenshot({path:output+'mobile-controls.png'});
