@@ -282,7 +282,8 @@ and cancellation with Escape, pointer cancellation, or an outside drop. A concur
 order change cancels a held drag. Pins persist on drop; Settings preserves its
 draft-only preview and explicit Save/Cancel. Distinct pin gestures made while a
 previous save or display is pending remain in the local preview and are submitted
-in order after each confirmed display. They never derive a command from a stale
+in order after each confirmed display. At most 32 moves wait locally; a full queue
+shows backpressure rather than accepting more gestures. They never derive a command from a stale
 page. A rejection, unknown save outcome, changed view or conflicting order drops
 later unsent moves and reports that they were not sent; it never retries a save.
 A saved order whose display is unavailable offers a bounded read-only refresh,

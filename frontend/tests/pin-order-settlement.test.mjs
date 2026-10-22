@@ -289,3 +289,16 @@ for(const error of ['HTTP 409 rejected','Outcome unknown'])test(`queued differen
   assert.match(JSON.stringify(f.root.toJSON()),/Later queued moves were not sent/);
  }finally{await f.close()}
 });
+
+test('a stalled save bounds queued gestures with visible backpressure',async()=>{
+ let reject;const f=await fixture(()=>new Promise((_,no)=>{reject=no}));
+ try{
+  await f.key('session:b','ArrowUp');
+  for(let index=0;index<32;index++)await f.key('session:b',index%2===0?'ArrowDown':'ArrowUp');
+  const preview=f.order();await f.key('session:b','ArrowDown');
+  assert.deepEqual(f.order(),preview);assert.equal(f.calls.length,1);
+  assert.equal(f.busy('session:b'),true);assert.match(JSON.stringify(f.root.toJSON()),/queue is full/);
+  await act(async()=>reject(Error('Outcome unknown')));
+  assert.equal(f.calls.length,1);assert.deepEqual(f.order(),ids);assert.equal(f.listeners.size,0);
+ }finally{await f.close()}
+});

@@ -395,6 +395,7 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
     throw Error('The pinned list is updating. Move the item again when it is ready.');
    const previous=[...(current.pinnedItemIds||[])],expected=movePin(previous,id,target);
    await settle(()=>model.act('navigation.pinOrder',{ids:expected}),previous,expected,next);
+   return {orderKey:expected.join('\0')};
   }catch(err){if(err.name!=='AbortError'&&owner.current.alive&&owner.current.version===version)setError({message:err.message||'Could not reorder pins. Please try again.',read:err.pinOrderDisplay===true,previous:err.pinOrderPrevious,expected:err.pinOrderExpected,visible:err.pinOrderVisible});throw err}
  };
  const refresh=async()=>{
@@ -429,7 +430,7 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
  };
  const open=row=>navigation?navigation.browse('workspace',row.workspaceId):workspaceModel.act('workspace.select',{id:row.workspaceId});
  const newChat=row=>workspaceModel.act('session.draft',{workspace:row.path,workspaceId:row.workspaceId,location:{kind:'workspace'}});
- return <><ReorderList items={items} ids={visible} busy={pinOrderPending(model.state)} queueChanges contextKey={pinOrderScope(model.state)} onQueueDiscard={()=>setError(value=>value?{...value,message:value.message+' Later queued moves were not sent.'}:value)} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
+ return <><ReorderList items={items} ids={visible} busy={pinOrderPending(model.state)} queueChanges contextKey={pinOrderScope(model.state)} onQueueDiscard={()=>setError(value=>value?{...value,message:value.message+' Later queued moves were not sent.'}:value)} onQueueFull={()=>setError({message:'Move queue is full. Wait for the saved order before moving another item.',read:false})} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
   {error&&<p role="alert" className="a-danger">{error.message}{error.read&&model.host?.refreshResources&&<> <button type="button" className="a-link" disabled={reading} onClick={refresh}>{reading?'Reading pins…':'Refresh pinned list'}</button></>}</p>}
   <ChatPagination page={page} label="pinned items" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
  </>;

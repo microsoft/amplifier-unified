@@ -4,17 +4,20 @@ import {GripVertical} from 'lucide-react';
 import './reorder-list.css';
 
 export function moveItem(ids,id,to){if(!ids.includes(id))return ids;const next=ids.filter(key=>key!==id);next.splice(Math.max(0,Math.min(to,next.length)),0,id);return next;}
+const MAX_QUEUED_MOVES=32;
 
 // Both immediate actions and Settings drafts use this pointer/keyboard control.
 // Consumers own persistence; cancelled drags never call onChange.
-export function ReorderList({items,ids,onChange,busy=false,queueChanges=false,onQueueDiscard,contextKey='',renderItem,className='',rowClassName='',floatingClassName='',action='view.update',savedHint='',onDraggingChange,orderKey=ids.join('\0')}){
+export function ReorderList({items,ids,onChange,busy=false,queueChanges=false,onQueueDiscard,onQueueFull,contextKey='',renderItem,className='',rowClassName='',floatingClassName='',action='view.update',savedHint='',onDraggingChange,orderKey=ids.join('\0')}){
  const root=useRef(null),drag=useRef(null),rects=useRef(new Map()),pending=useRef(false),alive=useRef(true);
  const queued=useRef([]),optimistic=useRef(null),latest=useRef(null);
- latest.current={onChange,onQueueDiscard,contextKey};
+ latest.current={onChange,onQueueDiscard,onQueueFull,contextKey};
  const [preview,setPreview]=useState(null),[floating,setFloating]=useState(null),[announcement,announce]=useState('');
  const rows=new Map(items.map(item=>[item.id,item]));
  const shown=preview&&preview.length===ids.length&&preview.every(id=>ids.includes(id))?preview:ids;
  const blocked=()=>pending.current?!queueChanges:busy;
+ const full=()=>queued.current.length>=MAX_QUEUED_MOVES;
+ const reportFull=()=>{announce('Move queue is full. Wait for the saved order before moving another item.');latest.current.onQueueFull?.()};
  const focus=(id,owner=globalThis.document?.activeElement)=>globalThis.requestAnimationFrame?.(()=>{if(globalThis.document?.activeElement===owner)root.current?.querySelector(`[data-order-id="${CSS.escape(id)}"] .a-reorder-grip`)?.focus({preventScroll:true})});
  const capture=()=>{if(root.current)rects.current=new Map([...root.current.querySelectorAll('[data-order-id]')].map(node=>[node.dataset.orderId,node.getBoundingClientRect()]));};
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;drag.current=null;queued.current=[]}},[]);
@@ -27,9 +30,11 @@ export function ReorderList({items,ids,onChange,busy=false,queueChanges=false,on
  },[shown.join('\0')]);
  const commit=async(next,id,basis=optimistic.current||ids)=>{
   if(blocked())return;
+  if(full()){reportFull();return;}
   if(next.join('\0')===basis.join('\0')){if(!pending.current)setPreview(null);return;}
   const to=next.indexOf(id),focusOwner=globalThis.document?.activeElement;
   queued.current.push({next,id,to,basis:[...basis],target:basis[to],contextKey,focusOwner});
+  if(full())reportFull();
   optimistic.current=next;setPreview(next);
   if(pending.current)return;
   pending.current=true;let last;
@@ -37,11 +42,15 @@ export function ReorderList({items,ids,onChange,busy=false,queueChanges=false,on
    while(alive.current&&queued.current.length){
     last=queued.current.shift();
     if(last.contextKey!==latest.current.contextKey)throw Error('The list changed. Queued moves were not sent.');
-    await latest.current.onChange(last.next,{id:last.id,to:last.to,basis:last.basis,target:last.target,contextKey:last.contextKey});
+    const committed=await latest.current.onChange(last.next,{id:last.id,to:last.to,basis:last.basis,target:last.target,contextKey:last.contextKey});
+    // A held next gesture may start against the optimistic order before React
+    // renders this exact local commit. Advance only its matching order witness.
+    if(drag.current&&drag.current.contextKey===last.contextKey&&drag.current.original.join('\0')===last.next.join('\0')&&committed?.orderKey!==undefined)
+     drag.current.orderKey=committed.orderKey;
    }
    if(alive.current&&last)announce(`${rows.get(last.id)?.label} moved to position ${last.to+1}.${savedHint?' '+savedHint:''}`);
   }
-  catch(error){const discarded=queued.current.length;queued.current=[];if(alive.current){if(discarded)latest.current.onQueueDiscard?.(discarded,error);announce((error.message||'Could not change order.')+(discarded?' Later queued moves were not sent.':''))}}
+  catch(error){const discarded=queued.current.length+(drag.current?.active?1:0);queued.current=[];optimistic.current=null;if(drag.current)finish(true);if(alive.current){if(discarded)latest.current.onQueueDiscard?.(discarded,error);announce((error.message||'Could not change order.')+(discarded?' Later queued moves were not sent.':''))}}
   // A later receipt must not move focus back after the user left this control.
   finally{pending.current=false;optimistic.current=null;if(alive.current){if(!drag.current)setPreview(null);if(last)focus(last.id,last.focusOwner)}}
  };
@@ -54,7 +63,7 @@ export function ReorderList({items,ids,onChange,busy=false,queueChanges=false,on
  // A concurrent pin/unpin, stale page or external order change invalidates a held drag.
  useEffect(()=>{if(drag.current&&(drag.current.contextKey!==contextKey||!(queueChanges&&pending.current)&&(busy||drag.current.original.join('\0')!==ids.join('\0')||drag.current.orderKey!==orderKey)))finish(true)},[ids.join('\0'),orderKey,busy,contextKey]);
  const down=(event,id)=>{
-  if(blocked()||event.button!==0)return;event.preventDefault();
+  if(blocked()||event.button!==0)return;if(full()){reportFull();return;}event.preventDefault();
   document.dispatchEvent(new CustomEvent('amplifier-navigation-details',{detail:'reordering'}));
   const node=event.currentTarget.closest('[data-order-id]'),box=node.getBoundingClientRect(),bounds=root.current.getBoundingClientRect();
   let scroll=root.current.parentElement;while(scroll&&!(scroll.scrollHeight>scroll.clientHeight&&/(auto|scroll)/.test(getComputedStyle(scroll).overflowY)))scroll=scroll.parentElement;
@@ -75,7 +84,7 @@ export function ReorderList({items,ids,onChange,busy=false,queueChanges=false,on
   setFloating({id:current.id,left:Math.max(0,Math.min(box.left+8,innerWidth-box.width)),top:event.clientY-(current.y-box.top),width:box.width,valid:current.valid});
  };
  const move=(id,to)=>{capture();const basis=optimistic.current||ids;void commit(moveItem(basis,id,to),id,basis)};
- const handle=(item,isFloating=false)=><button type="button" className="a-icon a-order-grip a-reorder-grip" aria-disabled={blocked()||undefined} draggable={false} data-action={action} aria-label={'Reorder '+item.label} title="Drag, or use Up/Down (Alt + Up/Down also works)" tabIndex={isFloating?-1:0} onPointerDown={e=>down(e,item.id)} onKeyDown={e=>{if(['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();move(item.id,(optimistic.current||ids).indexOf(item.id)+(e.key==='ArrowUp'?-1:1))}}}><GripVertical/></button>;
+ const handle=(item,isFloating=false)=><button type="button" className="a-icon a-order-grip a-reorder-grip" aria-disabled={blocked()||full()||undefined} draggable={false} data-action={action} aria-label={'Reorder '+item.label} title="Drag, or use Up/Down (Alt + Up/Down also works)" tabIndex={isFloating?-1:0} onPointerDown={e=>down(e,item.id)} onKeyDown={e=>{if(['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();move(item.id,(optimistic.current||ids).indexOf(item.id)+(e.key==='ArrowUp'?-1:1))}}}><GripVertical/></button>;
  const floatingItem=floating&&rows.get(floating.id),target=root.current?.closest('.a-settings-experience,.a-nav-slot')||root.current;
  return <><div className={'a-reorder-list '+className} ref={root} data-reordering={!!floating||undefined} onPointerMove={moving} onPointerUp={()=>finish(false)} onPointerCancel={()=>finish(true)} onLostPointerCapture={()=>{if(drag.current)finish(true)}} onDragStart={e=>e.preventDefault()}>
   {shown.map((id,index)=>{const item=rows.get(id)||{id,label:id};return <div key={id} data-order-id={id} className={`a-reorder-item ${rowClassName}${floating?.id===id?' a-order-placeholder':''}`}>

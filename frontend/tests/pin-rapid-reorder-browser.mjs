@@ -64,12 +64,13 @@ try{
   await expect(alerts()).toHaveCount(0);
   await expect.poll(()=>order(other)).toEqual(expected);
  };
- const pointerMove=async(source,target)=>{
+ const startDrag=async(source,target)=>{
   await expect(grip(page,source)).not.toHaveAttribute('aria-disabled','true');
   const from=await grip(page,source).boundingBox(),to=await pinned(page).locator(`[data-order-id="${target}"]`).boundingBox();
   assert.ok(from&&to);await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();
-  await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:3});await page.mouse.up();
+  await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:3});
  };
+ const pointerMove=async(source,target)=>{await startDrag(source,target);await page.mouse.up()};
  let expected=start;
  // Two different items, then a second adjacent sequence. No arbitrary sleeps.
  for(const [source,target] of [[start[1],start[0]],[start[2],start[1]],[start[0],start[2]],[start[1],start[0]]]){
@@ -180,6 +181,22 @@ try{
   releaseReceipt();releaseReceipt=null;expected=final;await settled(expected,b);await page.unroute('**/api/actions');
   assert.equal(commands.length,count+2);checks.push({cycle,twoDistinctMovesBeforeResponseAndReadback:true,order:expected});
  }
+ // B stays pointer-held across A's successful receipt and React publication.
+ let crossing=false;
+ const crossCount=commands.length,crossHold=new Promise(resolve=>{releaseReceipt=resolve});
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(!crossing&&body.action==='shell.command'&&body.args.action==='navigation.pinOrder'){crossing=true;await crossHold}
+  await route.continue();
+ });
+ const crossA=expected[1],crossB=expected[2],crossFirst=expectedMove(expected,crossA,expected[0]),crossFinal=expectedMove(crossFirst,crossB,crossFirst[0]);
+ await pointerMove(crossA,expected[0]);await expect.poll(()=>crossing).toBe(true);
+ await startDrag(crossB,crossFirst[0]);await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(1);
+ releaseReceipt();releaseReceipt=null;
+ await expect.poll(shellPins).toEqual({ids:crossFirst,items:crossFirst,pending:null});
+ await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(1);
+ await page.mouse.up();expected=crossFinal;await settled(expected,crossB);await page.unroute('**/api/actions');
+ assert.equal(commands.length,crossCount+2);checks.push({heldDifferentDragAcrossReceipt:true,order:expected});
  // Repeated explicit same-order intent is semantically idempotent.
  await action('navigation.pinOrder',{ids:expected});await settled(expected,next);
  // A saved order with a genuinely missing page stays honest, and an explicit
@@ -212,20 +229,25 @@ try{
  await page.mouse.move(380,830);await page.screenshot({path:output+'/pin-rapid-narrow.png'});
  // Lose a mutation's final HTTP acknowledgment after the server commits it.
  // The UI must not invent a saved receipt or retry the command.
- let lost=false;
+ let lost=false;const loseReceipt=new Promise(resolve=>{releaseReceipt=resolve});
  await page.route('**/api/actions',async route=>{
   const body=route.request().postDataJSON();
   if(!lost&&body.action==='shell.command'&&body.args.action==='navigation.pinOrder'){
-   lost=true;await route.fetch();await route.abort('failed');
+   await route.fetch();lost=true;await loseReceipt;await route.abort('failed');
   }else await route.continue();
  });
  const lostCount=commands.length,lostSource=expected[1];expected=expectedMove(expected,lostSource,expected[0]);
  await grip(page,lostSource).focus();await page.keyboard.press('ArrowUp');
+ await expect.poll(()=>lost).toBe(true);await expect.poll(shellPins).toEqual({ids:expected,items:expected,pending:null});
+ await startDrag(expected[2],expected[0]);await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(1);
+ releaseReceipt();releaseReceipt=null;
  await expect(alerts()).toHaveCount(1);assert.doesNotMatch(await alerts().innerText(),/Pin order was saved/);
+ await expect(alerts()).toContainText('Later queued moves were not sent.');
+ await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(0);await page.mouse.up();
  await expect.poll(async()=>(await state()).pinnedItemIds).toEqual(expected);
  assert.equal(commands.length,lostCount+1);await page.unroute('**/api/actions');
  await expect.poll(()=>order(other)).toEqual(expected);
- checks.push({lostAcknowledgment:true,unknownReported:true,replayed:false,order:expected});
+ checks.push({lostAcknowledgment:true,heldDifferentDragCancelled:true,unknownReported:true,replayed:false,order:expected});
  assert.deepEqual((await metrics()).runtimeCalls,[]);assert.deepEqual(errors,[]);
  const result={status:'passed',applicationModule:boot.applicationModule,checks,order:expected,commandCount:commands.length,runtimeCalls:[],limits:'Synthetic source host; no inference or native desktop acceptance.'};
  await writeFile(output+'/pin-rapid-result.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
