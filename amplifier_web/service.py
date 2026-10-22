@@ -4480,6 +4480,7 @@ class AppService:
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
                 if root_generation and payload.get('event') == 'generation.started':
+                    session.pop('modelAdmission', None)
                     session.pop('diagnosticReceipt', None)
                     session.pop('turnErrorType', None)
                     session.pop('errorType', None)
@@ -4492,7 +4493,8 @@ class AppService:
                     fail_generation(session, payload.get('input_ids', []))
                     session['turnErrorType'] = payload.get('error_type')
                     from .session_health import generation_failure
-                    failure = generation_failure(payload)
+                    from .model_admission import failure as admission_failure
+                    failure = admission_failure(session, payload) or generation_failure(payload)
                     existing = session.get('failure')
                     safety_categories = {'content_filter', 'computer_capture_stop'}
                     explicit_change = (failure and failure.get('category') != 'unknown'
@@ -4830,7 +4832,7 @@ class AppService:
                     return {**result, 'inputIds': args.get('_contextInputs', [])}
                 return self.surface_context.read(session_id, args, bindings)
         if operation == "capacity.admit":
-            from .capacity_wait import admit
+            from .model_admission import admit
             return await admit(self, session_id, args)
         if operation == 'capacity.abandoned':
             from .capacity import abandoned

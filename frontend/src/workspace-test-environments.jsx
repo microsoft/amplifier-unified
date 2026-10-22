@@ -139,10 +139,10 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
   {capability?.source&&<p style={{overflowWrap:'anywhere'}}>Working folder: {capability.source}</p>}
   {(page?.checks||[]).length>0&&<section aria-label="Queued checks"><h5>Queued checks</h5>
    <ul>{page.checks.map(check=><li key={check.id}>
-    <p role="status">Check: {check.status?.replaceAll('_',' ')}</p>
+    <p role="status">Check: {(check.recoveredOutcome?.outcome||check.status)?.replaceAll('_',' ')}</p>
     {check.status==='queued'&&<p>Waiting for room to run. You can keep working; this request will start automatically when capacity is available.</p>}
     {check.capacity?.blockers?.some(row=>row.code==='storage_pressure')&&check.status==='queued'&&<p>The test host needs more free storage before this check can start.</p>}
-    {check.detail&&<p>{check.detail}</p>}
+    {check.recoveredOutcome?<p>Cleanup recovered. The environment was removed; the check was not repeated.</p>:check.detail&&<p>{check.detail}</p>}
     {check.cancelRequested&&['starting','preparing','checking','stopping','removing'].includes(check.status)&&<p>Cancellation requested. The runner is stopping the check and will retain its evidence before cleanup.</p>}
     {check.check&&<button type="button" className="a-link" disabled={busy||!active} onClick={()=>readCheck(check.id)}>Read check result</button>}
     {checkOutput?.id===check.id&&<div aria-label="Saved check result">

@@ -50,11 +50,11 @@ def definitions(schema, string):
             'waitSeconds': {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS},
             'independent': {'type': 'boolean', 'description': 'Allow this check to overlap other independent checks in this chat within the global environment limit. Use only when no earlier check result is required. Default false preserves ordered execution.'},
             'notify': {'type': 'boolean'}}, [*scope, 'requestId', 'profileId', 'command'])),
-        'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. Does not execute or replay a check.', schema({**scope,
+        'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. A recoveredOutcome separately reports exact later cleanup and the verified check result; the original status remains retained. Does not execute or replay a check.', schema({**scope,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, list(scope))),
         'workspace.tests.cancel': ('Cancel this chat’s waiting check or request prompt termination of its admitted durable guest job. Cancellation is confirmed only after observed termination and owned cleanup. Evidence is retained.', schema({**scope,
             'requestId': string(200)}, [*scope, 'requestId'])),
-        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. Never executes or repeats a check.', schema({**scope,
+        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. A recoveredOutcome can confirm later cleanup without changing an unknown check into a pass. Never executes or repeats a check.', schema({**scope,
             'requestId': string(200), 'offset': {'type': 'integer', 'minimum': 0}}, [*scope, 'requestId'])),
     }
 
@@ -203,6 +203,10 @@ class TestQueue:
                 result = job[phase]
                 value[phase] = {key: result[key] for key in ('requestId', 'state', 'message') if key in result}
         value['notification'] = receipt['subscription']['status']
+        from .test_queue_recovery import outcome
+        recovered = outcome(self.app, receipt)
+        if recovered is not None:
+            value['recoveredOutcome'] = recovered
         return value
 
     def summary(self, request):

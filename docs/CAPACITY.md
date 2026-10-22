@@ -59,3 +59,27 @@ and shutdown must continue to await readers outside the service state lock.
 This improves consecutive terminal bursts only. Interleaved event barriers and
 the cost of persisting the union of concurrently dirty chats remain; batching is
 not proof that a provider's bridge timeout cannot occur.
+
+
+### Known model-admission outcomes
+
+A local admission refusal is retained as one bounded observation on the host's
+existing conversation record, bound to the exact root generation, input set,
+call ID, Stop revision and configuration revision. It contains host-generated
+reasons, not provider payloads. Child/background calls, duplicate admitted IDs,
+later admitted calls and changed generation/input/Stop bindings cannot supply a
+reason for another turn.
+
+The matching terminal failure shows the known model-call limit or expired wait,
+while preserving the native terminal metadata separately. Native loop errors
+normalize local exception subclasses to built-in types; the host observation
+does not reconstruct an arbitrary private exception chain. Limits, held unknown
+reservations and cumulative usage remain unchanged. An expired wait records that
+the next request was not sent; it is not a provider timeout or a saved budget
+pause. Renewable capacity continues to use the existing bounded FIFO wait.
+
+A fresh authorized continuation rechecks both current policies. Neither showing
+this reason, warming the worker nor editing a limit replays a failed input or a
+completed tool. Already completed effects and unresolved remote calls remain
+under their original receipts. The generic exception-diagnostics path is
+separate from this known host-admission boundary.
