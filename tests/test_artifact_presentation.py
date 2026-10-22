@@ -150,3 +150,32 @@ async def test_chat_return_preserves_inline_choice_and_disposed_primary(app):
         assert app.state['canvas']['_presentationDisposed']
         assert not app.state['canvas']['open']
     assert any(c['presentation'] == 'inline' for c in choices(app))
+
+
+async def test_primary_html_without_mount_telemetry_still_requires_explicit_reset(app):
+    first = await published(app, '<input value="not yet reported">', 'html')
+    with app.clients.bind('one'):
+        before = deepcopy(app.clients.record())
+    with pytest.raises(AppError) as refused:
+        await command(app, 'canvas.select', {'id': first['resourceId'], 'version': 1,
+            'messageId': 'inline-message', 'presentation': 'inline'}, origin='agent')
+    assert refused.value.code == 'canvas_preview_reset_required'
+    with app.clients.bind('one'):
+        assert app.clients.record()['canvas'] == before['canvas']
+        assert app.canvas_views.presentation(first['resourceId'], 1)['presentation'] == 'canvas'
+
+
+async def test_warm_visibility_reopen_clears_disposed_snapshot_without_another_action(app):
+    first = await published(app)
+    await command(app, 'canvas.select', {'id': first['resourceId'], 'version': 1,
+        'messageId': 'inline-message', 'presentation': 'inline'})
+    with app.clients.bind('one'):
+        cached = app.browser_state()
+        assert cached['canvas']['_presentationDisposed']
+        sid = app.state['selectedSessionId']
+    result = await command(app, 'canvas.visibility', {'sessionId': sid,
+        'canvasId': first['resourceId'], 'open': True})
+    assert result['state']['canvas']['open']
+    assert not result['state']['canvas'].get('_presentationDisposed')
+    assert next(c for c in result['state']['canvasWorkspace']['presentations']
+                if c['id'] == first['resourceId'])['presentation'] == 'canvas'

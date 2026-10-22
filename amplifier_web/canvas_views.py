@@ -118,11 +118,9 @@ class CanvasViews:
             if preference.get('dirty'):
                 raise AppError('Finish or cancel this preview edit before changing its presentation.',
                                409, code='canvas_view_dirty')
-            mounted = (identity != 'primary'
-                       or preference.get('activation', {}).get('status') in {'ready', 'loading'}
-                       or preference.get('document')
-                       or identity == 'primary' and primary.get('renderReports'))
-            if row['kind'] in {'html', 'babylon'} and mounted and not (reset and origin == 'ui'):
+            # An open/retained primary or allocated inline lease may already
+            # execute before its asynchronous mount report reaches the server.
+            if row['kind'] in {'html', 'babylon'} and not (reset and origin == 'ui'):
                 raise AppError('This interactive preview has local state. Keep it here, or explicitly '
                                'reset the preview to open its saved version in the other surface.',
                                409, code='canvas_preview_reset_required')

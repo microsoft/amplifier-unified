@@ -8,13 +8,14 @@ import {mkdir,writeFile} from 'node:fs/promises';
 
 const evidence=process.env.ARTIFACT_EVIDENCE_DIR||'/artifacts/one-surface';
 await mkdir(evidence,{recursive:true});
-const fixture=spawn(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url))],{stdio:'inherit'});
+const fixture=spawn(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.ARTIFACT_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url))],{stdio:'inherit'});
 let browser,page;const errors=[];
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 try{
  for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}if(fixture.exitCode!==null)throw Error('Fixture exited before readiness');await new Promise(resolve=>setTimeout(resolve,100));}
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS?['--single-process']:[]});
- page=await browser.newPage({viewport:{width:1400,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const context=await browser.newContext({viewport:{width:1400,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ page=await context.newPage();
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto('http://127.0.0.1:8958/login');
  await page.getByLabel('Username').fill('inline-fixture');await page.getByLabel('Password').fill('fixture-password');
@@ -23,6 +24,16 @@ try{
  await page.waitForFunction(()=>{const s=window.amplifier.getState(),chat=s.sessions.find(r=>r.id===s.selectedSessionId);return chat?.status==='idle'&&chat.messages?.some(r=>r.role==='assistant'&&r.text?.startsWith('## Ready'))});
  await action('canvas.show',{kind:'html',title:'One surface example',content:'<h1>Exact saved example</h1><label>Local note<input aria-label="Local note"></label><button onclick="this.textContent=\'Clicked\'">Try it</button>'});
  const identity=await page.evaluate(()=>window.amplifier.getState().canvas.id);
+ if(process.env.ARTIFACT_DUPLICATE_PROBE==='1'){
+  const legacyCard=page.locator('.a-inline-artifact').filter({hasText:'One surface example'}).first();
+  await legacyCard.scrollIntoViewIfNeeded();
+  await legacyCard.locator('iframe').waitFor();
+  await page.locator('.a-canvas-workspace iframe').waitFor();
+  const count=await page.locator(`iframe[src*="/api/canvas/${identity}/document"]`).count();
+  await writeFile(`${evidence}/negative-mounts.json`,JSON.stringify({count}));
+  assert.equal(count,1,'ONE_SURFACE_NEGATIVE: restored old default mounts duplicate executing frames');
+  throw Error('Negative control did not restore the original duplicate default');
+ }
  const card=page.locator(`.a-document-output[data-artifact-id="${identity}"]`);
  await card.scrollIntoViewIfNeeded();
  await page.locator('.a-canvas-workspace').frameLocator('iframe').getByRole('heading',{name:'Exact saved example'}).waitFor();
