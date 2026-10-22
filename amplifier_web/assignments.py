@@ -256,8 +256,21 @@ class Assignments:
         if not value:
             return {'allowed': True}
         reason = self.blocked(identity=value['id'])
-        usage = self.usage(value)
         limits = value['limits']
+        if all(limits[key] is None for key in ('maxConcurrentCalls', 'maxTotalTokens', 'maxCostUsd')):
+            # With no call or spend ceiling, historical usage cannot deny this
+            # admission. Keep retained-member availability checks, but do not
+            # hydrate every member or rebuild their accounting on each call.
+            missing = []
+            for sid, member in value['members'].items():
+                try:
+                    self.service._session(sid, hydrate=False)
+                except Exception:
+                    if member['status'] not in {'not_created', 'reserved'}:
+                        missing.append(sid)
+            usage = {'metrics': {}, 'receipts': [], 'missingMembers': missing}
+        else:
+            usage = self.usage(value)
         policy = {**limits, 'enabled': True}
         result = evaluate(policy, usage)
         reasons = list(result['reasons'])

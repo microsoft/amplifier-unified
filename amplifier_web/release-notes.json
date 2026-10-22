@@ -2,6 +2,46 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.21.0",
+      "title": "Navigate recent work and review upcoming automation",
+      "changes": [
+        "Go back and forward through recent Home, chat and workspace destinations with new navigation controls and a History menu. History stays private to the browser tab and preserves safeguards for drafts, Canvas edits and unsaved settings.",
+        "Review upcoming scheduled work and schedules needing attention in a clearer Automation overview. Create or edit schedules in their owning chat with retained private drafts, explicit timezone previews and fresh confirmation before activation; uncertain past runs are not replayed.",
+        "Keep Settings closed after a completed navigation and keep Home reachable on wider touch screens.",
+        "Keep a delayed mobile navigation drawer request from reopening over a newer destination, so Search and landing-page controls remain usable.",
+        "Stop showing a conversation\u2019s unfinished delegated work as running after its own runtime process has exited. Independent and replacement workers keep their state; saved results are preserved and interrupted work is not replayed or marked complete.",
+        "Keep cleanup-ownership and native-chat recency smoke checks aligned with configurable limits and bounded history reconciliation."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.214",
+      "title": "Keep parallel assignments responsive without unnecessary accounting",
+      "changes": [
+        "Avoid recalculating every member\u2019s historical model usage before each new call when an assignment has no call, token or cost limits. This removes a measured source of coordination delays while preserving Stop, membership checks, configured budgets and protection against replaying calls.",
+        "Keep the access-and-approvals browser smoke check working when Settings displays an unread-notice badge."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.213",
+      "title": "Remove optional per-chat quotas and recover verified cleanup failures",
+      "changes": [
+        "Allow task-chat, per-chat environment and pending-test count limits to be turned off. New execution settings default to no count limit for these controls and no queue-wait timeout; saved limits, machine resource checks and independent safety limits remain respected.",
+        "Show the effective saved test-runner capacity settings during setup, instead of reporting obsolete environment quotas that no longer control admission. Refresh the observation when those settings change.",
+        "Let test-environment cleanup continue after an exactly recorded archive-verification failure before removal. The continuation preserves fresh archive copies without extracting links, checks ownership again and leaves uncertain removal outcomes blocked.",
+        "Make the composer voice smoke test explicitly finish its setup fixture, preventing unrelated first-use settings from interrupting the check."
+      ],
+      "notices": [
+        {
+          "id": "execution-count-defaults-213",
+          "title": "New execution settings remove per-chat quotas and automatic queue expiry",
+          "detail": "New execution settings no longer cap task chats per source, environments per chat or pending tests per chat. Queued checks default to waiting until capacity is available or you stop or cancel them, rather than expiring after one hour. Existing saved limits and timeouts, and settings retained by already accepted checks, are unchanged. Zero means no count limit or wait timeout; machine resource checks, global queue bounds and ownership safeguards still apply.",
+          "action": "Review Testing & resources execution settings if you want explicit per-chat count limits or a queue-wait timeout."
+        }
+      ]
+    },
+    {
       "version": "0.20.212",
       "title": "Keep updates moving and let parallel work use available capacity",
       "changes": [

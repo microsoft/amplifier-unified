@@ -115,7 +115,9 @@ policy, not the immutable backend configuration used by owned environments.
 Consequently existing queued receipts, source bindings, and cleanup snapshots
 remain valid after settings edits, including receipts written before this UI.
 A save clears queue backoff and wakes waiting checks. Capacity observations and
-the final guarded launch admission use the current policy; a policy decrease
+the final guarded launch admission use the current policy. Setup readiness uses
+the same effective limits and invalidates its observation cache when they change;
+retained backend defaults must not appear as a current capacity refusal. A policy decrease
 never kills already admitted work. Changes to backend identity, installation,
 endpoint, credentials, source/image or placement retain their existing refusal
 and cleanup rules. Direct edits to the old backend configuration remain exact

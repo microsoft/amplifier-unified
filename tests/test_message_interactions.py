@@ -112,6 +112,156 @@ async def test_reactions_use_desired_state_and_are_shared_without_a_turn(app):
     assert not app.runtime.sent
 
 
+async def test_reaction_commits_and_publishes_while_generation_is_blocked(app):
+    import asyncio
+    import json
+    from amplifier_web.session_projection import view_path
+
+    args = {**target(app, 1), 'emoji': '\u2764\ufe0f', 'present': True}
+    session = app._session()
+    originals = copy.deepcopy(session['messages'])
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_send = app.runtime.send
+
+    async def blocked(*values):
+        entered.set()
+        await release.wait()
+        return await original_send(*values)
+
+    app.runtime.send = blocked
+    send = asyncio.create_task(call(app, 'conversation.send',
+        {'sessionId': session['id'], 'text': 'Synthetic blocked generation'},
+        command_id='blocked-generation'))
+    subscriber = None
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        starts = list(app.runtime.started)
+        with app.clients.bind('two'):
+            subscriber = app.subscribe()
+        receipt = await asyncio.wait_for(call(app, 'message.reaction', args,
+            command_id='reaction-during-generation'), 3)
+        assert receipt['accepted'] and receipt['result']['sent'] is False
+        assert not send.done() and not release.is_set()
+        assert app.runtime.started == starts and app.runtime.sent == []
+        assert session['messages'][:len(originals)] == originals
+        saved = json.loads(view_path(app.data_dir, session).read_text())
+        assert saved['messageAnnotations'][args['messageId']]['reactions'] == ['\u2764\ufe0f']
+        snapshot = await asyncio.wait_for(subscriber.get(), 3)
+        owner = next(row for row in snapshot['sessions'] if row['id'] == session['id'])
+        message = next(row for row in owner['messages'] if row['id'] == args['messageId'])
+        assert message['reactions'] == ['\u2764\ufe0f']
+    finally:
+        if subscriber is not None:
+            app.unsubscribe(subscriber)
+        release.set()
+        await send
+
+
+async def test_passive_reaction_receipt_is_exact_and_never_replays(app):
+    from amplifier_web.message_interactions import reaction_status
+    args = {**target(app), 'emoji': '\u2764\ufe0f', 'present': True}
+    read = {**args, 'commandId': 'receipt-only', 'clientId': 'one'}
+    assert reaction_status(app, read)['status'] == 'unknown'
+    receipt = await call(app, 'message.reaction', args, command_id='receipt-only')
+    await call(app, 'message.reaction', {**args, 'present': False}, client='two')
+    before = app.state['revision']
+    value = reaction_status(app, read)
+    assert value['status'] == 'accepted' and value['receipt']['result'] == receipt['result']
+    assert value['current']['reactions'] == [] and value['revision'] > receipt['result']['annotationRevision']
+    assert app.state['revision'] == before and not app.runtime.sent
+    for changed in [{'present': False}, {'messageId': 'other'}, {'clientId': 'two'}, {'emoji': '\u2705'}]:
+        with pytest.raises(AppError, match='does not belong'):
+            reaction_status(app, {**read, **changed})
+    unavailable = {**args, 'messageId': 'missing'}
+    with pytest.raises(AppError):
+        await call(app, 'message.reaction', unavailable, command_id='rejected-reaction')
+    rejected = reaction_status(app, {**unavailable, 'commandId': 'rejected-reaction', 'clientId': 'one'})
+    assert rejected['status'] == 'rejected' and rejected['receipt']['accepted'] is False
+    assert rejected['receipt']['status'] == 404
+    duplicate = await call(app, 'message.reaction', unavailable, command_id='rejected-reaction')
+    assert duplicate['duplicate'] and duplicate['accepted'] is False
+    assert not app.runtime.sent
+
+
+async def test_reaction_reads_never_return_dirty_annotations_after_a_failed_save(app, monkeypatch):
+    from amplifier_web.message_interactions import reaction_status
+    args = {**target(app), 'emoji': '\u2764\ufe0f', 'present': True}
+    await call(app, 'message.reaction', args, command_id='saved-reaction')
+    original_save = app._save
+    def fail_save():
+        raise OSError('Synthetic storage failure')
+    monkeypatch.setattr(app, '_save', fail_save)
+    with pytest.raises(OSError):
+        await call(app, 'message.reaction', {**args, 'present': False}, command_id='unsaved-reaction')
+    read = {**args, 'commandId': 'saved-reaction', 'clientId': 'one'}
+    try:
+        async with app.lock:
+            with pytest.raises(OSError):
+                reaction_status(app, read)
+        with pytest.raises(OSError):
+            await app.app_bridge('message.reactions.context', {}, args['sessionId'])
+        assert app._progress_dirty
+    finally:
+        monkeypatch.setattr(app, '_save', original_save)
+    commit = app._commit_pending_progress
+    def locked_commit():
+        assert app.lock.locked(), 'Flush and snapshot must share the same lock'
+        return commit()
+    monkeypatch.setattr(app, '_commit_pending_progress', locked_commit)
+    context = await app.app_bridge('message.reactions.context', {}, args['sessionId'])
+    assert not app._progress_dirty and context['items'][-1]['reactions'] == []
+    async with app.lock:
+        assert reaction_status(app, read)['current']['reactions'] == []
+
+
+async def test_archived_stopped_message_reaction_does_not_resume_or_restore_chat(app):
+    args = {**target(app), 'emoji': '\u2705', 'present': True}
+    session = app._session()
+    await call(app, 'session.archive', {'id': session['id']})
+    session['interruptionRevision'] = 7
+    organization = copy.deepcopy(app._state['conversationOrganization'])
+    receipt = await call(app, 'message.reaction', args)
+    assert receipt['accepted'] and receipt['result']['sent'] is False
+    assert session['interruptionRevision'] == 7
+    assert app._state['conversationOrganization'] == organization
+    assert not app.runtime.sent and not app.runtime.started
+    session['messages'] = [row for row in session['messages'] if row['id'] != args['messageId']]
+    with pytest.raises(AppError, match='not available'):
+        await call(app, 'message.reaction', {**args, 'present': False})
+    assert session['messageAnnotations'][args['messageId']]['reactions'] == ['\u2705']
+
+
+async def test_reaction_context_is_caller_bound_bounded_and_passive(app):
+    args = {**target(app), 'emoji': '\u2705', 'present': True}
+    await call(app, 'message.reaction', args)
+    before = copy.deepcopy(app._session()['messages'])
+    context = await app.app_bridge('message.reactions.context', {}, args['sessionId'])
+    assert context['sessionId'] == args['sessionId']
+    assert context['items'][0]['messageId'] == args['messageId']
+    assert context['items'][0]['reactions'] == ['\u2705']
+    assert app._session()['messages'] == before and not app.runtime.sent
+    from amplifier_web.message_interactions import reaction_context
+    class MetadataOnly(dict):
+        def get(self, key, *args):
+            assert key != 'messages', 'Do not trigger lazy transcript hydration'
+            return super().get(key, *args)
+    bounded = reaction_context(MetadataOnly(id='s', messageAnnotations={
+        f'm{index}': {'reactions': ['\u2705']} for index in range(1000)}))
+    assert len(bounded['items']) == 32 and bounded['omittedMessageCount'] == 968
+    session = app._session()
+    first = session['messages'][0]
+    for index in range(40):
+        row = app._message(session, 'assistant', f'Reaction target {index}')
+        await call(app, 'message.reaction', {'sessionId': session['id'], 'messageId': row['id'],
+                                           'emoji': '\u2705', 'present': True})
+    await call(app, 'message.reaction', {**target(app), 'emoji': '\u2764\ufe0f', 'present': True})
+    context = reaction_context(session)
+    assert context['items'][-1]['messageId'] == first['id']
+    assert '\u2764\ufe0f' in context['items'][-1]['reactions']
+    await call(app, 'message.reaction', {**target(app), 'emoji': '\u2764\ufe0f', 'present': False})
+    assert '\u2764\ufe0f' not in reaction_context(session)['items'][-1]['reactions']
+
+
 async def test_restart_history_projection_and_client_selection_preserve_metadata(app):
     original = app._session()
     result = await quote(app)
@@ -327,7 +477,8 @@ async def test_annotation_route_requires_exact_owner_and_avoids_hydration():
     routed = Routes(app)
     routed.router = router
     install_routes(routed)
-    handler = router.add_post.call_args.args[1]
+    handler = next(call.args[1] for call in router.add_post.call_args_list
+                   if call.args[0] == '/api/conversation/annotations')
     for args in [{}, {'sessionId': ''}, {'sessionId': None}, []]:
         with pytest.raises(ValueError, match='explicit conversation'):
             await handler(SimpleNamespace(json=AsyncMock(return_value=args)))
