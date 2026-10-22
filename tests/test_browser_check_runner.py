@@ -369,7 +369,7 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     assert diagnostics['if'] == 'always()'
     assert diagnostics['with'] == {
         'name': diagnostics_name,
-        'path': 'output/browser-checks/\noutput/active-client-performance/\noutput/state-transport-browser/\noutput/scoped-navigation/\noutput/selected-context/\n',
+        'path': 'output/browser-checks/\noutput/active-client-performance/\noutput/state-transport-browser/\noutput/scoped-navigation/\noutput/selected-context/\noutput/multi-quote/\n',
         'if-no-files-found': 'warn',
     }
     assert static['if'] == "${{ steps.frontend-build.outcome == 'success' }}"

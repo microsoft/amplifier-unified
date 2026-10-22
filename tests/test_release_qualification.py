@@ -543,7 +543,10 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
-                           'destination_history', 'settings_close_diagnostic'}
+                           'destination_history', 'settings_close_diagnostic', 'multi_quote'}
+    assert inputs['multi_quote']['type'] == 'boolean'
+    assert inputs['multi_quote']['default'] == 'false'
+    assert workflow['permissions'] == {'contents': 'read'}
     assert inputs['settings_close_diagnostic']['type'] == 'boolean'
     assert inputs['settings_close_diagnostic']['default'] == 'false'
     assert inputs['destination_history']['type'] == 'boolean'
@@ -570,7 +573,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     }
     assert history['steps'][1] == {
         'name': 'Reject mixed navigation selections',
-        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}',
+        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.multi_quote }}',
         'run': 'exit 1',
     }
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
@@ -582,6 +585,16 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
         'exit 1',
     ]
     steps = job['steps']
+    assert next(s for s in steps if s.get('name') == 'Reject mixed multi-quote selections') == {
+        'name': 'Reject mixed multi-quote selections',
+        'if': '${{ inputs.multi_quote && (inputs.attachment_consumption || inputs.app004_qualification || inputs.mcp_boundary) }}',
+        'run': 'exit 1',
+    }
+    assert next(s for s in mcp['steps'] if s.get('name') == 'Reject mixed MCP and attachment selection') == {
+        'name': 'Reject mixed MCP and attachment selection',
+        'if': '${{ inputs.attachment_consumption || inputs.multi_quote }}',
+        'run': 'exit 1',
+    }
     commands = browser_runner_commands(steps)
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
@@ -617,7 +630,15 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
              if step.get('if') != '${{ inputs.attachment_consumption }}']
     next_step = after[0]
     assert next_step['name'] == 'Run all extended browser scenarios serially'
-    assert 'if' not in next_step  # Implicit success gate leaves initialized rows unrun on failure.
+    # Multi-quote replaces only this explicitly selected run; default/APP004
+    # retain the existing plan and implicit success gate on earlier failures.
+    assert next_step['if'] == '${{ !inputs.multi_quote }}'
+    assert next(s for s in steps if '--initialize' in s.get('run', ''))['if'] == '${{ !inputs.multi_quote }}'
+    assert next(s for s in steps if s.get('name') == 'Run fixed multi-quote source and installed proof') == {
+        'name': 'Run fixed multi-quote source and installed proof',
+        'if': '${{ inputs.multi_quote }}',
+        'run': 'uv run --no-sync python scripts/multi_quote_checks.py --output output/multi-quote --installed',
+    }
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
     continued = [step for step in steps if 'continue-on-error' in step]
     assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts'}
