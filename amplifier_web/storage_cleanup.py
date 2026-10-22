@@ -48,8 +48,8 @@ def policy(app):
 
 def read(app):
     return {'policy': policy(app), 'lastCleanup': record(app, LATEST),
-            'scope': 'All workspaces on this Amplifier installation. Only unused component and test runner code copies are eligible.',
-            'preserved': 'Chats, working folders, saved test sources and results, shared dependency stores, current and rollback versions, and uncertain work are kept.'}
+            'scope': 'All workspaces on this Amplifier installation. Only unused component code, test runner code, and qualified reusable test dependencies are eligible.',
+            'preserved': 'Chats, working folders, saved test sources and results, other dependency stores, current and rollback versions, and uncertain work are kept.'}
 
 
 def request_maintenance(app):
@@ -67,7 +67,7 @@ def lock(app):
 
 
 def plan(candidates, settings, seen, now):
-    rows = [{**item, 'unusedSince': seen.get(item['kind'] + ':' + item['id'], now)} for item in candidates]
+    rows = [{**item, 'unusedSince': max(seen.get(item['kind'] + ':' + item['id'], now), item.get('lastUsedAt', 0))} for item in candidates]
     total = sum(item['fileBytes'] for item in rows)
     remaining = total
     for row in sorted(rows, key=lambda item: (item['unusedSince'], item['kind'], item['id'])):
@@ -90,7 +90,7 @@ def unresolved(app):
 
 
 async def preview(app):
-    from . import update_retention, managed_runner_updates
+    from . import update_retention, managed_runner_updates, test_dependency_layers
     manager = app.update_manager
     settings = policy(app)
     generations = await update_retention.reclaim(manager, inspect_only=True)
@@ -100,8 +100,12 @@ async def preview(app):
         runner_complete = runner_inspection['complete']
     except (TimeoutError, ValueError, OSError):
         runners, runner_complete = [], False
+    try:
+        dependencies = await asyncio.to_thread(test_dependency_layers.inspect, app.data_dir)
+    except (TimeoutError, ValueError, OSError):
+        dependencies = {'candidates': [], 'protectedIds': [], 'complete': False}
     held = unresolved(app)
-    candidates = [row for row in generations.get('candidates', []) + (runners or []) if (row['kind'], row['id']) not in held]
+    candidates = [row for row in generations.get('candidates', []) + (runners or []) + dependencies['candidates'] if (row['kind'], row['id']) not in held]
     seen = record(app, OBSERVATION, {}) or {}
     rows = plan(candidates, settings, seen, time.time())
     protected = []
@@ -115,6 +119,9 @@ async def preview(app):
         if item.get('runnerCandidate') and ('runner', item['id']) not in eligible:
             protected.append({'kind': 'runner', 'id': item['id'], 'label': 'Test runner version kept',
                               'reason': 'Current, rollback, referenced, changed, or not fully verified'})
+    for identity in dependencies['protectedIds']:
+        protected.append({'kind': 'test-dependencies', 'id': identity, 'label': 'Reusable test dependencies kept',
+                          'reason': 'Referenced, changed, or not fully verified'})
     # Preserve all test artifacts and engine roots. A terminal chat is not
     # proof that a native launch cannot still finish, nor an archive grant.
     for row in protected:
@@ -127,7 +134,7 @@ async def preview(app):
     measured_paths = {path for row in candidates for path in row.get('paths', [])}
     from .runtime_environment import project_path
     for index, row in enumerate(protected):
-        if not row.get('id') or index >= 4:
+        if not row.get('id') or index >= 4 or row['kind'] == 'test-dependencies':
             row['fileBytes'] = None
             protected_complete = False
             continue
@@ -142,11 +149,12 @@ async def preview(app):
         except (ValueError, OSError, TimeoutError):
             row['fileBytes'] = None
             protected_complete = False
-    complete = generations.get('complete', False) and runner_complete
+    complete = generations.get('complete', False) and runner_complete and dependencies['complete']
     return {'policy': settings, 'rows': [{k: v for k, v in row.items() if k not in {'paths', 'stamp'}} for row in rows],
             'protected': protected[:128], 'protectedCount': len(protected),
             'observedProtected': ['ecosystem:' + key for key in generations.get('protectedIds', [])]
-                + ['runner:' + key for key in runner_inspection['protectedIds']],
+                + ['runner:' + key for key in runner_inspection['protectedIds']]
+                + ['test-dependencies:' + key for key in dependencies['protectedIds']],
             'protectedFileBytes': protected_measured, 'protectedMeasurementComplete': protected_complete,
             'unusedFileBytes': sum(row['fileBytes'] for row in rows),
             'selectedFileBytes': sum(row['fileBytes'] for row in rows if row['selected']),
@@ -156,7 +164,7 @@ async def preview(app):
 
 
 async def run(app, identity, *, expected_revision=None, automatic=False):
-    from . import update_retention, managed_runner_updates
+    from . import update_retention, managed_runner_updates, test_dependency_layers
     async with lock(app):
         key = 'storage-cleanup-run:' + identity
         previous = record(app, key)
@@ -204,6 +212,16 @@ async def run(app, identity, *, expected_revision=None, automatic=False):
             if policy(app) == settings:
                 await managed_runner_updates.retire(app,
                     selected={identity for kind, identity in chosen if kind == 'runner'}, evidence=evidence)
+            if policy(app) == settings:
+                loop = asyncio.get_running_loop()
+                async def dependency_evidence(status, item):
+                    evidence(status, item)
+                def record_dependency(status, item):
+                    # SQLite/policy stay on their owning app loop. The native
+                    # remover calls this again at its final deletion boundary.
+                    asyncio.run_coroutine_threadsafe(dependency_evidence(status, item), loop).result(timeout=10)
+                await asyncio.to_thread(test_dependency_layers.retire, app.data_dir,
+                    {identity: row for (kind, identity), row in chosen.items() if kind == 'test-dependencies'}, record_dependency)
             result['status'] = 'needs-inspection' if any(row['status'] == 'attempting' for row in result['effects']) else 'completed'
         finally:
             if result['status'] == 'running':
