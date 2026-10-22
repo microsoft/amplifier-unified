@@ -389,6 +389,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             # /api/shell. They must not wait for an unrelated app-state frame.
             if not state_independent and (not payload['action'].startswith('shell.') or payload['action'] == 'shell.command'):
                 result['stateRevision'] = result.get('revision', service._state['revision'])
+                if payload['action'] == 'conversation.send' and result.get('delivery') == 'accepted':
+                    # Delivery settles after the durable admission receipt. The
+                    # client must observe consumption before retiring its outbox.
+                    result['stateRevision'] = service._state['revision']
             result['hostInstanceId'] = service.instance_id
         if request.get('companion_device'):
             from .device_pairing import companion_receipt

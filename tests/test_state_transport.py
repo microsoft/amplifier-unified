@@ -10,6 +10,80 @@ from test_service import Runtime
 
 
 @pytest.mark.parametrize('compact', [False, True])
+async def test_send_receipt_observes_consumption_after_admission(authenticated_client, tmp_path, compact):
+    import base64
+
+    class ObservedRuntime(Runtime):
+        async def send(self, session, text, input_id, emit):
+            self.admission = service.browser_state()
+            return await super().send(session, text, input_id, emit)
+
+    runtime = ObservedRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.history.close()
+    await service.event_log_view.close()
+    client = await authenticated_client(app)
+    await client.post('/api/clients/attach', json={'clientId': 'sender'})
+    headers = {'X-Amplifier-Client': 'sender'}
+    if compact:
+        headers['X-Amplifier-State-Transport'] = 'delta-v1'
+
+    async def command(identity, action, args):
+        response = await client.post('/api/actions', headers=headers,
+                                     json={'id': identity, 'action': action, 'args': args})
+        assert response.status == 200, await response.text()
+        return await response.json()
+
+    await command('create', 'session.create', {})
+    await command('file', 'attachment.add', {'name': 'sent.txt',
+                  'base64': base64.b64encode(b'Exact uploaded bytes').decode()})
+    with service.clients.bind('sender'):
+        sid = service.state['selectedSessionId']
+        attachment = deepcopy(service.clients.attachments(service._session(sid))[0])
+        queue = service.subscribe()
+    try:
+        args = {'sessionId': sid, 'text': 'First', 'attachmentIds': [attachment['id']]}
+        receipt = await command('first', 'conversation.send', args)
+        assert receipt['delivery'] == 'accepted'
+        frames = []
+        while not queue.empty():
+            frame = queue.get_nowait()
+            if 'shellClientId' not in frame:
+                frames.append(frame)
+        admission = runtime.admission
+        assert admission['revision'] == receipt['revision']
+        admitted = next(row for row in admission['sessions'] if row['id'] == sid)
+        assert admitted['draftAttachments'] == [attachment]
+        assert next(row for row in admitted['messages'] if row.get('inputId') == 'first')['delivery']['status'] == 'sending'
+        if compact:
+            assert 'state' not in receipt
+            assert receipt['stateRevision'] > receipt['revision']
+            observed = next(frame for frame in frames if frame['revision'] == receipt['stateRevision'])
+        else:
+            assert 'stateRevision' not in receipt
+            observed = receipt['state']
+        settled = next(row for row in observed['sessions'] if row['id'] == sid)
+        assert settled['draftAttachments'] == []
+        sent = next(row for row in settled['messages'] if row.get('inputId') == 'first')
+        assert sent['delivery']['status'] == 'accepted' and sent['attachments'] == [attachment]
+        duplicate = await command('first', 'conversation.send', args)
+        assert duplicate['duplicate'] and duplicate['revision'] == receipt['revision']
+        assert len(runtime.sent) == 1
+        second = await command('second', 'conversation.send', {'sessionId': sid, 'text': 'Adjacent cycle'})
+        assert second['delivery'] == 'accepted' and len(runtime.sent) == 2
+        rejected = await client.post('/api/actions', headers=headers, json={'id': 'stale',
+            'action': 'conversation.send', 'args': {'sessionId': sid, 'text': 'Stale',
+                                                   'attachmentIds': [attachment['id']]}})
+        assert rejected.status == 400
+        assert (await rejected.json())['error'] == 'An attachment is no longer in this draft. Refresh and retry.'
+        assert len(runtime.sent) == 2
+    finally:
+        service.unsubscribe(queue)
+
+
+@pytest.mark.parametrize('compact', [False, True])
 async def test_noop_layout_receipt_does_not_wait_for_other_client_revision(authenticated_client, tmp_path, compact):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
                            runtime=Runtime(), voice=False, background_updates=False)
