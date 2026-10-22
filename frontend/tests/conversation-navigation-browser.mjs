@@ -1,6 +1,9 @@
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
+import {mkdir,mkdtemp} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
 import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
 const full=Array.from({length:791},(_,i)=>({id:'m'+i,role:i%10===0?'user':'assistant',text:'Message '+i,createdAt:1000+i}));
@@ -9,6 +12,8 @@ let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},v
 const previews=[],indexes=[],windows=[],earlier=[];let restoring=false;
 let browser,vite,page;const errors=[],calls=[];
 const shell=createShellHttpFixture(()=>state);
+const evidence=process.env.AMPLIFIER_TEST_ARTIFACTS||await mkdtemp(join(tmpdir(),'conversation-navigation-'));
+await mkdir(evidence,{recursive:true});
 try{
  vite=await createServer({configFile:false,cacheDir:fileURLToPath(new URL('../.vite-legacy-mocks',import.meta.url)),root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});await vite.listen();
  browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.stack||e.message));
@@ -112,11 +117,11 @@ try{
   assert.ok(card.x-line.x-line.width>=6&&card.x-line.x-line.width<=10,'Preview should stay close to the expanded mark without overlapping it.');
  };
  await assertPreviewGap(marks.nth(4));
- await page.screenshot({path:'/tmp/conversation-navigation.png'});
+ await page.screenshot({path:join(evidence,'conversation-navigation.png')});
  await marks.last().hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 790');
  await expect.poll(()=>expandedWidth(marks.last())).toBeCloseTo(ordinaryWidth,1);
  await assertPreviewGap(marks.last());
- await page.screenshot({path:'/tmp/conversation-navigation-last.png'});
+ await page.screenshot({path:join(evidence,'conversation-navigation-last.png')});
  await marks.nth(4).hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 780');
  await page.emulateMedia({reducedMotion:'reduce'});
  assert.equal(await marks.nth(4).locator('span').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
@@ -168,7 +173,7 @@ try{
   await expect.poll(unobscured).toBe(true);
   await popup.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
- await page.screenshot({path:'/tmp/conversation-navigation-narrow.png'});
+ await page.screenshot({path:join(evidence,'conversation-navigation-narrow.png')});
  await page.setViewportSize({width:390,height:844});await expect(rail).toBeHidden();
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
