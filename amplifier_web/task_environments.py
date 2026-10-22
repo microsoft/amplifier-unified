@@ -241,7 +241,7 @@ def remove_installation(home, identity, folder, *, ignore_errors=False, cleanup_
         shutil.rmtree(folder, ignore_errors=ignore_errors)
 
 
-def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None, backend_config=None, profile_id=PROFILE, resource_request=None, timing_request=None):
+def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None, backend_config=None, profile_id=PROFILE, resource_request=None, timing_request=None, *, _qualification=False):
     profile = profiles.resources(profile_id, resource_request)
     resource_request = resource_request or profiles.freeze(profile_id)
     timing_request = timing_request or profiles.freeze_timing(profile_id)
@@ -261,10 +261,10 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
             raise ValueError('This environment request already has a different or admitted owner. Inspect its exact receipt.')
         limits = execution_settings.concurrency(home)
         count = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
-        if count >= limits['maxEnvironmentsPerChat']:
+        if not _qualification and count >= limits['maxEnvironmentsPerChat']:
             raise ValueError('This task already owns its allowed environments. Inspect or remove one, or adjust Advanced execution limits in Settings.')
         total, owned = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
-        if total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']:
+        if not _qualification and (total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']):
             raise ValueError('The resource owner capacity has been reached. Inspect retained owners or adjust Advanced execution limits in Settings.')
         row = {'id': str(uuid.uuid4()), 'kind': KIND, 'workspaceId': workspace, 'sessionId': sid,
                'owner': actor, 'source': source, 'profileId': profile_id, 'backendKey': backend_key,
@@ -369,9 +369,10 @@ def invoke(config, home, row, action, args, *, _qualification=False):
         process.stderr.close()
 
 
-def capacity(app, config):
+def capacity(app, config, *, _qualification=False):
     try:
-        result = invoke(capacity_settings.apply(app, config), app.data_dir, {}, 'capacity', {})
+        result = invoke(capacity_settings.apply(app, config, _qualification=_qualification),
+                        app.data_dir, {}, 'capacity', {}, **({'_qualification': True} if _qualification else {}))
         if not result.get('ok'):
             return {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
         observed = result['capacity']

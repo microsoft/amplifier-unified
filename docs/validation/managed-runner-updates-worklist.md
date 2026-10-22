@@ -66,6 +66,14 @@ remain queued and discover the new app after that observation finishes. Idle
 notifications must not continuously wake a capacity-only runner; ordinary
 tool, app and component idle wakeups remain covered separately.
 
+Qualification does not consume ordinary environment-count or retained-owner
+quotas. Both the core probe and private Incus engine probe use their existing
+exact update owner and physical-host reservation, with count ceilings disabled
+only for that private admission. Storage thresholds, memory/CPU pressure,
+reservation accounting, immutable backend identity and unknown-effect recovery
+remain mandatory. Explicit ordinary-work policy is neither changed nor bypassed
+by a public action parameter.
+
 Selection changes cancel future qualification effects and reconcile only the
 original owner. Unknown start/cleanup results retain that owner without replay.
 Code retirement is limited to purpose-installed candidates no longer selected,
