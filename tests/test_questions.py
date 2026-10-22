@@ -502,3 +502,59 @@ async def test_question_review_foreign_owner_supersede_and_dirty_guard(tmp_path)
             assert app.runtime.sent == []
     finally:
         await app.close()
+
+
+async def test_question_preview_revalidates_saved_binding_on_resource_read(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'markdown', 'title': 'Review', 'content': '# Pinned',
+        }))['result']
+        q = await create_question(app, sid, artifacts=[{'id': saved['id'], 'version': 1}])
+        app.clients.attach('reader')
+        with app.clients.bind('reader'):
+            await app.dispatch('session.select', {'id': sid})
+            preview = (await app.dispatch('canvas.views.inline', {
+                'resourceId': saved['id'], 'version': 1, 'questionId': q['id'],
+                'questionContentRevision': q['contentRevision'], 'previewId': 'read-recheck',
+            }))['result']
+            assert app.canvas_views.canvas(preview['viewId'])['content'] == '# Pinned'
+            # Synthetic corruption: a changed reference must never become a new
+            # body on an existing view. Production questions are immutable.
+            changed = app.questions.store.get(sid, q['id'])
+            changed['artifacts'][0]['bodyDigest'] = '0' * 64
+            app.questions.store.put(changed)
+            with pytest.raises(AppError, match='saved artifact changed'):
+                app.canvas_views.canvas(preview['viewId'])
+            assert preview['viewId'] not in {v['viewId'] for v in app.canvas_views.project()['views']}
+            assert app.runtime.sent == []
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('question_first', [True, False])
+async def test_question_and_message_preview_do_not_duplicate_body(tmp_path, question_first):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        message = app._message(app._session(), 'user', 'Review this document')
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'text', 'title': 'Review', 'content': 'One body',
+        }))['result']
+        q = await create_question(app, sid, artifacts=[{'id': saved['id'], 'version': 1}])
+        question = {'questionId': q['id'], 'questionContentRevision': q['contentRevision']}
+        publication = {'messageId': message['id']}
+        first, second = (question, publication) if question_first else (publication, question)
+        app.clients.attach('reader')
+        with app.clients.bind('reader'):
+            await app.dispatch('session.select', {'id': sid})
+            args = {'resourceId': saved['id'], 'version': 1}
+            opened = (await app.dispatch('canvas.views.inline', {**args, **first, 'previewId': 'first'}))['result']
+            with pytest.raises(AppError, match='existing preview'):
+                await app.dispatch('canvas.views.inline', {**args, **second, 'previewId': 'second'})
+            assert app.canvas_views.canvas(opened['viewId'])['content'] == 'One body'
+    finally:
+        await app.close()

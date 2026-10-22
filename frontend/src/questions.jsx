@@ -8,14 +8,17 @@ function ReviewArtifact({reference,question,state,dispatch}){
  const [expanded,setExpanded]=useState(false),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const controls=useRef(null),trigger=useRef(null),pending=useRef(false),alive=useRef(true),id=useId();
  const sameCanvas=!!(state.canvas?.open&&state.canvas.id===reference.id);
- const inCanvas=!!(sameCanvas&&
-  (state.canvas.selectedVersion??state.canvas.revision)===reference.version);
+ const inCanvas=!!(sameCanvas&&state.canvas.selectedVersion===reference.version);
+ const previousCanvas=useRef(sameCanvas);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
- useEffect(()=>{if(inCanvas&&expanded)controls.current?.close()},[inCanvas,expanded]);
+ useEffect(()=>{
+  const opened=sameCanvas&&!previousCanvas.current;previousCanvas.current=sameCanvas;
+  if(opened&&expanded)controls.current?.close();
+ },[sameCanvas,expanded]);
  async function open(){
   if(pending.current)return;pending.current=true;setBusy(true);setNotice('');
   try{
-   const result=await dispatch('canvas.select',{id:reference.id,version:reference.version});
+   const result=await dispatch('canvas.select',{sessionId:reference.sessionId,id:reference.id,version:reference.version});
    if(!result?.accepted)throw Error(result?.error||'The current view was kept.');
    if(alive.current)setExpanded(false);
   }catch(error){if(alive.current)setNotice(error.message)}
@@ -35,16 +38,16 @@ function ReviewArtifact({reference,question,state,dispatch}){
   }catch(error){if(alive.current)setNotice(error.message)}
   finally{pending.current=false;if(alive.current)setBusy(false)}
  }
- return <CompactArtifactCard title={reference.title} kind={reference.kind} version={reference.version} expanded={expanded}
+ return <div onKeyDown={async event=>{if(event.key==='Escape'&&expanded&&!pending.current){event.preventDefault();if(await controls.current?.close())trigger.current?.focus({preventScroll:true})}}><CompactArtifactCard title={reference.title} kind={reference.kind} version={reference.version} expanded={expanded}
   busy={busy} onPreview={toggle} onOpen={open} previewId={id} notice={notice||(inCanvas?`Shown in Canvas · exact v${reference.version}`:'')}>
   {expanded&&<ArtifactPreview item={{row:reference,version:reference.version}} state={state} dispatch={dispatch}
    questionBinding={{questionId:question.id,questionContentRevision:question.contentRevision||1}} fullView={open}
    compactHeading controlsRef={controls} onClosed={()=>setExpanded(false)}/>}
- </CompactArtifactCard>;
+ </CompactArtifactCard></div>;
 }
 
 function QuestionCard({question,sessionId,state,dispatch}){
- const q=question,draftKey=JSON.stringify(['amplifier.questionDraft.v1',state.client?.hostInstanceId||location.origin,sessionId,q.id,q.contentRevision||1]);
+ const q=question,draftKey=JSON.stringify(['amplifier.questionDraft.v1',state.client?.hostInstanceId||globalThis.location?.origin||'local',sessionId,q.id,q.contentRevision||1]);
  const [text,setText]=useState(()=>{try{return q.status==='pending'?(sessionStorage.getItem(draftKey)||'').slice(0,8000):''}catch{return ''}});
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[draftWarning,setDraftWarning]=useState('');
  const pending=useRef(false),request=useRef(null);
@@ -65,13 +68,13 @@ function QuestionCard({question,sessionId,state,dispatch}){
   const key=JSON.stringify(args);
   if(request.current?.key!==key)request.current={key,id:crypto.randomUUID()};
   pending.current=true;setBusy(true);setError('');
-  try{await dispatch('question.answer',args,{id:request.current.id})}
+  try{const result=await dispatch('question.answer',args,{id:request.current.id});if(!result?.accepted)throw Error(result?.error||'The answer could not be confirmed.')}
   catch(error){setError(error.message||'The answer could not be confirmed. Your choice is kept.')}
   finally{pending.current=false;setBusy(false)}
  }
  async function skip(){
   if(pending.current)return;pending.current=true;setBusy(true);setError('');
-  try{await dispatch('question.cancel',{sessionId,id:q.id,expectedRevision:q.revision,reason:'Skipped by the user'})}
+  try{const result=await dispatch('question.cancel',{sessionId,id:q.id,expectedRevision:q.revision,reason:'Skipped by the user'});if(!result?.accepted)throw Error(result?.error||'The question was not cancelled.')}
   catch(error){setError(error.message)}finally{pending.current=false;setBusy(false)}
  }
  const delivery=q.delivery?.status;

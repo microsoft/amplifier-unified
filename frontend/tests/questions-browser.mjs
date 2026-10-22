@@ -164,6 +164,10 @@ try{
  assert.equal(reviewResponse.status(),200,await reviewResponse.text());
  const review=await reviewResponse.json(),q=card(review.question.id);
  await page.setViewportSize({width:1280,height:900});
+ if(process.env.AMPLIFIER_QUESTIONS_NEGATIVE==='flatten'){
+  // Deliberate rendered-boundary fault: the formatting oracle below must fail.
+  await q.locator('.a-question-prompt').evaluate(element=>{element.textContent=element.textContent});
+ }
  await expect(q.locator('.a-question-prompt h1')).toHaveText('Choose the peer presentation');
  await expect(q.locator('.a-question-prompt li')).toHaveCount(2);
  await expect(q.locator('.a-question-prompt pre code')).toHaveText('exact source\n');
@@ -189,6 +193,15 @@ try{
   if(output)await page.screenshot({path:join(output,`question-review-${width}.png`)});
  }
  await page.setViewportSize({width:1280,height:900});
+ if(process.env.AMPLIFIER_QUESTIONS_NEGATIVE==='wrong-version'){
+  // Deliberate request fault: bypassing the pinned version must fail the v1 oracle.
+  await page.route('**/api/actions',async route=>{
+   const body=route.request().postDataJSON();
+   if(body?.action==='canvas.views.inline'&&body.args?.questionId===review.question.id)
+    return route.continue({postData:JSON.stringify({...body,args:{...body.args,version:2}})});
+   return route.continue();
+  });
+ }
  await first.getByRole('button',{name:/^Preview here:/}).click();
  await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
  await expect(first.getByRole('heading',{name:'Latest document v2'})).toHaveCount(0);

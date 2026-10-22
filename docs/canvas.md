@@ -403,8 +403,9 @@ Bodies load only after explicit expansion. Supported HTML mockups use the same
 sandbox as Canvas, never parent-document HTML. Unsupported kinds and unavailable
 versions report their limits instead of substituting Latest. Saved question and
 answer source is preserved, including whitespace. Free-text drafts are kept in
-the originating browser tab's session storage, keyed by host/chat/question
-revision; storage failure is visible. They are not sent until explicitly answered.
+the originating browser tab's session storage, keyed by host/chat/question ID
+and `contentRevision`; storage failure is visible. They are not sent until
+explicitly answered.
 
 An inline view binds either a message publication or
 `questionId` plus `questionContentRevision` from the question's immutable

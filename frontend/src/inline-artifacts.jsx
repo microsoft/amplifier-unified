@@ -17,6 +17,7 @@ const titleOf=({row,version})=>(row.app?.versions||row.versions||[]).find(v=>v.v
 // mounted until explicitly closed or its conversation leaves the screen.
 export function ArtifactPreview({item,messageId,questionBinding,state={},dispatch,fullView,imageFrame=false,compactHeading=false,controlsRef,onClosed}){
  const {row,version}=item,root=useRef(),run=useRef(dispatch);run.current=dispatch;
+ const releaseTail=useRef(Promise.resolve());
  const [near,setNear]=useState(false),[closed,setClosed]=useState(false),[attempt,setAttempt]=useState(0);
  const [loaded,setLoaded]=useState(null),[error,setError]=useState('');
  useEffect(()=>{
@@ -25,21 +26,43 @@ export function ArtifactPreview({item,messageId,questionBinding,state={},dispatc
  },[]);
  useEffect(()=>{
   if(!near||closed)return;
-  let active=true,owned;const controller=new AbortController();setError('');setLoaded(null);
-  const release=()=>owned&&run.current('canvas.views.release',targetOf(owned)).catch(()=>{});
-  run.current('canvas.views.inline',{resourceId:row.id,version,...(questionBinding||{messageId}),previewId:crypto.randomUUID()}).then(async result=>{
+  let active=true,owned,released;const controller=new AbortController();setError('');setLoaded(null);
+  const release=()=>{
+   if(!owned)return Promise.resolve();
+   if(!released)released=run.current('canvas.views.release',targetOf(owned)).then(result=>{
+    if(!result?.accepted)throw Error(result?.error||'The preview could not be closed.');
+   });
+   return released;
+  };
+  // A question preview retry must not overtake its old mount's admission/release.
+  // Keep distinct mount IDs: a late unmount must never release its replacement.
+  const opening=(questionBinding?releaseTail.current:Promise.resolve()).then(()=>{
+   if(!active)return null;
+   return run.current('canvas.views.inline',{resourceId:row.id,version,...(questionBinding||{messageId}),previewId:crypto.randomUUID()});
+  }).then(result=>{
+   if(!result&&!active)return null;
    if(!result?.accepted)throw Error(result?.error||'Preview was not opened.');
    owned=result.result;
-   if(!active){release();return}
+   return owned;
+  });
+  opening.then(async opened=>{
+   if(!opened||!active)return;
    const canvas=await request(`/api/canvas/views/${owned.viewId}/resource?`+new URLSearchParams(targetOf(owned)),{signal:controller.signal});
    if(active)setLoaded({view:owned,canvas});
   }).catch(error=>{if(active&&error.name!=='AbortError')setError(error.message)});
-  return()=>{active=false;controller.abort();release()};
+  return()=>{
+   active=false;controller.abort();
+   releaseTail.current=opening.then(release,()=>undefined);
+   releaseTail.current.catch(()=>{}); // Retain rejection for the next question retry.
+  };
  },[near,closed,attempt,row.id,version,messageId,questionBinding?.questionId,questionBinding?.questionContentRevision]);
  const view=loaded&&(state.canvasWorkspace?.views||[]).find(view=>view.viewId===loaded.view.viewId)||loaded?.view;
  const canvas=loaded&&{...loaded.canvas,...targetOf(view),view:view.view,renderReports:view.renderReports,document:view.document,interaction:view.interaction,events:view.events};
  const close=async()=>{
-  try{if(view)await dispatch('canvas.views.release',targetOf(view));setClosed(true);onClosed?.();return true}catch(error){setError(error.message);return false}
+  try{
+   if(view){const result=await dispatch('canvas.views.release',targetOf(view));if(!result?.accepted)throw Error(result?.error||'The preview could not be closed.')}
+   setClosed(true);onClosed?.();return true;
+  }catch(error){setError(error.message);return false}
  };
  useImperativeHandle(controlsRef,()=>({close}),[view,dispatch,onClosed]);
  return <section ref={root} className="a-inline-artifact" data-image-frame={imageFrame||undefined} aria-label={titleOf(item)}>
@@ -68,11 +91,11 @@ export function CompactArtifactCard({title,kind,version,expanded,busy,onPreview,
    <span className="a-compact-artifact-title" tabIndex={0} role="note" aria-label={`${title}, ${kind}`} onPointerDown={event=>{if(event.pointerType==='touch')event.currentTarget.focus()}} title={`${title} · ${kind}`}>{title}</span>
    <span className="a-compact-artifact-version" aria-label={`Exact version ${version}`}>v{version}</span>
    <span className="a-compact-artifact-action">
-    <button type="button" className="a-document-preview-toggle" disabled={busy} aria-label={`${label}: ${title}, version ${version}`} aria-expanded={expanded} aria-controls={previewId} aria-describedby={`${id}-preview`} onClick={onPreview}><Eye aria-hidden="true"/><span>{label}</span></button>
+    <button type="button" className="a-document-preview-toggle" disabled={busy} aria-label={`${label}: ${title}, version ${version}`} aria-expanded={expanded} aria-controls={previewId} aria-describedby={`${id}-preview`} onPointerDown={event=>{if(event.pointerType==='touch')event.currentTarget.focus()}} onClick={onPreview}><Eye aria-hidden="true"/><span>{label}</span></button>
     <span id={`${id}-preview`} className="a-artifact-tooltip" role="tooltip">{label}</span>
    </span>
    <span className="a-compact-artifact-action a-compact-artifact-open">
-    <button type="button" disabled={busy} data-action="canvas.select" aria-label={`Open in Canvas: ${title}, version ${version}`} aria-describedby={`${id}-open`} onClick={onOpen}><PanelRightOpen aria-hidden="true"/><span>Open in Canvas</span></button>
+    <button type="button" disabled={busy} data-action="canvas.select" aria-label={`Open in Canvas: ${title}, version ${version}`} aria-describedby={`${id}-open`} onPointerDown={event=>{if(event.pointerType==='touch')event.currentTarget.focus()}} onClick={onOpen}><PanelRightOpen aria-hidden="true"/><span>Open in Canvas</span></button>
     <span id={`${id}-open`} className="a-artifact-tooltip" role="tooltip">Open in Canvas</span>
    </span>
   </div>
