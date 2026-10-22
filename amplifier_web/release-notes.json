@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.210",
+      "title": "Keep built-in tool updates consistent with their selected sources",
+      "changes": [
+        "Record the selected source of built-in tools during update preparation, so newer filesystem and bash modules can be validated and adopted without conflicting with stale source records. Explicit source choices and integrity checks remain enforced."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.209",
       "title": "Keep update checks responsive during runner checks",
       "changes": [
