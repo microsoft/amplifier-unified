@@ -3,7 +3,7 @@
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir,writeFile,mkdtemp} from 'node:fs/promises';
+import {mkdir,writeFile,mkdtemp,readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -31,6 +31,9 @@ if(installed)assert.ok(process.env.AMPLIFIER_TEST_PYTHON&&process.env.AMPLIFIER_
 const home=await mkdtemp(path.join(output,'cold-home-'));
 const fixtureEnv={...process.env,AMPLIFIER_TEST_SHARED_WORK_HOME:home,
  AMPLIFIER_SHELL_NODE_MODULES:process.env.AMPLIFIER_SHELL_NODE_MODULES||root+'frontend/node_modules'};
+const rendererToolchain={modulesPath:fixtureEnv.AMPLIFIER_SHELL_NODE_MODULES,
+ candidateLockSha256:createHash('sha256').update(await readFile(root+'frontend/package-lock.json')).digest('hex'),
+ installedLockSha256:createHash('sha256').update(await readFile(path.join(fixtureEnv.AMPLIFIER_SHELL_NODE_MODULES,'.package-lock.json'))).digest('hex')};
 if(installed){delete fixtureEnv.PYTHONPATH;delete fixtureEnv.PYTHONHOME}
 const fixtureArgs=[...(installed?['-I','-B']:[]),fixturePath,'--chat-controls','--shared-work'];
 const fixtureOptions={stdio:['ignore','pipe','inherit'],env:fixtureEnv,cwd:path.dirname(fixturePath)};
@@ -394,6 +397,7 @@ try {
   assert.deepEqual(observation.taskControlCalls,[]);
   assert.deepEqual(observation.taskReadObservations.map(row=>row.status),['available','available','unavailable']);
   assert.ok(observation.taskReadObservations.every(row=>row.accepted&&!row.broadStateReturned));
+  coldTaskResult.readStatuses=observation.taskReadObservations.map(row=>row.status);
  }
  const runtime=await (await page.request.get(url+'/fixture',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);assert.equal(runtime.workerCount,0);
@@ -411,7 +415,7 @@ try {
   decisionCurrentness:{freshAccepted:true,laterCounterevidenceHistorical:true},coldTask:coldTaskResult,
   acceptedItems:found.size,sourcePagesComplete:true,priorReturnRetained:true,currentUnknown:true,
   widths:[1440,390,320],clients:coldTaskRequested?3:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
-  peerClient:{separateProcess:true},rendererValidation,
+  peerClient:{separateProcess:true},rendererValidation,rendererToolchain,
   runtimeCallbackCounts:observation.runtimeCallbackCounts,observationErrors:observer.errors,
   browserTimeouts:{actionTimeoutMs,navigationTimeoutMs},
   limits:['No live provider or private history','Synthetic runtime; installed identity requires explicit independently prepared wheel']};
