@@ -76,7 +76,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
   catch(e){setError(e.message)}finally{setBusy(false)}
  }
  const addPassage=(source,start,end)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection:{start,end}},{quoteSource:source});};
- return <><button ref={anchor} type="button" className="a-icon" aria-label="Reply to message" title="Quote whole message" data-action="message.reply" disabled={busy} onClick={()=>action('message.reply',{})}><Reply/></button>
+ return <><button ref={anchor} type="button" className="a-icon" aria-label="Reply to message" title="Quote whole message" data-action="message.reply" disabled={busy} onMouseDown={event=>{if(event.button===0)event.preventDefault();}} onClick={()=>action('message.reply',{})}><Reply/></button>
  <button type="button" className="a-link" disabled={busy} onClick={async()=>{try{setError('');const text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner)setPicker(text);}catch(error){setError(error.message);}}}>Choose passage</button>
  {selected&&<button type="button" className="a-link" onMouseDown={event=>event.preventDefault()} onClick={async()=>{try{if(selected.error)throw Error('Use Choose passage for an exact source selection across formatting or blocks. Nothing was added.');await addPassage(selected.source,selected.start,selected.end);setSelected(null);}catch(error){setError(error.message);}}}>Quote selection</button>}
  {picker!==null&&<PassagePicker text={picker} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker,[...picker.slice(0,start)].length,[...picker.slice(0,end)].length)}/>}

@@ -46,10 +46,16 @@ try{
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Before the whole message');
  const wholeButton=b.getByRole('button',{name:'Reply to message',exact:true});
  await wholeButton.scrollIntoViewIfNeeded();const beforeScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
+ await wholeButton.evaluate(button=>{
+  window.quoteScroll=[];window.beforeQuoteFocus=document.activeElement;
+  for(const event of ['pointerdown','mousedown','focus','click'])button.addEventListener(event,()=>window.quoteScroll.push({event,top:document.querySelector('.a-messages').scrollTop}),{capture:true,once:true});
+ });
  await wholeButton.click();await expect(quotes).toHaveCount(3);
  const afterScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
- assert.ok(Math.abs(afterScroll-beforeScroll)<=1,`Collecting moved the reading position: ${beforeScroll} -> ${afterScroll}`);
- assert.notEqual(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'Message Amplifier');
+ const scrollEvents=await page.evaluate(()=>window.quoteScroll);
+ if(proof)writeFileSync(join(proof,'collect-scroll.json'),JSON.stringify({beforeScroll,afterScroll,scrollEvents},null,2));
+ assert.ok(Math.abs(afterScroll-beforeScroll)<=1,`Collecting moved the reading position: ${beforeScroll} -> ${afterScroll}; ${JSON.stringify(scrollEvents)}`);
+ assert.ok(await page.evaluate(()=>document.activeElement===window.beforeQuoteFocus),'Collecting must not move focus');
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('After all references');
  assert.equal((await observe()).sends.length,0,'Collecting must not send');
  await editor.dispatchEvent('keydown',{key:'Enter',code:'Enter',isComposing:true,keyCode:229});

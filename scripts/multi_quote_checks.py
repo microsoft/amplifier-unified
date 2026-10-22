@@ -105,7 +105,7 @@ def main():
                 '--no-emit-project', '--format', 'requirements-txt', '--output-file', str(outside / 'dependencies.txt')])
             if exported:
                 return 1
-            dependencies, _ = run('installed-dependencies', ['uv', 'pip', 'install', '--python', str(python),
+            dependencies, _ = run('installed-dependencies', ['uv', 'pip', 'install', '--python', str(python), '--no-deps',
                 '--requirement', str(outside / 'dependencies.txt')])
             if dependencies:
                 return 1
