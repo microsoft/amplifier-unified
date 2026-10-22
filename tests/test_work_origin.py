@@ -213,6 +213,18 @@ async def test_effect_scope_matches_required_input_membership_not_order():
             return {'work': {'available': True, 'discovery': empty_discovery(), 'required': required}}
         return {'current': True, 'required': required, 'effectAuthorized': False}
     delivery = CoordinationDelivery(Previous(), bridge, origin_scope=lambda: scope)
+    # Exact empty manifest is still mandatory even when there are no bodies.
+    # This unit fixture passes it through the real capture/binding predicate.
+    from amplifier_core.message_models import Message
+    tool_input = {'operation': 'dispatch', 'args': required['requirementsRef']}
+    receipt = {'accepted': True, 'result': {**required, 'items': [], 'truncated': False, 'nextAfter': None}}
+    delivery.remember_work(receipt, tool_input, execution_id='manifest')
+    delivery.bind_work({'tool_name': 'app_control', 'tool_call_id': 'manifest',
+                        'tool_input': tool_input, 'result': receipt})
+    import json
+    messages = [Message(role='assistant', content='', tool_calls=[{
+        'id': 'manifest', 'tool': 'app_control', 'arguments': tool_input}]),
+        Message(role='tool', name='app_control', tool_call_id='manifest', content=json.dumps(receipt))]
     telemetry = ExecutionEvents(scope['rootSessionId'], lambda event: None)
     telemetry.admission_guard = AsyncMock()
     class Provider:
@@ -221,6 +233,6 @@ async def test_effect_scope_matches_required_input_membership_not_order():
         async def complete(self, value, **kwargs):
             return {'content': [{'type': 'tool_call', 'id': 'ordered', 'name': 'probe', 'input': {}}]}
     wrapped = SurfaceProvider(telemetry.instrument_provider(scope['rootSessionId'], Provider()), delivery)
-    await wrapped.complete(request())
+    await wrapped.complete(request(*messages))
     proof = await delivery.recheck_effect_coverage({'tool_call_id': 'ordered', 'tool_name': 'probe', 'tool_input': {}})
     assert proof['complete'] is True, proof

@@ -697,12 +697,14 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
     async def start(call):
         await adapter.loop._execute_tool_only(call, adapter.tools, adapter.hooks, None, c)
     item = {'type': 'function_call', 'id': 'item-one', 'call_id': 'native-tool',
-            'name': 'delegate', 'arguments': '{"instruction":"fixture"}', 'async': True}
+            'name': 'delegate', 'arguments': '{"instruction":"fixture"}', 'async': True, 'status': 'completed'}
     response_id = 'wrong' if fault == 'wrong_response' else 'response-one'
     events = [
         {'type': 'response.created', 'response': {'id': 'response-one'}},
         {'type': 'response.output_item.done', 'response_id': response_id, 'item': item},
-        {'type': 'response.completed', 'response': {'id': 'response-one', 'output': [item], 'usage': {}}},
+        {'type': 'response.completed', 'response': {'id': 'response-one', 'object': 'response',
+            'status': 'completed', 'model': 'gpt-6-astra', 'output': [item],
+            'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}},
     ]
     if fault == 'no_event_response':
         events[1].pop('response_id')
@@ -719,7 +721,7 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
     native.socket = SimpleNamespace(send=send, recv=AsyncMock(side_effect=[json.dumps(e) for e in events]),
                                     close=AsyncMock())
     native._connect = AsyncMock()
-    native._guard_assembled_params_with_provider_count = AsyncMock()
+    native._guard_assembled_params_with_provider_count = AsyncMock(return_value=None)
     native_owner = SimpleNamespace(coordinator=c, config={'background_delegate': True},
         runtime=SimpleNamespace(emit=AsyncMock()), start_native_job=start, native_job=lambda identity: None,
         context=SimpleNamespace(get_messages=AsyncMock(return_value=[m.model_dump() for m in adapter.messages])))
@@ -782,6 +784,12 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
         with pytest.raises(Exception):
             await wrapped.complete(original)
         assert sent == [] and proofs == []
+    elif fault == 'ambiguous_response':
+        from amplifier_core.llm_errors import LLMError
+        with pytest.raises(LLMError, match='outcome unknown'):
+            await wrapped.complete(original)
+        assert len(sent) == len(proofs) == 1 and proofs[0]['complete'] is False
+        assert host.state['outcome'] == 'unknown'
     else:
         await wrapped.complete(original)
         assert len(sent) == len(proofs) == 1
