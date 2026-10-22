@@ -167,10 +167,10 @@ def test_flattening_negative_control_is_discriminating():
 
 
 def make_cold(service, receiving, rows):
-    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.cold_display import ColdRecord, raw
     from amplifier_web.resource_files import put
     reference = put(service.db, rows)
-    cold = ColdRecord({**receiving, '_coldFields': {'messages': reference}}, service.db)
+    cold = ColdRecord({**raw(receiving), '_coldFields': {'messages': reference}}, service.db)
     dict.pop(cold, 'messages', None)
     service.state['sessions'] = [cold if row['id'] == receiving['id'] else row
                                  for row in service.state['sessions']]
