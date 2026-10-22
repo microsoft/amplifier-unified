@@ -75,6 +75,32 @@ The installed-wheel probe also loads worker-owned app packages in a fresh
 qualification: sibling app packages must be exposed by the explicit bootstrap
 without adding host site-packages or distribution metadata to the runtime.
 
+### Recovering a successful frontend build after asset parity fails
+
+Fast release checks retains `frontend-build-output-<attempt>` immediately after
+the build succeeds, before comparing the committed static files. It contains all
+generated static files and a manifest of their hashes and exact non-static source
+inputs. A stale-assets failure therefore does not require another owner to rebuild
+and transfer the same output. Failed or cancelled builds do not supply this bundle.
+
+Use the repository's exact run and attempt to download that artifact with `gh run
+download`. Inspect the run's repository, source and successful **Build frontend**
+step first; an artifact's own manifest is not independent workflow provenance.
+In the task-owned checkout, run:
+
+```sh
+python scripts/frontend_build_artifact.py verify --directory /path/to/downloaded/frontend-build-output
+```
+
+Verification is read-only. It rejects changed non-static inputs, changed local
+environment files, corrupt/missing/extra output, links and oversized bundles.
+After verification, the owner can copy the bundle's `static/` contents into
+`amplifier_web/static/` in its own checkout, removing only obsolete generated
+files after checking for local work, then review and commit the asset diff.
+If the source has changed, build that source again instead of importing old output.
+This repair artifact never supplies release qualification or skips checks. The
+existing successful-run proof and committed-assets requirement still apply.
+
 ## Local-first, fast publication policy (updated October 14, 2026)
 
 The development loop depends on published releases reaching local development
