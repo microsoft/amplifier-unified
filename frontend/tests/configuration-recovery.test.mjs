@@ -26,13 +26,16 @@ test('held view is visible without a plan and never inspects or edits its saved 
  await renderAct(async()=>root.unmount());
 });
 
-test('healthy opening retains automatic inspection and ordinary apply refresh',async()=>{
+test('healthy opening waits for explicit inspection and retains ordinary apply refresh',async()=>{
  let root,s={id:'healthy',title:'Healthy',configuration:{plan:{tools:[]}}};
  const state={view:{moduleEditor:{sessionId:s.id,text:'{"tools":[]}',appliedAt:1}}},calls=[];
  const act=async(action,args)=>{calls.push({action,args});return {accepted:true,result:{...report(session()),sessionId:s.id}}};
  const render=()=>React.createElement(ModuleSettings,{state,session:s,act});
  await renderAct(async()=>{root=create(render())});
- assert.ok(calls.some(c=>c.action==='configuration.inspect'&&c.args.id===s.id));
+ assert.ok(!calls.some(c=>c.action==='configuration.inspect'));
+ await renderAct(async()=>root.root.findAllByType('button')
+  .find(n=>n.props['data-action']==='configuration.inspect').props.onClick());
+ assert.equal(calls.filter(c=>c.action==='configuration.inspect'&&c.args.id===s.id).length,1);
  await renderAct(async()=>{
   s={...s,pendingConfiguration:{phase:'ready',effect:'mounted',appliedAt:2},configuration:{plan:{tools:[],hooks:[]}}};
   root.update(render());
