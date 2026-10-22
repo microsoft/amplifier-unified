@@ -223,7 +223,7 @@ try{
  // the public picker must reject it before showing stale/wrong workspace work.
  await workspaceView.getByRole('button',{name:'Details',exact:true}).click();
  failNext=true;await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
- await expect(related.getByRole('alert')).toContainText('Workspace work could not be read. Refresh to try again.');
+ await expect(related.getByRole('alert')).toHaveText('Fixture scope read unavailable');
  await expect(related.locator('.a-assignment')).toHaveCount(0);
  await expect(related).not.toHaveAttribute('inert');
  await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();

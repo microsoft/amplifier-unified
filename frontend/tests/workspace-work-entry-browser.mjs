@@ -32,8 +32,8 @@ try{
  await action('attachment.add',{sessionId:aChat,name:'draft.txt',base64:'cHJpdmF0ZQ=='});
  const header=page.locator('[data-part="header"]');await expect(header.getByRole('button',{name:'Workspace work',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Open canvas',exact:true}).click();
- const overview=page.getByRole('region',{name:'Chat overview',exact:true});await expect(overview.getByRole('button',{name:'Workspace work',exact:true})).toHaveCount(1);
- await overview.getByRole('button',{name:'Workspace work',exact:true}).click();await expect(page.getByRole('dialog',{name:'Workspace work',exact:true})).toBeVisible();
+ const overview=page.getByRole('region',{name:'Chat overview',exact:true});await expect(overview.getByRole('button',{name:'Chat coordination review',exact:true})).toHaveCount(1);
+ await overview.getByRole('button',{name:'Chat coordination review',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat coordination review',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();assert.equal((await state()).selectedSessionId,aChat);await expect(composer).toHaveDraft('Private draft stays with the active project');
  await action('canvas.visibility',{open:false});
  const browse=workspace=>action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace.id,workWorkspaceTab:'details',navExpanded:false}});
