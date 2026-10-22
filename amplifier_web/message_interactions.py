@@ -11,11 +11,18 @@ ACTIONS = {'message.reply', 'message.replyClear', 'message.reaction', 'message.r
 def definitions(schema, string):
     target = {'sessionId': string(200), 'messageId': string(200)}
     client = {'clientId': string(100)}
+    interval = {'start': {'type': 'integer', 'minimum': 0},
+                'end': {'type': 'integer', 'minimum': 1}}
+    selection = {'oneOf': [
+        schema({'sourceDigest': string(64), **interval}, ['sourceDigest', 'start', 'end']),
+        schema({'sourceDigest': string(64), 'spans': {
+            'type': 'array', 'minItems': 1, 'maxItems': 128,
+            'items': schema(interval, ['start', 'end'])}}, ['sourceDigest', 'spans']),
+    ]}
     return {
-        'message.reply': ('Prepare a quoted reply in the calling chat. By default saves one immutable legacy excerpt (up to 4000 characters) above a browser draft without changing its text or sending. snapshotOnly returns a complete immutable snapshot up to 12000 characters without changing the draft. Optional selection uses exact sourceDigest and Unicode character start/end offsets, end exclusive. Returns replyId; conversation.send accepts it or an ordered document of quote instances and new commentary.',
+        'message.reply': ('Prepare a quoted reply in the calling chat. By default saves one immutable legacy excerpt (up to 4000 characters) above a browser draft without changing its text or sending. snapshotOnly returns a complete immutable snapshot up to 12000 characters without changing the draft. Optional selection requires snapshotOnly and exact sourceDigest, with either start/end or 1–128 ordered non-overlapping spans of Unicode code-point offsets, end exclusive. Adjacent spans coalesce; the excerpt joins exact raw source slices without separators or normalization, limited to 12000 selected characters. Returns replyId; conversation.send accepts it or an ordered document of quote instances and new commentary.',
             schema({**target, **client, 'snapshotOnly': {'type': 'boolean'}, 'expectedSourceDigest': string(64),
-                    'selection': schema({'sourceDigest': string(64), 'start': {'type': 'integer', 'minimum': 0},
-                                         'end': {'type': 'integer', 'minimum': 1}}, ['sourceDigest', 'start', 'end'])},
+                    'selection': selection},
                    ['sessionId', 'messageId'])),
         'message.replyClear': ('Remove the selected quoted reply from one browser composer, preserving its text. expectedReplyId prevents removing a newer quote.',
             schema({'sessionId': string(200), 'expectedReplyId': string(64), **client}, ['sessionId', 'expectedReplyId'])),
@@ -67,6 +74,35 @@ def reconcile_native_reveal(session, native):
         session["messages"].insert(position, native)
 
 
+def _selection_spans(selection, digest, text_length):
+    """Validate raw code-point intervals; canonicalize only adjacent spans."""
+    from .service import AppError
+    if (not isinstance(selection, dict) or set(selection) not in (
+            {'sourceDigest', 'start', 'end'}, {'sourceDigest', 'spans'})):
+        raise AppError('Choose either sourceDigest with start/end or sourceDigest with spans.')
+    if not isinstance(selection['sourceDigest'], str) or selection['sourceDigest'] != digest:
+        raise AppError('The exact source changed. Select the passage again.', 409)
+    intervals = (selection['spans'] if 'spans' in selection else
+                 [{'start': selection['start'], 'end': selection['end']}])
+    if not isinstance(intervals, list) or not 1 <= len(intervals) <= 128:
+        raise AppError('Choose between 1 and 128 exact source spans.')
+    spans = []
+    for interval in intervals:
+        if not isinstance(interval, dict) or set(interval) != {'start', 'end'}:
+            raise AppError('Each source span requires only start and end.')
+        start, end = interval['start'], interval['end']
+        if (type(start) is not int or type(end) is not int
+                or not 0 <= start < end <= text_length):
+            raise AppError('The exact source changed. Select the passage again.', 409)
+        if spans and start < spans[-1]['end']:
+            raise AppError('Source spans must be ordered and non-overlapping.')
+        if spans and start == spans[-1]['end']:
+            spans[-1]['end'] = end
+        else:
+            spans.append({'start': start, 'end': end})
+    return spans
+
+
 def command(service, action, args, *, origin="ui"):
     from .service import AppError
     session = service._session(args['sessionId'])
@@ -101,7 +137,7 @@ def command(service, action, args, *, origin="ui"):
         service.state['view']['messageReply'] = copy.deepcopy(drafts.get(session['id']))
         return {'sent': False}
     row = message(session, args['messageId'])
-    if args.get('selection') is not None and not args.get('snapshotOnly'):
+    if 'selection' in args and not args.get('snapshotOnly'):
         raise AppError('A passage requires snapshotOnly; no whole-message fallback was used.')
     if action == 'message.reveal':
         from .workspace_canvas import select_session_workspace
@@ -122,14 +158,10 @@ def command(service, action, args, *, origin="ui"):
         digest = hashlib.sha256(text.encode()).hexdigest()
         if args.get('expectedSourceDigest') is not None and args['expectedSourceDigest'] != digest:
             raise AppError('The source changed. Select the message again.', 409)
-        selected = args.get('selection')
-        start, end = 0, len(text)
-        if selected is not None:
-            start, end = selected['start'], selected['end']
-            if (selected['sourceDigest'] != digest or type(start) is not int or type(end) is not int
-                    or not 0 <= start < end <= len(text)):
-                raise AppError('The exact source changed. Select the passage again.', 409)
-        if end - start > 12000:
+        selected = 'selection' in args
+        spans = (_selection_spans(args['selection'], digest, len(text)) if selected
+                 else [{'start': 0, 'end': len(text)}])
+        if sum(span['end'] - span['start'] for span in spans) > 12000:
             raise AppError('Choose a passage of at most 12,000 characters. Nothing was shortened.')
         attributed = service.peer_attribution.resolve(session, [row])[0]
         origin_kind = row.get('inputOrigin') or ('peer' if row.get('via') == 'peer' else row['role'])
@@ -138,8 +170,9 @@ def command(service, action, args, *, origin="ui"):
                                'scheduler': 'Scheduled input'}.get(origin_kind)
                               or ('You' if row['role'] == 'user' else 'Amplifier'))
         quote = {'sessionId': session['id'], 'messageId': row['id'], 'role': row['role'],
-                 'origin': origin_kind, 'speaker': speaker, 'excerpt': text[start:end],
-                 'sourceDigest': digest, 'spans': [{'start': start, 'end': end}],
+                 'origin': origin_kind, 'speaker': speaker,
+                 'excerpt': ''.join(text[span['start']:span['end']] for span in spans),
+                 'sourceDigest': digest, 'spans': spans,
                  'kind': 'passage' if selected else 'whole', 'truncated': False}
         quote['id'] = hashlib.sha256(json.dumps(quote, sort_keys=True).encode()).hexdigest()
         session.setdefault('messageQuotes', {})[quote['id']] = quote

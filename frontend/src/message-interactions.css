@@ -22,16 +22,27 @@
 #amp-one .a-user .a-assistant-reactions{justify-content:flex-end}
 #amp-one .a-assistant-reaction{display:inline-flex;align-items:center;gap:.35rem;border:1px solid var(--a-line);background:var(--a-soft);border-radius:1rem;padding:.2rem .55rem}
 #amp-one .a-assistant-reaction small{font-size:.75rem}
-#amp-one .a-composer-quote{border:1px solid var(--a-line);border-left:3px solid var(--a-accent);border-radius:.4rem;background:var(--a-soft);padding:.65rem;margin:.6rem 0;min-width:0;max-width:100%;white-space:normal}
-#amp-one .a-composer-quote-head{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap}
-#amp-one .a-composer-quote-head>button:first-child{margin-right:auto}
-#amp-one .a-composer-quote-head button{min-width:36px;min-height:36px}
-#amp-one .a-composer-quote-text{font:inherit!important;white-space:pre-wrap!important;overflow-wrap:anywhere;tab-size:4;margin:.5rem 0;max-width:100%;overflow:auto}
+#amp-one .a-composer-quote{border:1px solid var(--a-line);border-left:3px solid var(--a-accent);border-radius:0 .5rem .5rem 0;background:var(--a-surface);padding:.35rem .65rem .5rem;margin:.5rem 0;min-width:0;max-width:100%;white-space:normal;font-size:var(--a-text-sm,13px);line-height:1.5}
+#amp-one .a-composer-quote-head{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem;position:sticky;top:0;z-index:1;background:var(--a-surface);min-height:36px}
+#amp-one .a-composer-quote-head>button:first-child{margin-right:auto;min-width:0;font-weight:600;overflow-wrap:anywhere;text-align:left}
+#amp-one .a-composer-quote-tools{display:flex;gap:2px;flex:none;margin-left:auto}
+#amp-one .a-composer-quote-head button{min-width:36px;min-height:36px;padding:4px;border:0;border-radius:.3rem;background:transparent;color:var(--a-ink);font:inherit;cursor:pointer}
+#amp-one .a-composer-quote-head button:hover:not(:disabled){background:var(--a-soft)}
+#amp-one .a-composer-quote-head button:disabled{opacity:.4;cursor:default}
+#amp-one .a-composer-quote-head>button:first-child{color:var(--a-accent);text-decoration:underline;text-underline-offset:3px}
+#amp-one .a-composer-quote :focus-visible{outline:2px solid var(--a-accent);outline-offset:1px}
+#amp-one .a-composer-quote-text{font:inherit!important;white-space:pre-wrap!important;overflow-wrap:anywhere;tab-size:4;margin:.3rem 0!important;padding:0!important;background:transparent!important;max-width:100%;overflow:auto}
 #amp-one .a-composer-quote-text.collapsed{max-height:6rem;overflow:hidden}
 #amp-one .a-composer-quote small{display:block;color:var(--a-muted);font-size:.75rem}
+#amp-one .a-composer-quote small:empty{display:none}
+#amp-one .a-composer-quote-caption{line-height:1.5}
 #amp-one .a-quote-picker{max-width:min(700px,calc(100vw - 24px));width:90vw;max-height:85vh;padding:1rem;border:1px solid var(--a-line);border-radius:.7rem;background:var(--a-surface);color:var(--a-ink)}
 #amp-one .a-quote-picker::backdrop{background:#0006}
 #amp-one .a-quote-picker textarea{display:block;width:100%;height:35vh;white-space:pre-wrap;font:inherit;margin:.8rem 0}
 #amp-one .a-quote-picker>div{display:flex;gap:.5rem;justify-content:flex-end}
 #amp-one .a-quoted-document{min-width:0}
+#amp-one .a-quote-selection{position:fixed;z-index:50;max-width:calc(100vw - 16px);padding:3px;border:1px solid var(--a-line);border-radius:.5rem;background:var(--a-surface);box-shadow:0 3px 12px #0003}
+#amp-one .a-quote-selection button{min-height:40px;padding:6px 12px;border:0;border-radius:.3rem;background:var(--a-accent);color:var(--a-accent-ink,#fff);font:inherit;font-size:var(--a-text-sm,13px);cursor:pointer}
+#amp-one .a-quote-selection button:focus-visible{outline:2px solid var(--a-ink);outline-offset:2px}
+#amp-one .a-message-actions .a-quote-fallback{color:var(--a-muted);font-size:var(--a-text-xs,12px)}
 @media(pointer:coarse){#amp-one .a-composer-quote-head button{min-height:44px;min-width:44px}}

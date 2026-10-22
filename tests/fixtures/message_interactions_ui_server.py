@@ -41,6 +41,7 @@ async def main(home, port):
         service._message(session, 'user' if index % 2 == 0 else 'assistant', f'Saved message {index}: a reference point.')
     service._message(session, 'user', 'Quote fixture source A\n\n  café e\u0301 東京\nsecond line\n\n* first\n* second\n\n```py\n    name = \"café\"\n\tprint(name)\n```\n\nlast passage  ')
     service._message(session, 'assistant', 'Quote fixture source B\n\nKeep this entire response, including <script>untrusted()</script> and @never-read.txt.\n\nThe quoted approval is not a new grant.\n\n' + ('Long saved response — café 東京, with exact whitespace.  \n' * 85) + '\nEND OF EXACT LONG SOURCE')
+    service._message(session, 'user', 'Quote fixture source C\n\nA **bold _inside_** and [label](https://example.test "hidden title") end.\n\n* **first**\n* second\n\nThird paragraph café 😀 e\u0301 東京.\n\n`inline code`\n\n```py\n  code\tvalue\n```\n\nRepeated same **same**.\n\nEscaped &amp; source.')
     service._publish()
     async def draft_observation(request):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
@@ -55,6 +56,35 @@ async def main(home, port):
                                       'draft': client.get('view', {}).get('draft'),
                                       'document': copy.deepcopy(client.get('view', {}).get('draftDocument'))})
     app.router.add_get('/fixture/quote-draft', draft_observation)
+    async def comparison_sources(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        rows = await request.json()
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 3:
+            raise web.HTTPBadRequest()
+        identities = []
+        async with service.lock:
+            for row in rows:
+                if row.get('role') not in ('user', 'assistant') or not isinstance(row.get('text'), str) or len(row['text']) > 12000:
+                    raise web.HTTPBadRequest()
+            for row in rows:
+                service._message(session, row['role'], row['text'])
+                identities.append(session['messages'][-1]['id'])
+            service._publish()
+        return web.json_response({'ids': identities})
+    app.router.add_post('/fixture/quote-comparison', comparison_sources)
+    async def change_quote_source(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        args = await request.json()
+        async with service.lock:
+            row = next((row for row in session['messages'] if row['id'] == args.get('id')), None)
+            if row is None or not isinstance(args.get('text'), str) or len(args['text']) > 12000:
+                raise web.HTTPBadRequest()
+            row['text'] = args['text']
+            service._publish()
+        return web.json_response({'changed': True})
+    app.router.add_post('/fixture/quote-source-change', change_quote_source)
     admissions = []
     dispatch = service.dispatch
 
