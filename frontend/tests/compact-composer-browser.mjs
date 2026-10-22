@@ -22,6 +22,7 @@ try{
  await page.goto(url);await showFixtureConversation(page,{navPinned:false});
  const input=page.getByRole('textbox',{name:'Message Amplifier'}),surface=page.locator('[data-part="composer-surface"]'),primary=page.locator('[data-part="composer-primary-action"]'),options=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
  await input.waitFor();
+ await expect(page.getByRole('button',{name:'Return to reading position',exact:true})).toHaveCount(0);
  if(process.env.AMPLIFIER_TEST_PACKAGE_ROOT){
   const identity=await(await page.request.get(url+'/fixture')).json();
   assert.equal(identity.installedPackageVerified,true,'Actual fixture must import the installed wheel');
