@@ -2,6 +2,27 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.23.0",
+      "title": "Collect exact quotes and work more clearly with images and Canvas",
+      "changes": [
+        "Collect several exact passages or whole messages in one reply, with your own commentary between them. Reorder or remove a reference while keeping the remaining quotes, text, attachments and saved draft intact. Saved quotations retain their original wording.",
+        "Open attached images in a larger preview, use image controls on narrow screens, and drop files onto the current chat. Uploads stay bound to the draft or conversation where they began, including while creating a new chat.",
+        "Keep one full preview for each saved artifact version. Use its compact chat card to preview supported content in chat, move it to Canvas or hide the preview; other clients keep their own choices and unsaved edits remain protected.",
+        "Reach the full Canvas overview and open-document list, with usable scrolling tabs, compact document controls and preserved reading position, keyboard focus and reduced-motion behavior.",
+        "Review the current scope of an old permission request and dismiss an expired card without renewing access or restarting work. Decision controls refresh stale information and preserve existing grants.",
+        "Show the model reported by the current startup runtime without overwriting a newer saved selection. Report source-preparation failures as checks that never started while preserving uncertain outcomes for separate recovery.",
+        "Expand automatic smoke coverage for Canvas, quotes, artifact presentation, attachments and approval history, and repair the Compact composer and peer-preview checks found after the previous release."
+      ],
+      "notices": [
+        {
+          "id": "artifact-single-presentation-0230",
+          "title": "Choose where a saved artifact is shown",
+          "detail": "Saved artifacts now keep one full preview per version in each client. Most open in Canvas with a compact card in chat; generated images retain their inline default. Moving an interactive HTML or 3D preview may need to reset its local interaction state. Unsaved edits still prevent an unsafe move.",
+          "action": "Use Preview in chat or Open in Canvas on the saved card. If asked, choose Keep current preview to preserve its local state, or Reset preview to move it."
+        }
+      ]
+    },
+    {
       "version": "0.22.0",
       "title": "Preview source chats and keep the composer compact",
       "changes": [
