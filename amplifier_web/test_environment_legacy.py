@@ -1,4 +1,4 @@
-"""Recognize one returned legacy preservation failure, never transport uncertainty.
+"""Recognize exact returned preservation failures, never transport uncertainty.
 
 The original host helper (before phase receipts) returned this exact envelope
 only after a synchronous DTU export rejection. The export-limit producer killed
@@ -8,6 +8,10 @@ its result. `destroy` followed the two exports and was not reached on this error
 This is qualification of retained host evidence, not a guessed phase record or a
 conversion of UNKNOWN history to success. Current ownership and full preservation
 remain mandatory in the existing cleanup worker.
+
+The phase-aware helper also returned a bounded verify-exports/not_dispatched
+failure after exports, before destroy. Only its exact saved response qualifies;
+archives, message text and private diagnostic files alone cannot prove return.
 """
 from __future__ import annotations
 
@@ -16,14 +20,20 @@ import json
 import re
 
 
-def returned_export_limit(row, original):
+def returned_preservation_failure(row, original):
     """Return an exact continuation binding, or None for every unqualified case."""
     if row.get('guestRemoved') or row.get('status') == 'retired':
         return None
-    return _export_limit_binding(row, original)
+    return _returned_binding(row, original)
 
 
-def completed_export_limit(row, original, removal):
+def returned_export_limit(row, original):
+    """Retain the narrower legacy predicate for existing callers."""
+    proof = returned_preservation_failure(row, original)
+    return proof if proof and proof['kind'] == 'returned-legacy-export-limit' else None
+
+
+def completed_preservation_failure(row, original, removal):
     """Revalidate the saved exception for dependency-only cleanup.
 
     The caller must first verify the committed guest removal. This never
@@ -31,11 +41,11 @@ def completed_export_limit(row, original, removal):
     """
     if row.get('guestRemoved') is not True:
         return None
-    proof = _export_limit_binding(row, original)
+    proof = _returned_binding(row, original)
     return proof if proof and removal.get('legacyCleanupQualification') == proof else None
 
 
-def _export_limit_binding(row, original):
+def _returned_binding(row, original):
     if (not isinstance(original, dict)
             or original.get('action') != 'workspace.environments.remove'
             or original.get('state') != 'outcome_unknown'
@@ -62,15 +72,23 @@ def _export_limit_binding(row, original):
                    for k in ('snapshot_commit', 'snapshot_tree'))):
         return None
     result = original.get('result')
-    # The legacy host's exception/restart/timeout path did not attach this
-    # structured helper result. Never infer a normal return from message text.
-    if (not isinstance(result, dict)
-            or set(result) != {'ok', 'status', 'universeId', 'snapshot', 'code', 'message'}
-            or result['ok'] is not False or result['status'] != 'unknown'
-            or result['code'] != 'export-too-large'
-            or result['universeId'] != row['universeId']
-            or result['snapshot'] != snapshot
-            or not isinstance(result['message'], str)):
+    # invoke() saves structured results only after draining/reaping the helper.
+    # Its exception/restart/timeout path does not manufacture these envelopes.
+    if (not isinstance(result, dict) or result.get('ok') is not False
+            or result.get('status') != 'unknown'
+            or result.get('universeId') != row['universeId']
+            or not isinstance(result.get('message'), str)):
+        return None
+    if (set(result) == {'ok', 'status', 'universeId', 'snapshot', 'code', 'message'}
+            and result['code'] == 'export-too-large' and result['snapshot'] == snapshot):
+        kind = 'returned-legacy-export-limit'
+    elif (set(result) == {'ok', 'status', 'universeId', 'removal', 'message'}
+            and isinstance(result['removal'], dict)
+            and type(result['removal'].get('version')) is int
+            and result['removal'] == {'version': 1, 'phase': 'verify-exports',
+                                     'code': 'phase_failed', 'destroyEffect': 'not_dispatched'}):
+        kind = 'returned-archive-verification-failure'
+    else:
         return None
     owner = row.get('owner')
     if (not isinstance(owner, dict) or set(owner) != {'sessionId', 'principal'}
@@ -78,7 +96,7 @@ def _export_limit_binding(row, original):
             or not isinstance(owner.get('principal'), str) or not owner['principal']):
         return None
     payload = json.dumps(original, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
-    return {'version': 1, 'kind': 'returned-legacy-export-limit',
+    return {'version': 1, 'kind': kind,
             'originalRequestId': original['requestId'],
             'originalSha256': hashlib.sha256(payload).hexdigest(),
             'resourceId': row['id'], 'sessionId': row['sessionId'], 'owner': owner,

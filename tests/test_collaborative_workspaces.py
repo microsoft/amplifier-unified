@@ -1022,6 +1022,8 @@ async def test_creation_prerequisites_fail_before_any_chat_or_brief_effect(app, 
 
 
 async def test_outstanding_creation_bound_does_not_count_completed_history(app):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxTaskChatsPerSource':8}})
     source = app.state["sessions"][0]
     directory = app.data_dir / "sessions" / source["id"]
     directory.mkdir(parents=True, exist_ok=True)
@@ -1046,6 +1048,8 @@ async def test_outstanding_creation_bound_does_not_count_completed_history(app):
 
 @pytest.mark.parametrize('obligation', ['task', 'task-metadata', 'runtime-task', 'runtime-task-metadata', 'queued'])
 async def test_creation_cap_counts_dormant_owners_without_admitting_them(app, monkeypatch, obligation):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxTaskChatsPerSource':8}})
     source = app.state['sessions'][0]
     directory = app.data_dir / 'sessions' / source['id']
     directory.mkdir(parents=True, exist_ok=True)
