@@ -319,7 +319,12 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
       - name: Check qualification selection and static identity contracts
-        run: uv run --no-sync pytest -v --tb=short tests/test_compact_composer_checks.py --junitxml=output/compact-composer/runner-contracts.xml
+        run: >-
+          uv run --no-sync pytest -v --tb=short tests/test_compact_composer_checks.py
+          tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget
+          tests/test_release_qualification.py::test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
+          tests/test_browser_check_runner.py::test_attachment_focus_workflow_retains_failures_and_default_coverage
+          --junitxml=output/compact-composer/runner-contracts.xml
       - name: Qualify fixed source and installed composer journeys
         run: uv run --no-sync python scripts/compact_composer_checks.py
       - name: Retain exact results and failures

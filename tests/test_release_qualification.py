@@ -542,20 +542,22 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
-    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption'}
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption', 'compact_composer'}
     assert inputs['attachment_consumption']['type'] == 'boolean'
     assert inputs['attachment_consumption']['default'] == 'false'
     assert inputs['app004_qualification']['type'] == 'boolean'
     assert inputs['app004_qualification']['default'] == 'false'
     assert inputs['mcp_boundary']['type'] == 'boolean'
     assert inputs['mcp_boundary']['default'] == 'false'
+    assert inputs['compact_composer']['type'] == 'boolean'
+    assert inputs['compact_composer']['default'] == 'false'
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.compact_composer }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}"
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.compact_composer }}"
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
     incompatible = mcp['steps'][1]
     assert incompatible['name'] == 'Reject incompatible browser proof selections'
@@ -611,6 +613,36 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert diagnostics['if'] == 'always()'
     assert diagnostics['uses'] == 'actions/upload-artifact@v4'
     assert 'output/browser-checks/' in diagnostics['with']['path']
+
+
+def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert 'compact_composer' not in workflow['on']['workflow_call']['inputs']
+    job = workflow['jobs']['compact-composer']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
+    assert job['timeout-minutes'] == '30'
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[1] == {'name': 'Reject mixed selections',
+                       'if': '${{ inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification }}',
+                       'run': 'exit 1'}
+    assert steps[2]['run'] == 'python scripts/compact_composer_checks.py --initialize'
+    commands = [step['run'] for step in steps if 'run' in step]
+    assert commands.count('uv run --no-sync python scripts/compact_composer_checks.py') == 1
+    assert 'uv sync --locked --group dev --group artifacts' in commands
+    assert 'npm ci --prefix frontend' in commands
+    assert 'npm run build --prefix frontend' in commands
+    assert all('${{' not in command for command in commands)
+    assert all('continue-on-error' not in step for step in steps)
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    assert len(uploads) == 2
+    assert uploads[0]['if'] == "${{ steps.compact-build.outcome == 'success' }}"
+    assert uploads[0]['with']['path'] == 'amplifier_web/static/'
+    assert uploads[1]['if'] == 'always()'
+    assert uploads[1]['with']['path'] == 'output/compact-composer/'
+    assert all(step['with']['if-no-files-found'] == 'error' for step in uploads)
+    assert 'secrets.' not in str(job)
 
 
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
