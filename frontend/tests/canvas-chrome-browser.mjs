@@ -137,6 +137,31 @@ try{
    &&(!s||r.top>=s.top-1&&r.bottom<=s.bottom+1)&&el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
  });
  const requireReachable=async(locator,label)=>expect.poll(()=>reachable(locator),{message:label+' must be unclipped and hit-testable',timeout:3000}).toBe(true);
+ // Resolve screenshot-review claims at the actual overview header boundary.
+ // Partially visible document tabs are intentional; fixed controls are not.
+ const navigationGeometry=()=>panel.evaluate(el=>{
+  const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
+  const header=el.querySelector('.a-canvas-head'),reader=el.querySelector('.a-canvas-overview-page');
+  const controls=[el.querySelector('.a-chat-overview-trigger'),el.querySelector('.a-open-documents'),header.querySelector('[aria-label="Focus canvas"]')].map(node=>{
+   const r=box(node),points=[[r.left+4,r.top+4],[r.right-4,r.top+4],[r.left+4,r.bottom-4],[r.right-4,r.bottom-4]];
+   return {name:node.getAttribute('aria-label'),box:r,hit:points.every(([x,y])=>node.contains(document.elementFromPoint(x,y))),
+    children:[...node.querySelectorAll('svg,span,small')].filter(child=>{const s=getComputedStyle(child),r=box(child);return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>.99&&r.width>0&&r.height>0}).map(child=>({tag:child.tagName,text:child.textContent,box:box(child)}))};
+  });
+  return {header:box(header),reader:box(reader),viewport:{width:innerWidth,height:innerHeight},controls};
+ });
+ const navigationViolations=g=>{
+  const inside=(a,b)=>a.left>=b.left-1&&a.right<=b.right+1&&a.top>=b.top-1&&a.bottom<=b.bottom+1;
+  return [
+   g.reader.top>=g.header.bottom-1?null:'header overlaps overview reading region',
+   ...g.controls.flatMap(c=>[
+    inside(c.box,g.header)?null:c.name+' escapes header',
+    inside(c.box,{left:0,top:0,right:g.viewport.width,bottom:g.viewport.height})?null:c.name+' escapes viewport',
+    c.hit?null:c.name+' has covered hit targets',
+    ...c.children.map(child=>inside(child.box,c.box)?null:c.name+' clips '+child.tag)
+   ])
+  ].filter(Boolean);
+ };
+ const assertNavigation=async()=>{const g=await navigationGeometry();assert.deepEqual(navigationViolations(g),[],'FIXED_CANVAS_NAVIGATION');return g};
  const wheel=async(locator,x,y)=>{
   const b=await locator.boundingBox();assert.ok(b?.width>0&&b.height>0,'Wheel target must be rendered');
   await page.mouse.move(b.x+b.width*.8,b.y+b.height/2);await page.mouse.wheel(x,y);
@@ -317,6 +342,18 @@ try{
     const bounds=await assertBoundedOverflow();
     if(size.width===1500)assert.ok(Math.abs(bounds.panel.width-size.pane)<=2,'Requested split width must actually be rendered');
     await requireReachable(summary('outputs'),'Upper Outputs section');
+    const navigation=await assertNavigation();
+    if(scheme==='light'&&size.name==='mobile-320'){
+     const prior=await documents().evaluate(el=>el.style.transform);
+     try{
+      await documents().evaluate(el=>{el.style.transform='translateY(52px)'});
+      const broken=await navigationGeometry();
+      assert.ok(navigationViolations(broken).includes('Open documents, 12 open escapes header'));
+      await assert.rejects(assertNavigation(),/FIXED_CANVAS_NAVIGATION/);
+      report.navigationNegative={sample:broken,rejected:true};
+     }finally{await documents().evaluate((el,value)=>{el.style.transform=value},prior)}
+     await assertNavigation();
+    }
     await capture(scheme+'-'+size.name+'-upper');
     await wheel(overview,0,bounds.scrollHeight);
     await expect.poll(()=>overview.evaluate(el=>el.scrollTop+el.clientHeight>=el.scrollHeight-2)).toBe(true);
@@ -352,7 +389,7 @@ try{
     await expect(panel).toHaveAttribute('data-focused','true');await page.keyboard.press('Escape');
     await expect(panel).toHaveAttribute('data-focused','false');
     await expect(panel.getByRole('button',{name:/^(Close canvas panel|Back to canvas)$/})).toHaveCount(0);
-    return bounds;
+    return {...bounds,navigation};
    });
   }
  }
