@@ -73,6 +73,7 @@ try{
  const download=await downloadEvent;assert.equal(download.suggestedFilename(),'canvas.png');
  assert.deepEqual(await readFile(await download.path()),Buffer.from(png.split(',')[1],'base64'));
  await images.locator('.a-inline-image').click();
+ await page.waitForFunction(()=>window.amplifier.getState().canvas.title==='Second concept');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.title),'Second concept');
  await action('view.update',{patch:{canvasFocused:false}});await action('canvas.close');
  await images.scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/inline-artifacts-desktop.png'});
