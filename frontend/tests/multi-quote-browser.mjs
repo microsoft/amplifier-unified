@@ -17,6 +17,25 @@ const documentValue=()=>page.evaluate(()=>window.amplifier.getState().view.draft
 const commentary=doc=>doc.segments.filter(s=>s.type==='text').map(s=>s.text);
 const references=doc=>doc.segments.filter(s=>s.type==='quote');
 const observe=async()=>{const response=await context.request.get(url+'/fixture/message-source');assert.equal(response.status(),200);return response.json();};
+const checkpoints=[];
+const canonicalDraft=async()=>{
+ const id=await page.evaluate(()=>window.amplifier.getState().client.id);
+ const response=await context.request.get(url+'/fixture/quote-draft?'+new URLSearchParams({clientId:id}));
+ assert.equal(response.status(),200);return response.json();
+};
+async function enteredCommentary(text){
+ const observed=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>{
+  const state=window.amplifier.getState(),selection=window.getSelection();
+  return {paragraphs:[...editor.children].filter(node=>!node.hasAttribute('data-quote-instance')).map(node=>node.textContent),
+   document:state.view.draftDocument,draft:state.view.draft,active:document.activeElement?.outerHTML.slice(0,300),
+   selectionParent:selection?.anchorNode?.parentElement?.outerHTML.slice(0,300),events:window.quoteTypingEvents||[]};
+ });
+ const canonical=await canonicalDraft();checkpoints.push({stage:'typed '+text,expectedText:text,observed,canonical});
+ if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
+ assert.ok(observed.paragraphs.some(value=>value.includes(text)),`Typed commentary missing from DOM immediately: ${text}`);
+ assert.ok(commentary(observed.document).some(value=>value.includes(text)),`Typed commentary missing from editor draft: ${text}`);
+ await expect.poll(async()=>commentary((await canonicalDraft()).document)).toContain(text);
+}
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
@@ -40,10 +59,19 @@ try{
   return {text:text.slice(start,end),start:[...text.slice(0,start)].length,end:[...text.slice(0,end)].length};
  }
  const first=await passage('  café','\n\n* first');await expect(quotes).toHaveCount(1);
+ await page.evaluate(()=>{
+  window.quoteTypingEvents=[];
+  for(const name of ['keydown','beforeinput','input'])document.addEventListener(name,event=>{
+   if(window.quoteTypingEvents.length<30)window.quoteTypingEvents.push({type:name,key:event.key,inputType:event.inputType,
+    target:event.target.outerHTML?.slice(0,240),active:document.activeElement?.outerHTML.slice(0,240)});
+  },true);
+ });
  // Actual keyboard text entry after a quote, not a patched saved document.
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Between the passages');
+ await enteredCommentary('Between the passages');
  const second=await passage('```py','\n\nlast passage');await expect(quotes).toHaveCount(2);
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Before the whole message');
+ await enteredCommentary('Before the whole message');
  const wholeButton=b.getByRole('button',{name:'Reply to message',exact:true});
  await expect(b.locator('.a-detail-text')).toContainText('END OF EXACT LONG SOURCE');
  await wholeButton.scrollIntoViewIfNeeded();const beforeScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
@@ -62,6 +90,7 @@ try{
  assert.ok(Math.abs(scrollEvents.at(-1).buttonTop-scrollEvents[0].buttonTop)<=1,`Collecting moved the visible source: ${JSON.stringify(scrollEvents)}`);
  assert.ok(await page.evaluate(()=>document.activeElement===window.beforeQuoteFocus),'Collecting must not move focus');
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('After all references');
+ await enteredCommentary('After all references');
  assert.equal((await observe()).sends.length,0,'Collecting must not send');
  await editor.dispatchEvent('keydown',{key:'Enter',code:'Enter',isComposing:true,keyCode:229});
  assert.equal((await observe()).sends.length,0,'IME Enter must not send');
