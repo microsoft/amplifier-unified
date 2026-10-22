@@ -152,6 +152,10 @@ def engine_observation(controls, module_id):
 
     row = patch_row(controls.coordinator.config, module_id)
     tool = (controls.coordinator.get('tools') or {}).get('apply_patch')
+    mounted = tool
+    inspect = controls.coordinator.get_capability('web.work_inspect_tool')
+    if callable(inspect):
+        tool = inspect('apply_patch', mounted)
     guard = controls.coordinator.get_capability('web.file_source_guard')
     guarded = (isinstance(tool, GuardedFileTool) and tool.kind == 'patch'
         and tool.guard is guard and guard is not None and guard.coordinator is controls.coordinator)
@@ -163,7 +167,7 @@ def engine_observation(controls, module_id):
     if type(engine) is not {'native': NativeEngine, 'function': FunctionEngine}[kind]:
         raise ValueError('The declared and mounted patch engines differ.')
     return {'status': 'observed', 'workingDirectory': str(engine._resolve_path('.').resolve()),
-        'engine': kind, 'guarded': guarded, 'objectId': f'{os.getpid()}:{id(tool)}:{id(engine)}',
+        'engine': kind, 'guarded': guarded, 'objectId': f'{os.getpid()}:{id(mounted)}:{id(engine)}',
         'identityHash': module_identity(row),
         'moduleHash': fingerprint(row),
         'liveHash': fingerprint({key: value for key, value in controls.coordinator.config.items() if key in PLAN_KEYS})}
