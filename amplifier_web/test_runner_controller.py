@@ -54,18 +54,41 @@ def state():
     return path
 
 
+@contextmanager
+def authority_locked(root):
+    # Readers must not see the immutable writer's temporary second hard link.
+    # This persistent account lock is separate from long allocation operations.
+    path = root / '.authority.lock'
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        def check():
+            info = os.fstat(fd)
+            current = path.stat(follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077 or info.st_nlink != 1
+                    or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
+                raise ValueError('The runner authority lock changed.')
+        check()
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        check()
+        yield
+    finally:
+        os.close(fd)
+
+
 def authority_id(root, *, create=False):
-    path = root / 'authority.json'
-    value = read(path)
-    if value is None and create:
-        try:
-            worker.common.write_private_record(path, {'version': 1, 'id': uuid.uuid4().hex})
-        except FileExistsError:
-            pass
+    with authority_locked(root):
+        path = root / 'authority.json'
         value = read(path)
-    if not isinstance(value, dict) or value.get('version') != 1 or not re.fullmatch(r'[a-f0-9]{32}', value.get('id', '')):
-        raise ValueError('The target authority must be registered first.')
-    return value['id']
+        if value is None and create:
+            try:
+                worker.common.write_private_record(path, {'version': 1, 'id': uuid.uuid4().hex})
+            except FileExistsError:
+                pass
+            value = read(path)
+        if not isinstance(value, dict) or value.get('version') != 1 or not re.fullmatch(r'[a-f0-9]{32}', value.get('id', '')):
+            raise ValueError('The target authority must be registered first.')
+        return value['id']
 
 
 def read(path, default=None):
