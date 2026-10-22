@@ -579,3 +579,21 @@ test('automatic observation keeps the selected environment page while checks run
   assert.equal(calls.at(-1).args.offset,10);
  }finally{await act(async()=>root?.unmount());globalThis.setInterval=originalInterval;globalThis.clearInterval=originalClear}
 });
+
+
+for(const limit of [0,1,2])test(`manual Start follows the effective environment count limit ${limit}`,async()=>{
+ let root;const calls=[];
+ const view={items:[{id:'retained',revision:2,status:'stopped'}],capability:{status:'ready',ownedEnvironments:1,maxEnvironmentsPerChat:limit,profiles:[{id:'linux-python',label:'Python'}]}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action===read.action?view:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+  const forms=root.root.findAllByProps({'aria-label':'Start test environment'});
+  assert.equal(forms.length,limit===1?0:1);
+  if(limit===0){
+   await act(async()=>forms[0].props.onSubmit({preventDefault(){}}));
+   const start=calls.find(row=>row.action==='workspace.environments.start');
+   assert.equal(start.args.workspaceId,'w');assert.equal(start.args.sessionId,'a');assert.equal(start.args.profileId,'linux-python');
+   assert.equal(calls.filter(row=>row.action==='workspace.environments.remove').length,0);
+  }
+ }finally{await act(async()=>root?.unmount())}
+});

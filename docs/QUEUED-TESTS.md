@@ -2,12 +2,15 @@
 
 `workspace.tests.submit` queues bounded checks per root conversation. The global
 **Settings → Testing & resources → Advanced execution limits** controls both the
-total pending queue and **Maximum pending checks per chat** (default 1). These
-positive limits count all waiting and active checks, including those beyond the
-first displayed page. Raising the per-chat pending limit admits more waiting requests. The global
-**Owned test environments per chat** limit (default 1) separately controls
-concurrency. A request with `independent: true` may overlap other independent
-checks in distinct owned environments; default requests preserve ordered work. The
+total pending queue (default 64) and **Maximum pending checks per chat** (default
+0: no per-chat count ceiling). **Owned test environments per chat** also defaults
+to 0. Positive saved values remain operator ceilings and count all waiting/active
+checks or retained environments, including those beyond the first displayed page.
+A request with `independent: true` may overlap other independent checks in distinct
+owned environments, subject to physical resource admission and retained-owner
+bounds; default requests preserve ordered work. Queue wait defaults to 0 (until
+Stop or cancellation). An explicit wait limit and already-accepted deadlines keep
+their original meaning; changing defaults never rewrites a queued receipt. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
 command once, stops the exact owned environment, exports source and artifacts,
@@ -58,10 +61,11 @@ The result does not satisfy a shared-task dependency or prove product acceptance
 - Checks use submission order across local and registered remote machines.
   A standard request waits for earlier checks and owned cleanup; it also blocks
   later independent requests until it settles. Consecutive explicitly independent
-  requests may overlap within the current per-chat environment ceiling. Each
+  requests may overlap within any positive per-chat environment ceiling. Each
   request keeps its own source snapshot, resource ID, result and cleanup journal.
-  An unknown outcome never frees an owned slot, even after restart. Independent
-  work may use other free slots without retrying or resolving that unknown.
+  An unknown outcome never discards its retained owner, even after restart.
+  Independent work may use available capacity without retrying or resolving that
+  unknown; an earlier ordered check remains a barrier until its cleanup settles.
   Manual environments count against the same per-chat ceiling. Waiting reasons
   remain visible in the existing check list.
 - A host admits FIFO among its eligible roots. One physical capacity observation
@@ -70,6 +74,15 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   admission performs its own atomic recheck; a snapshot is not a reservation.
 
 ## Capacity policy
+
+The optional per-source **Outstanding task chats per manager** count also defaults
+to 0. Explicit zero disables only that count gate, not assignment, causal-depth,
+notification or ownership checks. Saved positive settings remain unchanged.
+The global pending queue, retained resource-owner and reservation bounds remain
+positive protections for bounded journals and ownership records; zero does not
+disable them. Removing a chat count ceiling does not itself provide machine
+resource admission for ordinary model workers. Test environments continue to use
+their separate physical resource authority described below.
 
 New managed setups with a verified native machine authority use CPU/memory
 reservations and observed memory, disk and CPU pressure instead of a fixed

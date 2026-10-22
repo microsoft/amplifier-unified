@@ -699,6 +699,23 @@ Read pages contain at most 32 records and do not hydrate conversation history.
 The ready-worker policy check observes supported reference filesystem and patch
 tools only; it does not certify custom tools, shell, browser or database access.
 
+### Optional per-chat execution counts — 2026-10-21
+
+Global execution settings accept explicit zero for outstanding task chats per
+source, owned test environments per chat and pending checks per chat; each
+then has no count ceiling. These optional counts and queue wait default to zero.
+Saved positive operator values are preserved. Wait zero means until Stop or
+cancellation; accepted checks retain their original deadline and resource budget.
+
+These choices do not change same-request idempotency, causal depth, assignment
+membership, authorization, Stop, retained-owner bounds or physical resource
+admission. Ordered checks retain their earlier-check/cleanup barrier; overlap
+requires both checks to be explicitly independent. Unknown results remain unknown
+and retain exact owners. Disabling a count cannot retire, replay or overwrite them.
+Manual and queued environment allocations share the same atomic admission owner.
+The global pending queue and retained resource/reservation record limits remain
+positive; bounded display pages are not concurrency ceilings.
+
 ### Notification display provenance — 2026-10-14
 
 A retained versioned notification is labelled as an Amplifier update when its

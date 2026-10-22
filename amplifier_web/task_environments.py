@@ -261,7 +261,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
             raise ValueError('This environment request already has a different or admitted owner. Inspect its exact receipt.')
         limits = execution_settings.concurrency(home)
         count = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
-        if not _qualification and count >= limits['maxEnvironmentsPerChat']:
+        if not _qualification and limits['maxEnvironmentsPerChat'] and count >= limits['maxEnvironmentsPerChat']:
             raise ValueError('This task already owns its allowed environments. Inspect or remove one, or adjust Advanced execution limits in Settings.')
         total, owned = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
         if not _qualification and (total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']):
