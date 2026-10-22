@@ -2,6 +2,83 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.212",
+      "title": "Keep updates moving and let parallel work use available capacity",
+      "changes": [
+        "Keep test-runner update checks independent of ordinary environment-count quotas while retaining CPU, memory, disk and ownership checks. New managed local test setups use measured resource admission instead of fixed running and retained environment counts.",
+        "Allow assignment owners to remove the open-helper and concurrent-model-call ceilings. New assignments start without these count ceilings; existing saved limits, spending budgets, unknown outcomes and Stop remain respected.",
+        "Keep stopped-turn failure information available through worker preparation so an authorized recovery can identify the correct failed generation.",
+        "Preserve unsaved workspace resource and reservation edits when navigating between Home, chats and workspaces, without replaying pending saves.",
+        "Update release-notice and update-readiness smoke fixtures for current installed and pending-runner states."
+      ],
+      "notices": [
+        {
+          "id": "assignment-count-defaults-212",
+          "title": "New assignments can run more work in parallel",
+          "detail": "New assignments no longer default to eight open helpers or eight concurrent model calls. Existing assignments keep their saved limits. Set explicit assignment limits if you want to constrain concurrency or spending; blank execution-count fields mean no count ceiling. Test environments still use machine resource checks.",
+          "action": "Review assignment settings if you want explicit concurrency or spending limits. Existing saved limits are unchanged."
+        }
+      ]
+    },
+    {
+      "version": "0.20.211",
+      "title": "Wait safely for busy assignment capacity",
+      "changes": [
+        "Let queued worker calls wait for active calls to finish when older calls have unknown outcomes. Unknown calls keep their reservations, and existing Stop, budget and concurrency limits remain enforced.",
+        "Update automated Home, navigation, archive and mobile checks for the current shared landing layouts, including keyboard navigation and usable phone controls.",
+        "Keep the complete authored What\u2019s new history available as the release count grows, within the existing size limit."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.210",
+      "title": "Keep built-in tool updates consistent with their selected sources",
+      "changes": [
+        "Record the selected source of built-in tools during update preparation, so newer filesystem and bash modules can be validated and adopted without conflicting with stale source records. Explicit source choices and integrity checks remain enforced."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.209",
+      "title": "Keep update checks responsive during runner checks",
+      "changes": [
+        "Keep a requested update check queued while the test runner briefly checks capacity, then recheck safely and show available app or component updates.",
+        "Avoid repeatedly polling a capacity-blocked runner merely because chats are idle. Its pending qualification and normal periodic checks are preserved."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.208",
+      "title": "Keep updates moving while the test runner waits",
+      "changes": [
+        "Allow app and component updates to proceed while an updated test runner waits for capacity or confirmation of its isolated check. The runner retains its original work and evidence; normal app restart and component safety checks still apply.",
+        "Keep the newer app release summary and Update Amplifier button available alongside the waiting runner. Preserve component update progress and results when the runner later completes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.207",
+      "title": "Reliable Linux setup and conversation settings",
+      "changes": [
+        "Apply conversation settings correctly when the app starts its worker through uv. Missing worker identity now stops the change before it can leave chat input blocked. Previously unresolved changes still require explicit recovery; nothing is replayed automatically.",
+        "Find uv in its standard installation location during setup and managed service startup, with Linux-specific guidance for missing prerequisites and clearer recovery errors.",
+        "Keep emergency reset usable when the ordinary startup helper is missing or damaged, while still finding uv in its standard location.",
+        "Keep the ChatGPT sign-in button readable across supported themes and interaction states.",
+        "Show the relevant release summary before, during and after an update, including when a newer release replaces a waiting update."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.206",
+      "title": "Keep open Work details available as activity arrives",
+      "changes": [
+        "Keep expanded tool, delegate and model details readable as newer activity moves the recent-event window forward, without rereading unchanged fields. Retention stays bounded and tied to the exact saved source.",
+        "Catch up on high-impact guidance for earlier releases in What\u2019s new, including Home and workspace layouts, access choices, task creation and managed-component cleanup.",
+        "Improve smoke-test coverage for saved detail previews and exact Copy behavior."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.205",
       "title": "Clearer tool details and more useful chat names",
       "changes": [
@@ -29,7 +106,14 @@
         "Find Home in the sidebar alongside Browse and Status, and use clearer Home navigation from other pages.",
         "Keep active filters visible, use Pick up again for quiet read chats, and clear status filters without losing your search. Existing chat and workspace actions remain available."
       ],
-      "notices": []
+      "notices": [
+        {
+          "id": "shared-landing-navigation",
+          "title": "Home, chat lists and workspaces share the same browsing layouts",
+          "detail": "Focus, Brief and Studio are available across Home, All chats, All workspaces and individual workspaces. Layout and reading position are retained when you visit a chat and return. The sidebar offers Home alongside Browse and Status, and navigation again uses Workspaces naming.",
+          "action": "Choose a layout on the list you are viewing. Use Pick up again for quiet read chats; clearing the status filter keeps your search. Existing workspace Chats, Files and Details and chat actions remain available."
+        }
+      ]
     },
     {
       "version": "0.20.202",
@@ -49,7 +133,14 @@
         "Use approved remote Linux test machines from macOS and Windows, preserving source snapshots, private connection authority and exact cleanup ownership.",
         "Review unused managed components and runner copies in Storage, with automatic cleanup honoring the global preference and retention period while protecting active work, user changes and rollback copies."
       ],
-      "notices": []
+      "notices": [
+        {
+          "id": "unused-code-cleanup-policy",
+          "title": "Storage cleanup can remove unused managed code copies",
+          "detail": "Automatic cleanup follows the saved global retention and size policy for proven unused components and runner copies. It protects active work, user changes, saved results and required rollback copies. Archiving a chat does not free its storage.",
+          "action": "Review automatic cleanup and retention in Settings \u2192 Privacy & files \u2192 Storage. Inspect the cleanup preview before requesting immediate cleanup; deleting saved work still requires its separate review."
+        }
+      ]
     },
     {
       "version": "0.20.200",
@@ -78,7 +169,14 @@
         "Keep existing jobs on their original runner, preserve explicit pins and custom installations, and retain the current runner, a rollback and generations still owned by active work.",
         "Show qualification waits and uncertain outcomes in Updates, with Retry and Skip controls that preserve the exact update identity."
       ],
-      "notices": []
+      "notices": [
+        {
+          "id": "managed-test-runner-updates",
+          "title": "Managed test runners follow the automatic update preference",
+          "detail": "With automatic updates enabled, Amplifier qualifies new managed test runners in an isolated environment before selecting them for new work. Existing jobs keep their original runner. Qualification may wait for test-machine capacity; a confirmed application update can already be complete while runner work is still waiting.",
+          "action": "Review the separate application and component status in Settings \u2192 Updates. Existing chats and checks can continue during a runner capacity wait; use the displayed Retry or Skip control if qualification needs attention. Fixed versions and custom installations remain protected."
+        }
+      ]
     },
     {
       "version": "0.20.197",
@@ -253,7 +351,14 @@
         "Preserve chat drafts and saved Canvas content across Home navigation, and release mobile navigation focus correctly when reopening Canvas.",
         "Protect committed Settings drafts before chat-reference navigation can read them."
       ],
-      "notices": []
+      "notices": [
+        {
+          "id": "home-arrival-and-view-preferences",
+          "title": "New browser clients arrive at Home",
+          "detail": "Home adds Focus, Brief and Studio views of your work. New browser clients open Home; returning clients keep their saved destination. Home remembers its view, filters and position without changing chat ownership, drafts or Canvas.",
+          "action": "Open a chat from Home to continue working. Use Appearance to choose initial view defaults; your later Home and sidebar choices are independent. Home navigation and shared workspace layouts were refined further in 0.20.188 and 0.20.203."
+        }
+      ]
     },
     {
       "version": "0.20.181",
@@ -285,7 +390,14 @@
         "Recover owned test environments after artifact-preservation failures. Cleanup preserves artifacts, distinguishes known failures from uncertain effects, and releases ownership only after the environment is confirmed absent.",
         "The accompanying context-managed component update supports compaction after unambiguous interrupted tool calls without replaying tools or rewriting saved history. Existing active workers adopt component changes when safely replaced."
       ],
-      "notices": []
+      "notices": [
+        {
+          "id": "persistent-access-choices",
+          "title": "Full access can be saved for a chat, workspace or app default",
+          "detail": "Access choices persist until changed. A workspace or chat override can differ from the app-wide default; this release does not turn existing choices into Full access.",
+          "action": "Review the affected chat or workspace in Access & approvals before widening access. The app default is also available in Settings \u2192 Privacy & files \u2192 Access & approvals from 0.20.186."
+        }
+      ]
     },
     {
       "version": "0.20.178",
@@ -342,7 +454,14 @@
         "Direct starts preserve one saved chat and initial-message identity through lost responses, retries and reloads. Current selections, drafts and file permissions remain intact.",
         "Fixed duplicate question cards after rerenders and reloads. Browser smoke coverage now checks question cards alongside chat handoffs, as well as direct-start recovery."
       ],
-      "notices": []
+      "notices": [
+        {
+          "id": "explicit-cross-workspace-start",
+          "title": "Explicit chat-start requests run without another confirmation",
+          "detail": "When you explicitly ask Amplifier to create and start a chat in another existing workspace, it can do so directly. A suggestion that you have not authorized still offers a review. Your current chat, draft and file permissions are preserved.",
+          "action": "Name the intended workspace and opening task when asking to start work. Ask for a proposal or review instead when you do not want the new chat to start yet."
+        }
+      ]
     },
     {
       "version": "0.20.173",

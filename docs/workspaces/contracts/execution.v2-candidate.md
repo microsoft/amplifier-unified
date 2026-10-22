@@ -523,7 +523,15 @@ Membership, limits and Stop are retained in existing command receipts; model
 usage stays in existing execution receipts and is attributed at admission.
 
 Assignment limits cover aggregate supported model calls and open commissioned
-roots. Optional token/cost reservations are declared allowances per call, not
+roots. New assignments have no execution count ceiling: `maxOpenTasks` and
+`maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
+explicit ceiling or `null` for no count limit (blank in the UI). Existing saved
+finite values are preserved until their owner explicitly changes them. The
+retained member roster remains structurally bounded by `maxMembers` (1–64,
+default 64); removing execution ceilings never discards members or unknown
+receipts, changes Stop/ownership, or bypasses token/cost budgets, the installation's
+separate per-source task-chat policy, or host resource admission. Optional
+token/cost reservations are declared allowances per call, not
 provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
@@ -698,6 +706,23 @@ reclaims bytes. No automatic garbage collection or deletion action is supplied.
 Read pages contain at most 32 records and do not hydrate conversation history.
 The ready-worker policy check observes supported reference filesystem and patch
 tools only; it does not certify custom tools, shell, browser or database access.
+
+### Optional per-chat execution counts — 2026-10-21
+
+Global execution settings accept explicit zero for outstanding task chats per
+source, owned test environments per chat and pending checks per chat; each
+then has no count ceiling. These optional counts and queue wait default to zero.
+Saved positive operator values are preserved. Wait zero means until Stop or
+cancellation; accepted checks retain their original deadline and resource budget.
+
+These choices do not change same-request idempotency, causal depth, assignment
+membership, authorization, Stop, retained-owner bounds or physical resource
+admission. Ordered checks retain their earlier-check/cleanup barrier; overlap
+requires both checks to be explicitly independent. Unknown results remain unknown
+and retain exact owners. Disabling a count cannot retire, replay or overwrite them.
+Manual and queued environment allocations share the same atomic admission owner.
+The global pending queue and retained resource/reservation record limits remain
+positive; bounded display pages are not concurrency ceilings.
 
 ### Notification display provenance — 2026-10-14
 

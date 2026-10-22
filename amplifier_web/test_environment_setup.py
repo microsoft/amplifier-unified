@@ -132,7 +132,11 @@ def command(argv, *, env=None, timeout=20):
     return result['stdout'].strip()
 
 
-def capacity_defaults():
+def capacity_defaults(*, resource_admission=False):
+    if resource_admission:
+        # Native host reservations and current pressure govern parallelism.
+        # Stopped retained guests consume disk, not an arbitrary instance slot.
+        return {'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 4 * 1024 ** 3}
     try:
         memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     except (OSError, ValueError):
@@ -500,8 +504,11 @@ async def verify_existing(config, raw, owned, record, step):
 
 async def setup_docker(base, selected, owned, record, step):
     from .task_environments import APPROVED_IMAGE
+    from . import test_host_resources
     binary, endpoint = selected['executable'], selected['dockerHost']
-    config = {**base, 'dockerHost': endpoint, 'image': APPROVED_IMAGE, **capacity_defaults()}
+    target = await settled_thread(test_host_resources.local_target, endpoint, {'dockerd'})
+    config = {**base, 'dockerHost': endpoint, 'image': APPROVED_IMAGE,
+              **capacity_defaults(resource_admission=target.get('supported') is True)}
     await step('preparing_image', 'Downloading the approved Python base image. Project dependencies are prepared separately.')
     await settled_thread(command, [binary, '--host', endpoint, 'pull', APPROVED_IMAGE], timeout=600)
     await step('checking_profile', 'Running a disposable offline Python check in the approved image.')
@@ -589,6 +596,9 @@ async def setup_incus(base, selected, owned, record, step):
         'packageSha256': QUALIFIED_PACKAGES[CURRENT_QUALIFIED_VERSION], 'incusExecutable': binary, 'configDir': str(client),
         'admissionDir': str(admission), 'project': project, 'image': image,
         'daemonFingerprint': daemon, 'preparationNetwork': bridge, **capacity_defaults()}}
+    from .incus_environment_worker import host_target
+    target = await settled_thread(host_target, config['incus'], env)
+    config['incus'].update(capacity_defaults(resource_admission=target.get('supported') is True))
     await step('checking_profile', 'Running a disposable offline check in the private test project.')
     name = 'setup-' + record['id'][:16]
     write_json(owned / 'probe.json', {'backend': 'incus', 'name': name, 'project': project})

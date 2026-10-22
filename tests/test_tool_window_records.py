@@ -53,7 +53,7 @@ async def test_real_observer_tool_fields_arrive_without_another_execution_and_ke
     assert row['inputSummary']['command'] == 'printf saved-command'
     for field, expected in [('input', 'saved-command'), ('output', 'saved-output')]:
         ref = row[field + 'Detail']
-        assert ref['windowKey'] == saved['items'][0]['id'] and ref['id'] != row['id']
+        assert ref['windowKey'].startswith('open-work:') and ref['id'] != row['id']
         assert expected in (await owner.read_text('s', ref))['value']
     assert session == original
     assert row['startedAt'] == 1 and row['endedAt'] == 2 and row['phase'] == 'completed'

@@ -29,7 +29,8 @@ def remote_backend(app, monkeypatch):
     monkeypatch.setattr(environments, 'invoke', remote_invoke)
 
 
-async def test_default_limit_and_full_per_chat_count_beyond_page(app, queue, backend):
+async def test_explicit_limit_and_full_per_chat_count_beyond_page(app, queue, backend):
+    await configure(app,1)
     await submit(app, 'first')
     with pytest.raises(AppError, match='pending check limit'):
         await submit(app, 'second')
@@ -248,3 +249,39 @@ async def test_restart_cancel_or_expiry_only_retires_proven_initial_allocation(a
         await drive(recovered)
         assert record(recovered, app, 'second')['job']['status'] == 'passed'
     assert not [a for a, _ in backend] if advanced != 'none' or end == 'stop' else True
+
+
+async def test_default_uncapped_per_chat_pending_keeps_global_bound_and_original_expiry(app,queue,backend):
+    await submit(app,'finite-wait',waitSeconds=20)
+    original=record(queue,app,'finite-wait')['job'].copy()
+    for index in range(63):
+        await submit(app,f'uncapped-{index}',independent=True)
+    assert queue.pending_count(sid=scope(app)['sessionId'])==64
+    assert record(queue,app,'uncapped-62')['job']['expiresAt'] is None
+    with pytest.raises(AppError,match='saved queue limit'):
+        await submit(app,'global-bound')
+    assert record(queue,app,'finite-wait')['job']==original
+    assert not backend
+
+@pytest.mark.parametrize('remote',[False,True])
+async def test_zero_environment_count_allows_independent_overlap(app,queue,backend,monkeypatch,remote):
+    if remote:
+        remote_backend(app,monkeypatch)
+    # Explicit controlled physical capacity is independent of the per-chat policy.
+    monkeypatch.setattr(environments,'capacity',lambda *a:{'available':True,'limits':{'max_running':0},'counts':{'active':0}})
+    entered=[];release=threading.Event();invoke=environments.invoke
+    def controlled(config,home,row,action,args):
+        if action=='execute':
+            entered.append(row['id']);assert release.wait(10)
+        return invoke(config,home,row,action,args)
+    monkeypatch.setattr(environments,'invoke',controlled)
+    for name in ('first','second','third'):
+        await submit(app,name,independent=True)
+    try:
+        await asyncio.gather(queue.tick(),queue.tick())
+        await until(lambda:len(entered)==3)
+        assert len(set(entered))==3
+    finally:
+        release.set();await asyncio.gather(*queue.tasks.values())
+    assert all(record(queue,app,name)['job']['status']=='passed' for name in ('first','second','third'))
+    assert all(environments.get(app.data_dir,scope(app)['sessionId'],resource)['status']=='retired' for resource in entered)

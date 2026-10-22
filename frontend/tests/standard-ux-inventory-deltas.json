@@ -2113,6 +2113,58 @@
         }
       ],
       "qualification": "docs/EXECUTION-INSPECTION.md"
+    },
+    {
+      "id": "delta.update-release-summary",
+      "sourceCommit": "6293d964e",
+      "reason": "Approved update summary is visible before, during and after installation; older guidance and Changelog remain expandable without changing the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "updates.release-summary",
+          "family": "updates",
+          "title": "Understand the exact release before, during and after an update",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Updates"
+          ],
+          "prerequisites": [
+            "Synthetic update transitions through the real HTTP/SSE owner; no installation or restart effects"
+          ],
+          "steps": [
+            "Read the offered release without expanding a disclosure",
+            "Discover a newer release while an earlier target is queued",
+            "Reload during restart and after app confirmation with a runner still pending",
+            "Read high-impact guidance separately and inspect a missing-notes fallback at phone width"
+          ],
+          "expectedResults": [
+            "Summary follows the actual update target, then the verified installed version.",
+            "Newer availability never relabels an in-flight target.",
+            "Ordinary summary visibility does not acknowledge high-impact notices.",
+            "Missing notes remain honest and never prevent existing update actions."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "reload",
+            "offline-notes"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/update-progress-browser.mjs",
+              "relation": "Existing registered owner now covers release-summary transitions, notice acknowledgment and phone layout"
+            },
+            {
+              "path": "frontend/tests/update-release-summary.test.mjs",
+              "relation": "Exact target, revision mismatch, feature preparation and stale confirmation cases"
+            }
+          ],
+          "limits": [
+            "Synthetic update presentation; actual updater installation and restart are unchanged."
+          ]
+        }
+      ],
+      "qualification": "docs/UPDATES.md"
     }
   ]
 }
