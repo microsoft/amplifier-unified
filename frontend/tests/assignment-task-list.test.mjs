@@ -1,12 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import React,{act} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({configFile:false,server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {AssignmentTaskList}=await server.ssrLoadModule('/src/assignment-task-list.jsx');
+const {AssignmentControls}=await server.ssrLoadModule('/src/assignment-controls.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+test('all SSR setup finishes before test and teardown registration',()=>{
+ const source=readFileSync(new URL(import.meta.url),'utf8');
+ const loads=[...source.matchAll(/await server\.ssrLoadModule\(/g)].map(match=>match.index);
+ assert.equal(loads.length,2);
+ assert.ok(loads.every(index=>index<source.indexOf('test.after(')));
+});
 const board=()=>({assignmentId:'assignment',assignmentRevision:3,assignmentStatus:'active',ownerSessionId:'owner',canManage:true,version:'v1',members:[{sessionId:'owner',label:'Coordinator'},{sessionId:'peer',label:'Draft helper'}],tasks:[{id:'first',title:'Inspect source',description:'Check input',revision:1,status:'open',dependsOn:[],blockedBy:[],readiness:'ready',claim:null},{id:'second',title:'Review report',description:'',revision:1,status:'open',dependsOn:['first'],blockedBy:['first'],readiness:'blocked',claim:null}]});
 const text=root=>JSON.stringify(root.toJSON());
 const button=(root,label)=>root.root.findAllByType('button').find(row=>row.children.join('')===label);
@@ -58,7 +66,6 @@ test('task revision updates refresh assignment controls without usage reads',asy
  }finally{await act(async()=>root.unmount())}
 });
 
-const {AssignmentControls}=await server.ssrLoadModule('/src/assignment-controls.jsx');
 const control=revision=>({id:'assignment',revision,status:'active',ownerSessionId:'owner',limits:{maxOpenTasks:8},members:{owner:{status:'bound'}}});
 const scopedBoard=(revision,status='active')=>({...board(),assignmentRevision:revision,assignmentStatus:status,version:'v'+revision,assignmentControl:{...control(revision),status}});
 const defer=()=>{let resolve;const promise=new Promise(done=>{resolve=done});return {promise,resolve}};
