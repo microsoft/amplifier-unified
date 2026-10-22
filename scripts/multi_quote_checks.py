@@ -49,10 +49,17 @@ def main():
         print(name, 'exit', code, text[-2500:], flush=True)
         return code, text
 
-    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
-    source = {p: sha((ROOT / p).read_bytes()) for p in tracked if p and (ROOT / p).is_file()}
-    (output / 'source.json').write_text(json.dumps({'head': subprocess.check_output(
-        ['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(), 'files': source}, indent=2))
+    # Managed source exports deliberately omit .git. The host snapshot receipt
+    # supplies commit/tree identity; this manifest measures actual guest bytes.
+    excluded = {'.git', '.venv', 'node_modules', '__pycache__', '.pytest_cache'}
+    source = {}
+    for folder, dirs, files in os.walk(ROOT):
+        dirs[:] = [name for name in dirs if name not in excluded]
+        for name in files:
+            path = Path(folder) / name
+            if path.is_file():
+                source[str(path.relative_to(ROOT))] = sha(path.read_bytes())
+    (output / 'source.json').write_text(json.dumps({'files': source}, indent=2))
     run('backend', [sys.executable, '-m', 'pytest', '-q', '--tb=short',
         'tests/test_multi_quote.py', 'tests/test_message_interactions.py',
         '--junitxml=' + str(output / 'backend.xml')])
