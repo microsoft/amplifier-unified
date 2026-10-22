@@ -331,7 +331,7 @@ class ClientViews:
         canvas = record.get('canvas', {})
         record.setdefault('chatCanvas', {})[record['selectedSessionId']] = {
             'canvas': {key: copy.deepcopy(canvas[key]) for key in
-                       ('id', 'open', 'selectedVersion', 'view') if key in canvas},
+                       ('id', 'open', 'selectedVersion', 'view', '_presentationDisposed') if key in canvas},
             'view': {key: copy.deepcopy(value) for key, value in record['view'].items()
                      if key.startswith('canvas')},
         }
@@ -365,6 +365,8 @@ class ClientViews:
             load(self.service.state, self.service.db, canvas['id'],
                  open_panel=bool(canvas.get('open')), version=canvas.get('selectedVersion'))
             record['canvas']['view'] = copy.deepcopy(canvas.get('view', {}))
+            if canvas.get('_presentationDisposed'):
+                record['canvas']['_presentationDisposed'] = True
         else:
             empty(self.service.state, open_panel=bool(canvas.get('open')) and bool(record.get('selectedSessionId')))
 

@@ -105,7 +105,7 @@ function ResourceView({view,state,dispatch,recovery}){
 }
 
 export function CanvasWorkspace({state,dispatch,hidden=false}){
- const retained=useRef(new Map()),allViews=(state.canvasWorkspace?.views||[]).filter(view=>view.viewId==='primary');
+ const retained=useRef(new Map()),allViews=(state.canvasWorkspace?.views||[]).filter(view=>view.viewId==='primary'&&!state.canvas?._presentationDisposed);
  // Do not initialize a newly selected hidden artifact. Retain the mounted
  // viewer while Library is open so local edits survive passive navigation.
  for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id)||(state.canvas?.kind==='gif'&&!state.canvas.open))retained.current.delete(id);

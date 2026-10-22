@@ -2477,6 +2477,66 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.artifact-one-surface",
+      "sourcePullRequest": 1032,
+      "reason": "Give one-surface artifact presentation and late-hide focus preservation one automatic source smoke owner; keep the frozen inventory and all existing owners.",
+      "workflowsAdded": [
+        {
+          "id": "canvas.artifact-one-surface",
+          "family": "canvas",
+          "title": "Present one exact saved version in chat or Canvas without losing current work",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Saved artifact card",
+            "Preview in chat / Open in canvas"
+          ],
+          "prerequisites": [
+            "Built client with synthetic authored artifacts and controlled local fixture; no live history or provider calls"
+          ],
+          "steps": [
+            "Show HTML once and count actual mounted primary/inline frames and leases",
+            "Cancel a reset, then transition inline to Canvas and back, hide, reopen and reload",
+            "Use exact historical versions, another client and short Markdown/code/JSON cards",
+            "Hold an accepted Hide response while focusing the composer or an unrelated iframe",
+            "Toggle inline content while preserving unrelated dirty Canvas, unsent draft and Settings"
+          ],
+          "expectedResults": [
+            "One exact artifact version never automatically mounts two full renderers, even hidden ones.",
+            "Cancelled HTML reset retains the original frame and local input; completed transitions preserve exact saved identity.",
+            "Ordinary keyboard Hide returns focus to its disclosure; a newer composer or iframe focus choice wins over a late receipt.",
+            "Unrelated dirty Canvas and unsaved Settings remain mounted and unchanged; replacement still uses the existing guard.",
+            "Shared card controls remain labeled and usable at desktop and narrow widths; presentation creates no additional saved artifacts or messages."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "dirty-settings",
+            "dirty-canvas",
+            "second-client",
+            "reload"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/artifact-one-surface-browser.mjs",
+              "relation": "Automatic artifact-one-surface owner; real mount counts, delayed focus, versions and draft guards; evidence in output/browser-checks/artifact-one-surface"
+            },
+            {
+              "path": "tests/test_artifact_presentation.py",
+              "relation": "Canonical exact-version ownership, reset refusal and dirty-view transitions"
+            }
+          ],
+          "limits": [
+            "Automatic source smoke, not installed-wheel, physical-device or assistive-screenreader acceptance.",
+            "Registration alone is not a pass. The separate historical negative duplicate-default and installed-boundary receipts remain exact-source evidence, not automatic assertions."
+          ]
+        }
+      ],
+      "qualification": "docs/canvas.md"
     }
   ]
 }

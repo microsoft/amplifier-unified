@@ -5,7 +5,7 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url))],{stdio:'inherit'});
+const fixture=spawn(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url))],{stdio:'inherit'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
 let browser,page;const errors=[];
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -23,9 +23,8 @@ try{
  let releasePreview;
  const previewGate=new Promise(resolve=>{releasePreview=resolve});
  await page.route('**/api/canvas/views/inline-*/resource?*',async route=>{await previewGate;await route.continue()});
- await action('canvas.show',{kind:'html',title:'Interactive example',content:'<h1>Original saved version</h1><button onclick="this.textContent=\'Clicked inline\'">Try it</button><p id="boundary"></p><script>try{parent.document.title;document.getElementById("boundary").textContent="UNSAFE"}catch{document.getElementById("boundary").textContent="Parent isolated"}</script>'});
- const identity=await page.evaluate(()=>window.amplifier.getState().canvas.id);
- await action('canvas.close');
+ const saved=await action('canvas.show',{kind:'html',presentation:'inline',title:'Interactive example',content:'<h1>Original saved version</h1><button onclick="this.textContent=\'Clicked inline\'">Try it</button><p id="boundary"></p><script>try{parent.document.title;document.getElementById("boundary").textContent="UNSAFE"}catch{document.getElementById("boundary").textContent="Parent isolated"}</script>'});
+ const identity=saved.result.id;
  const card=page.locator('.a-inline-artifact').filter({has:page.locator('strong',{hasText:'Interactive example'})}).first();
  await card.scrollIntoViewIfNeeded();
  await card.locator('.a-inline-artifact-placeholder').waitFor();
@@ -48,20 +47,21 @@ try{
  await action('canvas.select',{id:identity});
  const primary=await page.evaluate(()=>{const view=window.amplifier.getState().canvasWorkspace.views.find(view=>view.viewId==='primary');return Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]))});
  await action('canvas.views.dirty',{...primary,dirty:true});
- await card.getByRole('button',{name:'Open Interactive example in full view',exact:true}).click();
+ await card.getByRole('button',{name:'Open Interactive example in canvas',exact:true}).click();
  await page.getByText('Finish or cancel the primary viewer edit before leaving it. Use viewer recovery only to discard that edit.',{exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.selectedVersion??null),null,'A refused full-view action must not silently retarget');
  await action('canvas.views.dirty',{...primary,dirty:false});
- await card.getByRole('button',{name:'Open Interactive example in full view',exact:true}).click();
+ await card.getByRole('button',{name:'Open Interactive example in canvas',exact:true}).click();
+ await card.getByRole('button',{name:'Reset preview and open in Canvas',exact:true}).click();
  await page.locator('.a-canvas-workspace').frameLocator('iframe').getByRole('heading',{name:'Original saved version',exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.selectedVersion),1);
  await action('view.update',{patch:{canvasFocused:false}});await action('canvas.close');
  const png=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=400;canvas.height=300;const context=canvas.getContext('2d');context.fillStyle='#197b94';context.fillRect(0,0,400,300);context.fillStyle='white';context.font='28px sans-serif';context.fillText('Saved image',30,150);return canvas.toDataURL('image/png')});
- await action('canvas.show',{kind:'image',title:'First concept',content:png});await action('canvas.show',{kind:'image',title:'Second concept',content:png});await action('canvas.close');
+ await action('canvas.show',{kind:'image',title:'First concept',content:png,presentation:'inline'});await action('canvas.show',{kind:'image',title:'Second concept',content:png,presentation:'inline'});await action('canvas.close');
  const images=page.locator('.a-inline-gallery');await images.scrollIntoViewIfNeeded();
  await images.locator('.a-inline-image img').waitFor();assert.equal(await images.getAttribute('aria-label'),'Image gallery, 2 images');
  await images.getByRole('button',{name:'Image 2: Second concept',exact:true}).click();
- await images.getByRole('button',{name:'Open Second concept in full view',exact:true}).last().waitFor();
+ await images.getByRole('button',{name:'Open Second concept in canvas',exact:true}).last().waitFor();
  assert.ok(await images.locator('.a-inline-image img').evaluate(image=>image.complete&&image.naturalWidth===400));
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Please keep these instructions.');
  const messageCount=await page.evaluate(()=>{const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId).messages.length});
@@ -73,6 +73,7 @@ try{
  const download=await downloadEvent;assert.equal(download.suggestedFilename(),'canvas.png');
  assert.deepEqual(await readFile(await download.path()),Buffer.from(png.split(',')[1],'base64'));
  await images.locator('.a-inline-image').click();
+ await page.waitForFunction(()=>window.amplifier.getState().canvas.title==='Second concept');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.title),'Second concept');
  await action('view.update',{patch:{canvasFocused:false}});await action('canvas.close');
  await images.scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/inline-artifacts-desktop.png'});

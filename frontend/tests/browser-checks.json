@@ -77,6 +77,7 @@
     {"id": "message-delivery", "command": ["node", "tests/message-delivery-browser.mjs"]},
     {"id": "canvas-media", "command": ["node", "tests/canvas-media-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/canvas-media"}},
     {"id": "inline-media-transition", "command": ["node", "tests/inline-media-transition-browser.mjs"], "env": {"EVIDENCE_DIR": "{root}/output/browser-checks/inline-media-transition"}},
+    {"id": "artifact-one-surface", "command": ["node", "tests/artifact-one-surface-browser.mjs"], "env": {"ARTIFACT_EVIDENCE_DIR": "{root}/output/browser-checks/artifact-one-surface"}},
     {"id": "app-toolbar", "command": ["node", "tests/app-toolbar-browser.mjs"]},
     {"id": "smart-tools", "command": ["node", "tests/smart-tools-browser.mjs"]},
     {"id": "mcp-recovery", "command": ["node", "tests/mcp-recovery-browser.mjs"], "env": {"MCP_RECOVERY_SCREENSHOT": "{root}/output/browser-checks/mcp-recovery.png"}},

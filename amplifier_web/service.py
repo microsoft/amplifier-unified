@@ -83,7 +83,7 @@ ACTION_DEFINITIONS = {
     "workspace.resources.list": ("Read retained external resource inventory; recording is not teardown.", schema({"workspaceId":string(100)})),
     "workspace.resources.add": ("Record an external resource and its owner. Does not create or delete infrastructure.", schema({"workspaceId":string(100),"kind":string(1000),"resourceId":string(1000),"owner":string(1000),"note":string(1000)},["workspaceId","kind","resourceId","owner"])),
     "workspace.resources.update": ("Record observed resource status with evidence at an exact revision. Never performs teardown or treats observation as ownership.", schema({"workspaceId":string(100),"id":string(100),"expectedRevision":{"type":"integer","minimum":1},"status":{"enum":["active","reaped","observed_absent"]},"evidence":string(4000)})),
-    "canvas.show": ("Save a durable artifact in this chat; direct content opens a new tab, while reopening the same canonical file reuses its tab and versions changes (browser kind takes an http/https url): sandboxed interactive HTML (embedded video/audio via data: or blob: URLs; no remote media), Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, PDF workspace files (up to 20 MB, read-only original download), auto-detected workspace file, Babylon.js 3D HTML (kind babylon, global BABYLON preloaded), A2UI snapshot, or live Settings (kind settings, no content; reuses the chat’s Settings tab and never snapshots credentials). Local HTML/Babylon files support up to 20 MB; large snapshots are loaded separately from contentResource. Browser previews may be blocked by mixed content or site embedding policies; inspect renderReports and offer canvas.openExternal. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","pdf","a2ui","browser","babylon","settings"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"surface":{"type":"object"}},["kind"])),
+    "canvas.show": ("Save a durable artifact and choose one full presentation: canvas (default), inline, or saved (compact card only). Inline needs an attached client and an originating turn, and preserves unrelated Canvas work. Direct content creates an artifact; a canonical file reuses its tab and versions changes. Formats: sandboxed HTML, Markdown, Mermaid, DOT, structured data, text, code, image, PDF workspace files (20 MB, read-only original download), auto-detected file, Babylon.js HTML, A2UI, browser URL, or live Settings. PDF/browser/A2UI/Settings open in Canvas, not inline. HTML/Babylon files support 20 MB; embedded data/blob media only, no remote media. Browser embedding can fail; inspect render reports. A2UI supports Text, Row, Column, Card, Button and Divider. Saving is not render verification.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","pdf","a2ui","browser","babylon","settings"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"clientId":string(100),"surface":{"type":"object"},"presentation":{"enum":["canvas","inline","saved"],"default":"canvas"}},["kind"])),
     "canvas.view": ("Adjust shared canvas viewer controls", schema({"id":string(100),"patch":schema({"source":{"type":"boolean"},"help":{"type":"boolean"},"reload":{"type":"number","minimum":0},"zoom":{"type":"number","minimum":0.2,"maximum":4},"panX":{"type":"number","minimum":-10000,"maximum":10000},"panY":{"type":"number","minimum":-10000,"maximum":10000},"engine":{"enum":["dot","neato","fdp","sfdp","circo","twopi"]},"node":string(500),"query":string(500)}, [])})),
     "canvas.report": ("Report browser rendering success or failure for a canvas part; this is display evidence only", schema({"id":string(100),"part":string(100),"status":{"enum":["pending","ready","unverified","error"]},"message":string(2000)},["id","part","status"])),
     "canvas.snapshot": ("Report visible HTML preview text and standard controls as untrusted display data", schema({"id":string(100),"document":schema({"text":string(16000),"controls":{"type":"array","maxItems":100,"items":schema({"id":string(100),"tag":string(30),"type":string(30),"label":string(200),"value":string(4000),"disabled":{"type":"boolean"}},["id","tag","type","label","value","disabled"])}})})),
@@ -95,7 +95,7 @@ ACTION_DEFINITIONS = {
     "canvas.openFile": ("Open a local file in Canvas for the selected chat and its unchanged workspace. Exact artifact references verify reported bytes in the recorded execution folder. Optional showConversation opens the named chat from that workspace's Files page atomically with a successful preview; stale pages and unavailable files do not navigate. Never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200),"showConversation":{"type":"boolean"},"referenceRequestId":string(200),"referenceResponseRevision":{"type":"integer","minimum":1},"expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
-    "canvas.select": ("Reopen Latest or an exact immutable saved version in the calling chat. Omit version for Latest; version views are read-only. Supply clientId when multiple clients display that chat.", schema({"id":string(100),"clientId":string(100),"sessionId":string(200),"version":{"type":"integer","minimum":1}}, ["id"])),
+    "canvas.select": ("Present an existing artifact in canvas (default), inline, or saved (compact card only), without creating content or replaying work. Inline requires exact version and publication messageId. Omit version for Latest in Canvas; exact versions are read-only. Preserves unrelated Canvas and drafts; dirty transitions refuse. Moving a mounted HTML/3D preview requires an explicit UI resetPreview choice, never an agent reset. Does not force full-frame focus. Supply clientId when needed.", schema({"id":string(100),"clientId":string(100),"sessionId":string(200),"version":{"type":"integer","minimum":1},"messageId":string(200),"presentation":{"enum":["canvas","inline","saved"],"default":"canvas"},"resetPreview":{"type":"boolean"}}, ["id"])),
     "canvas.visibility": ("Show or hide this client's retained Canvas viewer without discarding edits. Bind sessionId and canvasId from the current state; optionally address an attached clientId.", schema({"open":{"type":"boolean"},"sessionId":{"type":["string","null"]},"canvasId":{"type":["string","null"]},"clientId":string(200)},["open","sessionId","canvasId"])),
     "canvas.reopen": ("Show this chat's canvas and saved artifacts", schema()),
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
@@ -2169,7 +2169,7 @@ class AppService:
                 from .automatic_history import read_transcript
                 window = await asyncio.to_thread(read_transcript, copy.deepcopy(session), limit=None)
                 reveal_message = next((row for row in window["messages"] if row["id"] == args["messageId"]), None)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.show', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -2732,8 +2732,15 @@ class AppService:
                     effects.extend(view_effects)
                 elif action in {'canvas.select','canvas.reopen','canvas.tabClose'}:
                     from .canvas_library import command
-                    command(self.state,self.db,action,args)
-                    if action=='canvas.select':
+                    if action == 'canvas.select':
+                        diagnostic_result = self.canvas_views.select_presentation(args, origin)
+                    elif action == 'canvas.reopen' and self.state.get('canvas', {}).get('_presentationDisposed'):
+                        current = self.state['canvas']
+                        self.canvas_views.select_presentation({'id': current['id'],
+                            'version': current.get('selectedVersion') or current.get('revision', 1)}, origin)
+                    if action != 'canvas.select' or args.get('presentation', 'canvas') == 'canvas':
+                        command(self.state,self.db,action,args)
+                    if action=='canvas.select' and args.get('presentation', 'canvas') == 'canvas':
                         self.state['view']['settingsCanvas'] = False
                         self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
                 elif action=='canvas.openExternal':
@@ -2763,6 +2770,9 @@ class AppService:
                         'content':content,'filename':download_name,'mime':'text/plain','canvasId':args['id']})
                 elif action=='canvas.show':
                     sid=args.get('sessionId',self.state.get('selectedSessionId'))
+                    destination = args.get('presentation', 'canvas')
+                    if args.get('kind') == 'settings' and destination != 'canvas':
+                        raise AppError('Settings opens in Canvas.', 409)
                     from .agent_canvas import scope
                     workspace_id=scope(self,sid)[1] if sid else self.state['selectedWorkspaceId']
                     scoped={**self.state,'selectedSessionId':sid,'selectedWorkspaceId':workspace_id}
@@ -2775,15 +2785,36 @@ class AppService:
                         open_canvas(scoped, self.db)
                     else:
                         canvas_command(scoped,action,args,origin)
-                    from .canvas_versions import assert_clean, reference
+                    from .canvas_versions import assert_clean, reference, message_id
+                    publication_message = message_id(scoped, sid)
+                    if destination == 'inline':
+                        from .canvas_views import INLINE_KINDS
+                        if scoped['canvas']['kind'] not in INLINE_KINDS:
+                            raise AppError('This artifact opens in Canvas.', 409)
+                        if (not publication_message or self.clients.record() is None
+                                or sid != self.state.get('selectedSessionId')):
+                            raise AppError('Inline presentation needs an originating turn in the attached chat.', 409)
                     assert_clean(self, scoped['canvas']['id'])
+                    # Stage the publication before its presentation guard. A
+                    # refusal must not add a version/publication or change tabs.
+                    scoped['canvasArtifacts'] = [copy.deepcopy(row) if row['id'] == scoped['canvas']['id'] else row
+                                                 for row in scoped.get('canvasArtifacts', [])]
+                    if 'canvasTabs' in scoped:
+                        scoped['canvasTabs'] = copy.deepcopy(scoped['canvasTabs'])
                     remember(scoped,self.db)
                     diagnostic_result = {'id': scoped['canvas']['id'], 'revision': scoped['canvas'].get('revision', 1), 'reference': reference(scoped['canvas'])}
                     if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
-                        self.state['canvas']=scoped['canvas']
-                        if args.get('kind') == 'settings':
-                            self.state['view']['panel'] = None
-                        self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
+                        self.canvas_views.choose(scoped['canvas'], diagnostic_result['revision'], destination,
+                                                 message_id=publication_message, origin=origin)
+                        if destination == 'canvas':
+                            self.state['canvas']=scoped['canvas']
+                            if args.get('kind') == 'settings':
+                                self.state['view']['panel'] = None
+                            self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
+                    self.state['canvasArtifacts'] = scoped['canvasArtifacts']
+                    if 'canvasTabs' in scoped:
+                        self.state['canvasTabs'] = scoped['canvasTabs']
+                    diagnostic_result['presentation'] = destination
                 else:
                     canvas_command(self.state, action, args, origin)
             elif action == 'session.draft':
@@ -4925,6 +4956,13 @@ class AppService:
             elif args['action'] == 'smartTools.viewStatus':
                 result = await self.dispatch(args['action'], action_args, origin='agent', caller_session_id=session_id)
                 canvas_client = result['result'].get('clientId')
+            elif args['action'] == 'canvas.show' and (action_args.get('presentation') == 'inline' or action_args.get('clientId')):
+                from .agent_canvas import target
+                requested_client = action_args.get('clientId', input_origin['clientId'] if input_origin is not None else None)
+                canvas_client = target(self, session_id, requested_client, required=True)[0]
+                with self.clients.bind(canvas_client):
+                    result = await self.dispatch(args['action'], action_args, origin='agent',
+                        command_id=args.get('id'), caller_session_id=session_id)
             elif args['action'] in {'canvas.select', 'smartTools.reconnectView', 'smartTools.reviewView'}:
                 from .agent_canvas import selection_target
                 canvas_client = selection_target(self, session_id, {**action_args, 'id': action_args.get('canvasId', action_args.get('id'))})

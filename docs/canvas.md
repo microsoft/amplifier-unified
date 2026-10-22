@@ -93,6 +93,51 @@ full-frame mode while retaining preferred split widths.
 
 ## Agent awareness and access
 
+### One full presentation per saved version
+
+`canvas.show` saves content and chooses `presentation: "canvas"` by default.
+The originating turn keeps a compact exact-version card, not another executing
+preview. Use `"inline"` for a short review in chat without replacing unrelated
+Canvas work, or `"saved"` for the compact card only. Inline needs an attached
+client displaying the chat, an originating publication turn, and a supported
+kind. PDF, browser, Settings, A2UI and app viewers remain Canvas-only.
+
+`canvas.select {id, version, presentation, messageId}` changes the presentation
+of existing saved content; inline requires its exact publication `messageId`.
+It never creates another artifact, revises content or starts conversation work.
+The choice belongs to this client and exact artifact version, survives reload,
+and does not change another client's choice. Old calls without `presentation`
+still open Canvas. Generated-image receipts retain their inline default unless
+the user chooses Canvas or hides the preview.
+
+The card keeps its title, type and version while **Preview in chat** / **Hide
+preview** toggles its body. Opening Canvas does not force full-frame focus.
+Dirty-view refusals keep the current renderer and show the error beside the
+card. Ordinary HTML/3D has no lossless state-transfer protocol: moving a mounted
+frame requires the user's explicit **Reset preview** choice, or **Keep current
+preview** preserves it. Reset never bypasses a declared dirty edit. Closing the
+Canvas panel alone retains its existing view; it does not request inline display.
+`canvas.views.inline` is the lower-level renderer-lease API, not a card-expansion
+action. No CSS-hidden second executing renderer satisfies the one-surface rule.
+
+### Artifact controls and reuse
+
+This is a bounded control inventory, not a new renderer registry or design system.
+The shell's extension slots remain a separate contract. Before adding artifact
+controls, reuse the owning entry or record the necessary semantic difference.
+
+| Control / owner | Variants, state and reuse boundary | Accessibility / focused evidence |
+| --- | --- | --- |
+| Compact exact-version card and disclosure: `frontend/src/inline-artifacts.jsx` (`DocumentOutput`, `Preview`, `ArtifactLinks`) | HTML, documents, diagrams and images share title/type/version/open/disclosure; image gallery and specialized renderer bodies remain distinct. Client-local placement, pending/error and explicit HTML reset are not generic card state. | Native buttons; stable `aria-expanded`/`aria-controls`; titled open target; status errors; preserved focus. `tests/test_artifact_presentation.py`, `frontend/tests/artifact-one-surface-browser.mjs`, `frontend/tests/inline-artifacts-browser.mjs`. |
+| Viewer controls: `frontend/src/canvas-controls.jsx`, `canvas-viewer.jsx`, `canvas-workspace.jsx` | Existing renderer host, exact source binding, source/copy/download, portal placement and inline toolbar suppression. Do not add a competing inline toolbar or renderer registry. | Existing keyboard controls, labels and dirty/reload guards; `tests/test_canvas_views.py` and viewer browser tests. |
+| Saved output inspection: `frontend/src/outputs.jsx`, shared `image-actions.jsx` | Snapshot read/download/lineage and image follow-up; output HTML is **not** an executable preview. See [Outputs](OUTPUTS.md). | Exact-target download and draft-preserving follow-up; `tests/test_output_images.py` and inline-artifact browser tests. |
+
+When changing these owners, format routing, placement or action semantics,
+update the affected entry (or state why its contract is unchanged) and extend its
+focused test. HTML/Markdown parity checks must exercise the same disclosure and
+exact-version open path, not merely compare CSS. This index and review discipline
+do not claim universal control conformance.
+
 The host mounts `app_control` and injects canvas guidance as ephemeral system
 context on every provider request, including resumed conversations. Delegated
 sessions inherit this access through the loop-live execution host. The voice
