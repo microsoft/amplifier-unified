@@ -46,8 +46,8 @@ try{
  const expanded=await box('.a-canvas-panel'),chat=await box('.a-conversation');assert.ok(expanded.width>1000);assert.ok(chat.width>=360&&chat.width<=361);
  const composer=await box('.a-composer');assert.ok(composer.x>=chat.x&&composer.x+composer.width<=chat.x+chat.width);assert.ok(await page.locator('.a-compose-bottom').evaluate(el=>el.scrollWidth<=el.clientWidth));
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
- const models=await box('.a-model-popover');assert.ok(models.x>=0&&models.x+models.width<=1600); // Compact selectors are positioned in the viewport.
- await page.getByRole('button',{name:'Close model settings'}).click();
+ const models=await page.getByRole('dialog',{name:'Chat options',exact:true}).boundingBox();assert.ok(models.x>=0&&models.x+models.width<=1600); // Compact selectors are positioned in the viewport.
+ await page.getByRole('button',{name:'Close chat options'}).click();
  await page.screenshot({path:'/tmp/amplifier-canvas-wide.png'});
  // Mouse drag reaches the same bounds and persists only its completed preference.
  const handle=await separator.boundingBox();await page.mouse.move(handle.x+handle.width/2,handle.y+80);await page.mouse.down();await page.mouse.move(handle.x+200,handle.y+80,{steps:6});await page.mouse.up();await settled();

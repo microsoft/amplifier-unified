@@ -32,7 +32,7 @@ try{
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.effort==='low'));
  await slider.press('End');
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.effort==='high'));
- await page.getByRole('button',{name:'Close model settings'}).click();
+ await page.getByRole('button',{name:'Close chat options'}).click();
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision/);
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision \(high\)/);
  if(process.argv.includes('--model-only')){

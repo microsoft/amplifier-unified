@@ -33,7 +33,7 @@ try{
  await page.goto(url);await expect(input).toBeEditable();
  await probe('narrow-options-dismiss-focus',['composer.options'],async()=>{
   await input.fill('Keep this unsent draft');await page.setViewportSize({width:390,height:844});
-  const trigger=page.getByRole('button',{name:'Chat options',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
+  const trigger=page.getByRole('button',{name:'Model and reasoning settings',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
   await click('Open ordinary narrow options',trigger);await expect(menu.locator('#chat-provider')).toBeFocused();
   const before=(await state()).view.newSessionDraft??null;
   await menu.locator('#chat-provider').press('Escape');await expect(menu).toHaveCount(0);await expect(trigger).toBeFocused();

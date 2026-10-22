@@ -27,7 +27,7 @@ try{
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(composer).toHaveDraft(retainedDraft);
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
- const panel=page.getByRole('region',{name:'Conversation model',exact:true});
+ const panel=page.getByRole('dialog',{name:'Chat options',exact:true});
  await expect(panel.locator('#chat-provider')).toBeEnabled();
  try{await expect(panel.locator('#chat-provider option[value="replacement-account"]')).toHaveCount(1)}catch(error){
   console.error(JSON.stringify({actions,inspect:await inspect()}));
@@ -38,7 +38,7 @@ try{
  assert.deepEqual((await inspect()).started,[],'Browsing a failed chat cannot start its worker');
  await panel.locator('#chat-provider').selectOption('replacement-account');
  await expect.poll(async()=>(await inspect()).pending).toEqual({instance:'replacement-account',model:'new-model'});
- await panel.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.reload();
  await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toContainText('new-model');
  await expect(composer).toHaveDraft(retainedDraft);

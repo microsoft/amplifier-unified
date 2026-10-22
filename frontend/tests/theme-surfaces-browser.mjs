@@ -83,7 +83,7 @@ try{
   if(await page.locator(canvas).isVisible())await page.getByRole('button',{name:'Back to chat',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
   assert.equal((await style(chat)).tl,'0px');assert.equal((await style(chat)).tr,'0px');
-  if(width<520){await page.getByRole('button',{name:'Chat options',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Done',exact:true}).click();}
+  if(width<520){await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Done',exact:true}).click();}
   await page.screenshot({path:out+'/narrow-'+width+'.png'});await page.getByRole('button',{name:'Open canvas',exact:true}).click();
   await expect(page.locator(canvas)).toBeVisible();assert.equal((await style(canvas)).tl,'0px');assert.equal((await style(canvas)).tr,'0px');await assertFits();
  }

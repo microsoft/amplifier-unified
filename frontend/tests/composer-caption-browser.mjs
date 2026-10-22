@@ -35,11 +35,10 @@ const status=()=>page.locator('.a-composer .a-sr-only[role="status"]');
 const primary=()=>page.locator('[data-part="composer-primary-action"]');
 const sendCount=()=>calls.filter(row=>row.action==='conversation.send').length;
 const geometry=async()=>{
- const elements={bottom:page.locator('.a-compose-bottom'),tools:page.locator('.a-compose-tools'),primary:primary(),
+ const elements={surface:page.locator('[data-part="composer-surface"]'),controls:page.locator('.a-compose-configuration'),primary:primary(),
   attachment:page.getByRole('button',{name:'Add attachments',exact:true}),
   providerModel:page.getByRole('button',{name:'Model and reasoning settings',exact:true}),
-  providerModelLabel:page.getByRole('button',{name:'Model and reasoning settings',exact:true}).locator('span'),
-  bundle:page.getByRole('button',{name:'Conversation bundle',exact:true})};
+  providerModelLabel:page.getByRole('button',{name:'Model and reasoning settings',exact:true}).locator('span')};
  const result={};
  for(const [name,element] of Object.entries(elements)){
   await expect(element).toBeVisible();const box=await element.boundingBox();
@@ -67,7 +66,7 @@ async function accessibleSending(){
  assert.equal(css.position,'absolute');assert.equal(css.clipPath,'inset(50%)');assert.equal(css.clip,'rect(0px, 0px, 0px, 0px)');
  assert.ok(css.width<=1&&css.height<=1,'No painted normal caption box');
  const ax=await status().ariaSnapshot();assert.match(ax,/status/);assert.match(ax,/Sending message…/);
- await expect(page.locator('.a-compose-bottom [role="status"]')).toHaveCount(0);
+ await expect(page.locator('.a-compose-configuration [role="status"]')).toHaveCount(0);
  assert.equal(await page.getByText('Sending message…',{exact:true}).count(),1,'Only one composer sending announcement');
  return {css,accessibility:ax};
 }
@@ -122,8 +121,10 @@ async function run(){
  });
  await page.goto(origin,{waitUntil:'domcontentloaded',timeout:15000});
  await expect(composer()).toBeEditable();
- await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toHaveText('Test · model');
- await expect(page.getByRole('button',{name:'Conversation bundle',exact:true})).toHaveText('Work');
+ await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toHaveText('model');
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await expect(page.getByLabel('Registered root bundles',{exact:true}).locator('option:checked')).toHaveText('Work');
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  proof.readiness=await page.evaluate(()=>({stream:window.captionBootstrap,selectedSessionId:window.amplifier.getState().selectedSessionId,
   shell:window.amplifier.getShellState()}));
  assert.equal(proof.readiness.selectedSessionId,sid);assert.equal(proof.readiness.stream.baselineCount,1);
@@ -158,9 +159,8 @@ async function run(){
   await composer().focus();await page.keyboard.type(nextDraft);
   await expect(composer()).toHaveDraft(nextDraft);await expect(composer()).toContainText(nextDraft);
   await page.getByRole('button',{name:'Add attachments',exact:true}).focus();
-  for(const name of ['Model and reasoning settings','Conversation bundle']){
-   await page.keyboard.press('Tab');await expect(page.getByRole('button',{name,exact:true})).toBeFocused();
-  }
+  await page.keyboard.press('Tab');await expect(primary()).toBeFocused();
+  await page.keyboard.press('Tab');await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toBeFocused();
   // Current main deliberately moves Chat controls into the header Chat menu.
   await page.getByRole('button',{name:'Chat',exact:true}).focus();
   await expect(page.getByRole('button',{name:'Chat',exact:true})).toBeFocused();

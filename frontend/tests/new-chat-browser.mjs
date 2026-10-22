@@ -27,19 +27,19 @@ try{
  await expect(page.getByRole('button',{name:'Chat',exact:true})).toHaveCount(0);
  const originalWorkspace=(await state()).settings.workspace;
  await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
- await expect(page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true})).toContainText('Work');
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await expect(page.getByLabel('Registered root bundles',{exact:true}).locator('option:checked')).toHaveText('Work');
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  assert.deepEqual((await state()).view.newSessionDraft?.selection||{},{});
 
  await launcher.click();await launcher.click();assert.equal((await state()).sessions.length,0);await expectCatalog([]);
  await expect(page.getByText('Chat settings',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Notify me when ready',exact:true})).toHaveCount(0);
- await page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true}).click();
- await page.getByLabel('Registered root bundles',{exact:true}).selectOption('work');
- await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await page.getByLabel('Registered root bundles',{exact:true}).selectOption('work');
  await page.locator('select#chat-model').selectOption('chosen-model');
  await page.locator('#chat-effort').press('End');
- await page.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
  await page.getByRole('textbox',{name:/Folder on/}).fill(originalWorkspace+'/../');
@@ -53,7 +53,7 @@ try{
  await page.screenshot({path:out+'/new-chat-desktop.png'});
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});
  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`});
- await page.locator('.a-composer').getByRole('button',{name:'Chat options',exact:true}).click();const panel=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(panel).toBeVisible();
+ await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(panel).toBeVisible();
  const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}});
  assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry));
  await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();

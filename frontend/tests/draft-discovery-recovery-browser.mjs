@@ -38,7 +38,7 @@ try{
  assert.ok(reads>=2);
  await expect(composer).toHaveDraft('Keep this draft while settings recover');
  release();
- await page.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.screenshot({path:'../evidence/recovered-draft.png'});
  const inspection=await(await page.request.get(url+'/fixture')).json();
  assert.deepEqual(inspection.started,[]);assert.deepEqual(inspection.sent,[]);

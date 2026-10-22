@@ -137,22 +137,24 @@ try{
  await expect(rail).toBeHidden();
  await pane.evaluate(el=>{el.scrollTop=(el.scrollHeight-el.clientHeight)/2;el.dispatchEvent(new Event('scroll'))});
  const latest=page.getByRole('button',{name:'Jump to latest messages'});await expect(latest).toBeVisible();
- for(const [trigger,label,close] of [['Model and reasoning settings','Conversation model','Close model settings'],['Conversation bundle','Choose conversation bundle','Close bundle settings']]){
-  await page.getByRole('button',{name:trigger,exact:true}).click({timeout:8000});
-  const popup=page.getByRole('region',{name:label,exact:true});await expect(popup).toBeVisible();
+ {
+  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click({timeout:8000});
+  const popup=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(popup).toBeVisible();
+  await expect(popup.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
+  await expect(popup.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeVisible();
   await expect.poll(()=>popup.evaluate((el,jump)=>{
    const a=el.getBoundingClientRect(),b=document.querySelector(jump).getBoundingClientRect();
    const left=Math.max(a.left,b.left),right=Math.min(a.right,b.right),top=Math.max(a.top,b.top),bottom=Math.min(a.bottom,b.bottom);
    if(right<=left||bottom<=top)return 'no overlap';
    return el.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));
   },'.a-chat-jump button')).toBe(true);
-  await page.getByRole('button',{name:close,exact:true}).click();
+  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
  await page.screenshot({path:'/tmp/conversation-navigation-narrow.png'});
  await page.setViewportSize({width:390,height:844});await expect(rail).toBeHidden();
- await page.getByRole('button',{name:'Chat options',exact:true}).click();
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await expect(page.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
  await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
- await expect(page.getByRole('region',{name:'Conversation model',exact:true})).toBeVisible();
  await expect(page.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.setViewportSize({width:1440,height:900});await expect(rail).toBeVisible();
