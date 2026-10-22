@@ -1,12 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createConversationNavigation,isNavigationAction} from '../src/conversation-navigation.js';
+import {createConversationNavigation,isNavigationAction,usesNavigationQueue} from '../src/conversation-navigation.js';
 import {createSettingsActionQueue} from '../src/settings-action-queue.js';
 import {createPendingView} from '../src/pending-view.js';
 
 function state(id,revision=1){return {revision,client:{hostInstanceId:'host'},selectedSessionId:id,selectedWorkspaceId:'space',
  sessions:['a','b','c'].map(key=>({id:key,workspaceId:'space',title:key,draft:key+' draft',messages:key===id?[{id:key+'-message',text:key+' history'}]:[]})),
  view:{draft:id+' draft'},canvas:{id:id+'-canvas',open:true},canvasWorkspace:{views:[]},canvasArtifacts:[]}}
+
+for(const field of ['navExpanded','navPinned'])test(`delayed ${field} cannot overtake later browsing, while later drawer intent still wins`,async()=>{
+ const enqueue=createSettingsActionQueue(),pending=createPendingView();
+ const queues={navigation:{current:Promise.resolve()},commands:{current:Promise.resolve()}};
+ let server=state('a'),release;const blocked=new Promise(resolve=>release=resolve),calls=[];
+ const change=(patch,wait=Promise.resolve())=>{
+  const token=pending.add(patch),args={patch};
+  return enqueue(usesNavigationQueue('view.update',args)?queues.navigation:queues.commands,async()=>{
+   await wait;server={...server,view:{...server.view,...patch}};calls.push(patch);pending.settle(token);
+  });
+ };
+ const opened=change({[field]:true},blocked),browse={workSurface:'chats',navExpanded:false,navPinned:false};
+ const navigated=change(browse);
+ assert.equal(pending.apply(server).view[field],false);
+ await change({navFilter:'Beta'});assert.deepEqual(calls,[{navFilter:'Beta'}]);
+ release();await Promise.all([opened,navigated]);
+ assert.equal(pending.apply(server).view[field],false);
+ assert.equal(server.view.workSurface,'chats');
+ assert.deepEqual(calls,[{navFilter:'Beta'},{[field]:true},browse]);
+ // Drawer operations use this queue only; they are not destination changes.
+ assert.equal(isNavigationAction('view.update',{patch:{[field]:true}}),false);
+ let releaseBrowse;const heldBrowse=new Promise(resolve=>releaseBrowse=resolve);
+ const revisited=change({workSurface:'home',[field]:false},heldBrowse),reopened=change({[field]:true});
+ assert.equal(pending.apply(server).view[field],true);
+ releaseBrowse();await Promise.all([revisited,reopened]);
+ assert.equal(pending.apply(server).view[field],true);
+});
 
 test('newer browsing paints immediately but commits after a delayed chat selection',async()=>{
  const navigation=createConversationNavigation(),pending=createPendingView(),enqueue=createSettingsActionQueue();
