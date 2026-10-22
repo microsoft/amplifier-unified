@@ -19,7 +19,7 @@ try{
  await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[{id:'turn-one',anchorMessageId:'question',startedAt:start,endedAt:start+29.4,phase:'completed'}],nodes:[model]}}}});
  browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
  const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:headers}),errors=[],payloadReads=[];
- page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/[?&]field=(request|response)/.test(r.url()))payloadReads.push(r.url())});
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/[?&]field=(request|response|delegateRequest|delegateResponse)/.test(r.url()))payloadReads.push(r.url())});
  await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  // Delegated calls after the assistant's pause remain grouped even though
  // the worker itself belongs to the earlier message gap.
@@ -33,13 +33,17 @@ try{
  await page.reload();
  const after=page.locator('[data-group-id="turn-one@answer"]');
  await after.locator(':scope > button').click();
- const delegate=after.locator('[data-kind="worker"]');
- await expect(delegate).toContainText('Delegate · Source review');
+ const delegate=after.locator('[data-part="work-stream"]');
+ const original=page.locator('[data-group-id="turn-one@question"]');
+ const originalToggle=original.locator(':scope > button');
+ if(await originalToggle.getAttribute('aria-expanded')!=='true')await originalToggle.click();
+ const exchange=original.locator('[data-part="work-stream"]');
+ await expect(delegate).toContainText('Source review');
  await expect(delegate).toContainText('review-model');
- await expect(delegate.locator('[data-kind="llm"]')).toHaveCount(0);
- await delegate.locator(':scope > button').click();
- await expect(delegate.getByRole('region',{name:'Request to delegate',exact:true})).toContainText('Review the source');
- await expect(delegate).toContainText('Waiting for response');
+ await expect(delegate.locator('[data-kind="llm"] > button')).toHaveAttribute('aria-expanded','false');
+ await expect(delegate.getByRole('region',{name:'Request',exact:true})).toHaveCount(0);
+ await expect(exchange.getByRole('region',{name:'Request',exact:true})).toContainText('Review the source');
+ await expect(delegate).toContainText('Delegate is working');
  const beforeStop=await control({op:'inspect'});
  assert.deepEqual(beforeStop.workerStops,[]);assert.deepEqual(beforeStop.runtimeStops,[]);
  await delegate.getByRole('button',{name:'Stop worker',exact:true}).click();
@@ -47,39 +51,38 @@ try{
  assert.deepEqual((await control({op:'inspect'})).runtimeStops,[],'Stopping this delegate must not stop its parent or another chat');
  // This fixture proves the real UI/service target. Later lifecycle records
  // below are controlled events, not an actual child-process exit claim.
- await expect(delegate.locator('[data-node-id="review-call"]')).toHaveCount(0);
+ await expect(delegate.locator('[data-node-id="review-call"]')).toBeVisible();
  const reads=[];page.on('request',r=>{if(r.url().includes('/api/conversation/text'))reads.push(r.url())});
  const initialReads=reads.length;
- await expect(delegate.getByRole('button',{name:/Worker activity/})).toHaveAttribute('aria-expanded','false');
- await delegate.getByRole('button',{name:/Worker activity/}).click();
+ await expect(delegate.getByRole('button',{name:/Worker activity/})).toHaveCount(0);
  await expect(delegate.locator('[data-node-id="review-call"]')).toBeVisible();
  assert.equal(reads.length,initialReads,'Activity expansion must not read exchange bodies');
- await delegate.getByRole('button',{name:/Worker activity/}).click();
- await delegate.getByRole('button',{name:'Show full request',exact:true}).click();
- await expect(delegate.getByRole('region',{name:'Request to delegate',exact:true})).toContainText('Request detail café.');
+ await exchange.getByRole('button',{name:'Show full request',exact:true}).click();
+ await expect(exchange.getByRole('region',{name:'Request',exact:true})).toContainText('Request detail café.');
  // Completion updates the same mounted disclosure without changing expansion.
  await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[{id:'turn-one',phase:'completed',startedAt:start,endedAt:start+50}],nodes:[{...delegation,phase:'completed',endedAt:start+50,output:JSON.stringify({success:true,output:{response,session_id:'review'}})},{...worker,phase:'completed',endedAt:start+50},child]}}}});
- await expect(delegate.getByRole('region',{name:'Response to parent',exact:true})).toContainText('Review complete');
- await expect(delegate.getByRole('button',{name:/Worker activity/})).toHaveAttribute('aria-expanded','false');
- await delegate.getByRole('button',{name:'Show full response',exact:true}).click();
- await expect(delegate.locator('pre')).toContainText('const verified = true;');
+ await expect(exchange.getByRole('region',{name:'Reply',exact:true})).toContainText('Review complete');
+ await expect(delegate.getByRole('region',{name:'Reply',exact:true})).toHaveCount(0);
+ await expect(delegate.locator('[data-node-id="review-call"] > button')).toHaveAttribute('aria-expanded','false');
+ await exchange.getByRole('button',{name:'Show full response',exact:true}).click();
+ await expect(exchange.locator('pre')).toContainText('const verified = true;');
  await page.evaluate(()=>{window.copied='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.copied=text}}})});
- await delegate.getByRole('button',{name:'Copy response to parent',exact:true}).click();
+ await exchange.getByRole('button',{name:'Copy reply',exact:true}).click();
  assert.equal(await page.evaluate(()=>window.copied),response);
- await delegate.locator(':scope > button').click();
- await expect(delegate.getByRole('region',{name:'Response to parent',exact:true})).toHaveCount(0);
- await delegate.locator(':scope > button').click();
- await expect(delegate.getByRole('button',{name:/Worker activity/})).toHaveAttribute('aria-expanded','false');
+ await originalToggle.click();
+ await expect(exchange.getByRole('region',{name:'Reply',exact:true})).toBeHidden();
+ await originalToggle.click();
+ await expect(delegate.locator('[data-node-id="review-call"] > button')).toHaveAttribute('aria-expanded','false');
  // Capture a realistic short exchange, not the middle of a deliberately
  // expanded stress payload underneath the fixed composer.
  await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[{id:'turn-one',phase:'completed',startedAt:start,endedAt:start+50}],nodes:[{...delegation,phase:'completed',endedAt:start+50,input:JSON.stringify({agent:'review',instruction:'Review the source and identify any missing test coverage.'}),output:JSON.stringify({success:true,output:{response:'## Review complete\n\nThe request and returned answer are visible inside this delegate.\n\n- Existing model and tool calls remain under **Worker activity**.\n- Add coverage for resumed workers and paged history.',session_id:'review'}})},{...worker,phase:'completed',endedAt:start+50},child]}}}});
- await expect(delegate).toContainText('Add coverage for resumed workers');
- await delegate.evaluate(el=>el.scrollIntoView({block:'start'}));
+ await expect(exchange).toContainText('Add coverage for resumed workers');
+ await exchange.evaluate(el=>el.scrollIntoView({block:'start'}));
  mkdirSync(root+'test-results',{recursive:true});
  await page.screenshot({path:root+'test-results/delegate-exchange-desktop.png'});
  await page.setViewportSize({width:390,height:844});
- await delegate.evaluate(el=>el.scrollIntoView({block:'start'}));
- await expect(delegate.getByRole('region',{name:'Response to parent',exact:true})).toBeVisible();
+ await exchange.evaluate(el=>el.scrollIntoView({block:'start'}));
+ await expect(exchange.getByRole('region',{name:'Reply',exact:true})).toBeVisible();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'No horizontal page overflow');
  await page.screenshot({path:root+'test-results/delegate-exchange-mobile.png'});
  await page.setViewportSize({width:1280,height:1000});
@@ -93,9 +96,8 @@ try{
  if(await combinedWork.getAttribute('aria-expanded')!=='true')await combinedWork.click();
  const deliveredGroup=page.locator('[data-group-id="turn-one@report-message"]');
  await expect(deliveredGroup).toBeVisible();
- const deliveredDelegate=deliveredGroup.locator('[data-kind="worker"]');
- await deliveredDelegate.locator(':scope > button').click();
- await expect(deliveredDelegate.getByRole('region',{name:'Response to parent',exact:true})).toContainText('The exact delivered async answer.');
+ const deliveredDelegate=deliveredGroup.locator('[data-part="work-stream"]');
+ await expect(deliveredDelegate.getByRole('region',{name:'Reply',exact:true})).toContainText('The exact delivered async answer.');
  await expect(page.getByText('Pre-delivery tool record',{exact:true})).toHaveCount(0);
  // The rail contains loaded messages only. Demand the older page before
  // jumping to its question, then read the exact retained root-event record.
@@ -119,8 +121,7 @@ try{
  const saved=page.locator('[data-group-id^="event-window:"]');
  await saved.getByRole('button',{name:/^Recent saved work/}).click();
  await expect(saved).toContainText('Full conversation totals and earlier activity are not included.');
- const recorded=saved.locator('[data-kind="tool"]');
- await recorded.locator(':scope > button').click();
+ const recorded=saved.getByRole('region',{name:'Recorded reply',exact:true});
  await expect(recorded).toContainText('The exact delivered async answer.');
  await expect(saved.locator('.a-execution-usage')).toHaveCount(0);
  await expect(saved.locator('.a-execution-call-counts')).toHaveCount(0);
@@ -131,7 +132,15 @@ try{
  assert.ok(focusedReads.some(args=>args.get('group')?.startsWith('event-window:')),'Recorded work is read on disclosure');
  const header=page.locator('.a-work-header');
  await expect(header.getByRole('button',{name:'Chat overview',exact:true})).toHaveCount(0);
- await expect(header.getByRole('button',{name:'Chat',exact:true}).locator('.lucide-sliders-horizontal')).toHaveCount(1);
+ // Assert the current public menu, not a superseded icon implementation.
+ const chat=header.getByRole('button',{name:'Chat',exact:true});
+ await expect(chat).toBeVisible();
+ await chat.click();
+ const chatMenu=page.getByRole('group',{name:'Chat',exact:true});
+ await expect(chatMenu.getByRole('button',{name:'Help & diagnostics',exact:true})).toBeVisible();
+ await expect(chatMenu.getByRole('button',{name:'Advanced',exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');
+ await expect(chatMenu).toHaveCount(0);
  await expect(header.locator('.lucide-ellipsis')).toHaveCount(0);
  await openSettingsPage(page,'diagnostics');
  await expect(page.getByText('Saved recording setting: Off',{exact:true})).toBeVisible();
@@ -143,5 +152,5 @@ try{
  await expect(page.getByText('Saved recording setting: On',{exact:true})).toBeVisible();
  await page.screenshot({path:root+'test-results/delegate-recording-settings.png'});
  assert.deepEqual(errors,[]);
- console.log('PASS: live delegate nesting and delivered exchange, bounded historical root record with explicit partial accounting, current header and saved recording setting. Historical nested delegate reconstruction is not qualified.');
+ console.log('PASS: delegate stream and delivered exchange, bounded historical root record with explicit partial accounting, current header and saved recording setting. Historical nested delegate reconstruction is not qualified.');
 }finally{await browser?.close();fixture.kill()}

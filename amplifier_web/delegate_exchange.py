@@ -24,6 +24,20 @@ def tool_name(node):
     return str(node.get('tool') or node.get('label') or '').rsplit(':', 1)[-1].rsplit('.', 1)[-1]
 
 
+def exchange_fields(name, arguments):
+    """Typed fields permitted by the recorded tool contract, not arbitrary text."""
+    if name == 'delegate':
+        return FIELDS
+    arguments = parsed(arguments)
+    if (name == 'live_worker' and isinstance(arguments, dict)
+            and isinstance(arguments.get('action'), str)
+            and arguments.get('action') in {'message', 'steer'}
+            and isinstance(arguments.get('text'), str)):
+        # A control receipt confirms submission at most, never a child reply.
+        return ('delegateRequest',)
+    return ()
+
+
 def select(value, field):
     """Unwrap only documented delegation envelopes; receipts are never answers."""
     value = parsed(value)
@@ -55,6 +69,9 @@ def source_field(field):
 
 
 def field_value(node, field):
+    if tool_name(node) == 'live_worker' and (field == 'delegateResponse'
+            or field not in node and field not in exchange_fields('live_worker', node.get('input'))):
+        return None
     if field in node:
         return node[field]
     source = source_field(field)

@@ -4,7 +4,7 @@ import json
 import pytest
 
 from amplifier_web.browser_detail import owned_nodes, page, read_text
-from amplifier_web.delegate_exchange import descriptor, select
+from amplifier_web.delegate_exchange import descriptor, select, exchange_fields
 from amplifier_web.event_log_view import EventLogView, event_path
 from test_event_log_view import append
 
@@ -24,6 +24,72 @@ def test_typed_envelopes_preserve_empty_and_unicode_content():
     assert select({'instruction': 'Check café\n```py\nx=1\n```'}, 'delegateRequest') == 'Check café\n```py\nx=1\n```'
     assert select({'success': True, 'output': {'response': '', 'session_id': 'child'}}, 'delegateResponse') == ''
     assert select({'output': {'output': 'Complete'}}, 'delegateResponse') == 'Complete'
+
+
+@pytest.mark.parametrize('action', ['message', 'steer'])
+def test_followup_selector_admits_only_request_not_control_receipt(action):
+    arguments = {'action': action, 'session_id': 'child', 'text': 'Follow-up café'}
+    assert exchange_fields('live_worker', arguments) == ('delegateRequest',)
+    row = {'id': 'followup', 'tool': 'live_worker', 'input': json.dumps(arguments),
+           'output': json.dumps({'success': True, 'output': 'Accepted'})}
+    result = descriptor(row, 'root')
+    assert result['delegateRequest'] == arguments['text']
+    assert 'delegateResponse' not in result
+
+
+@pytest.mark.parametrize('arguments', [
+    {'action': 'cancel', 'text': 'Not a message'},
+    {'action': 'message', 'text': {'wrong': 'shape'}},
+    {'action': 'list', 'text': 'Not a message'},
+    {'text': 'No operation'},
+    {'action': ['message'], 'text': 'Not a string operation'},
+    {'action': {'name': 'steer'}, 'text': 'Not a string operation'},
+])
+def test_worker_control_without_message_contract_has_no_exchange(arguments):
+    assert exchange_fields('live_worker', arguments) == ()
+    assert exchange_fields('other_tool', arguments) == ()
+
+
+def test_followup_owner_scalar_survives_browser_compaction():
+    from amplifier_web.browser_detail import compact
+    row = {'id': 'follow', 'kind': 'tool', 'exchangeOwnerId': 'worker:child:run',
+           'sessionId': 'sender', 'rootSessionId': 'root'}
+    assert compact(row, 'root', 'nodes', 512)['exchangeOwnerId'] == 'worker:child:run'
+
+
+@pytest.mark.parametrize('target,expected', [('child', 'worker:child:second'), ('missing', None), ([], None)])
+def test_recorded_followup_uses_exact_resumed_owner_and_never_reply(tmp_path, monkeypatch, target, expected):
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    session = {'id': 'root', 'workspace': str(tmp_path / 'project'), 'messages': [], 'workers': []}
+    path = event_path(session, 'root')
+    for call, at in [('first', 10), ('second', 20)]:
+        append(path, 'tool:pre', {'session_id': 'root', 'tool_call_id': call,
+                                'tool_name': 'delegate', 'tool_input': {'instruction': call}}, at)
+        append(path, 'delegate:agent_spawned' if call == 'first' else 'delegate:agent_resumed',
+               {'session_id': 'root' if call == 'first' else 'child', 'parent_session_id': 'root',
+                'sub_session_id': 'child', 'tool_call_id': call}, at + 1)
+    arguments = {'action': 'message', 'session_id': target, 'text': 'Continue café'}
+    append(path, 'tool:pre', {'session_id': 'root', 'tool_call_id': 'follow', 'tool_name': 'live_worker',
+                            'tool_input': arguments}, 30)
+    append(path, 'tool:post', {'session_id': 'root', 'tool_call_id': 'follow', 'tool_name': 'live_worker',
+                             'tool_input': arguments, 'result': {'success': True, 'output': 'Accepted'}}, 31)
+    row = next(row for row in EventLogView(None).read(session)['nodes'] if row['id'] == 'tool:root:follow')
+    assert row.get('exchangeOwnerId') == expected
+    assert row['delegateRequest'] == arguments['text']
+    assert 'delegateResponse' not in row and 'delegateResponseDetail' not in row
+
+
+@pytest.mark.parametrize('action', ['cancel', 'list', ['message'], {'name': 'steer'}])
+def test_invalid_recorded_followup_keeps_raw_record_without_exchange(tmp_path, monkeypatch, action):
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    session = {'id': 'root', 'workspace': str(tmp_path / 'project'), 'messages': [], 'workers': []}
+    path = event_path(session, 'root')
+    append(path, 'tool:post', {'session_id': 'root', 'tool_call_id': 'control', 'tool_name': 'live_worker',
+                             'tool_input': {'action': action, 'text': 'not a request'},
+                             'result': 'control result'}, 1)
+    row = next(row for row in EventLogView(None).read(session)['nodes'] if row['id'] == 'tool:root:control')
+    assert row['output'] == 'control result'
+    assert 'delegateRequest' not in row and 'delegateResponse' not in row and 'exchangeOwnerId' not in row
 
 
 def test_canonical_exchange_exact_and_lazy_after_worker_and_request_are_paged_out(tmp_path, monkeypatch):

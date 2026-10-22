@@ -2761,6 +2761,71 @@
       ],
       "evidenceContext": "Historical checkpoint identity only; no new execution is claimed by this additive registration.",
       "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.979",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/979",
+      "reason": "Add the chronological delegate Work stream browser owner without replacing any existing scenario or frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.delegate-work-stream",
+          "family": "conversation",
+          "title": "Read delegate exchanges and independently expand their Work steps",
+          "scope": "standard-path",
+          "entryPath": [
+            "Conversation",
+            "Work disclosure"
+          ],
+          "prerequisites": [
+            "Built production client with synthetic recorded delegate requests, replies, operations and follow-ups",
+            "Canonical bounded detail server and actual saved-field read/copy boundary"
+          ],
+          "steps": [
+            "Expand Work and read chronological requests, operations, replies and follow-ups",
+            "Expand each operation independently and copy exact saved content",
+            "Inspect registered-web observer content and long Unicode bodies",
+            "Check actor readability on desktop and narrow layouts, with split-word and occlusion negative controls"
+          ],
+          "expectedResults": [
+            "Control acknowledgments are not represented as delegate replies.",
+            "Repeated owner headers do not replay old exchanges as new messages.",
+            "Unknown associations stay explicit; operation ownership and targeted Stop remain unchanged.",
+            "Complete field copy follows its exact saved reference and lease; no truncation is represented as a complete body.",
+            "Visible actor labels remain readable and hit-testable at measured sizes."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "long-Unicode",
+            "saved-detail",
+            "unverified-association"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/delegate-work-stream-browser.mjs",
+              "relation": "New single automatic Extended browser owner for chronology, lazy copy and measured actor readability"
+            },
+            {
+              "path": "tests/test_delegate_work_stream.py",
+              "relation": "Canonical field-reference/lease and real producer/capture component boundaries"
+            },
+            {
+              "path": "frontend/tests/delegate-activity-browser.mjs",
+              "relation": "Existing delegate ownership, control, recording settings and reload workflow"
+            },
+            {
+              "path": "frontend/tests/work-stream.test.mjs",
+              "relation": "Automatically discovered source ordering and ownership regressions"
+            }
+          ],
+          "limits": [
+            "Browser fixture uses synthetic runtime state; installed application acceptance is separately qualified.",
+            "Native component checks do not prove live-provider conversations or OS-process cold-turn retirement; #1009 remains separate.",
+            "Registration records coverage ownership, not an automatic passing qualification claim."
+          ]
+        }
+      ],
+      "qualification": "docs/clients/live-sessions.md"
     }
   ]
 }
