@@ -105,6 +105,7 @@ async def main():
                 'text':TEXT,'long':LONG,'crlf':CRLF,'textSha256':hashlib.sha256(TEXT.encode()).hexdigest(),
                 'effects':runtime.effects,'subprocesses':attempts,'installed':INSTALLED,
                 'rendererValidations':renderer_validations,
+                'receiverCold':not dict.__contains__(service._session(recipient['id'],hydrate=False),'messages'),
                 'backend':str(Path(server.__file__).resolve())})
         app.router.add_get('/api/fixture/peerFacts',facts)
         async def change(request):
@@ -114,6 +115,14 @@ async def main():
             elif args['kind']=='rename': a['title']='Renamed navigation design'
             elif args['kind']=='archive': service.state.setdefault('conversationOrganization',{}).setdefault('archived',{})[a['id']]=True
             elif args['kind']=='revoke': a['workspace']='/unavailable-synthetic'
+            elif args['kind']=='cold-receiver':
+                from amplifier_web.cold_display import ColdRecord
+                from amplifier_web.resource_files import put
+                current = service._session(recipient['id'],hydrate=False)
+                reference = put(service.db,current['messages'])
+                cold = ColdRecord({**current,'_coldFields':{'messages':reference}},service.db)
+                dict.pop(cold,'messages')
+                service.state['sessions'] = [cold if row['id']==current['id'] else row for row in service.state['sessions']]
             service._publish()
             return web.json_response({'changed':True})
         app.router.add_post('/api/fixture/change',change)

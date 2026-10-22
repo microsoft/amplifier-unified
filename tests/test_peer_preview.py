@@ -164,3 +164,64 @@ def test_flattening_negative_control_is_discriminating():
     assert flattened != TEXT
     assert '\\n' in TEXT and '\nThis is a real soft line break.' in TEXT
     assert '\n```python\n' in TEXT and '\n| Case | Result |\n' in TEXT
+
+
+def make_cold(service, receiving, rows):
+    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.resource_files import put
+    reference = put(service.db, rows)
+    cold = ColdRecord({**receiving, '_coldFields': {'messages': reference}}, service.db)
+    dict.pop(cold, 'messages', None)
+    service.state['sessions'] = [cold if row['id'] == receiving['id'] else row
+                                 for row in service.state['sessions']]
+    return cold
+
+
+@pytest.mark.parametrize('cold', [False, True])
+async def test_complete_bounded_receiver_proof_is_immediately_usable(app, monkeypatch, cold):
+    from amplifier_web import cold_display
+    service, source, receiving, mid = app
+    if cold:
+        receiving = make_cold(service, receiving, copy.deepcopy(receiving['messages']))
+    monkeypatch.setattr(cold_display, 'load', lambda *a: (_ for _ in ()).throw(AssertionError('Full hydrate')))
+    with service.clients.bind('preview-client'):
+        page = await service.history.windows.read(receiving['id'], limit=20)
+        shown = next(row for row in page['items'] if row['id'] == mid)
+        meta = shown['attribution']['peer']
+        assert meta['available']
+        result = await service.dispatch('peer.preview', {'proof': meta['proof'], 'sourceSessionId': receiving['id']})
+        assert result['accepted'] and result['effects'] == []
+        assert (await service.peer_preview.read({'proof': meta['proof']}))['page']['items']
+    if cold:
+        assert not dict.__contains__(receiving, 'messages')
+
+
+@pytest.mark.parametrize('change', ['text', 'replaced', 'duplicate', 'receipt', 'partial', 'postread'])
+async def test_cold_proof_rechecks_canonical_original_and_receipt(app, monkeypatch, change):
+    from amplifier_web import cold_display
+    service, source, receiving, mid = app
+    rows = copy.deepcopy(receiving['messages'])
+    receiving = make_cold(service, receiving, rows)
+    monkeypatch.setattr(cold_display, 'load', lambda *a: (_ for _ in ()).throw(AssertionError('Full hydrate')))
+    with service.clients.bind('preview-client'):
+        page = await service.history.windows.read(receiving['id'], limit=20)
+        proof = next(row for row in page['items'] if row['id'] == mid)['attribution']['peer']['proof']
+        if change == 'text': rows[0]['text'] = 'Changed canonical body'
+        if change == 'replaced': rows[0]['id'] = 'replacement'
+        if change == 'duplicate': rows.append(copy.deepcopy(rows[0]))
+        if change == 'partial':
+            rows = [copy.deepcopy(rows[0])] + [{'id':str(i), 'role':'assistant','text':'Other'} for i in range(101)] + rows
+        if change in {'text', 'replaced', 'duplicate', 'partial'}:
+            receiving = make_cold(service, receiving, rows)
+        if change == 'receipt': service.db.execute("DELETE FROM commands WHERE id='peer-preview-input'")
+        if change == 'postread':
+            read = service.history.windows.read
+            async def replaced_after_source_read(*args, **kwargs):
+                result = await read(*args, **kwargs)
+                rows[0]['text'] = 'Replaced while source read was in flight'
+                make_cold(service, receiving, rows)
+                return result
+            monkeypatch.setattr(service.history.windows, 'read', replaced_after_source_read)
+        with pytest.raises((AppError, ValueError)):
+            await service.peer_preview.read({'proof':proof})
+        assert not dict.__contains__(receiving, 'messages')

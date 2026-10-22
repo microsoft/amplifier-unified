@@ -211,6 +211,11 @@ try{
  await panel().getByRole('button',{name:'Refresh',exact:true}).click();await expect(panel().getByRole('alert')).toContainText('Previous snapshot retained');
  await page.unroute('**/api/peer/preview?**');await panel().getByRole('button',{name:'Refresh',exact:true}).click();
  await change('archive');await panel().getByRole('button',{name:'Refresh',exact:true}).click();
+ await change('cold-receiver');
+ await panel().getByRole('button',{name:'Refresh',exact:true}).click();
+ await expect(panel().getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
+ assert.equal((await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json()).receiverCold,true);
+ await expect(panel().getByRole('alert')).toHaveCount(0);
  if(process.env.AMPLIFIER_PROOF_DIR){mkdirSync(process.env.AMPLIFIER_PROOF_DIR,{recursive:true});await page.screenshot({path:join(process.env.AMPLIFIER_PROOF_DIR,'peers-desktop.png')});}
  await panel().getByRole('button',{name:'Open chat',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(facts.sourceA);assert.equal(await page.evaluate(()=>window.peerDocument),before.document);

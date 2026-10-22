@@ -161,6 +161,26 @@ class TranscriptWindows:
         return [session['id'], self._fence(session['id']), len(rows), rows[0].get('id') if rows else None,
                 rows[-1].get('id') if rows else None, session.get('nativeRevision')]
 
+    def exact_saved_originals(self, session):
+        """Fresh complete bounded originals for a synchronous receipt guard.
+
+        Called under writer exclusion. Reuse the canonical immutable-resource
+        reader and its byte/object/file fences; never hydrate a ColdRecord or
+        treat a prior display-page cache as current authority. Partial sets
+        cannot establish global uniqueness, even if they contain the wanted ID.
+        """
+        cold = self._cold_source(session)
+        if cold is None:
+            return dict.get(session, 'messages', ())
+        from .saved_message_window import read_saved_window
+        identity, source, fence = session['id'], _source(session), self._fence(session['id'])
+        page = read_saved_window(cold, self.reader, session_id=identity, fence=fence, limit=100)
+        current = self.service._session(identity, hydrate=False)
+        if (_source(current) != source or self._fence(identity) != fence
+                or self._cold_source(current) != cold or page['hasEarlier'] or page['unavailableRanges']):
+            raise ValueError('The complete original source is unavailable or changed.')
+        return page['items']
+
     def _saved_page(self, session, before, limit):
         stamp = self._saved_stamp(session)
         source = _digest(stamp)
