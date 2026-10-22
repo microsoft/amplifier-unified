@@ -2944,7 +2944,21 @@ class AppService:
                     from .message_interactions import reconcile_native_reveal
                     reconcile_native_reveal(session, reveal_message)
                 from .message_interactions import command
-                diagnostic_result = command(self, action, args, origin=origin)
+                try:
+                    diagnostic_result = command(self, action, args, origin=origin)
+                except AppError as exc:
+                    # This synchronous reaction boundary rejects before changing
+                    # annotations. Retain that exact evidence for a lost reply;
+                    # absence of a receipt still never means rejection.
+                    if action == 'message.reaction' and command_id and 400 <= exc.status < 500:
+                        rejected = {'accepted': False, 'status': exc.status, 'error': str(exc),
+                                    'effects': [], 'result': {'sessionId': args['sessionId'],
+                                    'messageId': args['messageId'], 'reactionActor': 'assistant' if origin == 'agent' else 'user',
+                                    'sent': False}}
+                        self.db.execute('INSERT INTO commands VALUES (?,?,?)',
+                                        (command_id, fingerprint, json.dumps(rejected)))
+                        self.db.commit()
+                    raise
             elif action == 'message.copy':
                 source = self._session(args['sessionId'])
                 message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
@@ -4691,6 +4705,14 @@ class AppService:
             return self.observations.authorize_admission(session_id, args)
         if operation == 'memory.context':
             return await self.recall.personalization.context(session_id, expected=args.get('expected'))
+        if operation == 'message.reactions.context':
+            from .message_interactions import reaction_context
+            # A previous publication failure leaves progress dirty. Do not
+            # describe an unsaved in-memory annotation as committed context.
+            async with self.lock:
+                if getattr(self, '_progress_dirty', False):
+                    self._commit_pending_progress()
+                return reaction_context(self._session(session_id, hydrate=False))
         if operation == "questions.admit":
             async with self.lock:
                 self._session(session_id)
