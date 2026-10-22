@@ -86,3 +86,139 @@ async def test_model_catalog_skips_execution_preflight_and_does_not_wait_for_res
     assert app.runtime is None
     release.set()
     await asyncio.gather(*app.management.conversation_catalog_requests.values())
+
+
+async def test_delayed_catalog_cannot_overwrite_new_bundle_revision(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.conversation_models import browse
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def resolve(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return {'providers': [{'id': 'obsolete'}], 'catalogs': {}}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    task = asyncio.create_task(browse(app.management, deepcopy(app._session())))
+    await entered.wait()
+    await app.dispatch('conversation.configure', choices(app, bundle='work'))
+    release.set()
+    await task
+    assert 'configuration.catalog' not in app.state.get('runtimeControl', {}).get(app._session()['id'], {})
+
+
+async def test_preview_and_catalog_do_not_wait_on_runtime_mutation(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    async def resolve(*args, **kwargs):
+        return {'bundle': 'work', 'fingerprint': 'fixture', 'selection': None,
+                'modelCompatible': True, 'changes': {}}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    monkeypatch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('history')))
+    monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock(side_effect=AssertionError('worker')))
+    await app.management.lock.acquire()
+    try:
+        await app.dispatch('bundle.preview', {'sessionId': app._session()['id'], 'bundle': 'work'})
+        async with asyncio.timeout(2):
+            while app._session().get('bundleChange', {}).get('phase') != 'ready':
+                await asyncio.sleep(.01)
+        assert app._session()['bundlePreview']['baseline'] == 'saved'
+        await asyncio.wait_for(app.management.list_bundles({}, 'passive-catalog'), 2)
+    finally:
+        app.management.lock.release()
+    assert app.runtime is None
+
+
+def valid_catalog():
+    return {'providers': [{'id': 'one', 'sharedCatalogKey': 'one'}], 'catalogs': {'one': {
+        'phase': 'ready', 'models': [{'id': 'chosen'}],
+        'metadata': {'configSchema': {'fields': [{'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}}}}
+
+
+@pytest.mark.parametrize('fault', ['offline', 'model', 'effort', 'provider'])
+def test_invalid_choices_never_pass_validation(fault):
+    from amplifier_web.next_message_configuration import validate_selection
+    catalog = valid_catalog()
+    selected = {'instance': 'one', 'model': 'chosen', 'effort': 'high'}
+    if fault == 'offline':
+        catalog['catalogs']['one']['phase'] = 'error'
+    else:
+        selected[{'model': 'model', 'effort': 'effort', 'provider': 'instance'}[fault]] = 'unavailable'
+    with pytest.raises(ValueError):
+        validate_selection(selected, catalog)
+
+
+async def test_genuine_input_consumes_latest_revision_and_no_older_ack(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.next_message_configuration import bind, applied
+    runtime = RuntimeManager()
+    app.runtime = runtime
+    bind(app, runtime)
+    calls = []
+    async def resolve(*args, **kwargs):
+        if kwargs.get('replacement'):
+            return {'bundle': args[2], 'fingerprint': 'plan', 'selection': kwargs['replacement']['selection'],
+                    'modelCompatible': True}
+        return valid_catalog()
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    async def start(session, emit, **kwargs):
+        kwargs['guard']()
+        calls.append(('start', deepcopy(session)))
+    async def control(sid, operation, value, **kwargs):
+        kwargs['guard']()
+        calls.append((operation, value))
+    async def request(sid, op, **kwargs):
+        kwargs['guard']()
+        calls.append((op, kwargs['input_id']))
+        return {'accepted': True}
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    monkeypatch.setattr(runtime, '_request', request)
+    await app.dispatch('conversation.configure', choices(app, bundle='work',
+        selection={'instance': 'one', 'model': 'chosen', 'effort': 'high'}))
+    await app.dispatch('conversation.configure', choices(app, 1,
+        selection={'instance': 'one', 'model': 'chosen', 'effort': 'low'}))
+    current = app._session()
+    applied(current, {'revision': 1, 'bundle': 'work'})
+    assert current['pendingModelSelection']['effort'] == 'low'
+    await runtime.send(deepcopy(current), 'real synthetic input', 'one-input', app.on_runtime_event)
+    assert [row[0] for row in calls] == ['start', 'provider.select', 'send']
+    assert calls[0][1]['bundleReplacement']['deferred'] is True
+    assert calls[1][1]['effort'] == 'low'
+    assert current['bundle'] == 'work' and current['appliedConfigurationRevision'] == 2
+    assert 'pendingModelSelection' not in current and 'pendingBundleSelection' not in current
+
+
+@pytest.mark.parametrize('fault', ['stop', 'newer', 'permission'])
+async def test_delayed_validation_refuses_before_start_and_keeps_intent(app, monkeypatch, fault):
+    from amplifier_web import draft_defaults
+    from amplifier_web.next_message_configuration import prepare
+    from amplifier_web.runtime import RuntimeStartupError
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def resolve(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return {'bundle': 'work', 'fingerprint': 'plan', 'selection': None, 'modelCompatible': True}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    await app.dispatch('conversation.configure', choices(app, bundle='work'))
+    original = deepcopy(app._session())
+    attempt = asyncio.create_task(prepare(app, original))
+    await entered.wait()
+    if fault == 'stop':
+        app._session()['interruptionRevision'] = 1
+    elif fault == 'newer':
+        await app.dispatch('conversation.configure', choices(app, 1, bundle='other'))
+    else:
+        app._session()['fileAccessPending'] = True
+    release.set()
+    with pytest.raises(RuntimeStartupError):
+        await attempt
+    assert app.runtime is None
+    assert app._session()['pendingBundleSelection']['bundle'] == ('other' if fault == 'newer' else 'work')
+    assert app._session()['bundle'] == 'anchors'
+
+
+async def test_reset_then_explicit_pin_does_not_silently_discard_pin(app):
+    await app.dispatch('conversation.configure', choices(app, bundle='work', resetModel=True))
+    selected = {'instance': 'one', 'model': 'chosen'}
+    await app.dispatch('conversation.configure', choices(app, 1, selection=selected))
+    assert app._session()['pendingBundleSelection']['resetModel'] is False
+    assert app._session()['pendingModelSelection'] == selected

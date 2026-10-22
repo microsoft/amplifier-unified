@@ -6,9 +6,49 @@ import uuid
 from pathlib import Path
 
 
+async def preview_saved(management, args):
+    """Compose a candidate without mounting either conversation runtime."""
+    from .draft_defaults import resolve_defaults
+    app, sid = management.service, args['sessionId']
+    token = str(uuid.uuid4())
+    async with app.lock:
+        source = copy.deepcopy(app._session(sid, hydrate=False))
+        revision = (app.state.get('configurationRevision', 0), source.get('nextMessageRevision', 0),
+                    source.get('interruptionRevision', 0))
+        app._session(sid)['bundlePreviewRequest'] = token
+        app._session(sid)['bundleChange'] = {'phase': 'working', 'action': 'bundle.preview', 'bundle': args['bundle']}
+        app._publish_changes(sessions={sid})
+    try:
+        checked = await resolve_defaults(app.data_dir, source['workspace'], args['bundle'],
+            session_id=source.get('runtimeSessionId') or source.get('nativeIdentity') or sid,
+            replacement={'selection': source.get('selection'), 'workingDirectory': source.get('workingDirectory'),
+                         'replaceSavedSelection': 'selection' in source})
+        result = {**checked, 'previewId': token, 'baseline': 'saved',
+            'detail': 'Declared bundle settings only. Model and mounted capabilities are checked when work begins.'}
+        error = None
+    except Exception:
+        result = None
+        error = 'Bundle preview is unavailable. Your saved choices are unchanged; retry when its source is available.'
+    async with app.lock:
+        current = app._session(sid, hydrate=False)
+        if (current.get('bundlePreviewRequest') != token or revision != (
+                app.state.get('configurationRevision', 0), current.get('nextMessageRevision', 0),
+                current.get('interruptionRevision', 0))):
+            return
+        if result is not None:
+            current['bundlePreview'] = result
+        current['bundleChange'] = {'phase': 'error' if error else 'ready', 'action': 'bundle.preview',
+            'bundle': args['bundle'], **({'error': error} if error else {})}
+        app._publish_changes(sessions={sid})
+    if error:
+        raise ValueError(error)
+
+
 async def perform(management, action, args):
     from .configuration_authority import check_current
     check_current()
+    if action == 'bundle.preview':
+        return await preview_saved(management, args)
     app = management.service
     sid = args['sessionId']
     async with app.lock:
@@ -58,7 +98,16 @@ async def perform(management, action, args):
         elif action == 'bundle.switch':
             if replacement is None:
                 check_current()
-                prepared = await app.runtime.control(sid, 'bundle.prepare', args)
+                switch_args = args
+                if args.get('previewId'):
+                    expected = source.get('bundlePreview', {})
+                    if expected.get('previewId') != args['previewId'] or expected.get('bundle') != args['bundle']:
+                        raise ValueError('The configuration changed. Preview the selected bundle again.')
+                    mounted_preview = await app.runtime.control(sid, 'bundle.preview', {'bundle': args['bundle']})
+                    if any(expected.get(key) != mounted_preview.get(key) for key in ('fingerprint', 'selection')):
+                        raise ValueError('The configuration changed. Preview the selected bundle again.')
+                    switch_args = {**args, 'previewId': mounted_preview['previewId']}
+                prepared = await app.runtime.control(sid, 'bundle.prepare', switch_args)
                 if prepared.get('requiresModelChoice'):
                     async with app.lock:
                         app._session(sid)['bundlePreview'] = prepared['preview']

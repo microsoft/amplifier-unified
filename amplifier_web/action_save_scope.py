@@ -8,7 +8,7 @@ use the same _publish_changes boundary directly.
 
 SESSION_ACTIONS = {
     'session.markUnread', 'session.rename', 'session.naming', 'session.inspect', 'session.warm',
-    'session.history', 'session.takeover', 'conversation.send',
+    'session.history', 'session.takeover', 'conversation.send', 'conversation.configure',
     'conversation.delivery', 'conversation.retry', 'conversation.stop',
     'worker.spawn', 'worker.stop', 'worker.steer', 'worker.message',
     'approval.respond', 'attachment.add', 'attachment.remove',

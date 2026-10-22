@@ -273,7 +273,9 @@ async def ensure(home, generation, session, *, progress=None):
     )
     validate_id(runtime_id)
     edited_path = Path(home) / "sessions" / runtime_id / "configuration.json"
-    edited = json.loads(edited_path.read_text()) if edited_path.exists() else None
+    # A root replacement intentionally clears the previous root's module plan.
+    # Qualify the candidate graph, not stale overrides from the old root.
+    edited = json.loads(edited_path.read_text()) if edited_path.exists() and not session.get('bundleReplacement') else None
     # Local overrides are mutable user inputs. Content, not merely the path,
     # participates in qualification so edits cannot reuse an obsolete wheel.
     local_inputs = _local_build_inputs(config, edited, local, bundle)

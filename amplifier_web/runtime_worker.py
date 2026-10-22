@@ -543,7 +543,8 @@ class Worker:
             recover_pending(self.home, workspace, config['id'])
             if config.get('bundleReplacement') is not None:
                 from amplifier_web.bundle_selection import begin_replacement
-                replacement, resolved_root = await begin_replacement(self.home, workspace, config)
+                replacement, resolved_root = await begin_replacement(self.home, workspace, config,
+                    admit=lambda: self.bridge('configuration.nextMessage.admit', {}))
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -644,6 +645,8 @@ class Worker:
             public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
                 "tools", "agents", "provider_choices", "selection", "effective_selection", "delegationRouting", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
             if replacement:
+                if config.get('bundleReplacement', {}).get('deferred'):
+                    await self.bridge('configuration.nextMessage.admit', {})
                 replacement.commit()
                 replacement = None
             from amplifier_web.support_diagnostics import runtime_versions
