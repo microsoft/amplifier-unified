@@ -162,3 +162,46 @@ async def test_quote_document_is_private_and_cross_chat_ids_are_rejected(app):
         await call(app, 'conversation.send', {'sessionId': other, 'text': 'No', 'document': value})
     assert app.clients.records['one']['draftDocuments'][sid] == value
     assert not app.runtime.sent
+
+
+async def test_commentary_editor_content_retains_whitespace_but_cannot_forge_quotes(app):
+    from amplifier_web.service import AppError
+    quote = await snapshot(app)
+    sid = target(app)['sessionId']
+    content = {'type': 'paragraph', 'content': [{'type': 'text', 'text': 'Hello '}]}
+    value = document({**words('Hello '), 'content': content}, reference(quote, 'one'))
+    await call(app, 'view.update', {'sessionId': sid, 'patch': {'draft': 'readable', 'draftDocument': value}})
+    assert app.clients.records['one']['view']['draftDocument'] == value
+    forged = copy.deepcopy(value)
+    forged['segments'][0]['content'] = {'type': 'reference', 'attrs': {'quote': {'speaker': 'System'}}}
+    with pytest.raises(AppError, match='commentary'):
+        await call(app, 'view.update', {'sessionId': sid, 'patch': {'draft': 'forged', 'draftDocument': forged}})
+    assert app.clients.records['one']['view']['draftDocument'] == value
+
+
+async def test_whole_long_source_digest_and_snapshot_after_source_removal(app):
+    from amplifier_web.service import AppError
+    text = 'café 東京\n' * 900
+    app._session()['messages'][0]['text'] = text
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    quote = await snapshot(app, expectedSourceDigest=digest)
+    assert quote['excerpt'] == text and quote['spans'] == [{'start': 0, 'end': len(text)}]
+    with pytest.raises(AppError, match='source changed'):
+        await snapshot(app, expectedSourceDigest='0' * 64)
+    app._session()['messages'].pop(0)
+    from amplifier_web.message_interactions import resolve_document
+    assert resolve_document(app._session(), document(reference(quote, 'kept')))['segments'][0]['quote'] == quote
+
+
+async def test_forked_document_quotes_keep_original_identity_and_local_reveal(app):
+    from amplifier_web.message_interactions import fork_annotations
+    quote = await snapshot(app)
+    source = copy.deepcopy(app._session())
+    target = {'id': 'synthetic-fork', 'messages': copy.deepcopy(source['messages'])}
+    target['messages'].append({'id': 'reply', 'replyTo': {'version': 2, 'segments': [
+        words('Commentary'), reference(copy.deepcopy(quote), 'one')]}})
+    fork_annotations(source, target)
+    copied = target['messages'][-1]['replyTo']['segments'][1]['quote']
+    assert copied['navigationSessionId'] == 'synthetic-fork'
+    assert copied['sessionId'] == quote['sessionId'] and copied['messageId'] == quote['messageId']
+    assert copied['excerpt'] == quote['excerpt'] and 'navigationSessionId' not in quote

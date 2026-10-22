@@ -4,7 +4,7 @@ import {schema as markdownSchema,MarkdownParser,MarkdownSerializer,defaultMarkdo
 import {InputRule,inputRules,wrappingInputRule,textblockTypeInputRule,undoInputRule} from 'prosemirror-inputrules';
 import {keymap} from 'prosemirror-keymap';
 import {baseKeymap,chainCommands,newlineInCode,createParagraphNear,liftEmptyBlock,splitBlock,toggleMark,setBlockType} from 'prosemirror-commands';
-import {history,undo,redo} from 'prosemirror-history';
+import {history,undo,redo,closeHistory} from 'prosemirror-history';
 import {splitListItem,liftListItem,sinkListItem,wrapInList} from 'prosemirror-schema-list';
 
 // Markdown image references remain editable without fetching remote images.
@@ -13,7 +13,7 @@ export const composerSchema=new Schema({nodes:markdownSchema.spec.nodes.update('
  ...markdownSchema.spec.nodes.get('image'),
  toDOM:node=>['span',{'class':'a-composer-image-reference',title:node.attrs.src},node.attrs.alt||'Image reference'],
 }).addToEnd('reference',{
- group:'block',atom:true,selectable:true,draggable:false,
+ group:'block',atom:true,selectable:false,draggable:false,isolating:true,
  attrs:{instanceId:{},quote:{}},
  // Never parse pasted HTML into an attributed quote.
  toDOM:node=>['blockquote',{'data-quote-instance':node.attrs.instanceId},node.attrs.quote.excerpt],
@@ -31,16 +31,29 @@ export function composerDocument(doc){
  const segments=[];let quoted=false;
  doc.forEach(node=>{
   if(node.type.name==='reference'){quoted=true;segments.push({type:'quote',instanceId:node.attrs.instanceId,quote:node.attrs.quote});}
-  else segments.push({type:'text',text:composerMarkdown(composerSchema.nodes.doc.create(null,node))});
+  else segments.push({type:'text',text:composerMarkdown(composerSchema.nodes.doc.create(null,node)),content:node.toJSON()});
  });
- return quoted?{version:1,segments}:null;
+ // Markdown is the readable projection, not an exact editor checkpoint. Keep
+ // structured commentary even after the last quote is removed if reparsing
+ // would change it (for example, a split paragraph's trailing space).
+ return quoted||!parseComposer(composerMarkdown(doc)).eq(doc)?{version:1,segments}:null;
 }
 export function parseDocument(text,document){
  if(!document?.segments)return parseComposer(text);
  const nodes=[];
  for(const part of document.segments){
   if(part.type==='quote')nodes.push(composerSchema.nodes.reference.create({instanceId:part.instanceId,quote:part.quote}));
-  else parseComposer(part.text).forEach(node=>nodes.push(node));
+  else if(part.content){
+   const node=composerSchema.nodeFromJSON(part.content);node.check();
+   let valid=node.isBlock&&node.type.name!=='doc';
+   const check=item=>{
+    if(item.type.name==='reference')valid=false;
+    for(const mark of item.marks)if(mark.type.name==='link'&&!tokenizer.validateLink(mark.attrs.href))valid=false;
+   };
+   check(node);node.descendants(check);
+   if(!valid||composerMarkdown(composerSchema.nodes.doc.create(null,node))!==part.text)throw Error('The saved commentary does not match its editor content.');
+   nodes.push(node);
+  }else parseComposer(part.text).forEach(node=>nodes.push(node));
  }
  return composerSchema.nodes.doc.create(null,nodes.length?nodes:[composerSchema.nodes.paragraph.create()]);
 }
@@ -50,21 +63,26 @@ export function insertQuote(view,quote,target){
  if(existing.length>=12||existing.reduce((n,part)=>n+[...part.quote.excerpt].length,0)+[...quote.excerpt].length>24000)throw Error('Keep at most 12 quotes and 24,000 quoted characters. Nothing was shortened.');
  const node=composerSchema.nodes.reference.create({instanceId:crypto.randomUUID(),quote});
  if(target.pos===view.state.doc.content.size){
-  const tr=view.state.tr.insert(target.pos,[node,composerSchema.nodes.paragraph.create()]);
+  const tr=closeHistory(view.state.tr).insert(target.pos,[node,composerSchema.nodes.paragraph.create()]);
   view.dispatch(tr.setSelection(TextSelection.create(tr.doc,target.pos+node.nodeSize+1)));
   return;
  }
  if(view.state.doc.resolve(target.pos).depth>1)throw Error('Place the quote between paragraphs or choose Add quotes at end. Your draft was kept.');
  // Collapse at the captured end: never replace selected commentary.
- let tr=view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(target.pos)));
- tr=tr.replaceSelectionWith(node);
- if(tr.doc.lastChild.type.name==='reference')tr.insert(tr.doc.content.size,composerSchema.nodes.paragraph.create());
- view.dispatch(tr);
+ let tr=closeHistory(view.state.tr);
+ if(view.state.doc.resolve(target.pos).depth===0)tr.insert(target.pos,node);
+ else tr.setSelection(TextSelection.create(view.state.doc,target.pos)).replaceSelectionWith(node);
+ let after;
+ tr.doc.forEach((child,pos)=>{if(child.attrs.instanceId===node.attrs.instanceId)after=pos+child.nodeSize;});
+ if(!tr.doc.nodeAt(after)?.isTextblock)tr.insert(after,composerSchema.nodes.paragraph.create());
+ // Never leave NodeSelection on the immutable block: the next keystroke
+ // would replace it. This updates the bookmark without focusing or scrolling.
+ view.dispatch(tr.setSelection(TextSelection.create(tr.doc,after+1)));
 }
 export function changeQuote(view,id,direction){
  const positions=[];view.state.doc.forEach((node,pos)=>{if(node.type.name==='reference')positions.push({node,pos});});
  const index=positions.findIndex(row=>row.node.attrs.instanceId===id),here=positions[index];if(!here)return;
- let tr=view.state.tr;
+ let tr=closeHistory(view.state.tr);
  if(direction===0)tr=tr.delete(here.pos,here.pos+here.node.nodeSize);
  else{
   const other=positions[index+direction];if(!other)return;
@@ -148,6 +166,12 @@ export function setComposerLink(view,value){
  view.dispatch(tr);view.focus();return true;
 }
 export const composerNewline=chainCommands(newlineInCode,splitListItem(composerSchema.nodes.list_item),createParagraphNear,liftEmptyBlock,splitBlock);
+function besideQuote(state,direction){
+ const {empty,$from}=state.selection;if(!empty||$from.depth!==1)return false;
+ if(direction<0&&$from.parentOffset!==0||direction>0&&$from.parentOffset!==$from.parent.content.size)return false;
+ const boundary=state.doc.resolve(direction<0?$from.before():$from.after());
+ return (direction<0?boundary.nodeBefore:boundary.nodeAfter)?.type.name==='reference';
+}
 export function composerState(text,document){
  const {marks,nodes}=composerSchema;
  return EditorState.create({schema:composerSchema,doc:parseDocument(text,document),plugins:[
@@ -155,7 +179,8 @@ export function composerState(text,document){
   composerRules(),history(),keymap({
    'Mod-z':undo,'Shift-Mod-z':redo,'Mod-y':redo,
    'Mod-b':toggleMark(marks.strong),'Mod-i':toggleMark(marks.em),'Mod-`':toggleMark(marks.code),
-   'Backspace':chainCommands(undoInputRule,(state,dispatch)=>state.selection.empty&&state.selection.$from.parentOffset===0&&liftListItem(nodes.list_item)(state,dispatch)),
+   'Backspace':chainCommands(state=>besideQuote(state,-1),undoInputRule,(state,dispatch)=>state.selection.empty&&state.selection.$from.parentOffset===0&&liftListItem(nodes.list_item)(state,dispatch)),
+   'Delete':state=>besideQuote(state,1),
    'Tab':sinkListItem(nodes.list_item),'Shift-Tab':liftListItem(nodes.list_item),
   }),keymap(baseKeymap),
  ]});

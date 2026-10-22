@@ -34,6 +34,7 @@ import {useMessageOutbox,outboxMessages} from './message-outbox';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
+import {readDetail} from './detail-read.js';
 import {trackAction,setFeedbackEventStream} from './feedback-diagnostics';
 import {ConversationError,ConversationSelect} from './conversation-controls';
 import {useShell,ShellContext,ShellSlot} from './shell/runtime';
@@ -206,8 +207,13 @@ function App(){
    addingQuote.current=true;setQuoteNotice('Adding quote…');
    return (async()=>{
     let prepared={...args,snapshotOnly:true};
-    if(typeof meta.quoteSource==='string'){
-     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(meta.quoteSource));
+    const source=meta.quoteDetail?await readDetail(meta.quoteDetail,async(url,options)=>{
+     const page=await request(url,options);
+     if(page.total>12000)throw Error('Choose a passage of at most 12,000 characters. Nothing was shortened.');
+     return page;
+    }):meta.quoteSource;
+    if(typeof source==='string'){
+     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source));
      const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
      prepared=args.selection?{...prepared,selection:{...args.selection,sourceDigest:digest}}:{...prepared,expectedSourceDigest:digest};
     }

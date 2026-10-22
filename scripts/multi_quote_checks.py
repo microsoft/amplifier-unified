@@ -1,0 +1,119 @@
+"""Fixed, focused multi-quote qualification inside the owned managed guest only."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+import zipfile
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--installed', action='store_true')
+    args = parser.parse_args()
+    if ROOT != Path('/workspace') or os.environ.get('UV_OFFLINE') != '1':
+        raise SystemExit('Run only in the owned offline managed guest; never on the host.')
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    results = []
+
+    def save():
+        (output / 'results.json').write_text(json.dumps(results, indent=2))
+
+    def run(name, command, *, cwd=ROOT, env=None, stdin=None, expected=0):
+        started = time.monotonic()
+        try:
+            result = subprocess.run(command, cwd=cwd, env=env, input=stdin, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
+            code, text = result.returncode, result.stdout
+        except subprocess.TimeoutExpired as error:
+            code, text = 124, str(error.stdout or '') + '\nCHECK TIMEOUT'
+        except OSError as error:
+            code, text = 127, str(error)
+        (output / (name + '.log')).write_text(text)
+        results.append({'name': name, 'command': command, 'exitCode': code,
+                        'expectedExit': expected, 'passed': code == expected,
+                        'seconds': round(time.monotonic() - started, 3)})
+        save()
+        print(name, 'exit', code, text[-2500:], flush=True)
+        return code, text
+
+    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+    source = {p: sha((ROOT / p).read_bytes()) for p in tracked if p and (ROOT / p).is_file()}
+    (output / 'source.json').write_text(json.dumps({'head': subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(), 'files': source}, indent=2))
+    run('backend', [sys.executable, '-m', 'pytest', '-q', '--tb=short',
+        'tests/test_multi_quote.py', 'tests/test_message_interactions.py',
+        '--junitxml=' + str(output / 'backend.xml')])
+    units = ['multi-quote', 'markdown-composer', 'draft-attach', 'draft-journal',
+             'pending-view', 'message-render-stability', 'message-reaction-feedback']
+    unit_code, _ = run('model-units', ['node', '--test', *['tests/' + name + '.test.mjs' for name in units]], cwd=ROOT / 'frontend')
+    model = ROOT / 'frontend/src/markdown-composer.js'
+    original = model.read_bytes()
+    if unit_code == 0:
+        before = 'if(direction===0)tr=tr.delete(here.pos,here.pos+here.node.nodeSize);'
+        assert original.decode().count(before) == 1
+        try:
+            model.write_text(original.decode().replace(before, 'if(direction===0){tr=tr.delete(here.pos,here.pos+here.node.nodeSize);tr=tr.delete(1,2);}'))
+            code, text = run('negative-commentary-removal', ['node', '--test', '--test-name-pattern=three references accumulate',
+                'tests/multi-quote.test.mjs'], cwd=ROOT / 'frontend', expected=1)
+            results[-1]['passed'] = code == 1 and 'quote removal preserves every commentary segment' in text
+            results[-1]['namedAssertion'] = 'quote removal preserves every commentary segment'
+        finally:
+            model.write_bytes(original)
+        results[-1]['sourceRestored'] = sha(model.read_bytes()) == sha(original)
+        results[-1]['restoredSha256'] = sha(original)
+        results[-1]['passed'] &= results[-1]['sourceRestored']
+        save()
+    else:
+        results.append({'name': 'negative-commentary-removal', 'passed': False, 'status': 'not-run', 'reason': 'Baseline units failed'})
+        save()
+    build, _ = run('production-build', ['npm', 'run', 'build', '--prefix', 'frontend'])
+    browser_env = {**os.environ, 'AMPLIFIER_TEST_PYTHON': sys.executable,
+                   'AMPLIFIER_PROOF_DIR': str(output / 'source-browser')}
+    if build == 0:
+        run('source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'], env=browser_env)
+    if args.installed and build == 0:
+        wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', '--no-build-isolation', '--out-dir', str(output / 'wheel')])
+        if wheel_code == 0:
+            wheel, = (output / 'wheel').glob('*.whl')
+            outside = output / 'installed'; outside.mkdir()
+            python = outside / 'venv/bin/python'
+            run('installed-venv', ['uv', 'venv', '--python', sys.executable, '--system-site-packages', str(outside / 'venv')])
+            install, _ = run('wheel-install', ['uv', 'pip', 'install', '--python', str(python), '--no-deps', str(wheel)])
+            if install == 0:
+                expected = {}
+                with zipfile.ZipFile(wheel) as archive:
+                    for name in archive.namelist():
+                        if name.startswith('amplifier_web/') and not name.endswith('/'):
+                            expected[name] = sha(archive.read(name))
+                            path = ROOT / name
+                            if '/static/' in name or name.endswith('.py'):
+                                assert not path.exists() or sha(path.read_bytes()) == expected[name], name
+                (output / 'wheel-identity.json').write_text(json.dumps({'wheelSha256': sha(wheel.read_bytes()), 'files': expected}, indent=2))
+                env = dict(os.environ); env.pop('PYTHONPATH', None)
+                probe = "import amplifier_web,json,hashlib; from pathlib import Path; root=Path(amplifier_web.__file__).parent; assert str(root).startswith(" + repr(str(outside)) + "); expected=json.loads(" + repr(json.dumps(expected)) + "); assert all(hashlib.sha256((root.parent/name).read_bytes()).hexdigest()==digest for name,digest in expected.items()); print(root); print(len(expected),'package/static hashes match')"
+                run('installed-identity', [str(python), '-c', probe], cwd=outside, env=env)
+                fixtures = outside / 'tests/fixtures'; fixtures.mkdir(parents=True)
+                for name in ('message_interactions_ui_server.py', 'chat_ui_server.py', 'settings_ui_server.py'):
+                    shutil.copyfile(ROOT / 'tests/fixtures' / name, fixtures / name)
+                env.update(AMPLIFIER_TEST_PYTHON=str(python), AMPLIFIER_QUOTE_FIXTURE=str(fixtures / 'message_interactions_ui_server.py'),
+                           AMPLIFIER_FIXTURE_CWD=str(outside), AMPLIFIER_PROOF_DIR=str(output / 'installed-browser'))
+                run('installed-browser', ['node', str(ROOT / 'frontend/tests/multi-quote-browser.mjs')], cwd=outside, env=env)
+    print('FINAL_RESULTS', json.dumps(results), flush=True)
+    return 0 if results and all(row['passed'] for row in results) else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -10,19 +10,20 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
 const url=`http://127.0.0.1:${port}`,proof=process.env.AMPLIFIER_PROOF_DIR;
 if(proof)mkdirSync(proof,{recursive:true});
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/message_interactions_ui_server.py',import.meta.url)),String(port)],{stdio:'inherit'});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUOTE_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/message_interactions_ui_server.py',import.meta.url)),String(port)],{stdio:'inherit',cwd:process.env.AMPLIFIER_FIXTURE_CWD||process.cwd()});
 const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),page=await context.newPage(),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 const documentValue=()=>page.evaluate(()=>window.amplifier.getState().view.draftDocument);
 const commentary=doc=>doc.segments.filter(s=>s.type==='text').map(s=>s.text);
 const references=doc=>doc.segments.filter(s=>s.type==='quote');
+const observe=async()=>{const response=await context.request.get(url+'/fixture/message-source');assert.equal(response.status(),200);return response.json();};
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
  const editor=page.getByRole('textbox',{name:'Message Amplifier'}),quotes=editor.locator('[data-quote-instance]');
  await editor.fill('Before the references');
  await page.locator('.a-file-input').setInputFiles({name:'synthetic.txt',mimeType:'text/plain',buffer:Buffer.from('Attachment kept')});
- await page.getByText('synthetic.txt',{exact:true}).first().waitFor();
+ await page.getByRole('button',{name:'Remove synthetic.txt',exact:true}).waitFor();
  const a=page.locator('.a-message').filter({hasText:'Quote fixture source A'}).first(),b=page.locator('.a-message').filter({hasText:'Quote fixture source B'}).first();
  const sourceA=await a.getAttribute('data-message-id'),sourceB=await b.getAttribute('data-message-id');
  async function passage(startMarker,endMarker){
@@ -57,7 +58,7 @@ try{
  let moved=await documentValue();assert.deepEqual(references(moved).map(q=>q.instanceId),[initial[1].instanceId,initial[0].instanceId,initial[2].instanceId]);assert.deepEqual(commentary(moved),comments);
  await quotes.nth(1).getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(2);
  doc=await documentValue();assert.deepEqual(commentary(doc),comments);assert.deepEqual(references(doc).map(q=>q.quote.excerpt),[second.text,initial[2].quote.excerpt]);
- await page.getByText('synthetic.txt',{exact:true}).first().waitFor();
+ await page.getByRole('button',{name:'Remove synthetic.txt',exact:true}).waitFor();
  // Held source receipt: moving the caret/mode alone must not retarget the insertion.
  let release,started;const held=new Promise(resolve=>release=resolve),waiting=new Promise(resolve=>started=resolve);
  await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(body?.action==='message.reply'){const response=await route.fetch();started();await held;await route.fulfill({response});}else await route.continue();});
@@ -72,8 +73,10 @@ try{
  const submitted=await documentValue();await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>document.querySelectorAll('.a-message [data-sent-quote]').length===3);
  await expect(quotes).toHaveCount(0);
- const state=await page.evaluate(()=>{const s=window.amplifier.getState();return s.sessions.find(c=>c.id===s.selectedSessionId);});
- const sent=state.messages.find(m=>m.replyTo?.version===2);assert.ok(sent);assert.deepEqual(sent.replyTo.segments,submitted.segments);
+ await expect.poll(async()=>(await observe()).sends.length).toBe(1);
+ const observed=await observe(),sent=observed.sessions.flatMap(s=>s.messages).find(m=>m.replyTo?.version===2);
+ assert.ok(sent);assert.deepEqual(sent.replyTo.segments,submitted.segments);
+ assert.equal(sent.attachments[0].name,'synthetic.txt');
  assert.equal(await page.locator('.a-message [data-sent-quote] .a-composer-quote-text').first().textContent(),second.text);
  await editor.fill('Adjacent cycle');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>{const s=window.amplifier.getState();return s.sessions.find(c=>c.id===s.selectedSessionId)?.messages.some(m=>m.text==='Adjacent cycle');});
@@ -81,4 +84,7 @@ try{
  assert.deepEqual(errors,[]);
  if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,submitted,sent,initialScroll:beforeScroll},null,2));
  console.log('PASS exact Unicode/multiline passages + whole message, interleaved commentary, attachment, reload, keyboard reorder, removal, captured delayed target, narrow rendering, sent projection and adjacent cycle.');
+}catch(error){
+ if(proof){writeFileSync(join(proof,'failure.json'),JSON.stringify({message:error.message,errors},null,2));await page.screenshot({path:join(proof,'failure.png')}).catch(()=>{});}
+ throw error;
 }finally{await browser.close();fixture.kill();await new Promise(resolve=>fixture.exitCode!==null?resolve():fixture.once('exit',resolve));}

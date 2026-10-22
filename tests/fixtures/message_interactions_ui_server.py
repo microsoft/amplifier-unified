@@ -5,12 +5,13 @@ import tempfile
 from pathlib import Path
 from aiohttp import web
 import settings_ui_server as fixture
+import chat_ui_server as chat_fixture
 from chat_ui_server import ChatRuntime
 
 fixture.Runtime = ChatRuntime
 
 async def main(home, port):
-    app = await fixture.main(home)
+    app = await chat_fixture.main(home)
     app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
     service = app['service']
     session = service._session()

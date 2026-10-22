@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {TextSelection} from 'prosemirror-state';
+import {TextSelection,NodeSelection} from 'prosemirror-state';
+import {undo,redo} from 'prosemirror-history';
 import {composerState,composerDocument,composerMarkdown,insertQuote,changeQuote} from '../src/markdown-composer.js';
 const quote=id=>({id,sessionId:'synthetic',messageId:id,speaker:'Amplifier',origin:'assistant',role:'assistant',kind:'passage',sourceDigest:'a'.repeat(64),spans:[{start:1,end:30}],excerpt:'  café e\u0301 東京\n\n• one\n    code\tvalue\n',truncated:false});
 function editor(text){const view={state:composerState(text),composing:false};view.dispatch=tr=>view.state=view.state.apply(tr);return view;}
@@ -16,7 +17,7 @@ test('three references accumulate; quote-only swaps/removal retain every comment
  changeQuote(view,original[1].instanceId,-1);
  assert.deepEqual(quotes(view).map(x=>x.quote.id),['second','first','first']);assert.deepEqual(texts(view),commentary);
  changeQuote(view,original[0].instanceId,0);
- assert.deepEqual(quotes(view).map(x=>x.instanceId),[original[1].instanceId,original[2].instanceId]);assert.deepEqual(texts(view),commentary);
+ assert.deepEqual(quotes(view).map(x=>x.instanceId),[original[1].instanceId,original[2].instanceId]);assert.deepEqual(texts(view),commentary,'quote removal preserves every commentary segment');
  assert.equal(quotes(view)[0].quote.excerpt,quote('second').excerpt);
  const restored=editor('');restored.state=composerState(composerMarkdown(view.state.doc),composerDocument(view.state.doc));
  assert.deepEqual(composerDocument(restored.state.doc),composerDocument(view.state.doc));
@@ -34,4 +35,35 @@ test('selected commentary is not replaced by adding a reference',()=>{
  const view=editor('Retain these words');view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,1,7)));
  insertQuote(view,quote('source'),at(view));
  assert.equal(texts(view).join(''),'Retain these words');
+});
+test('typing-after-quote preserves every inserted quote, including adjacent additions',()=>{
+ const view=editor('Before');
+ insertQuote(view,quote('first'),{doc:view.state.doc,pos:7});
+ assert.ok(view.state.selection instanceof TextSelection);
+ view.dispatch(view.state.tr.insertText('X'));
+ assert.equal(quotes(view).length,1,'typing-after-quote must preserve the inserted quote');
+ assert.equal(texts(view).join(''),'BeforeX');
+ let pos;view.state.doc.forEach((node,index)=>{if(node.type.name==='reference')pos=index;});
+ view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc,pos)));
+ insertQuote(view,quote('second'),at(view));
+ view.dispatch(view.state.tr.insertText('Y'));
+ assert.deepEqual(quotes(view).map(x=>x.quote.id),['first','second']);
+ assert.equal(texts(view).join(''),'BeforeYX');
+});
+test('reload preserves exact commentary at split boundaries and repeated save cycles',()=>{
+ const view=editor('Hello world\n\n**café** e\u0301 東京\n\n```py\n  code\tvalue\n```');
+ insertQuote(view,quote('first'),{doc:view.state.doc,pos:7});
+ const original=composerDocument(view.state.doc);
+ assert.equal(original.segments[0].text,'Hello ');
+ for(let cycle=0;cycle<2;cycle++){
+  view.state=composerState(composerMarkdown(view.state.doc),composerDocument(view.state.doc));
+  assert.deepEqual(composerDocument(view.state.doc),original,'reload must preserve exact commentary at split boundary');
+ }
+});
+test('explicit quote removal is undoable without changing commentary',()=>{
+ const view=editor('Before\n\nAfter');insertQuote(view,quote('first'),{doc:view.state.doc,pos:7});
+ const original=composerDocument(view.state.doc),id=quotes(view)[0].instanceId;
+ changeQuote(view,id,0);assert.equal(composerDocument(view.state.doc),null);
+ assert.ok(undo(view.state,view.dispatch));assert.deepEqual(composerDocument(view.state.doc),original);
+ assert.ok(redo(view.state,view.dispatch));assert.equal(composerDocument(view.state.doc),null);
 });

@@ -50,6 +50,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
  const owner=sessionId+':'+message.id,current=useRef(owner),[receipt,setReceipt]=useState(null);current.current=owner;
  const anchor=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
  useEffect(()=>{
+  if(typeof document==='undefined')return;
   const update=()=>{
    const selection=window.getSelection(),article=anchor.current?.closest('[data-message-id]');
    if(!selection||selection.isCollapsed||selection.rangeCount!==1){setSelected(null);return;}
@@ -68,7 +69,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
  const chosen=receipt?.owner===owner&&receipt.revision>(message.annotationRevision??-1)?receipt.reactions:message.reactions||[];
  async function action(name,args){
   if(busy)return;setBusy(true);setError('');
-  try{const result=await dispatch(name,{sessionId,messageId:message.id,...args},name==='message.reply'&&!message.textDetail?{quoteSource:message.text}:{});
+  try{const result=await dispatch(name,{sessionId,messageId:message.id,...args},name==='message.reply'?{quoteSource:message.text,quoteDetail:message.textDetail}:{});
    const value=result?.result;
    if(name==='message.reaction'&&current.current===owner&&result?.accepted===true&&value?.sessionId===sessionId&&value.messageId===message.id&&Array.isArray(value.reactions)&&Number.isSafeInteger(value.annotationRevision))setReceipt({owner,reactions:[...value.reactions],revision:value.annotationRevision});
   }
