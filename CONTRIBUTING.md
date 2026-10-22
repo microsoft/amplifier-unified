@@ -19,3 +19,9 @@ pull-request descriptions.
   report that limitation instead of silently rewriting shared history.
 
 For release acceptance, use the [platform and first-use checklist](docs/validation/release-acceptance.md).
+
+For changes to cross-surface artifact controls, routing or presentation actions,
+update the affected [control inventory entry](docs/canvas.md#artifact-controls-and-reuse)
+or explain why its contract is unchanged, and extend the linked focused test.
+Reuse the existing card and viewer owners; do not add parallel controls merely
+because the content has a different format.

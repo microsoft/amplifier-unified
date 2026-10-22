@@ -45,7 +45,7 @@ async def test_exact_inline_selection_hide_and_reload_do_not_create_versions(app
 
 async def test_stateful_transition_refusal_retains_frame_and_explicit_ui_reset(app):
     first = await published(app, '<input value="saved">', 'html')
-    await command(app, 'canvas.views.status', {**target(first), 'status': 'ready'})
+    await command(app, 'canvas.views.status', {**target(first), 'status': 'ready', 'message': 'Synthetic mounted frame'})
     args = {'id': first['resourceId'], 'version': 1, 'messageId': 'inline-message', 'presentation': 'inline'}
     with pytest.raises(AppError) as refused:
         await command(app, 'canvas.select', args)

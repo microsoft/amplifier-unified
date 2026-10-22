@@ -42,6 +42,7 @@ chat list shows All chats, without discarding the manager's view state.
 | Workspace and chat controls | `frontend/src/shell/navigation-components.jsx` | Existing component tests run against public host fixtures |
 | Public authoring API | `packages/shell-sdk` | External navigator in `examples/shell-navigator` |
 | Theme tokens and layout presentation | Host root and existing panel layout | Live preview, CSS reordering, revert and stable iframe checks |
+| Artifact card, disclosure, viewer and saved-output controls | [Artifact controls and reuse](../canvas.md#artifact-controls-and-reuse) | Exact-version presentation, control parity, dirty-state and narrow-layout checks |
 
 The host has one event stream. A small shell invalidation event shares it with
 normal app updates; a coalesced query supplies bounded instance snapshots.
