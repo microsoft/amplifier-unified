@@ -62,7 +62,13 @@ try{
  await receivedLong.getByRole('button',{name:'Copy peer message as Markdown'}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(facts.long);
  await receivedLong.locator('.a-peer-summary').click();
- const before=await page.evaluate(()=>{const s=window.amplifier.getState();window.peerDocument=crypto.randomUUID();return {id:s.selectedSessionId,draft:s.view.draft,document:window.peerDocument}});
+ await page.evaluate(async()=>{
+  const s=window.amplifier.getState(),result=await window.amplifier.dispatch('attachment.add',{
+   sessionId:s.selectedSessionId,name:'draft-proof.txt',base64:btoa('Synthetic attachment retained without sending.')});
+  if(result.accepted!==true)throw Error('Synthetic draft attachment was not accepted');
+ });
+ const before=await page.evaluate(()=>{const s=window.amplifier.getState();window.peerDocument=crypto.randomUUID();return {id:s.selectedSessionId,draft:s.view.draft,attachments:s.sessions.find(x=>x.id===s.selectedSessionId)?.draftAttachments||s.draftAttachments||[],document:window.peerDocument}});
+ assert.equal(before.attachments.length,1);
  const link=original.getByRole('button',{name:'Preview source chat: Navigation design'});
  await link.click();await expect(panel()).toBeVisible();
  assert.equal(await original.locator('.a-peer-summary').getAttribute('aria-expanded'),'true');
@@ -89,7 +95,7 @@ try{
  const afterAnchor=await readAnchor();assert.equal(afterAnchor.id,anchor.id);assert.ok(Math.abs(afterAnchor.offset-anchor.offset)<2);
  await expect(sourceLong.locator('h2').last()).toHaveText('Beyond compact boundary');
  // Confirm no reload/current draft mutation through preview and an adjacent close/reopen cycle.
- assert.deepEqual(await page.evaluate(()=>{const s=window.amplifier.getState();return {id:s.selectedSessionId,draft:s.view.draft,document:window.peerDocument}}),before);
+ assert.deepEqual(await page.evaluate(()=>{const s=window.amplifier.getState();return {id:s.selectedSessionId,draft:s.view.draft,attachments:s.sessions.find(x=>x.id===s.selectedSessionId)?.draftAttachments||s.draftAttachments||[],document:window.peerDocument}}),before);
  await panel().getByRole('button',{name:'Close source preview'}).click();await expect(link).toBeFocused();
  await change('arrive');await expect(summary).toContainText('4 messages');await expect(original.locator('.a-peer-summary')).toHaveAttribute('aria-expanded','true');
  for(const width of [390,320]){
@@ -137,13 +143,14 @@ try{
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(facts.sourceA);assert.equal(await page.evaluate(()=>window.peerDocument),before.document);
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),facts.receiving);
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(facts.receiving);
+ assert.deepEqual(await page.evaluate(()=>{const s=window.amplifier.getState();return s.sessions.find(x=>x.id===s.selectedSessionId)?.draftAttachments||s.draftAttachments||[]}),before.attachments);
  await expect(summary).toBeVisible();if(await summary.getAttribute('aria-expanded')==='false')await summary.click();
  await link.click();await expect(panel()).toBeVisible();await change('revoke');
  await expect(panel().getByText('Source chat unavailable',{exact:true})).toBeVisible();await expect(panel().locator('[data-preview-message-id]')).toHaveCount(0);
  await expect(panel().getByRole('button',{name:'Open chat',exact:true})).toBeDisabled();
  const final=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();assert.deepEqual(final.effects,[]);assert.deepEqual(final.subprocesses,[]);assert.deepEqual(errors,[]);
  assert.ok(!commands.some(x=>['conversation.send','worker.spawn','session.warm','approval.respond'].includes(x)));
- results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
+ results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,draftAttachmentsRetained:before.attachments.length,narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
  if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-browser-result.json'),JSON.stringify(results,null,2));
  console.log(JSON.stringify(results));
 }catch(error){

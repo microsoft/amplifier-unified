@@ -78,6 +78,7 @@ def browser(root, name, python, *, installed=False):
     assert item['cleanup'] == {'remaining': [], 'terminated': 0}
     proof, = json.loads((evidence / 'peer-browser-result.json').read_text())
     assert all(proof[key] is True for key in ('semanticMarkdown', 'exactCopy', 'noReload', 'noRuntime'))
+    assert proof['draftAttachmentsRetained'] == 1
     assert proof['narrow'] == [320, 390]
     assert proof['mode'] == ('installed-static' if installed else 'built-static')
     return proof
