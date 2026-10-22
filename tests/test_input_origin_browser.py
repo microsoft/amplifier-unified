@@ -10,6 +10,12 @@ from amplifier_web.runtime_worker import Worker
 from amplifier_web.service import AppError, AppService
 
 
+def coordinator(session_id):
+    capabilities = {}
+    return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+                           register_capability=capabilities.__setitem__)
+
+
 @pytest.fixture
 async def origin(tmp_path):
     app = AppService(tmp_path/'app', workspace=tmp_path)
@@ -23,7 +29,8 @@ async def origin(tmp_path):
             visual = app.computer_visual.for_client(sid)
             await visual.grant_source({'sessionId': sid, 'source': {'kind': 'window', 'label': client}})
     worker = Worker()
-    worker.session = SimpleNamespace(coordinator=SimpleNamespace(session_id=sid))
+    worker.session = SimpleNamespace(coordinator=coordinator(sid))
+    worker.runtime = SimpleNamespace(generation={'id': 'generation-1', 'input_ids': ['input-1']})
     worker.context_inputs = ['input-1']
     worker.context_bindings = {'input-1': {'clientId': 'input-browser', 'targets': []}}
 
@@ -89,6 +96,7 @@ async def test_explicit_navigation_and_canvas_remain_valid_but_cannot_move_conse
 async def test_unknown_or_mixed_origins_do_not_fall_back_to_another_client(origin, clients):
     app, sid, worker = origin
     worker.context_inputs = [f'input-{i}' for i in range(len(clients))]
+    worker.runtime.generation['input_ids'] = list(worker.context_inputs)
     worker.context_bindings = {f'input-{i}': {'clientId': value, 'targets': []} for i, value in enumerate(clients) if value is not None}
     bridge = main_bridge(worker)
     before = deepcopy(app.clients.records)
@@ -130,8 +138,9 @@ async def test_stale_origin_fails_even_when_another_browser_is_connected(origin,
 
 async def test_delegate_keeps_assigned_origin_after_parent_input_and_binding_changes(origin):
     app, sid, worker = origin
-    delegated = worker.app_access_bridge(SimpleNamespace(session_id='actual-child'))
+    delegated = worker.app_access_bridge(coordinator('actual-child'))
     worker.context_inputs = ['input-2']
+    worker.runtime.generation = {'id': 'generation-2', 'input_ids': ['input-2']}
     worker.context_bindings = {'input-2': {'clientId': 'old-browser', 'targets': []}}
     assert (await main_bridge(worker)('get_state', {}))['canvasContext']['clientId'] == 'old-browser'
     assert (await delegated('get_state', {}))['canvasContext']['clientId'] == 'input-browser'
@@ -142,9 +151,10 @@ async def test_delegate_keeps_assigned_origin_after_parent_input_and_binding_cha
 async def test_multiple_inputs_from_same_browser_and_context_filtering_still_work(origin):
     app, sid, worker = origin
     worker.context_inputs.append('input-2')
+    worker.runtime.generation['input_ids'] = list(worker.context_inputs)
     worker.context_bindings['input-2'] = {'clientId': 'input-browser', 'targets': []}
     assert (await main_bridge(worker)('get_state', {}))['computerVisual']['available']
-    delegated = worker.app_access_bridge(SimpleNamespace(session_id='actual-child'))
+    delegated = worker.app_access_bridge(coordinator('actual-child'))
     captured = []
     async def inspect(operation, args):
         captured.append(args)

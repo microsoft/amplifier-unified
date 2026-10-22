@@ -119,13 +119,17 @@ async def _configuration_tool(app, sid, native_role=None):
         return await mounted_tool(bridge)
     from types import SimpleNamespace
     from amplifier_web.runtime_worker import Worker
+    def native_coordinator(session_id):
+        capabilities = {}
+        return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+                               register_capability=capabilities.__setitem__)
     worker = Worker.__new__(Worker)
-    root = SimpleNamespace(session_id=sid)
+    root = native_coordinator(sid)
     worker.session = SimpleNamespace(coordinator=root)
-    worker.runtime = SimpleNamespace(generation={'id': 'synthetic-generation'})
+    worker.runtime = SimpleNamespace(generation={'id': 'synthetic-generation', 'input_ids': []})
     worker.context_inputs, worker.context_bindings = [], {}
     worker.bridge = bridge
-    coordinator = root if native_role == 'root' else SimpleNamespace(session_id='native-child')
+    coordinator = root if native_role == 'root' else native_coordinator('native-child')
     return await mounted_tool(worker.app_access_bridge(coordinator))
 
 
