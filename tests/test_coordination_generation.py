@@ -411,6 +411,8 @@ async def test_idle_history_and_terminal_unknown_creation_do_not_exhaust_cap(app
 
 @pytest.mark.parametrize("work", ["queued", "generation", "preparation", "durable", "durable-projection"])
 async def test_unknown_root_with_actual_work_still_occupies_single_cap_slot(app, work):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxTaskChatsPerSource':8}})
     source = app.state["sessions"][0]
     roots = []
     for index in range(8):
@@ -451,6 +453,8 @@ async def test_unknown_root_with_actual_work_still_occupies_single_cap_slot(app,
 
 
 async def test_concurrent_pending_creations_are_bounded_before_roots_exist(app, monkeypatch):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxTaskChatsPerSource':8}})
     source = app.state["sessions"][0]
     release = asyncio.Event()
     entered = []
