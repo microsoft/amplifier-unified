@@ -4688,6 +4688,9 @@ class AppService:
             return await self.recall.personalization.context(session_id, expected=args.get('expected'))
         if operation == 'message.reactions.context':
             from .message_interactions import reaction_context
+            # A previous publication failure leaves progress dirty. Do not
+            # describe an unsaved in-memory annotation as committed context.
+            await self._flush_pending_progress()
             async with self.lock:
                 return reaction_context(self._session(session_id, hydrate=False))
         if operation == "questions.admit":
