@@ -248,7 +248,7 @@ next admission check.
 - Queue depth/wait controls, profile execution timeout controls, artifact retention
   limits and broader host registration remain distinct from these resource budgets.
 
-### Legacy export-limit cleanup continuation
+### Returned preservation failure cleanup continuation
 
 A qualified legacy returned export-limit failure keeps its original UNKNOWN
 receipt. If its separately admitted cleanup verifies guest removal but cannot
@@ -258,6 +258,21 @@ original receipt and unchanged owner/source/backend bindings, then finishes only
 dependency cleanup. It does not issue another guest removal or create another
 operation identity. Missing or changed qualification, another unresolved removal,
 and unverified guest removal remain held. Restart does not weaken these checks.
+
+The same continuation also accepts an exact retained helper response reporting
+`verify-exports` / `phase_failed` / `destroyEffect: not_dispatched`, after the
+host drained and reaped that helper. Passive `workspace.environments.removal.read`
+reports `returned_archive_verification_failure` for this case. It does not read
+archive contents or infer execution from diagnostic files. A generic UNKNOWN,
+missing response, dispatch uncertainty or another unresolved removal stays held.
+
+Fresh archive validation failures report `archive_verification_failed` before
+any removal effect, so existing queue cleanup can continue through `finishCleanup`.
+The continuation exports both filesystems again, verifies bounded archive-only
+custody without extracting or following links, rechecks the stopped owner and
+backend, then verifies removal and finishes dependency cleanup. Existing exports
+alone never authorize destruction. The original uncertain receipt remains intact;
+its ordered queue barrier clears only when the canonical resource owner retires.
 
 ## Work concurrency settings
 
