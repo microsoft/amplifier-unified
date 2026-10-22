@@ -8,7 +8,7 @@
         "Review shared workspace commitments, owners, progress, evidence and unresolved cleanup in one Work view. Inspect saved details across desktop and phone clients while preserving your draft, Canvas and Settings edits. Browsing does not start model work.",
         "Keep shared-work requests tied to their exact source and current input before acting. Changed requests, stopped work and uncertain outcomes retain their checks and evidence instead of silently replaying an operation.",
         "Retain the original cause when a manager turn fails, improving support diagnostics without replaying work or replacing a newer result.",
-        "Prepared test environments report their actual Python and build commands, artifact paths and source identity. Optional packaging failures can leave source checks usable; interrupted helpers still report interruption. New prepared checks preserve source and artifacts as verified archives before cleanup.",
+        "Prepared test environments report their actual Python and build commands, artifact paths and source identity. Optional packaging failures can leave source checks usable; terminated helpers do not report successful preparation. New prepared checks preserve source and artifacts as verified archives before cleanup.",
         "Update Canvas browser checks for the current controls and keep rollback, native-boundary and release-artifact checks aligned with their current owners."
       ],
       "notices": []
