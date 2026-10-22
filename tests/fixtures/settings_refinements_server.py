@@ -19,6 +19,7 @@ async def main(home):
     manager=setup.SetupManager(home);workspace=str(home/'workspace')
     path=home/'oauth.json';write_private(path,json.dumps({'access_token':'fixture-oauth','refresh_token':'fixture-refresh'}))
     await manager.perform('providers.save',{'workspace':workspace,'module':'provider-openai-chatgpt','id':'chatgpt-connected','config':{'default_model':'fixture-model','token_file_path':str(path)}})
+    app['service'].state['releaseNoticeStartVersion']='0.20.15'
     app['service'].state['updates']['application']={'current':'0.20.15','latest':'0.20.15','status':'current','releaseNotes':[{'version':'0.20.15','title':'Fixture release','changes':['Settings are simpler.'],'notices':[{'id':'fixture','title':'New Settings layout','detail':'Find everyday settings in the sidebar.','action':'Review the new layout.'}]}]}
     return app
 collections.main=main

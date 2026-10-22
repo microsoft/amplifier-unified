@@ -1,5 +1,6 @@
 """Contention uses actual provider instrumentation, not synthetic usage rows."""
 import asyncio
+import copy
 from types import SimpleNamespace
 
 import pytest
@@ -81,6 +82,33 @@ async def test_provider_contention_waits_then_invokes_once_after_release(app, pr
     assert first.called == ['fixture'] and second.called == ['fixture']
     assert second.control.capacity.last_denial is None
     assert app.assignments.usage(app.assignments.current(source))['calls'] == 2
+
+
+async def test_uncapped_assignment_runs_more_than_eight_helpers_and_provider_calls(app, providers):
+    source = app.state['sessions'][0]
+    # The installation's separate per-source creation policy remains authoritative.
+    policy = (await app.dispatch('testing.execution.read', {}))['result']
+    await app.dispatch('testing.execution.save', {
+        'expectedRevision': policy['revision'], 'queue': {}, 'profiles': {},
+        'concurrency': {'maxTaskChatsPerSource': 12}}, command_id='fixture-source-cap')
+    sessions = [source]
+    for index in range(10):
+        helper, _ = await child(app, source, f'helper-{index}')
+        sessions.append(helper)
+    observed = [providers(session) for session in sessions]
+    calls = [item.start(f'call-{index}') for index, item in enumerate(observed)]
+    await until(lambda: all(item.called for item in observed) or any(task.done() for task in calls))
+    assert all(item.called == [f'call-{index}'] for index, item in enumerate(observed))
+    assert all(not task.done() for task in calls)  # All eleven overlap at the provider boundary.
+    snapshot = app.assignments.snapshot(source)
+    assert snapshot['inFlightCalls'] == 11
+    assert len(snapshot['assignment']['members']) == 11
+    assert not app._model_admission_waiters
+    for item in observed:
+        item.release.set()
+    await asyncio.gather(*calls)
+    await until(lambda: app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 110)
+    assert all(item.control.capacity.last_denial is None for item in observed)
 
 
 async def waiting_pair(app, providers, **policy):
@@ -199,6 +227,119 @@ async def test_unknown_inflight_receipt_cannot_be_freed_by_waiting(app, provider
     assert not second.called
     assert app.assignments.usage(app.assignments.current(source))['receipts'][0]['phase'] == 'outcome_unknown'
     assert app._model_admission_waiters == []
+
+
+async def mixed_capacity(app, providers):
+    """An old unknown call keeps its slot while current calls can settle."""
+    source = app.state['sessions'][0]
+    live, _ = await child(app, source, 'live')
+    waiting, _ = await child(app, source, 'waiting')
+    await limits(app, source, maxConcurrentCalls=2)
+    unknown_provider, live_provider = providers(source), providers(live)
+    unknown_provider.start('old-call')
+    await until(lambda: unknown_provider.called)
+    from amplifier_web.capacity import restore_observation
+    restore_observation(source)
+    app._publish_changes(sessions={source['id']})
+    assignment = app.assignments.current(source)
+    unknown = copy.deepcopy(app.assignments.usage(assignment)['receipts'][0])
+    live_task = live_provider.start('live-call')
+    await until(lambda: live_provider.called)
+    queued = providers(waiting)
+    queued_task = queued.start('queued-call')
+    await until(lambda: waiting.get('activity', {}).get('phase') == 'capacity' or queued_task.done())
+    assert not queued_task.done(), queued_task.exception() if not queued_task.cancelled() else 'cancelled'
+    return source, waiting, assignment, unknown, live_provider, live_task, queued, queued_task
+
+
+async def test_mixed_unknown_and_live_capacity_waits_fifo_without_releasing_unknown(app, providers):
+    source, waiting, assignment, unknown, live, live_task, first, first_task = await mixed_capacity(app, providers)
+    last_session, _ = await child(app, source, 'last')
+    assignment = app.assignments.current(source)
+    last = providers(last_session)
+    last_task = last.start('last-call')
+    await until(lambda: last_session.get('activity', {}).get('phase') == 'capacity' or last_task.done())
+    assert not last_task.done()
+    assert not first.called and not last.called
+    assert first.control.capacity.last_denial is None and last.control.capacity.last_denial is None
+    assert app.assignments.usage(assignment)['calls'] == 2
+
+    live.release.set()
+    await live_task
+    await until(lambda: first.called)
+    assert first.called == ['queued-call'] and not last.called
+    first.release.set()
+    await first_task
+    await until(lambda: last.called)
+    last.release.set()
+    await last_task
+
+    receipts = app.assignments.usage(assignment)['receipts']
+    assert next(row for row in receipts if row['id'] == unknown['id']) == unknown
+    assert len(receipts) == 4 and last.called == ['last-call']
+    assert first.control.capacity.last_denial is None and last.control.capacity.last_denial is None
+    assert not app._model_admission_waiters
+
+
+async def test_removing_count_ceiling_wakes_waiter_without_erasing_unknown_receipt(app, providers):
+    source, waiting, assignment, unknown, live, live_task, queued, task = await mixed_capacity(app, providers)
+    await limits(app, source, maxOpenTasks=None, maxConcurrentCalls=None)
+    await until(lambda: queued.called)
+    assert queued.called == ['queued-call'] and not live_task.done()
+    assert not queued.control.capacity.last_denial
+    receipts = app.assignments.usage(app.assignments.current(source))['receipts']
+    assert len(receipts) == 3
+    assert next(row for row in receipts if row['id'] == unknown['id']) == unknown
+    live.release.set(); queued.release.set()
+    await asyncio.gather(live_task, task)
+    assert not app._model_admission_waiters
+
+
+@pytest.mark.parametrize('change', ['stop', 'generation', 'budget'])
+async def test_mixed_capacity_wait_rechecks_authority_and_budget(app, providers, change):
+    source, waiting, assignment, unknown, live, live_task, queued, task = await mixed_capacity(app, providers)
+    if change == 'stop':
+        await app.dispatch('conversation.stop', {'sessionId': waiting['id']}, command_id='stop-mixed-wait')
+    elif change == 'generation':
+        from test_assignments import generation
+        await generation(app, waiting, 'replacement-generation', ['replacement-input'])
+    else:
+        # Unknown token consumption still blocks an enabled cumulative budget.
+        await limits(app, source, maxTotalTokens=100)
+    live.release.set()
+    await live_task
+    with pytest.raises(ValueError if change == 'budget' else asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
+    assert not queued.called
+    assert bool(queued.control.capacity.last_denial) == (change == 'budget')
+    receipts = app.assignments.usage(assignment)['receipts']
+    assert len(receipts) == 2
+    assert next(row for row in receipts if row['id'] == unknown['id']) == unknown
+    assert not app._model_admission_waiters
+
+
+@pytest.mark.parametrize('ceiling', [1, 2])
+async def test_unknown_reservations_alone_at_or_above_ceiling_still_pause(app, providers, ceiling):
+    source = app.state['sessions'][0]
+    other, _ = await child(app, source, 'other')
+    waiting, _ = await child(app, source, 'waiting')
+    await limits(app, source, maxConcurrentCalls=2)
+    from amplifier_web.capacity import restore_observation
+    for session in (source, other):
+        observed = providers(session)
+        observed.start()
+        await until(lambda: observed.called)
+        restore_observation(session)
+        app._publish_changes(sessions={session['id']})
+    await limits(app, source, maxConcurrentCalls=ceiling)
+    assignment = app.assignments.current(source)
+    before = copy.deepcopy(app.assignments.usage(assignment)['receipts'])
+    refused = providers(waiting)
+    with pytest.raises(ValueError, match='concurrent model-call limit'):
+        await refused.start()
+    assert not refused.called and refused.control.capacity.last_denial
+    assert app.assignments.usage(assignment)['receipts'] == before
+    assert not app._model_admission_waiters
 
 
 async def test_full_wait_queue_does_not_block_free_unrelated_assignment(app, providers):

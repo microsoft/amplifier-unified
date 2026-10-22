@@ -391,6 +391,7 @@ class RemovalFailure(OSError):
 def remove_owned(payload, identity, backend, config, lib, backend_error, binding_source):
     phase, effect, destination, started = 'observe-stopped', 'not_dispatched', None, False
     recovering, cleanup = payload.get('action') == 'finishCleanup', None
+    archive_rejected = False
     try:
         universe = lib.status(identity, config=config)
         if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
@@ -431,7 +432,13 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
             if (archive.get('id') != identity or archive.get('source') != source
                     or archive.get('destination') != str(destination / name)):
                 raise ValueError('The exported selection does not match the original removal.')
-        retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if recovering else 'files')
+        try:
+            retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if recovering else 'files')
+        except (ValueError, retention.tarfile.TarError):
+            # A synchronous validation rejection precedes destroy. Do not turn
+            # filesystem/publication errors or helper loss into this receipt.
+            archive_rejected = True
+            raise
         phase = 'publish-manifest'
         retain_manifest(destination, archives)
         if recovering:
@@ -499,9 +506,12 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
         if effect == 'not_dispatched':
             if isinstance(exc, backend_error) and phase in {'export-workspace', 'export-artifacts'}:
                 # Only a synchronous library export rejection is a known
-                # preservation failure. Publication/validation OSErrors remain
+                # preservation failure. Publication/filesystem OSErrors remain
                 # unknown under the original removal boundary.
                 receipt = {**cleanup_failure(payload, 'preserving', identity, getattr(exc, 'code', None)),
+                           'removal': diagnostic}
+            elif archive_rejected:
+                receipt = {**cleanup_failure(payload, 'verifying', identity, 'archive_verification_failed'),
                            'removal': diagnostic}
             elif recovering and cleanup == 'rechecking':
                 receipt = {**cleanup_failure(payload, cleanup, identity), 'removal': diagnostic}
@@ -512,7 +522,7 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
                     'startedSha256': retention.digest(destination / 'removal-started.json')[0]})
             except Exception:
                 pass  # Diagnostic persistence cannot change the known external outcome.
-        if isinstance(exc, backend_error) or (recovering and cleanup == 'rechecking'):
+        if isinstance(exc, backend_error) or archive_rejected or (recovering and cleanup == 'rechecking'):
             return receipt
         raise RemovalFailure(receipt) from None
 

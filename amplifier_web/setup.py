@@ -685,6 +685,7 @@ class SetupManager:
         return result
 
     async def start_login(self,provider,args,workspace,scope):
+        from .host_dependencies import MissingHostDependency
         identity=args['id']; previous=self.logins.get(identity)
         if previous and not previous['task'].done():return await self.publish_login(identity)
         original=copy.deepcopy(provider)
@@ -755,6 +756,7 @@ class SetupManager:
                             await self.publish_login(identity,providers=result['providers'],providersWorkspace=workspace,providersLoadedAt=time.time(),loginConfigurationChanged=True)
             except asyncio.CancelledError:row['status']='cancelled';raise
             except TimeoutError:row.update(status='expired',error='Sign-in expired. Start again.')
+            except MissingHostDependency as exc:row.update(status='failed',error=str(exc))
             except Exception as exc:row.update(status='failed',error='Unable to run provider login ('+type(exc).__name__+').')
             finally:
                 if row['status'] in {'completed','failed','expired','cancelled'}:

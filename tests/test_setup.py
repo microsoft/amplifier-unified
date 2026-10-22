@@ -185,6 +185,35 @@ async def test_login_progress_and_cancel_preserve_owned_path(manager,tmp_path):
     assert manager.logins['chatgpt']['process'].returncode is not None
     await manager.close()
 
+
+@pytest.mark.asyncio
+async def test_login_missing_helper_is_actionable_without_exposing_provider_errors(manager,tmp_path,monkeypatch):
+    from amplifier_web import host_dependencies
+    await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai-chatgpt','id':'chatgpt','config':{}})
+    monkeypatch.setenv('HOME',str(tmp_path/'empty-home'))
+    monkeypatch.setenv('PATH',str(tmp_path/'empty-bin'))
+    monkeypatch.setattr(host_dependencies.sys,'platform','linux')
+    await manager.perform('providers.login',{'id':'chatgpt','workspace':str(tmp_path)})
+    await manager.logins['chatgpt']['task']
+    result=manager.login_state('chatgpt')
+    assert result['status']=='failed' and 'setup helper (uv)' in result['error']
+    assert 'same user' in result['error'] and 'process' not in manager.logins['chatgpt']
+    assert not list((manager.home/'config/chatgpt-sign-in').rglob('*.json'))
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_api_key_setup_reports_same_missing_host_helper(manager,tmp_path,monkeypatch):
+    from amplifier_web.host_dependencies import MissingHostDependency
+    await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai','id':'api','config':{'api_key':'private-fixture-key'}})
+    monkeypatch.setenv('HOME',str(tmp_path/'empty-home'))
+    monkeypatch.setenv('PATH',str(tmp_path/'empty-bin'))
+    monkeypatch.setattr('sys.platform','linux')
+    with pytest.raises(MissingHostDependency,match='setup helper') as error:
+        await manager.probe('providers.models',{'id':'api'},str(tmp_path))
+    assert 'private-fixture-key' not in str(error.value)
+    await manager.close()
+
 @pytest.mark.asyncio
 async def test_local_routing_shadows_project_without_mutating_it(manager,tmp_path):
     import copy

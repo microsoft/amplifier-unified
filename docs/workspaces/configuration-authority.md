@@ -166,6 +166,19 @@ Cross-account or multi-tenant isolation is not established by this local work.
 
 ## Qualification boundary
 
+Configuration attempts bind to the native worker identity reported on its private
+startup pipe, including the native session ID. A managed launcher such as `uv`
+can have a different PID. Missing or invalid worker identity refuses before
+dispatch and leaves a known unperformed operation, rather than holding input on
+an unknown outcome. This identity stays out of public runtime reports; original
+grant, target, interruption and native receipt checks remain in force.
+
+The maintained queued-configuration checks include actual `uv` launcher/worker
+separation, successful settings application/remount, and missing or invalid
+identity refusal without a settings write or unresolved input fence. Runtime
+checks reject identity from another native session. Run these affected checks
+with `uv` installed; a direct-Python fixture alone does not cover that boundary.
+
 Tests include positive user and agent administration, denied effects/scopes,
 revocation while queued or preparing, durable approvals/restart, exact retries,
 lost acknowledgments, Stop, peer lineage, and new scheduled roots. Native tests

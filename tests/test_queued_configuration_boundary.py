@@ -173,7 +173,7 @@ async def reach_apply(boundary):
 
 
 @pytest.fixture
-async def process_boundary(tmp_path, monkeypatch):
+async def process_boundary(tmp_path, monkeypatch, request):
     from pathlib import Path
     import sys
     from amplifier_web.runtime import RuntimeManager
@@ -181,7 +181,13 @@ async def process_boundary(tmp_path, monkeypatch):
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(home))
     monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "process-native"))
     fixture = Path(__file__).parent / "fixtures/configuration_effect_worker.py"
-    runtime = RuntimeManager(command=[sys.executable, "-u", str(fixture)],
+    command = [sys.executable, "-u", str(fixture)]
+    if getattr(request, "param", None) == "uv":
+        import shutil
+        uv = shutil.which("uv")
+        assert uv, "The launcher regression requires the installed uv helper"
+        command = [uv, "run", "--no-project", "--python", sys.executable, *command]
+    runtime = RuntimeManager(command=command,
         startup_timeout=10, retention={"prewarm_on_select": False})
     app = AppService(home, runtime, workspace=tmp_path)
     try:
@@ -211,6 +217,36 @@ async def process_apply(boundary, identity="process-apply"):
     result = await finished(boundary.app, identity)
     # finished is written by the management command's terminal publication.
     return result
+
+
+@pytest.mark.parametrize("process_boundary", ["uv"], indirect=True)
+async def test_uv_launcher_configuration_uses_native_worker_identity(process_boundary):
+    b = process_boundary
+    row = b.runtime.workers[b.owner["id"]]
+    launcher_pid = row["process"].pid
+    # Exercise application first: the original failure must be the actual
+    # pre-write worker refusal, not a missing new diagnostic field assertion.
+    result = await process_apply(b)
+    assert result["phase"] == "ready", result
+    saved = operation(b)
+    assert saved["attempts"][0]["workerPid"] != launcher_pid
+    assert saved["state"]["effect"] == "mounted"
+    assert not b.owner["configurationBusy"]
+    assert json.loads(override_path(b.owner["runtimeSessionId"]).read_text()) == plan(2)
+
+
+@pytest.mark.parametrize("unconfirmed", [None, 0, True, "123"])
+async def test_unconfirmed_native_worker_refuses_before_dispatch(process_boundary, unconfirmed):
+    b = process_boundary
+    b.runtime.workers[b.owner["id"]]["native_worker_pid"] = unconfirmed
+    result = await process_apply(b)
+    assert result["phase"] == "error"
+    saved = operation(b)
+    assert saved["state"]["effect"] == "none"
+    assert saved.get("attempts", []) == []
+    assert "identity was not confirmed" in saved["state"]["error"]
+    assert not b.owner["configurationBusy"]
+    assert not override_path(b.owner["runtimeSessionId"]).exists()
 
 
 async def test_real_worker_process_refusal_reconciles_and_explicit_resume_mounts(process_boundary):

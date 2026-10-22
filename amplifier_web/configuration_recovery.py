@@ -133,8 +133,13 @@ def prepare_attempt(management, session, operation):
         raise ValueError("Only a proven unperformed configuration can enter native dispatch.")
     attempt = binding(record)
     row = getattr(management.service.runtime, "workers", {}).get(session["id"], {})
+    worker_pid = row.get("native_worker_pid")
+    if row.get("process") is not None and (type(worker_pid) is not int or worker_pid <= 0):
+        # Refuse before claiming an attempt or marking its effect unknown. The
+        # launcher's PID cannot stand in for an unconfirmed native worker.
+        raise ValueError("The conversation worker identity was not confirmed. No configuration change was dispatched.")
     attempt.update(nativeSessionId=row.get("runtime_id", session["id"]),
-        workerPid=getattr(row.get("process"), "pid", None))
+        workerPid=worker_pid)
     record.setdefault("attempts", []).append(attempt)
     write_private(management.configuration_record_path(session["id"], operation), json.dumps(record))
     management.configuration_transition(session, operation, stage="dispatching",
