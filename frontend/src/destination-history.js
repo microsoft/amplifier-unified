@@ -3,7 +3,7 @@ const STORAGE_KEY='amplifier.destinationHistory';
 const MAX_ENTRIES=30, MAX_BYTES=65536, LABEL_LIMIT=160;
 const text=value=>typeof value==='string'?value.slice(0,LABEL_LIMIT):'';
 const id=value=>typeof value==='string'&&value.length>0&&value.length<=200?value:null;
-const tabs=new Set(['chats','files','details']);
+const tabs=new Set(['chats','work','files','details']);
 export const sameDestination=(a,b)=>!!a&&!!b&&a.kind===b.kind&&(a.id||null)===(b.id||null);
 const sameRoute=(a,b)=>a===null&&b===null||sameDestination(a,b)&&(a.tab||null)===(b.tab||null);
 

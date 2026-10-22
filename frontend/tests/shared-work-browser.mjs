@@ -245,6 +245,13 @@ try {
  // Only explicit Open chat traverses the existing guarded navigation path.
  await detail.getByRole('button',{name:'Open chat: '+manifest.ownerSessionId,exact:true}).click();
  await expect.poll(async()=>(await state()).selectedSessionId).toBe(manifest.ownerSessionId);
+ await page.getByRole('button',{name:'Back in navigation history',exact:true}).click();
+ await expect.poll(async()=>(await state()).view.workWorkspaceTab).toBe('work');
+ await expect(detail).toBeVisible();
+ await expect(work.getByRole('searchbox',{name:'Find work'})).toHaveValue('Retain the original promise');
+ await page.getByRole('button',{name:'Forward in navigation history',exact:true}).click();
+ await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(manifest.ownerSessionId);
  await action('session.select',{id:draftOwner});
  await expect(composer).toHaveDraft('Private draft remains unchanged.',{timeout:actionTimeoutMs});
  await expect(page.getByRole('button',{name:'Remove private-draft.txt',exact:true})).toBeVisible();
@@ -413,6 +420,7 @@ try {
   dirtyCanvas:{refusal:true,mountPreserved:true,draftAndAttachmentPreserved:true},
   dirtySettings:{keepRefusedNavigation:true,privateDraftPreserved:true,discardWithoutSave:true},
   decisionCurrentness:{freshAccepted:true,laterCounterevidenceHistorical:true},coldTask:coldTaskResult,
+  navigationWorkReturn:{backToWork:true,privateFilterRetained:true,forwardToChat:true},
   acceptedItems:found.size,sourcePagesComplete:true,priorReturnRetained:true,currentUnknown:true,
   widths:[1440,390,320],clients:coldTaskRequested?3:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
   peerClient:{separateProcess:true},rendererValidation,rendererToolchain,
