@@ -3,12 +3,13 @@
   "releases": [
     {
       "version": "0.21.0",
-      "title": "Move between recent destinations and keep worker status accurate",
+      "title": "Navigate recent work and review upcoming automation",
       "changes": [
         "Go back and forward through recent Home, chat and workspace destinations with new navigation controls and a History menu. History stays private to the browser tab and preserves safeguards for drafts, Canvas edits and unsaved settings.",
+        "Review upcoming scheduled work and schedules needing attention in a clearer Automation overview. Create or edit schedules in their owning chat with retained private drafts, explicit timezone previews and fresh confirmation before activation; uncertain past runs are not replayed.",
         "Keep Settings closed after a completed navigation and keep Home reachable on wider touch screens.",
         "Stop showing a conversation\u2019s unfinished delegated work as running after its own runtime process has exited. Independent and replacement workers keep their state; saved results are preserved and interrupted work is not replayed or marked complete.",
-        "Keep cleanup-ownership smoke coverage aligned with configurable test-environment limits."
+        "Keep cleanup-ownership and native-chat recency smoke checks aligned with configurable limits and bounded history reconciliation."
       ],
       "notices": []
     },
