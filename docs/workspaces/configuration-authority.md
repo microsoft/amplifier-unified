@@ -243,6 +243,28 @@ A stale Allow/Deny click acknowledges the expired request with `decisionApplied:
 false` instead of trapping the user in an error. Raw API configuration requests
 without a native waiter may still survive a host restart when otherwise valid.
 
+Retired cards show the observed reason and **Dismiss old request**, rather than
+unusable decision buttons. Dismissal preserves the exact request in collapsed
+permission history. Pending counts still derive from current pending records;
+an old request is not an outstanding approval. An already-allowed grant is never
+revoked merely because a lagging card still looks pending after restart.
+
+**Review current scope** calls only `capability.read` with the exact request ID.
+It shows applicable saved authority and Full access separately from request
+expiry. It neither opens runtime settings nor sends an input. The optional `id`
+read returns a request projection with `requestHash`, revision and the available
+decisions. Bundled decision controls check that hash before submitting and the
+server rechecks it under its commit lock. A failed decision refreshes display
+without repeating the mutation or changing the proposed scope silently.
+
+Dismissal reuses `capability.revoke` with `dismissRequest:true`, the observed
+`expectedRevision` and `expectedRequestHash`. It refuses active/current requests.
+An unavailable receipt permits only dismissal of its exact retained card, not a
+fabricated grant or a claim that an earlier operation did not occur. A native
+waiter may receive one bare Deny; history-only notes are not delivered. Missing or
+lost notification acknowledgement stays `unconfirmed` and is not retried.
+Dismissal never renews authority, starts a worker, undoes effects or replays work.
+
 Both Allow and Deny accept an optional `comment` (up to 4,000 characters). The
 host retains it with the decision and in chat history. A live native waiter
 receives the note in model context before its tool is released; configuration

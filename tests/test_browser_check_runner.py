@@ -247,6 +247,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'testing-settings': {},
         'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
         'approval-layout': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/approval-layout'},
+        'approval-lifecycle': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/approval-lifecycle'},
         'standard-ux-connection-controls': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-connection-controls'},
         'standard-ux-preferences': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-preferences'},
         'standard-ux-privacy-effects': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-privacy-effects'},
@@ -299,7 +300,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 115
+    assert len(original) == 65 and len(rows) == 116
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -474,7 +475,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
-        'cross-workspace-handoff', 'chat-reference', 'automation-hub', 'settings-drafts', 'approval-layout')}
+        'cross-workspace-handoff', 'chat-reference', 'automation-hub', 'settings-drafts', 'approval-layout', 'approval-lifecycle')}
     assert source_only <= extended_scripts
     assert not source_only & readiness_scripts
     installed_overlap = {f'tests/{name}-browser.mjs' for name in (
@@ -521,6 +522,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     pin_reorder = 'tests/pin-rapid-reorder-browser.mjs'
     assert pin_reorder in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', pin_reorder] for row in plan['scenarios']) == 1
+    approval = 'tests/approval-lifecycle-browser.mjs'
+    assert approval in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', approval] for row in plan['scenarios']) == 1
     # New source journeys are automatic; their manual lanes add installed and
     # negative-control proof without replacing any existing ordinary owner.
     feature_additions = {f'tests/{name}-browser.mjs' for name in
@@ -531,8 +535,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum('node tests/composer-options-browser.mjs' in line for _, line in commands) == 1
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder} - feature_additions) == 146
-    assert len(readiness_scripts | extended_scripts) == 158
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval} - feature_additions) == 146
+    assert len(readiness_scripts | extended_scripts) == 159
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

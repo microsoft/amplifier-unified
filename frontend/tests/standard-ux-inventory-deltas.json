@@ -2231,6 +2231,58 @@
       "qualification": "docs/navigation.md"
     },
     {
+      "id": "delta.approval-lifecycle",
+      "sourceCommit": "c275d53a0c67d320691a6c40704f21620b8c5043",
+      "reason": "Expired capability requests gain an additive maintained browser owner; preserve the frozen inventory, baseline hash and all existing scenario entries.",
+      "workflowsAdded": [
+        {
+          "id": "decisions.expired-request-review",
+          "family": "decisions",
+          "title": "Review and dismiss an obsolete configuration request without restarting work",
+          "scope": "standard-path",
+          "entryPath": ["Chat", "Previous permission requests"],
+          "prerequisites": [
+            "Authenticated production service and bundled client with synthetic saved old and current requests",
+            "Two clients, cold host records and a runtime that records any attempted startup or input; no live grants or provider calls"
+          ],
+          "steps": [
+            "Inspect the reason on a legacy pending request after Stop and open passive current-scope review",
+            "Dismiss only the old request with the keyboard while a newer request remains pending",
+            "Confirm history, second-client state, a late decision refusal and reload with the private draft intact",
+            "Change scope and expiry after review, then exercise the stale decision preflight",
+            "Read the narrow-layout reason, scroll to the hit-testable Dismiss control and complete the adjacent request"
+          ],
+          "expectedResults": [
+            "Stale requests have an evidenced reason and no Allow/Deny controls; unavailable scope remains unknown.",
+            "Scope review starts no worker, model, runtime control or input and does not grant, renew or request authority.",
+            "Exact dismissal retains history and notes, clears only that request's pending attention and leaves newer requests and active authority unchanged.",
+            "Late scope or expiry changes cannot be silently approved; a failed decision refreshes display without replay.",
+            "Both clients, reload and the adjacent cycle agree; private drafts remain intact and narrow controls are reachable."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "late-decision", "changed-scope", "expired-request", "second-client", "reload"],
+          "existingTests": [
+            {
+              "path": "frontend/tests/approval-lifecycle-browser.mjs",
+              "relation": "Registered additive owner approval-lifecycle; exact run report and screenshots under output/browser-checks/approval-lifecycle"
+            },
+            {
+              "path": "tests/test_capability_lifecycle.py",
+              "relation": "Canonical request/revision/hash, missing-record dismissal, live grant preservation, native Deny-once delivery and storage/await races"
+            },
+            {
+              "path": "frontend/tests/approval-layout-browser.mjs",
+              "relation": "Existing separate reading-column, keyboard visibility and light/dark/split/narrow layout owner"
+            }
+          ],
+          "limits": [
+            "Synthetic request records and runtime, not real-provider or live-user incident acceptance.",
+            "Registration is not a new passing check or a claim about the original UNKNOWN effect; current candidate qualification remains separate."
+          ]
+        }
+      ],
+      "qualification": "docs/workspaces/configuration-authority.md"
+    },
+    {
       "id": "delta.compact-composer",
       "sourceCommit": "f1c10e55961bbba30acd9c9c08154f3f3592d3fb",
       "reason": "Keep ordinary compact writing and configuration paths in automatic source smoke coverage; preserve the frozen checklist.",

@@ -12,6 +12,7 @@
     {"id": "device-pairing", "command": ["node", "tests/device-pairing-browser.mjs"]},
     {"id": "standard-ux-keyboard-reflow", "command": ["node", "tests/standard-ux-keyboard-reflow-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-keyboard-reflow"}},
     {"id": "approval-layout", "command": ["node", "tests/approval-layout-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/approval-layout"}},
+    {"id": "approval-lifecycle", "command": ["node", "tests/approval-lifecycle-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/approval-lifecycle"}},
     {"id": "standard-ux-connection-controls", "command": ["node", "tests/standard-ux-connection-controls-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-connection-controls"}},
     {"id": "standard-ux-preferences", "command": ["node", "tests/standard-ux-preferences-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-preferences"}},
     {"id": "standard-ux-privacy-effects", "command": ["node", "tests/standard-ux-privacy-effects-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-privacy-effects"}},

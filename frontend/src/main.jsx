@@ -1,4 +1,4 @@
-import {ApprovalCard} from './approval-card';
+import {ApprovalPanel} from './approval-card';
 import {AutomationHub} from './automation-hub';
 import {createArchiveAction} from './archive-action.js';
 import {ArchiveContext,ArchiveNotice} from './archive-feedback.jsx';
@@ -736,7 +736,7 @@ function App(){
    {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    <LiveActivity session={state.sessions.find(row=>row.id===session?.id)||session}/>
-   {!!session?.approvals?.filter(a=>a.status==='pending'||!a.status).length&&<section className="a-card a-approvals" data-part="approvals"><div className="a-card-header"><h2>Needs your attention</h2></div>{session.approvals.filter(a=>a.status==='pending'||!a.status).map(a=><ApprovalCard key={a.id} approval={a} sessionId={session.id} act={act}/>)}</section>}
+   <ApprovalPanel session={session} act={act} dispatch={dispatch} freshnessKey={`${connected}:${session?.interruptionRevision}:${session?.executionRevision}`}/>
    {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
    <form className="a-composer a-compact-composer" data-part="composer" data-action="conversation.send" onSubmit={send}>
