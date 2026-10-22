@@ -43,7 +43,7 @@ async function open(page,name,scope='.a-composer'){
 }
 async function close(page,opener){await page.keyboard.press('Escape');await expect(page.locator('dialog[open]')).toHaveCount(0);await expect(opener).toBeFocused()}
 async function snapshot(page){const s=await state(page),i=await inspect(page);return {selected:s.selectedSessionId,canvas:s.canvas,drafts:i.drafts,attachments:i.attachments,sendCount:i.sends.length,scroll:await page.locator('.a-messages').evaluate(n=>n.scrollTop)}}
-async function contextFor(viewport,scheme){const context=await browser.newContext({viewport,colorScheme:scheme,hasTouch:viewport.width<500,isMobile:viewport.width<500,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await context.route('**/*',r=>new URL(r.request().url()).origin===base?r.continue():r.abort('blockedbyclient'));const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);page.on('pageerror',e=>report.errors.push(e.message));await page.goto(base);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id,null,{timeout:15000});await call(page,'session.create',{title:'Image study',bundle:'anchors'});await call(page,'view.update',{patch:{scheme}});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();return {context,page}}
+async function contextFor(viewport,scheme){const context=await browser.newContext({acceptDownloads:true,viewport,colorScheme:scheme,hasTouch:viewport.width<500,isMobile:viewport.width<500,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await context.route(url=>url.origin!==base,r=>r.abort('blockedbyclient'));const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);page.on('pageerror',e=>report.errors.push(e.message));assert.equal((await page.request.post(base+'/fixture/browser-session',{timeout:5000})).status(),200);await page.goto(base);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id,null,{timeout:15000});await call(page,'session.create',{title:'Image study',bundle:'anchors'});await call(page,'view.update',{patch:{scheme}});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();return {context,page}}
 async function run(name,fn){const row={name,status:'running'};report.cases.push(row);try{await fn();row.status='passed'}catch(e){row.status='failed';row.error=e.stack;primary??=e}await save()}
 try{
  const r=await ready;base=r.base;assert.equal(r.pid,fixture.pid);const build=await readFile(join(root,'amplifier_web/static/build.json'));assert.equal(hash(build),r.buildSha256);report.build={sha256:r.buildSha256,package:r.packageRoot,metadata:JSON.parse(build)};
@@ -72,6 +72,11 @@ try{
    await page.setViewportSize({width,height});await expect.poll(async()=>{try{assertFit(await geometry(page));return true}catch{return false}}).toBe(true);
    await page.getByRole('button',{name:'100%',exact:true}).click();const stage=page.getByLabel('Image viewport',{exact:true});
    if(width>500){const box=await stage.boundingBox(),beforePan=await geometry(page);await page.mouse.move(box.x+100,box.y+100);await page.mouse.down();await page.mouse.move(box.x+30,box.y+30,{steps:5});await page.mouse.up();const afterPan=await geometry(page);assert.ok(afterPan.scroll[0]>beforePan.scroll[0]&&afterPan.scroll[1]>beforePan.scroll[1],'Actual mouse drag pans');}
+   else{
+    const cdp=await context.newCDPSession(page),box=await stage.boundingBox();await stage.evaluate(n=>{n.scrollTop=0;n.scrollLeft=0});
+    try{const x=box.x+box.width/2,y=box.y+box.height/2;await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});for(let step=1;step<=5;step++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y-step*16}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await expect.poll(async()=>(await geometry(page)).scroll[1]).toBeGreaterThan(0);assert.equal(await stage.evaluate(n=>getComputedStyle(n).touchAction),'auto');}
+    finally{await cdp.detach()}
+   }
    for(let n=0;n<12;n++)if(await page.getByRole('button',{name:'Zoom in',exact:true}).isEnabled())await page.getByRole('button',{name:'Zoom in',exact:true}).click();
    await expect(page.getByRole('button',{name:'Zoom in',exact:true})).toBeDisabled();assert.ok((await geometry(page)).width<=2400*8+.6);
    await page.getByRole('button',{name:'Fit',exact:true}).click();
@@ -94,8 +99,12 @@ try{
    await page.evaluate(url=>{const original=HTMLImageElement.prototype.decode;window.restoreDecode=()=>{HTMLImageElement.prototype.decode=original};HTMLImageElement.prototype.decode=function(){const work=original.call(this);if(this.src.endsWith(url))return work.then(()=>new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Decode gate deadline')),10000);window.releaseDecode=()=>{clearTimeout(timeout);resolve()}}));return work}},a.url);
    const first=page.locator('.a-composer').getByRole('button',{name:'Preview decode-a.png',exact:true}).first();await first.click();await expect(page.getByText('Loading image…',{exact:true})).toBeVisible();await expect(page.locator('.a-image-preview-plane img')).toHaveCount(0);await page.waitForFunction(()=>!!window.releaseDecode);
    await close(page,first);const second=await open(page,'decode-b.png');await page.evaluate(()=>window.releaseDecode());assert.deepEqual((await geometry(page)).natural,[32,24]);await close(page,second);await page.evaluate(()=>window.restoreDecode());
-   const fail=route=>route.fulfill({status:404,body:'Unavailable'});await page.route('**'+a.url,fail);
-   await first.click();await expect(page.getByRole('button',{name:'Retry preview'})).toBeVisible();await expect(page.locator('.a-image-preview-plane img')).toHaveCount(0);await page.unroute('**'+a.url,fail);await page.getByRole('button',{name:'Retry preview'}).click();await expect(page.locator('.a-image-preview-plane img')).toBeVisible();assertFit(await geometry(page));await close(page,first);
+   // The image can be decoded from memory; an HTTP 404 interception alone is
+   // not a decode-error control. Reject the actual decoder boundary once.
+   await page.evaluate(()=>{const decode=HTMLImageElement.prototype.decode;HTMLImageElement.prototype.decode=function(){return Promise.reject(new DOMException('Controlled decode failure','EncodingError'))};window.restoreDecode=()=>{HTMLImageElement.prototype.decode=decode}});
+   try{await first.click();await expect(page.getByRole('button',{name:'Retry preview'})).toBeVisible();await expect(page.locator('.a-image-preview-plane img')).toHaveCount(0);}
+   finally{await page.evaluate(()=>window.restoreDecode())}
+   await page.getByRole('button',{name:'Retry preview'}).click();await expect(page.locator('.a-image-preview-plane img')).toBeVisible();assertFit(await geometry(page));await close(page,first);
    await page.reload();await expect(first).toBeVisible();const reopened=await open(page,'decode-b.png');assert.deepEqual((await geometry(page)).natural,[32,24]);await close(page,reopened);await original(page,a,aBytes);await original(page,b,bBytes);
    await call(page,'view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
    await call(page,'canvas.show',{kind:'markdown',title:'Kept editing',content:'# Original'});
@@ -125,6 +134,53 @@ try{
    await withActionRoute(page,{label:'late-drop-upload',trace:report.routes,release,handle:async route=>{const body=route.request().method()==='POST'?route.request().postDataJSON():null;if(!held&&body?.action==='attachment.add'){held=true;const response=await route.fetch();seen();await gate;await route.fulfill({response});return;}await route.continue();}},async()=>{await drops(page,'.a-messages',[{name:'late.png',base64:data.toString('base64')}]);await bounded(arrived,10000,'Drop action arrived');await call(page,'session.select',{id:other});await composer.fill('Keep other text');release();});
    await expect.poll(async()=>(await inspect(page)).attachments[owner]?.filter(x=>x.name==='late.png').length).toBe(1);assert.equal((await inspect(page)).attachments[other]?.length||0,0);await expect(composer).toHaveDraft('Keep other text');assert.equal((await inspect(page)).sends.filter(s=>[owner,other].includes(s.sessionId)).length,0);
   }finally{try{await control(page,{op:'release-all'})}finally{await bounded(context.close(),10000,'Close drop context')}}
+ });
+ await run('upload-error-unknown-and-unnamed-handoff',async()=>{
+  const {context,page}=await contextFor({width:1280,height:900},'light');
+  try{
+   const composer=page.getByRole('textbox',{name:'Message Amplifier'}),data=await png(page,48,32),owner=(await state(page)).selectedSessionId;
+   await composer.fill('Preserve text across upload errors');
+   let requests=0;page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/api/actions')&&r.postDataJSON()?.action==='attachment.add')requests++});
+   await drops(page,'.a-messages',[{name:'ordered-first.png',base64:data.toString('base64')},{name:'empty.png',base64:''},{name:'must-not-upload.png',base64:data.toString('base64')}]);
+   await expect(page.getByText(/remaining file was not uploaded/)).toBeVisible();
+   assert.deepEqual((await inspect(page)).attachments[owner].map(f=>f.name),['ordered-first.png']);assert.equal(requests,1);await expect(composer).toHaveDraft('Preserve text across upload errors');
+   // A dropped response is unknown, not permission to retry an attachment action.
+   let lost=false;
+   await withActionRoute(page,{label:'upload-lost-reply',trace:report.routes,handle:async route=>{
+    const body=route.request().method()==='POST'?route.request().postDataJSON():null;
+    if(!lost&&body?.action==='attachment.add'){lost=true;await route.fetch();await route.abort('failed');return;}await route.continue();
+   }},async()=>{
+    await drops(page,'.a-messages',[{name:'unknown.png',base64:data.toString('base64')}]);
+    await expect.poll(async()=>(await inspect(page)).attachments[owner]?.filter(f=>f.name==='unknown.png').length).toBe(1);
+    await expect(page.locator('.a-upload-status')).toHaveCount(0);assert.equal(requests,2);await expect(composer).toHaveDraft('Preserve text across upload errors');
+   });
+   await page.reload();await expect(composer).toHaveDraft('Preserve text across upload errors');assert.equal(requests,2,'Reload never replays an unknown upload');
+   const workspace=(await state(page)).sessions.find(s=>s.id===owner).workspace;
+   await call(page,'session.draft',{workspace});await composer.fill('New unnamed text');
+   const draftId=(await state(page)).attachmentDraftId;
+   await page.evaluate(()=>{
+    const read=FileReader.prototype.readAsDataURL;
+    FileReader.prototype.readAsDataURL=function(file){const loaded=this.onload;this.onload=event=>{const timer=setTimeout(()=>{this.onerror?.(new ProgressEvent('error'))},10000);window.releaseFileRead=()=>{clearTimeout(timer);loaded.call(this,event)}};return read.call(this,file)};
+    window.restoreFileRead=()=>{FileReader.prototype.readAsDataURL=read};
+   });
+   try{
+    await drops(page,'.a-messages',[{name:'unnamed-late.png',base64:data.toString('base64')}]);await page.waitForFunction(()=>!!window.releaseFileRead);
+    const created=(await call(page,'session.create',{workspace,fromDraft:true,expectedDraftId:draftId})).sessionId;
+    await call(page,'session.draft',{workspace});await composer.fill('Newer unnamed draft stays here');
+    await page.evaluate(()=>window.releaseFileRead());
+    await expect.poll(async()=>(await inspect(page)).attachments[created]?.filter(f=>f.name==='unnamed-late.png').length).toBe(1);
+    assert.equal((await state(page)).selectedSessionId,null);await expect(composer).toHaveDraft('Newer unnamed draft stays here');
+    assert.equal((await inspect(page)).attachments['']?.length||0,0);
+    // Deliberate wrong-owner/duplicate controls use real actions, then remove only their own synthetic rows.
+    await call(page,'attachment.add',{sessionId:owner,name:'negative.png',base64:data.toString('base64')});
+    await call(page,'attachment.add',{sessionId:owner,name:'negative.png',base64:data.toString('base64')});
+    const wrong=(await inspect(page)).attachments[owner].filter(f=>f.name==='negative.png');
+    assert.throws(()=>assert.equal(wrong.length,1),'Exactly-once oracle detects duplicate admission');
+    assert.throws(()=>assert.equal((wrong.length?owner:null),created),'Owner oracle detects wrong draft');
+    for(const file of wrong)await call(page,'attachment.remove',{sessionId:owner,id:file.id});
+    assert.equal((await inspect(page)).sends.filter(s=>[owner,created].includes(s.sessionId)).length,0);
+   }finally{await page.evaluate(()=>{window.releaseFileRead?.();window.restoreFileRead?.()})}
+  }finally{await bounded(context.close(),10000,'Close upload recovery context')}
  });
  assert.deepEqual(report.errors,[]);if(primary)throw primary;
 }catch(error){primary??=error;report.error=error.stack}
