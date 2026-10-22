@@ -507,6 +507,16 @@ async def main():
                     'result':{'success':True,'output':{'response':args['reply'],'session_id':'observer-child'}}})
                 events.lifecycle({'type':'child.updated','sessionId':'observer-child','parentSessionId':aid,
                     'callId':'observer-delegate','runId':'observer-run','agent':'review','status':'completed','report':'SUMMARY-DECOY'})
+                if args.get('olderRecords') is True:
+                    from amplifier_web.event_window import MAX_ITEMS
+                    # Establish the explicit older-page prerequisite before
+                    # publishing host metadata to an already-open browser.
+                    # Otherwise a ready recent window can correctly supply the
+                    # exact fields without a separate saved-tool lookup.
+                    for index in range(MAX_ITEMS):
+                        log_hook(aid,'tool:post',{'tool_call_id':f'observer-later-{index}',
+                            'tool_name':'unrelated','result':'Later saved observation'})
+                    await service.event_log_view.windows.read(aid)
                 for event in emitted:
                     normalized=normalize_event(event,aid)
                     if normalized:

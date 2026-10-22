@@ -3,7 +3,7 @@ import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const outputDir=process.env.AMPLIFIER_TEST_OUTPUT_DIR||await mkdtemp(join(tmpdir(),'amplifier-execution-actions-'));
@@ -16,10 +16,19 @@ const control=async body=>{const response=await fetch(base+'/api/fixture/control
 await control({op:'bounded-tool-records'});
 const before=await control({op:'inspect-work-source'});
 const browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
+const legacyReads=[],legacyResponses=[];
 try{
  const page=await browser.newPage({viewport:{width:1300,height:1050},extraHTTPHeaders:headers}),errors=[],reads=[];
  page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)});
  page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/conversation/detail'&&['tool','field'].includes(url.searchParams.get('part')))reads.push(url)});
+ page.on('response',response=>{
+  const url=new URL(response.url());
+  if(url.pathname!=='/api/conversation/detail'||url.searchParams.get('part')!=='tool'||!url.searchParams.get('id')?.endsWith(':older-legacy'))return;
+  const record={at:Date.now(),query:Object.fromEntries(url.searchParams),status:response.status()};legacyReads.push(record);
+  legacyResponses.push(response.json().then(value=>{record.response={lookupKey:value.lookupKey,before:value.before,coverage:value.coverage,error:value.error,
+   contentAvailability:value.item?.contentAvailability,observations:value.item?.savedObservations?.map(row=>({id:row.id,event:row.event,createdAt:row.createdAt,toolCallId:row.toolCallId}))}})
+   .catch(error=>{record.readError=error.message}));
+ });
  await page.goto(base);await showFixtureConversation(page);
  const turn=page.locator('[data-group-id="tool-details@tool-detail-question"]');
  const turnButton=turn.locator(':scope > button.a-execution-turn-line');await turnButton.waitFor();
@@ -119,4 +128,20 @@ try{
  assert.deepEqual(await control({op:'inspect-work-source'}),retainedBefore,'Inspection and rollover do not replay work');
  await page.screenshot({path:join(outputDir,'open-fields-after-rollover.png')});
  console.log('Bounded older exact, delegate and child fields render; legacy observations remain separate; inspection preserves runtime and source state.');
-}catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}
+}catch(error){
+ console.error(log);
+ // Preserve the failed lookup and visible records without retrying a read or
+ // weakening the three-observation assertion. Do not capture payload bodies.
+ const diagnostic={error:String(error),reads:legacyReads};
+ try{
+  await Promise.allSettled(legacyResponses);
+  const page=browser.contexts()[0]?.pages()[0];
+  diagnostic.dom=page?await page.locator('[data-node-id$=":older-legacy"]').evaluateAll(rows=>rows.map(row=>({
+   expanded:row.querySelector(':scope > button')?.getAttribute('aria-expanded'),
+   observations:[...row.querySelectorAll('.a-related-saved-records > .a-execution-node')].map(node=>node.dataset.nodeId),
+   controls:[...row.querySelectorAll('button')].map(button=>({label:button.getAttribute('aria-label')||button.textContent,disabled:button.disabled})),
+   alerts:[...row.querySelectorAll('[role=alert]')].map(alert=>alert.textContent)}))):[];
+  await writeFile(join(outputDir,'legacy-tool-lookup-failure.json'),JSON.stringify(diagnostic,null,2));
+ }catch(captureError){console.error('Could not capture legacy lookup diagnostics:',captureError.message)}
+ throw error;
+}finally{await browser.close();fixture.kill()}
