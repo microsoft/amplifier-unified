@@ -964,13 +964,17 @@ def read(app, sid, config, offset=0, limit=10):
                         try:
                             row = recovery.bind_configuration(app, row, selected)
                             observed = invoke(selected, home, row, 'read', {})
+                            # An absent owner can make the ordinary read fail.
+                            # Only the selected bounded native proof can recover it.
+                            if row['id'] == reservation_probe:
+                                recovered = recovery.recover_reservation(app, row, selected, observed)
+                                if recovered is not row:
+                                    physical = recovered['reservationRecovery']['environmentStatus']
+                                    observed = {**(observed if observed.get('ok') is True else {}),
+                                                'ok': True, 'universeId': row['universeId'],
+                                                'status': 'removed' if physical == 'absent' else physical}
+                                row = recovered
                             if observed.get('ok'):
-                                if row['id'] == reservation_probe:
-                                    recovered = recovery.recover_reservation(app, row, selected, observed)
-                                    if recovered is not row:
-                                        physical = recovered['reservationRecovery']['environmentStatus']
-                                        observed = {**observed, 'status': 'removed' if physical == 'absent' else physical}
-                                    row = recovered
                                 changes = {key: observed[key] for key in ('universeId', 'services', 'snapshot', 'sourceReady') if key in observed and observed[key] != row.get(key)}
                                 if observed.get('status') != row.get('environmentState'):
                                     changes['environmentState'] = observed.get('status', 'unknown')

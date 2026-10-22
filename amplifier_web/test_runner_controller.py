@@ -344,12 +344,16 @@ def dispatch(request, *, _configuration=None, _engine_owner=None):
             if action == 'reconcile':
                 settle_observed_reservation(root, runtime_payload, result, row)
                 reconcile_launch(root, runtime_payload, result, row)
-            elif action == 'read' and result.get('ok') is True and result.get('status') in {'stopped', 'removed', 'absent', 'unknown'}:
+            elif action == 'read' and result.get('status') in {'stopped', 'removed', 'absent', 'unknown'}:
                 if preparation_settled(root) and machine.held(row):
                     try:
                         observed = worker.execute_call({**runtime_payload, 'action': 'reconcile'}, **({'_engine_owner': _engine_owner} if _engine_owner else {}))
                         if settle_observed_reservation(root, runtime_payload, observed, row):
-                            result = {**result, 'status': 'removed' if observed['status'] == 'absent' else observed['status']}
+                            # Failed inventory is not evidence; replace it only
+                            # after exact settled native ownership/absence proof.
+                            result = {**(result if result.get('ok') is True else {}),
+                                      'ok': True, 'universeId': worker.identity(runtime_payload),
+                                      'status': 'removed' if observed['status'] == 'absent' else observed['status']}
                     except (OSError, ValueError, TimeoutError):
                         pass  # Keep both the uncertain effect and its reservation.
             # Unknown creation retains capacity even after absent inventory.

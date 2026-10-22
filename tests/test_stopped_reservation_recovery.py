@@ -13,6 +13,7 @@ from test_task_environments import backend, start, act, scope
 from test_test_host_resources import machine, native_backend
 from test_environment_recovery import observation
 from test_registered_test_runners import target, prepared, request
+from test_test_environment_worker import library, removal_main, real_docker_owner, real_docker_json
 
 
 async def lost_check(app, monkeypatch):
@@ -262,3 +263,117 @@ def test_held_reservation_rejects_changed_saved_machine_or_resources(machine):
         with pytest.raises(ValueError, match='another owner'):
             host.held(altered)
     assert host.snapshot()['reserved']['count'] == 1
+
+
+# Use the real helper readers and sanitized protocol boundaries. Only external
+# daemon wire responses and the initially lost effect reply are simulated.
+
+
+@pytest.mark.parametrize('condition', ['absent', 'unavailable', 'pending', 'foreign'])
+async def test_actual_docker_reader_recovers_absence_after_failed_owner_read(
+        app, native_backend, library, monkeypatch, condition):
+    from types import SimpleNamespace
+    from amplifier_web import test_environment_worker as worker
+    row, original = await lost_check(app, monkeypatch)
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    root = owner.storage.directory(app.data_dir, raw)
+    value = {'root': str(root), 'source': raw['source'], 'dockerHost': 'unix:///fixture.sock',
+             'rootOwner': raw['sessionId'], 'operationId': raw['launchOperationId'],
+             'universeId': raw['universeId'], 'expectedBackendIdentity': raw['backendIdentity'],
+             'admissionRoot': str(root / 'admission')}
+    worker.retain_settlement(value, raw['universeId'], raw['backendIdentity'], 'removed')
+    if condition == 'pending':
+        worker.reserve_admission(value, {'scope': raw['backendIdentity']})
+    monkeypatch.setattr(worker, 'docker_owner', real_docker_owner)
+    monkeypatch.setattr(worker, 'docker_json', real_docker_json)
+    def docker(command, **kwargs):
+        if 'info' in command:
+            return SimpleNamespace(stdout=json.dumps({'ID': raw['backendIdentity']['daemon']}))
+        if condition == 'unavailable':
+            raise worker.subprocess.CalledProcessError(1, command)
+        if condition == 'foreign' and 'ps' in command:
+            return SimpleNamespace(stdout=json.dumps({'State': 'exited', 'Labels': {
+                'com.docker.compose.project': raw['universeId'],
+                'io.amplifier.root-owner': 'foreign-owner',
+                'io.amplifier.operation-id': raw['launchOperationId']}}))
+        return SimpleNamespace(stdout='')
+    monkeypatch.setattr(worker.subprocess, 'run', docker)
+    ordinary = removal_main(monkeypatch, {**value, 'action': 'read'})
+    assert ordinary['ok'] is False and ordinary['status'] == 'unknown'
+    assert host.snapshot()['reserved']['count'] == 1
+    calls = []
+    def invoke(config, home, current, action, args):
+        assert current['id'] == raw['id'] and action in {'read', 'reconcile'}
+        calls.append(action)
+        return removal_main(monkeypatch, {**value, 'action': action})
+    monkeypatch.setattr(owner, 'invoke', invoke)
+    before = copy.deepcopy(app.operations.requests.list(row['sessionId']))
+    result = (await app.dispatch('workspace.environments.read', scope(app)))['result']['items'][0]
+    assert calls == ['read', 'reconcile']
+    assert host.snapshot()['reserved']['count'] == (0 if condition == 'absent' else 1)
+    saved = owner.get(app.data_dir, row['sessionId'], row['id'])
+    assert saved['status'] != 'retired' and result['lastOperation'] == original
+    assert app.operations.requests.list(row['sessionId']) == before
+    assert library[1] == [], 'No native lifecycle operation may be replayed'
+    if condition == 'absent':
+        assert result['status'] == 'removed'
+        assert saved['reservationRecovery']['observation']['absenceConfirmed'] is True
+        assert saved['reservationRecovery']['state'] == 'released'
+    else:
+        assert result['status'] == 'unknown' and 'reservationRecovery' not in saved
+
+
+@pytest.mark.parametrize('condition', ['absent', 'unavailable', 'pending', 'foreign'])
+def test_actual_target_reader_recovers_absence_after_failed_instance_read(target, monkeypatch, condition):
+    worker = controller.worker
+    value = prepared(target)
+    value['expectedBackendIdentity'] = target[1]
+    real_execute = worker.execute_call
+    # The original start was admitted but its reply did not establish an outcome.
+    monkeypatch.setattr(worker, 'execute_call', lambda payload: {'ok': False, 'status': 'unknown'})
+    original = request(target, value, 'start')
+    root = target[0] / ('owner-' + controller.digest(controller.owner(value)))
+    effect = root / ('effect-' + controller.digest([value['requestId'], 'start']) + '.json')
+    original_bytes = effect.read_bytes()
+    monkeypatch.setattr(worker, 'execute_call', real_execute)
+    monkeypatch.setattr(worker, 'validate_configuration', lambda config: config)
+    monkeypatch.setattr(worker, 'environment', lambda config, root: {})
+    name = worker.identity(value)
+    queries = []
+    def incus(config, env, args, *a, **kw):
+        assert args[0] == 'query', 'Read recovery cannot mutate the backend'
+        queries.append(args[1])
+        if args[1] == '/1.0':
+            result = {'environment': {'project': 'test', 'certificate_fingerprint': 'daemon-a'}}
+        elif args[1] == '/1.0/instances':
+            if condition == 'unavailable':
+                return {'exit_code': 1, 'stdout': '', 'truncated': False}
+            result = []
+        else:
+            assert args[1] == '/1.0/instances/' + name
+            return {'exit_code': 1, 'stdout': '', 'truncated': False}
+        return {'exit_code': 0, 'stdout': json.dumps(result), 'truncated': False}
+    def cli(config, env, args, *a, **kw):
+        assert args == ['launch-status', value['operationId']]
+        return {'name': name, 'owner_root': 'foreign-owner' if condition == 'foreign' else value['rootOwner'],
+                'request_id': value['operationId'], 'state': 'unknown' if condition == 'pending' else 'stopped',
+                'instance_status': 'Stopped'}
+    monkeypatch.setattr(worker, 'incus', incus)
+    monkeypatch.setattr(worker, 'cli', cli)
+    ordinary = real_execute({**value, 'root': str(root), 'incus': {'project': 'test'}, 'action': 'read'})
+    assert ordinary['ok'] is False and ordinary['status'] == 'unknown'
+    assert host.snapshot()['reserved']['count'] == 1
+    queries.clear()
+    result = request(target, value, 'read')
+    assert '/1.0/instances' in queries, 'The failed read must still reach exact native reconciliation'
+    assert host.snapshot()['reserved']['count'] == (0 if condition == 'absent' else 1)
+    assert effect.read_bytes() == original_bytes
+    assert request(target, value, 'start') == original
+    if condition == 'absent':
+        assert result['ok'] is True and result['status'] == 'removed' and result['universeId'] == name
+        assert 'code' not in result and 'effectAdmitted' not in result
+        proof = controller.read(root / 'reservation-recovery.json')
+        assert proof['state'] == 'released' and proof['observation']['absenceConfirmed'] is True
+    else:
+        assert result['ok'] is False and result['status'] == 'unknown'
+        assert not (root / 'reservation-recovery.json').exists()

@@ -354,7 +354,7 @@ def recover_reservation(app, row, config, observed):
     releasing the lease; an uncertain check/removal remains uncertain.
     """
     from . import task_environments as owner
-    if (config.get('remoteRunner') or observed.get('ok') is not True
+    if (config.get('remoteRunner')
             or (observed.get('status') not in {'stopped', 'removed', 'absent', 'unknown'}
                 and row.get('environmentState') != 'unknown')
             or row.get('pendingRequest')
