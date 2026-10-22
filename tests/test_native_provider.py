@@ -224,6 +224,92 @@ async def test_bound_send_rejects_new_submission_after_generation_change(tmp_pat
     assert not host.path.exists()
 
 
+@pytest.mark.parametrize('operation', ['response.create', 'response.steer'])
+@pytest.mark.parametrize('ending', ['prepare_reject', 'final_reject', 'cancel', 'send_error', 'ignored_terminal'])
+async def test_real_native_unsent_callback_reaches_bound_host_disk(tmp_path, monkeypatch, operation, ending):
+    import asyncio
+    from amplifier_core.llm_errors import LLMError
+    from amplifier_module_provider_openai import OpenAIProvider
+    from amplifier_module_provider_openai.native import NativeSendAdmission
+    from websockets.protocol import State
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    c = Coordinator(OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'}))
+    await install_native(c.loop, c, c.providers)
+    host = c.get_capability('web.native_provider')
+    native = host.provider
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    observed = []
+
+    async def lifecycle(kind, data):
+        observed.append(kind)
+        if not (kind == 'native.not_sent' and ending == 'ignored_terminal'):
+            await callback(kind, data)
+
+    def admit(envelope):
+        assert envelope.attempt_id == 'attempt' and envelope.kind == operation
+        assert 'PRIVATE' in envelope.payload
+        return ending == 'send_error'
+
+    async def prepare(kind, *, input_id):
+        assert kind == operation
+        if ending == 'prepare_reject':
+            raise ValueError('PRIVATE callback failure')
+        if ending == 'cancel':
+            raise asyncio.CancelledError()
+        return NativeSendAdmission(attempt_id='attempt', admit=admit)
+
+    native.lifecycle = lifecycle
+    native.prepare_send = prepare
+    native.owner = SimpleNamespace(
+        config={}, runtime=SimpleNamespace(emit=AsyncMock()), _text=lambda command: 'PRIVATE steer')
+    native._connect = AsyncMock()
+    socket = SimpleNamespace(state=State.OPEN, send=AsyncMock(side_effect=OSError('Synthetic send failure')),
+                             close=AsyncMock(), recv=AsyncMock())
+    native.socket = socket
+    if operation == 'response.steer':
+        native.response_id = 'parent'
+        host.state.update(requestId='parent-attempt', outcome='running', responseId='parent')
+    failure = asyncio.CancelledError if ending == 'cancel' else (
+        OSError if ending == 'send_error' else LLMError)
+    with pytest.raises(failure):
+        if operation == 'response.create':
+            await native._native_response({'input': [{'role': 'user', 'content': 'PRIVATE create'}]})
+        else:
+            await native.steer_live(SimpleNamespace(id='input-one'))
+    if ending == 'send_error':
+        socket.send.assert_awaited_once()
+        assert 'native.not_sent' not in observed
+    else:
+        socket.send.assert_not_awaited()
+        assert observed.count('native.not_sent') == 1
+    restored = NativeProviderHost(c, c.loop, host.directory)
+    expected = 'unknown' if ending in {'send_error', 'ignored_terminal'} else 'not_sent'
+    assert restored.state['sends'][0]['outcome'] == expected
+    assert restored.state['sends'][0]['admittedCallId'] == 'budget-call'
+    assert restored.state['sends'][0]['attemptId'] == 'attempt'
+    assert 'PRIVATE' not in host.path.read_text()
+    if operation == 'response.steer' and ending not in {'send_error', 'ignored_terminal'}:
+        assert host.state['outcome'] == 'running' and host.state['requestId'] == 'parent-attempt'
+
+
+@pytest.mark.parametrize('phase', ['native.request', 'native.outcome_unknown', 'native.completed'])
+async def test_known_entered_or_terminal_send_cannot_be_relabelled_unsent(tmp_path, phase):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    record = send_record()
+    await callback('native.submitting', record)
+    await callback(phase, {'response_id': 'reply'})
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError):
+        await callback('native.not_sent', {**record, 'reason': 'rejected'})
+    assert host.path.read_bytes() == before
+
+
 @pytest.mark.asyncio
 async def test_shared_control_compacts_only_idle_and_never_returns_private_opaque(tmp_path,monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))

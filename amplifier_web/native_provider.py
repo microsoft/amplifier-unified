@@ -25,14 +25,122 @@ class NativeProviderHost:
             saved = json.loads(self.path.read_text())
             if saved.get("sessionId") == coordinator.session_id:
                 self.state = saved
+                changed = False
+                for row in self.state.get("sends", []):
+                    if row.get("outcome") in {"submitting", "sent", "running", "pending"}:
+                        row["outcome"] = "unknown"
+                        changed = True
                 if self.state.get("outcome") in {"submitting", "running", "pending"}:
                     self.state["outcome"] = "unknown"
                     self.state["reason"] = "Host restarted without a terminal provider receipt; no work was replayed."
+                    changed = True
+                if changed:
                     self.save()
         coordinator.register_capability("web.native_provider", self)
 
     def save(self):
         write_private(self.path, json.dumps(self.state, ensure_ascii=False))
+
+    def bind_send_lifecycle(self, *, attempt_id, generation_id, admitted_call_id):
+        """Capture an existing host admission before an opted-in transport call.
+
+        This consumes receipts, not Work applicability or effect permission.
+        The caller supplies its actual host identities, never model arguments.
+        Legacy installation stays unchanged until its admission owner opts in.
+        """
+        if any(not isinstance(value, str) or not value or len(value) > 200
+               for value in (attempt_id, generation_id, admitted_call_id)):
+            raise ValueError("Native send requires an exact host admission binding")
+        binding = {"attemptId": attempt_id, "generationId": generation_id,
+                   "admittedCallId": admitted_call_id, "identity": copy.deepcopy(self.identity)}
+
+        async def observe(kind, data):
+            previous = self.state
+            state = copy.deepcopy(previous)
+            rows = state.setdefault("sends", [])
+            if kind in {"native.submitting", "native.not_sent"}:
+                keys = ("send_id", "operation", "epoch", "response_id", "input_id")
+                identity = {key: data.get(key) for key in keys}
+                operation = identity["operation"]
+                if (operation not in {"response.create", "response.steer"}
+                        or any(not isinstance(identity[key], str) or not identity[key]
+                               or len(identity[key]) > 200 for key in ("send_id", "epoch"))
+                        or any(value is not None and (not isinstance(value, str) or not value
+                                                     or len(value) > 200)
+                               for value in (identity["response_id"], identity["input_id"]))
+                        or (operation == "response.create" and identity["input_id"] is not None)
+                        or (operation == "response.steer" and
+                            (identity["input_id"] is None or identity["response_id"] is None))
+                        or data.get("execution_replayed") is not False):
+                    raise ValueError("Native send receipt identity is invalid")
+                matches = [row for row in rows if row["send_id"] == identity["send_id"]]
+                if kind == "native.submitting":
+                    generation = getattr(self.coordinator.get_capability("live.runtime"), "generation", None) or {}
+                    if (matches or data.get("attempt_id") is not None
+                            or self.selected_identity() != binding["identity"]
+                            or generation.get("id") != binding["generationId"]):
+                        raise ValueError("Native send admission binding changed")
+                    # Never evict an unresolved send to make room for another.
+                    if len(rows) >= 128:
+                        terminal = next((row for row in rows if row["outcome"] in
+                                         {"not_sent", "completed"}), None)
+                        if terminal is None:
+                            raise ValueError("Native send receipt capacity requires reconciliation")
+                        rows.remove(terminal)
+                    row = {**identity, **copy.deepcopy(binding), "outcome": "submitting"}
+                    rows.append(row)
+                    if operation == "response.create":
+                        state.update(requestId=attempt_id, generationId=generation_id,
+                                     identity=copy.deepcopy(binding["identity"]), outcome="submitting")
+                else:
+                    if (len(matches) != 1 or any(matches[0].get(key) != value for key, value in identity.items())
+                            or any(matches[0].get(key) != value for key, value in binding.items())
+                            or matches[0]["outcome"] != "submitting"
+                            or data.get("attempt_id") not in (None, attempt_id)
+                            or data.get("reason") not in ("cancelled", "rejected")):
+                        raise ValueError("Native terminal does not match an unresolved unsent operation")
+                    row = matches[0]
+                    row.update(outcome="not_sent", reason=data["reason"])
+                    if operation == "response.create" and state.get("requestId") == attempt_id:
+                        state.update(outcome="not_sent", reason=data["reason"])
+                row["updatedAt"] = time.time()
+            else:
+                owned = [row for row in rows if row["attemptId"] == attempt_id
+                         and row["outcome"] in {"submitting", "sent", "running", "pending"}]
+                if kind == "steering.sent":
+                    owned = [row for row in owned if row["operation"] == "response.steer"
+                             and row["input_id"] == data.get("input_id")
+                             and row["response_id"] == data.get("response_id")]
+                elif kind in {"native.request", "native.response.created", "native.completed"}:
+                    owned = [row for row in owned if row["operation"] == "response.create"]
+                phases = {"native.request": "sent", "steering.sent": "sent",
+                          "native.response.created": "running", "native.completed": "completed",
+                          "native.outcome_unknown": "unknown"}
+                if kind in phases:
+                    for row in owned:
+                        row["outcome"] = ("pending" if kind == "native.completed"
+                                          and data.get("pending_steering") else phases[kind])
+                        row["updatedAt"] = time.time()
+                    if state.get("requestId") == attempt_id and owned:
+                        state["outcome"] = owned[0]["outcome"]
+                        if kind in {"native.response.created", "native.completed"}:
+                            state["responseId"] = data.get("response_id")
+            # Only bounded identity/phase metadata; never payload or arbitrary
+            # observer error text. A failed write cannot appear durable in RAM.
+            receipt = {"id": str(uuid.uuid4()), "event": kind, "requestId": attempt_id,
+                       "time": time.time(), **{key: data.get(key) for key in
+                       ("send_id", "operation", "epoch", "input_id", "response_id", "steer_id")
+                       if isinstance(data.get(key), str) and len(data[key]) <= 200}}
+            state["receipts"] = (state.get("receipts", []) + [receipt])[-128:]
+            state["updatedAt"] = time.time()
+            self.state = state
+            try:
+                self.save()
+            except BaseException:
+                self.state = previous
+                raise
+
+        return observe
 
     def selected_mount(self):
         providers = self.coordinator.get("providers") or {}
