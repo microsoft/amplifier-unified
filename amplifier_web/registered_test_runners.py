@@ -320,20 +320,21 @@ def resolve_job(app, job, active):
     return configs.resolve(app, {'backendKey': job['backendKey'], 'backendConfigRetained': True}, active)
 
 
-def has_room(observation, request):
+def has_room(observation, request, planned=None):
     if not observation.get('supported'):
         return True
     limits, reserved, observed = observation['effective'], observation['reserved'], observation['observed']
+    planned = planned or {}
     return not (
-        limits['maxReservedCpu'] and reserved['cpus'] + request['cpus'] > limits['maxReservedCpu']
-        or limits['maxReservedMemoryMiB'] and reserved['memoryMiB'] + request['memoryMiB'] > limits['maxReservedMemoryMiB']
-        or limits['minAvailableMemoryMiB'] and observed['availableMemoryMiB'] < request['memoryMiB'] + limits['minAvailableMemoryMiB'] + reserved.get('pendingMemoryMiB', 0)
+        limits['maxReservedCpu'] and reserved['cpus'] + planned.get('cpus', 0) + request['cpus'] > limits['maxReservedCpu']
+        or limits['maxReservedMemoryMiB'] and reserved['memoryMiB'] + planned.get('memoryMiB', 0) + request['memoryMiB'] > limits['maxReservedMemoryMiB']
+        or limits['minAvailableMemoryMiB'] and observed['availableMemoryMiB'] < request['memoryMiB'] + limits['minAvailableMemoryMiB'] + reserved.get('pendingMemoryMiB', 0) + planned.get('memoryMiB', 0)
         or limits['minFreeBytes'] and observed['freeBytes'] < limits['minFreeBytes']
         or limits['maxLoadPercent'] and observed['loadPercent'] > limits['maxLoadPercent']
-        or request.get('profileId') != 'linux-python' and limits.get('maxPreparing') and reserved.get('preparing', 0) >= limits['maxPreparing'])
+        or request.get('profileId') != 'linux-python' and limits.get('maxPreparing') and reserved.get('preparing', 0) + planned.get('preparing', 0) >= limits['maxPreparing'])
 
 
-def select(app, job, active, observations=None, backoff=None):
+def select(app, job, active, observations=None, backoff=None, routing=None):
     from . import task_environments as environments
     from . import test_environment_configs as configs
     observations = {} if observations is None else observations
@@ -358,7 +359,8 @@ def select(app, job, active, observations=None, backoff=None):
                 else:
                     backoff.pop(key, None)
             observed = observations[key]
-            available = observed.get('available') and has_room(observed.get('machineResources', {}), job['resourceRequest'])
+            available = (routing.room(key, config, observed, routing.request(job)) if routing is not None else
+                         observed.get('available') and has_room(observed.get('machineResources', {}), job['resourceRequest']))
             if available:
                 return config
         except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
