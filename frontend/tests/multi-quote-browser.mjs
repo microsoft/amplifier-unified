@@ -17,7 +17,7 @@ const documentValue=()=>page.evaluate(()=>window.amplifier.getState().view.draft
 const commentary=doc=>doc.segments.filter(s=>s.type==='text').map(s=>s.text);
 const references=doc=>doc.segments.filter(s=>s.type==='quote');
 const observe=async()=>{const response=await context.request.get(url+'/fixture/message-source');assert.equal(response.status(),200);return response.json();};
-const checkpoints=[];
+const checkpoints=[],compactGeometry=[];
 const BEFORE='Before the references',BETWEEN='Between the passages',BEFORE_WHOLE='Before the whole message',AFTER='After all references';
 const UNICODE='  café e\u0301 東京  ';
 const projectDocument=doc=>doc.segments.map(part=>part.type==='text'?part.text:part);
@@ -62,6 +62,28 @@ async function expectLayout(stage,expected,{canonicalReady=true}={}){
  const canonical=await canonicalDraft();
  checkpoints.at(-1).canonical=canonical;
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
+}
+async function expectCompact(stage){
+ const surface=page.locator('.a-compact-composer [data-part="composer-surface"]');
+ await expect(surface).toHaveAttribute('data-expanded','true');
+ const geometry=await surface.evaluate(node=>{
+  const rect=el=>{const {x,y,width,height}=el.getBoundingClientRect();return {x,y,width,height};};
+  const editor=node.querySelector('[role=textbox]'),writing=node.querySelector('.a-compose-writing');
+  return {surface:rect(node),editor:rect(editor),writing:rect(writing),
+   quoteCount:writing.querySelectorAll('[data-quote-instance]').length,
+   overflow:node.scrollWidth>node.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
+   theme:document.querySelector('#amp-one').dataset.themeScheme,
+   primary:rect(node.querySelector('[data-part="composer-primary-action"]'))};
+ });
+ compactGeometry.push({stage,...geometry});
+ if(proof)writeFileSync(join(proof,'compact-quote-geometry.json'),JSON.stringify(compactGeometry,null,2));
+ assert.ok(geometry.quoteCount>=2,'Real immutable quotes belong inside the compact writing wrapper');
+ assert.ok(geometry.editor.width>=geometry.surface.width-40,'Quotes use the full compact writing width');
+ assert.ok(geometry.editor.height<=181,'Long quote drafts retain bounded editor height');
+ assert.equal(geometry.overflow,false,'Compact quote surface must not overflow');
+ assert.equal(geometry.pageOverflow,false,'Compact quote page must not overflow');
+ assert.ok(geometry.primary.width>=44&&geometry.primary.height>=44,'Primary action retains its touch target');
+ await expect(page.locator('[data-part="composer-primary-action"]')).toBeInViewport();
 }
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
@@ -108,6 +130,7 @@ try{
  assert.equal(secondQuote.quote.excerpt,second.text);assert.equal(secondQuote.quote.messageId,sourceA);
  assert.deepEqual(secondQuote.quote.spans,[{start:second.start,end:second.end}]);
  await expectLayout('second quote',[BEFORE,firstQuote,BETWEEN,secondQuote,'']);
+ await expectCompact('two immutable references');
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Before the whole message');
  await enteredCommentary('Before the whole message');
  await expectLayout('before whole typed',[BEFORE,firstQuote,BETWEEN,secondQuote,BEFORE_WHOLE]);
@@ -198,11 +221,28 @@ try{
  await sourceLink.focus();await page.keyboard.press('Enter');
  await page.getByRole('button',{name:'Return to reading position'}).click();
  await expect(sourceLink).toBeFocused();
+ const options=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
+ await options.click();await page.getByRole('dialog',{name:'Chat options',exact:true}).waitFor();
+ await page.keyboard.press('Escape');await expect(options).toBeFocused();
+ await expectLayout('compact options preserve interleaving',expected);
+ await expectCompact('desktop retained quote draft');
  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'quotes-desktop.png')});
  for(const width of [390,320]){
   await page.setViewportSize({width,height:844});
   for(const colorScheme of ['light','dark']){
-   await page.emulateMedia({colorScheme});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   await page.emulateMedia({colorScheme});
+   const revision=await page.evaluate(async scheme=>{
+    const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
+    const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,
+     composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,scheme}}});
+    if(!prepared.accepted)throw Error(prepared.error||'Fixture appearance refused');
+    const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
+    if(!applied.accepted)throw Error(applied.error||'Fixture appearance refused');return applied.result.revision;
+   },colorScheme);
+   await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
+   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',colorScheme);
+   await expectCompact(`${width}px ${colorScheme}`);
+   await expectLayout(`${width}px ${colorScheme} preserves interleaving`,expected);
    if(proof)await page.locator('.a-composer').screenshot({path:join(proof,`quotes-${width}-${colorScheme}.png`)});
   }
  }

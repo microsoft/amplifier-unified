@@ -65,8 +65,12 @@ def main():
     run('backend', [sys.executable, '-m', 'pytest', '-q', '--tb=short',
         'tests/test_multi_quote.py', 'tests/test_message_interactions.py',
         '--junitxml=' + str(output / 'backend.xml')])
+    run('coverage-contracts', [sys.executable, '-m', 'pytest', '-q', '--tb=short',
+        'tests/test_browser_check_runner.py', 'tests/test_release_qualification.py',
+        'tests/test_peer_qualification.py', 'tests/test_compact_composer_checks.py',
+        '--junitxml=' + str(output / 'coverage-contracts.xml')])
     units = ['multi-quote', 'markdown-composer', 'draft-attach', 'draft-journal',
-             'pending-view', 'message-render-stability', 'message-reaction-feedback']
+             'pending-view', 'message-render-stability', 'message-reaction-feedback', 'composer']
     unit_code, _ = run('model-units', ['node', '--test', *['tests/' + name + '.test.mjs' for name in units]], cwd=ROOT / 'frontend')
     model = ROOT / 'frontend/src/markdown-composer.js'
     original = model.read_bytes()
@@ -117,6 +121,18 @@ def main():
             if build == 0:
                 run('restored-source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'],
                     env={**browser_env, 'AMPLIFIER_PROOF_DIR': str(output / 'restored-source-browser')})
+    if build == 0:
+        # Exercise the ordinary source owners through the unchanged standard
+        # runner. Derive rows from the accepted plan, never a parallel command list.
+        plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+        names = {'multi-quote', 'compact-composer'}
+        rows = [row for row in plan['scenarios'] if row['id'] in names]
+        assert len(rows) == len(names) and {row['id'] for row in rows} == names
+        selected = output / 'automatic-source-plan.json'
+        selected.write_text(json.dumps({**plan, 'scenarios': rows}, indent=2))
+        run('automatic-source-smoke', [sys.executable, 'scripts/browser_check_runner.py',
+            '--plan', str(selected), '--output', str(output / 'automatic-source-smoke'),
+            '--budget-seconds', '180'])
     if args.installed and build == 0:
         wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', *(['--offline'] if managed else []), '--out-dir', str(output / 'wheel')])
         if wheel_code == 0:

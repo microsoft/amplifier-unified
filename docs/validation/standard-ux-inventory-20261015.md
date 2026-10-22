@@ -995,3 +995,30 @@ remote cleanup boundaries, concurrent scheduler passes, restart and the exact
 initial-allocation cancellation gap. Unknown or advanced owners remain held. This
 is controlled-backend and rendered-client evidence, not live runner deployment.
 No new broad test lane or publication gate is added.
+
+## Compact composer and peer preview integration (October 22)
+
+The additive `compact-composer` and `peer-preview` browser scenarios run in the
+automatic extended source smoke plan. The existing `composer-options` owner
+remains in Public readiness without duplication. Together they cover the
+ordinary writing/options controls and grouped incoming-message source preview;
+the existing composer primary-action and peer-attribution journeys retain their
+separate assertions. The frozen original inventory and 65-scenario hash remain
+unchanged. The delta ledger records the specific paths, expected results and
+synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
+qualify installed wheels and negative controls; they do not replace these
+automatic ordinary-path owners.
+
+## Immutable multi-quote integration (October 22)
+
+The additive `multi-quote` source journey uses the existing automatic browser
+runner and `output/browser-checks/multi-quote` evidence directory. It retains
+literal, independently expected commentary before/between/after immutable
+references through reload, removal/reorder, delayed addition and normal Send.
+The same journey checks compact writing-wrapper containment and narrow layout;
+it does not substitute quote-shaped Markdown for immutable source identity.
+The Composer and Peer owners above and the frozen baseline remain unchanged.
+The manual multi-quote lane adds two deliberate commentary-loss/misplacement
+controls, byte-exact restoration and installed-wheel proof. Physical-device,
+real OS IME, live-provider and lost-Send-ACK browser coverage remain explicit
+limits; registering this owner is not a new passing result.

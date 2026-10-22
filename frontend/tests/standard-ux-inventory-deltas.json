@@ -2217,6 +2217,165 @@
         }
       ],
       "qualification": "docs/navigation.md"
+    },
+    {
+      "id": "delta.compact-composer",
+      "sourceCommit": "f1c10e55961bbba30acd9c9c08154f3f3592d3fb",
+      "reason": "Keep ordinary compact writing and configuration paths in automatic source smoke coverage; preserve the frozen checklist.",
+      "workflowsAdded": [
+        {
+          "id": "composer.compact-options",
+          "family": "composer",
+          "title": "Write, attach and configure a chat from the compact composer",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Composer",
+            "Model and reasoning settings"
+          ],
+          "prerequisites": [
+            "Synthetic host/runtime with built client; no account, live provider or real audio"
+          ],
+          "steps": [
+            "Inspect idle and expanded input at desktop and phone widths across detail/theme choices",
+            "Write multiline text, paste quotes and attach/remove files without sending",
+            "Open model/reasoning/bundle options; close with keyboard and retain focus/draft",
+            "Reload with a retained draft and verify long-input actions stay reachable"
+          ],
+          "expectedResults": [
+            "Idle field remains compact with usable touch targets and no horizontal overflow.",
+            "IME composition and Shift+Enter do not send; private input stays out of ordinary readback.",
+            "Options remain usable without losing unsent text or attachments."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "detail-levels",
+            "reload",
+            "zoom-equivalent"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/compact-composer-browser.mjs",
+              "relation": "Automatic compact-composer owner; bounded geometry, input, privacy and retained draft assertions"
+            },
+            {
+              "path": "frontend/tests/composer-options-browser.mjs",
+              "relation": "Existing automatic Public readiness composer-options owner; choices, invalid controls and keyboard/focus continuity"
+            },
+            {
+              "path": "scripts/compact_composer_checks.py",
+              "relation": "Separate fixed manual source/installed-wheel and adjacent regression qualification"
+            }
+          ],
+          "limits": [
+            "Synthetic source smoke; no live provider, physical keyboard or native audio claim.",
+            "Separate immutable quote-node behavior remains independently owned."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.peer-preview",
+      "sourceCommit": "e0155b968c38b5bd8940e827d9e0d07bcb6991b1",
+      "reason": "Give grouped incoming peer messages and read-only source preview an automatic ordinary-path smoke owner.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.peer-preview",
+          "family": "conversation",
+          "title": "Read grouped peer messages and inspect their source without leaving a draft",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Messages from another chat",
+            "Preview source chat"
+          ],
+          "prerequisites": [
+            "Synthetic peer messages with canonical delivery receipts; no live history or model calls"
+          ],
+          "steps": [
+            "Expand grouped peers, inspect formatted content and copy exact original Markdown",
+            "Preview source chat, load earlier pages and refresh without reordering or losing place",
+            "Return to the original chat with unsent text and attachment retained",
+            "Attempt preview during dirty Canvas/Settings transitions; cancel and preserve the current owner",
+            "Repeat at narrow widths and verify no runtime starts or page reload"
+          ],
+          "expectedResults": [
+            "Grouping preserves exact content and reliable sender attribution.",
+            "Preview is bounded and read-only; source rows retain formatting and ordering.",
+            "Drafts, selected chat, dirty editors and renderer leases remain intact."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "dirty-settings",
+            "dirty-canvas"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/peer-preview-browser.mjs",
+              "relation": "Automatic peer-preview owner for grouped formatting, paging, copy, draft and dirty-owner continuity"
+            },
+            {
+              "path": "tests/test_peer_preview.py",
+              "relation": "Canonical source authorization, exact delivery receipts and bounded pagination"
+            },
+            {
+              "path": "scripts/peer_message_qualification.py",
+              "relation": "Separate fixed manual negative-formatting and installed-wheel qualification"
+            }
+          ],
+          "limits": [
+            "Synthetic source smoke; no live-history scale or provider-latency claim."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.multi-quote",
+      "sourceCommit": "063f6b6dc21d628d2fa3ebecfe8f21d6d9eb2ee4",
+      "reason": "Register the reviewed immutable-quote journey as an ordinary automatic source owner, integrated with compact writing; preserve every frozen and additive owner.",
+      "workflowsAdded": [
+        {
+          "id": "composer.immutable-multi-quote",
+          "family": "composer",
+          "title": "Collect exact references and interleave commentary in the compact composer",
+          "scope": "standard-path",
+          "entryPath": ["Chat", "Message actions", "Choose passage or Reply to message"],
+          "prerequisites": ["Synthetic current-chat messages and attachments; built client; no live history or provider"],
+          "steps": [
+            "Select two nonadjacent passages and quote a whole message while typing literal commentary before, between and after",
+            "Reload, keyboard-reorder and remove only a quote, preserving exact commentary and attachment",
+            "Hold an addition, move the caret and insertion mode, then verify the new instance at its captured target",
+            "Change commentary while a receipt is held; verify journal ownership and reject the late addition",
+            "Inspect narrow compact layout, send once, copy the exact saved message and repeat a plain cycle"
+          ],
+          "expectedResults": [
+            "Immutable blocks retain exact Unicode, whitespace, source spans and independent identity without replacing earlier content.",
+            "Independently authored DOM, editor and canonical-draft order survives quote manipulation and reload.",
+            "The compact writing wrapper retains full-width references, accessible controls and no horizontal overflow.",
+            "No collection, composition or quote-removal action sends; normal Send preserves exact interleaving and attachments.",
+            "Delayed additions retain their captured target or fail visibly; newer journaled commentary remains owned."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "light-dark", "touch-emulated", "reload", "delayed-receipt"],
+          "existingTests": [
+            {"path": "frontend/tests/multi-quote-browser.mjs", "relation": "Automatic multi-quote source owner; artifacts at output/browser-checks/multi-quote"},
+            {"path": "scripts/multi_quote_checks.py", "relation": "Separate fixed focused source/installed qualification with both meaningful commentary mutants"}
+          ],
+          "limits": [
+            "Registration is not a passing result; current raw run evidence must be inspected.",
+            "No physical device, real OS IME, live provider or screen-reader claim.",
+            "Lost Send acknowledgement and late quote across chat switch remain narrower host/model checks, not this browser journey."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
     }
   ]
 }
