@@ -444,6 +444,9 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert 'uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"' in installed['run']
     assert 'assert not actual.is_relative_to(source)' in installed['run']
     assert "('failure', 'error', 'skipped')" in installed['run']
+    assert installed['run'].index('uv pip check') < installed['run'].index(' -m pytest')
+    assert "result.returncode == 1 and len(cases) == 1" in installed['run']
+    assert 'negative-control.json' in installed['run']
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [
