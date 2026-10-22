@@ -65,7 +65,7 @@ try{
  await options.click();await menu.getByRole('button',{name:'Close chat options',exact:true}).press('Escape');
  await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
  await options.click();await page.locator('.a-messages').click({position:{x:40,y:40}});await expect(menu).toHaveCount(0);
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
  for(const width of [320,390]){
   await page.setViewportSize({width,height:650});await expect(options).toBeVisible();await belowField();await options.click();await expect(menu).toBeVisible();
   await expect.poll(async()=>{const b=await menu.boundingBox();return b.x>=0&&b.y>=0&&b.x+b.width<=width&&b.y+b.height<=650}).toBe(true);
@@ -105,7 +105,7 @@ try{
  await expect(page.locator('.a-settings-canvas')).toHaveCount(0);
  await page.getByRole('tab',{name:'Settings',exact:true}).click();
  await expect(page.locator('.a-settings-canvas')).toBeVisible();
- await page.getByRole('button',{name:'Close tab Settings',exact:true}).click();
+ await page.getByRole('tab',{name:'Settings',exact:true}).press('Delete');
  await expect(page.getByRole('tab',{name:'Settings',exact:true})).toHaveCount(0);
  await expect(page.getByRole('tab',{name:'Notes',exact:true})).toBeVisible();
  await page.evaluate(()=>window.amplifier.dispatch('canvas.show',{kind:'settings'}));
@@ -117,7 +117,7 @@ try{
  const privateKey=page.locator('#voice-api-key');
  if(!await privateKey.isVisible())await page.getByText('Change voice connection',{exact:true}).click();
  await privateKey.fill('synthetic-private-draft');
- await page.getByRole('button',{name:'Close tab Settings',exact:true}).click();
+ await page.getByRole('tab',{name:'Settings',exact:true}).press('Delete');
  await expect(page.getByRole('alertdialog')).toBeVisible();
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await expect(privateKey).toHaveValue('synthetic-private-draft');
@@ -130,7 +130,7 @@ try{
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,sid);
  await expect(privateKey).toHaveValue('synthetic-private-draft');
  assert.ok(!JSON.stringify(await page.evaluate(()=>window.amplifier.getState())).includes('synthetic-private-draft'));
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
  await page.getByRole('button',{name:'Discard changes',exact:true}).click();
  // A normal configured visit does not force a setup dialog.
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{settingsCanvas:false,setupJourney:'done'}}));
