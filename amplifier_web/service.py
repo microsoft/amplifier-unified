@@ -4647,7 +4647,8 @@ class AppService:
         # Remove only known fields: arbitrary extras must still be validated.
         transport = args
         args = {key: value for key, value in args.items()
-                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients', '_workOrigin'}}
+                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
+                               '_workOrigin', '_workDispatchGuarded'}}
         if '_inputClients' not in transport:
             return await self._app_bridge(operation, args, session_id)
         # The worker stamps this from accepted inputs, replacing any tool args.

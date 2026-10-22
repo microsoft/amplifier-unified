@@ -11,7 +11,10 @@ import json
 
 from .collaboration import BINDING
 
-# Explicit recovery surface. Do not infer read-only behavior from action suffixes
+# Explicit recovery surface, including attributed reports and own-request
+# cancellation. Reporting is not a read, but must remain possible when stuck.
+# None of these reports publishes, verifies a result or grants execution.
+# Do not infer read-only behavior from action suffixes
 # or ACTION_POLICIES (which describes ownership, not effect safety).
 SAFE_ACTIONS = frozenset({
     'workspace.work.list', 'workspace.work.read', 'workspace.work.source',
@@ -38,7 +41,8 @@ def recovery_read(tool_name, tool_input):
     operation = tool_input.get('operation')
     if operation in {'get_state', 'list_actions', 'history', 'context.read'}:
         return True
-    return operation == 'dispatch' and (tool_input.get('args') or {}).get('action') in SAFE_ACTIONS
+    arguments = tool_input.get('args')
+    return operation == 'dispatch' and isinstance(arguments, dict) and arguments.get('action') in SAFE_ACTIONS
 
 
 def _receipt(invocation, identity):
@@ -86,12 +90,17 @@ def check(invocation, sid, args):
             or not isinstance(args['toolInput'], dict)
             or not isinstance(args['toolCallId'], str) or not 1 <= len(args['toolCallId']) <= 200):
         raise AppError('Work effect checks require the exact tool name, input and executing call ID.')
-    target = invocation.bound_root(sid)
     result = {'applicable': True, 'allowed': False, 'reason': None,
               'requiredVersion': None, 'effectAuthorized': False}
-    if recovery_read(args['toolName'], args['toolInput']):
-        return {**result, 'allowed': True, 'reason': 'Exact read or safe reporting; ordinary authority still applies.'}
     try:
+        target = invocation.bound_root(sid)
+        if recovery_read(args['toolName'], args['toolInput']):
+            return {**result, 'allowed': True, 'reason': 'Exact read or safe reporting; ordinary authority still applies.'}
+        if args['toolName'] == 'tool_exec' and (BINDING.get() or {}).get('_workDispatchGuarded') is True:
+            # Only the installed ProgrammaticTool under the worker's active
+            # BoundDispatch supplies this fact. Each inner call stays guarded.
+            return {**result, 'allowed': True,
+                    'reason': 'Host-verified guarded programmatic container; each inner effect must pass its own check.'}
         applicable, reason = applicability(invocation, target)
         result.update(applicable=applicable, reason=reason)
         if not applicable:
@@ -112,7 +121,9 @@ def check(invocation, sid, args):
                 or origin.get('rootSessionId') != sid
                 or origin.get('runtimeSessionId') != (BINDING.get() or {}).get('_runtimeSessionId')
                 or origin.get('generationId') != required.get('generationId')
-                or origin.get('stopRevision') != target.get('interruptionRevision', 0)
+                # This counter is worker-local; the persistent host Stop
+                # boundary is independently bound by required.version.
+                or type(origin.get('stopRevision')) is not int or origin['stopRevision'] < 0
                 or origin.get('inputCoverage') != 'complete'
                 or origin.get('inputIds') != exact_inputs):
             return {**result, 'reason': 'Originating call scope no longer matches this root, generation, Stop or complete input set.'}

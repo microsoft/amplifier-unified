@@ -10,6 +10,7 @@ import pytest
 
 from test_collaborative_workspaces import app, generation
 from test_work_invocation import prepared_work, assert_available_commission, current_work, transport, retained_bytes
+from test_workspace_work import read, revise, source
 
 
 def tool_args():
@@ -72,7 +73,8 @@ async def test_work_precondition_rejects_mismatched_origin(app, fault):
     elif fault == 'attempt': witness['origin']['attemptId'] = 'other-attempt'
     elif fault == 'generation': witness['origin']['generationId'] = 'old-generation'
     elif fault == 'inputs': witness['origin']['inputIds'] = []
-    elif fault == 'stop': witness['origin']['stopRevision'] += 1
+    elif fault == 'stop':
+        await app.dispatch('conversation.stop', {'sessionId': child['id']}, command_id='effect-host-stop')
     elif fault == 'admission': witness['origin']['admittedCallId'] = None
     elif fault == 'request': witness['requestSha256'] = 'b' * 64
     before = retained_bytes(app)
@@ -95,6 +97,21 @@ async def test_missing_work_association_cannot_become_an_ordinary_tool_exemption
     assert result['allowed'] and result['effectAuthorized'] is False
 
 
+async def test_local_worker_stop_counter_is_not_the_persistent_host_counter(app):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'local-stop-counter')
+    _, child = await assert_available_commission(app, owner, item, 'local-stop-commission')
+    required = (await current_work(app, child))['required']; args = tool_args()
+    witness = trusted_fixture(child, required, args)
+    witness['origin']['stopRevision'] = 3
+    assert child.get('interruptionRevision', 0) == 0
+    result = await check(app, child, args, witness)
+    assert result['allowed'] and result['effectAuthorized'] is False
+    await app.dispatch('conversation.stop', {'sessionId': child['id']}, command_id='local-stop-host-stop')
+    result = await check(app, child, args, witness)
+    assert not result['allowed'] and result['effectAuthorized'] is False
+
+
 async def test_unrelated_root_preserves_ordinary_policy_and_model_witness_is_rejected(app):
     owner = app.state['sessions'][0]
     await generation(app, owner, 'ordinary-generation', ['ordinary-human-input'])
@@ -113,3 +130,46 @@ async def test_safe_reporting_does_not_exempt_nested_effects(app):
     assert not recovery_read('app_control', {'operation': 'dispatch', 'args': {'action': 'runtime.control', 'args': {'operation': 'tool.invoke'}}})
     assert not recovery_read('bash', {'command': 'cat work.txt'})
     assert not recovery_read('tool_exec', {'code': 'await tools.write_file({})'})
+
+
+@pytest.mark.parametrize('guarded,tool,allowed', [
+    (True, 'tool_exec', True), (False, 'tool_exec', False),
+    ('true', 'tool_exec', False), (True, 'write_file', False)])
+async def test_programmatic_container_requires_exact_private_host_fact(app, guarded, tool, allowed):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'container-boundary')
+    _, child = await assert_available_commission(app, owner, item, 'container-commission')
+    args = {'toolName': tool, 'toolInput': {'code': 'await tools.read_file({})'}, 'toolCallId': 'container-call'}
+    result = await app.app_bridge('work.effect.check', {
+        **args, **transport(child), '_workDispatchGuarded': guarded}, child['id'])
+    assert result['allowed'] is allowed and result['effectAuthorized'] is False
+    from amplifier_web.service import AppError
+    with pytest.raises(AppError, match='exact tool name'):
+        await check(app, child, {**args, 'workDispatchGuarded': True})
+
+
+@pytest.mark.parametrize('arguments', ['workspace.work.list', ['workspace.work.list']])
+async def test_malformed_nested_tool_arguments_return_unavailable(app, arguments):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'malformed-effect')
+    _, child = await assert_available_commission(app, owner, item, 'malformed-effect-commission')
+    result = await check(app, child, {'toolName': 'app_control', 'toolInput': {
+        'operation': 'dispatch', 'args': arguments}, 'toolCallId': 'malformed'})
+    assert not result['allowed'] and result['effectAuthorized'] is False
+
+
+async def test_same_witness_is_invalid_after_real_promise_change(app):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'promise-effect')
+    _, child = await assert_available_commission(app, owner, item, 'promise-effect-commission')
+    required = (await current_work(app, child))['required']; args = tool_args()
+    witness = trusted_fixture(child, required, args)
+    assert (await check(app, child, args, witness))['allowed']
+    current = (await read(app, owner, item['id']))['item']
+    await revise(app, owner, current, 'promise-effect-revision',
+                 source=source(app, owner, 'New condition before effect.'),
+                 constraints=['New condition before effect.'])
+    before = retained_bytes(app)
+    result = await check(app, child, args, witness)
+    assert not result['allowed'] and result['effectAuthorized'] is False
+    assert retained_bytes(app) == before
