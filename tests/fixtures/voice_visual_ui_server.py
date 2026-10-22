@@ -22,6 +22,10 @@ async def main(home):
     from amplifier_web.server import create_app
     runtime=Runtime();app=await create_app(home/'app',workspace=str(home),runtime=runtime,voice=False,background_updates=False,preload_providers=False)
     service=app['service'];runtime.service=service;app['control_token']='fixture-browser-control-token'
+    if '--onboarding-complete' in sys.argv:
+        # Configured voice journeys can start after onboarding. Otherwise delayed
+        # provider discovery can open first-use Settings over the voice controls.
+        await service.dispatch('view.update', {'patch': {'setupJourney': 'done'}})
     class Manager:
         api_key=True
         call=None

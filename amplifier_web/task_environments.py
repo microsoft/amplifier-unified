@@ -261,7 +261,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
             raise ValueError('This environment request already has a different or admitted owner. Inspect its exact receipt.')
         limits = execution_settings.concurrency(home)
         count = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
-        if not _qualification and count >= limits['maxEnvironmentsPerChat']:
+        if not _qualification and limits['maxEnvironmentsPerChat'] and count >= limits['maxEnvironmentsPerChat']:
             raise ValueError('This task already owns its allowed environments. Inspect or remove one, or adjust Advanced execution limits in Settings.')
         total, owned = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
         if not _qualification and (total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']):
@@ -402,9 +402,9 @@ def legacy_cleanup_qualification(app, row, action, args):
     """Derive an exception from trusted retained evidence, never caller flags."""
     if action != 'finishCleanup':
         return None
-    from .test_environment_legacy import returned_export_limit
+    from .test_environment_legacy import returned_preservation_failure
     prior = app.operations.requests.read(row['sessionId'], args['previousRequestId'])
-    return returned_export_limit(row, prior)
+    return returned_preservation_failure(row, prior)
 
 
 def require_resolved_removal(app, row, exclude_request_id=None, legacy=None):
@@ -416,15 +416,15 @@ def require_resolved_removal(app, row, exclude_request_id=None, legacy=None):
     """
     qualified = None
     if legacy is not None:
-        from .test_environment_legacy import returned_export_limit, completed_export_limit
+        from .test_environment_legacy import returned_preservation_failure, completed_preservation_failure
         prior = app.operations.requests.read(row['sessionId'], legacy['originalRequestId'])
         if row.get('guestRemoved'):
             removal, _ = confirmed_guest_removal(app, row)
-            verified = completed_export_limit(row, prior, removal)
+            verified = completed_preservation_failure(row, prior, removal)
         else:
-            verified = returned_export_limit(row, prior)
+            verified = returned_preservation_failure(row, prior)
         if verified != legacy:
-            raise ValueError('The retained legacy preservation result changed.')
+            raise ValueError('The retained preservation result changed.')
         qualified = legacy['originalRequestId']
     journal = app.operations.requests.journal
     with journal.lock:

@@ -156,8 +156,8 @@ def read_removal(app, args, origin, caller, *, listing=False):
                         or app.operations.requests.read(sid, args['originalRequestId']) != original
                         or root_binding() != captured):
                     raise AppError('Removal inspection changed or is busy.', 409)
-                from .test_environment_legacy import returned_export_limit
-                legacy = returned_export_limit(row, original)
+                from .test_environment_legacy import returned_preservation_failure
+                legacy = returned_preservation_failure(row, original)
                 available = bool(legacy and row.get('environmentState') == 'stopped')
                 if available:
                     from .task_environments import require_resolved_removal
@@ -169,7 +169,7 @@ def read_removal(app, args, origin, caller, *, listing=False):
                     'version': 1, 'sessionId': sid, 'id': rid, 'revision': row['revision'],
                     'original': {'requestId': args['originalRequestId'], 'state': state},
                     'status': 'qualified' if legacy else 'held',
-                    'code': 'returned_legacy_export_limit' if legacy else
+                    'code': legacy['kind'].replace('-', '_') if legacy else
                             'original_binding_missing' if original.get('resourceId') is None
                             else 'original_binding_unverified',
                     'executor': 'returned_and_reaped' if legacy else 'unobserved',
