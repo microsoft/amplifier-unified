@@ -12,7 +12,7 @@ SOURCE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SOURCE))
 
 PROVIDER = '''
-import json, os
+import asyncio, json, os
 from pathlib import Path
 from amplifier_core import ProviderInfo
 from amplifier_core.message_models import ChatResponse, TextBlock
@@ -35,6 +35,11 @@ class FixtureProvider:
                 "kwargsModel":kwargs.get("model"),"kwargsEffort":kwargs.get("reasoning_effort")})+"\\n")
         return ChatResponse(content=[TextBlock(text="native-next-message-"+self.config["root"])])
 async def mount(coordinator, config=None):
+    if (config or {}).get("fail"):
+        raise ValueError("Synthetic unavailable module")
+    if (config or {}).get("hold"):
+        Path(config["hold"]).touch()
+        await asyncio.Event().wait()
     await coordinator.mount("providers", FixtureProvider(config, coordinator), name="fixture")
 '''
 
@@ -78,13 +83,15 @@ async def run(root, regression=False):
     loop = str(Path(amplifier_module_loop_live.__file__).parent)
     bundles = []
     calls = root/'calls.jsonl'
-    for label in ('a', 'b'):
+    for label in ('a', 'b', 'bad', 'slow'):
         path = root/f'bundle-{label}.yaml'
         path.write_text(yaml.safe_dump({'bundle': {'name': 'fixture-'+label, 'version': SNAPSHOT_VERSION},
             'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False}},
                         'context': {'module': 'context-simple', 'source': context}},
             'providers': [{'module': 'provider-fixture', 'source': str(provider.parent),
-                           'config': {'root': label, 'calls': str(calls)}}]}))
+                           'config': {'root': label, 'calls': str(calls),
+                               **({'fail': True} if label == 'bad' else {}),
+                               **({'hold': str(root/'mount-held')} if label == 'slow' else {})}}]}))
         bundles.append(str(path))
     (shared/'settings.yaml').write_text(yaml.safe_dump({'bundle': {'active': bundles[0], 'app': []},
         'web_bundles': {'excluded': list(APPENDED_DEFAULTS)},
@@ -106,6 +113,14 @@ async def run(root, regression=False):
     report = {'regression': regression, 'versions': {name: importlib.metadata.version(name) for name in
         ('amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live', 'amplifier-module-context-simple')},
         'processes': []}
+    worker_processes = []
+    spawn = asyncio.create_subprocess_exec
+    async def observed_spawn(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        if '--worker' in args:
+            worker_processes.append(process)
+        return process
+    asyncio.create_subprocess_exec = observed_spawn
     try:
         await client.start_server()
         headers = {'Cookie': SESSION_COOKIE+'='+new_session(app['session_secret']),
@@ -121,7 +136,7 @@ async def run(root, regression=False):
         for revision, bundle, model, effort in [(0,bundles[1],'second','high'),(1,bundles[1],'first','low')]:
             await action('conversation.configure', {'sessionId':sid, 'expectedRevision':revision,
                 'bundle':bundle, 'selection':{'instance':'fixture','model':model,'effort':effort}}, 'save-'+str(revision))
-        assert not runtime.workers and not calls.exists()
+        assert not runtime.workers and not worker_processes and not calls.exists()
         report['zeroStartsBeforeSend'] = True
         if regression:
             # Deliberate stale-selection injection before the provider boundary;
@@ -155,7 +170,35 @@ async def run(root, regression=False):
         messages = SessionHistoryStore(sessions_dir(workspace)/runtime.workers[sid]['runtime_id']).load_messages()
         ids = [(message.get('metadata') or {}).get('amplifier_input',{}).get('id') for message in messages]
         assert ids.count('input-one') == ids.count('input-two') == 1, ids
-        report.update(passed=True, calls=observed, inputsExactlyOnce=True, adjacentCycle=True)
+        assert len(worker_processes) == 2
+        native_id = runtime.workers[sid]['runtime_id']
+        baseline = SessionHistoryStore(sessions_dir(workspace)/native_id).load_messages()
+        await action('conversation.configure', {'sessionId':sid,'expectedRevision':3,'bundle':bundles[2]}, 'save-unavailable')
+        response = await client.post('/api/actions', headers=headers, json={'action':'conversation.send',
+            'args':{'sessionId':sid,'text':'KEEP_FAILED_INPUT','expectedConfigurationRevision':4},'id':'input-unavailable'})
+        failure = await response.json()
+        assert not failure.get('accepted') and failure.get('receipt', {}).get('delivery') == 'failed', failure
+        assert current['pendingBundleSelection']['bundle'] == bundles[2]
+        assert any(m.get('text') == 'KEEP_FAILED_INPUT' and m.get('delivery', {}).get('status') == 'failed'
+                   for m in current['messages'])
+        assert SessionHistoryStore(sessions_dir(workspace)/native_id).load_messages() == baseline
+        assert len(calls.read_text().splitlines()) == 2
+        await action('conversation.configure', {'sessionId':sid,'expectedRevision':4,'bundle':bundles[3]}, 'save-slow')
+        sending = asyncio.create_task(client.post('/api/actions', headers=headers, json={'action':'conversation.send',
+            'args':{'sessionId':sid,'text':'KEEP_STOPPED_INPUT','expectedConfigurationRevision':5},'id':'input-stop'}))
+        await until(lambda: (root/'mount-held').exists())
+        await action('conversation.stop', {'sessionId':sid}, 'stop-delayed-application')
+        stopped_response = await asyncio.wait_for(sending, 45)
+        stopped = await stopped_response.json()
+        assert not stopped.get('accepted'), stopped
+        await until(lambda: sid not in runtime.workers)
+        assert current['pendingBundleSelection']['bundle'] == bundles[3]
+        assert current['interruptionRevision'] == 1
+        assert len(calls.read_text().splitlines()) == 2
+        assert SessionHistoryStore(sessions_dir(workspace)/native_id).load_messages() == baseline
+        report.update(passed=True, calls=observed, inputsExactlyOnce=True, adjacentCycle=True,
+            failedMountRolledBack=True, failedTextRetained=True, stoppedMountRolledBack=True,
+            noFailureReplay=True, observedWorkerStarts=len(worker_processes))
     except BaseException as exc:
         report.update(passed=False, error=type(exc).__name__+': '+str(exc))
         if 'current' in locals():
@@ -163,9 +206,9 @@ async def run(root, regression=False):
                 ('nextMessageError', 'nextMessageFailure', 'error', 'failure')}
         raise
     finally:
-        processes = [row['process'] for row in runtime.workers.values()]
         await asyncio.wait_for(client.close(), 60)
-        report['cleanupConfirmed'] = all(process.returncode is not None for process in processes)
+        asyncio.create_subprocess_exec = spawn
+        report['cleanupConfirmed'] = all(process.returncode is not None for process in worker_processes)
         (root/'result.json').write_text(json.dumps(report, indent=2))
         print(json.dumps(report), flush=True)
         assert report['cleanupConfirmed']
