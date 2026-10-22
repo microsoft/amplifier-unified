@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.21.0",
+      "title": "Move between recent destinations and keep worker status accurate",
+      "changes": [
+        "Go back and forward through recent Home, chat and workspace destinations with new navigation controls and a History menu. History stays private to the browser tab and preserves safeguards for drafts, Canvas edits and unsaved settings.",
+        "Keep Settings closed after a completed navigation and keep Home reachable on wider touch screens.",
+        "Stop showing a conversation\u2019s unfinished delegated work as running after its own runtime process has exited. Independent and replacement workers keep their state; saved results are preserved and interrupted work is not replayed or marked complete.",
+        "Keep cleanup-ownership smoke coverage aligned with configurable test-environment limits."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.214",
       "title": "Keep parallel assignments responsive without unnecessary accounting",
       "changes": [
