@@ -7,7 +7,6 @@ import {WritingBlock} from './writing-block.js';
 import {canvasReference,CanvasReferenceLink} from './canvas-links.js';
 import {localFilePath,LocalFileLink,remarkLocalFiles} from './local-file-links.js';
 import {BlockCopy,copySourceBlocks} from './block-copy.js';
-import './markdown-content.css';
 
 const components={
  a:({node,href,children,...props})=>React.createElement('a',{...props,href,target:href?.startsWith('#')?undefined:'_blank',rel:'noopener noreferrer'},children),

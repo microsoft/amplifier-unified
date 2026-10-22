@@ -76,6 +76,7 @@ import {VoiceVisualClient,ComputerVisualClient} from './voice-visual';
 import {VoiceVisualControls,SharingIndicator} from './voice-visual.jsx';
 import {sessionStatus} from './session-status';
 import {Markdown} from './markdown';
+import './markdown-content.css';
 import {FeedbackPanel,FeedbackNotice} from './feedback';
 import {notificationBody,desktopNotificationsEnabled,notificationMessages} from './notifications';
 import {ConversationWork,useInterimReplies} from './interim-replies.jsx';

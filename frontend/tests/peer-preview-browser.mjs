@@ -210,6 +210,7 @@ try{
  await expect(panel().getByText('Source chat unavailable',{exact:true})).toBeVisible();await expect(panel().locator('[data-preview-message-id]')).toHaveCount(0);
  await expect(panel().getByRole('button',{name:'Open chat',exact:true})).toBeDisabled();
  const final=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();assert.deepEqual(final.effects,[]);assert.deepEqual(final.subprocesses,[]);assert.deepEqual(errors,[]);
+ assert.equal(final.rendererValidations.length,1);
  assert.ok(!commands.some(x=>['conversation.send','worker.spawn','session.warm','approval.respond'].includes(x)));
  results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,draftTextAfterReturn:true,draftAttachmentsRetained:before.attachments.length,lateDirtyPreservation:{canvasRefused:true,rendererMountAndLeaseRetained:true,settingsCancelled:true,settingsEditorRetained:true,canonicalSourceRetained:true,cleanOpenAccepted:true},narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
  if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-browser-result.json'),JSON.stringify(results,null,2));

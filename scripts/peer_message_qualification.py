@@ -67,6 +67,7 @@ def browser(root, name, python, *, installed=False):
     evidence = OUTPUT / name
     row = {'id': 'peer-preview', 'command': ['node', 'tests/peer-preview-browser.mjs'],
            'env': {'AMPLIFIER_TEST_PYTHON': str(python), 'AMPLIFIER_PROOF_DIR': str(evidence),
+                   'AMPLIFIER_SHELL_NODE_MODULES': str(ROOT / 'frontend/node_modules'),
                    'AMPLIFIER_TEST_INSTALLED_STATIC': '1' if installed else '0'}}
     plan = {'schemaVersion': 1, 'scenarios': [row]}
     (OUTPUT / (name + '-plan.json')).write_text(json.dumps(plan, indent=2))

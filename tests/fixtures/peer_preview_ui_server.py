@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import sys
 import tempfile
 
@@ -35,9 +36,17 @@ class NoModel:
 
 async def main():
     attempts = []
+    renderer_validations = []
     spawn = asyncio.create_subprocess_exec
     async def query_only(*args, **kwargs):
         if args[:3] == (sys.executable, '-m', 'amplifier_web.shell_query_worker'):
+            return await spawn(*args, **kwargs)
+        # The synthetic editor uses the same isolated native-renderer validator
+        # as production. This is not a source-chat worker or provider execution.
+        if len(args) == 5 and args[:2] == (
+            shutil.which('node'), str(Path(server.__file__).with_name('shell_validator.mjs'))
+        ):
+            renderer_validations.append(str(args[1]))
             return await spawn(*args, **kwargs)
         attempts.append([str(x)[:100] for x in args[:3]])
         raise AssertionError('Unexpected worker/provider subprocess')
@@ -94,6 +103,7 @@ async def main():
                 'originals':[x['messageId'] for x in sent], 'older':older['id'],'sourceText':source_text['id'],'sourceLong':source_long['id'],
                 'text':TEXT,'long':LONG,'crlf':CRLF,'textSha256':hashlib.sha256(TEXT.encode()).hexdigest(),
                 'effects':runtime.effects,'subprocesses':attempts,'installed':INSTALLED,
+                'rendererValidations':renderer_validations,
                 'backend':str(Path(server.__file__).resolve())})
         app.router.add_get('/api/fixture/peerFacts',facts)
         async def change(request):
