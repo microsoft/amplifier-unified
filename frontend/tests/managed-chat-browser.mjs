@@ -42,10 +42,10 @@ try{
  await page.getByRole('button',{name:'No workspace',exact:true}).click();
  await expect(page.locator('#new-chat-workspace')).toHaveCount(0);
  await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
- await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();await expect(page.getByLabel('Registered root bundles',{exact:true}).locator('option:checked')).toHaveText('Work');await page.getByRole('button',{name:'Close chat options',exact:true}).click();
+ await expect(page.locator('.a-composer').getByRole('button',{name:'Conversation bundle'})).toContainText('Work');
  assert.equal((await state()).sessions.length,0);await assert.rejects(stat(folders));
  const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'});
- await model.click();await expect(page.locator('#chat-provider')).toBeVisible();await page.locator('#chat-model').selectOption('chosen-model');await page.getByRole('button',{name:'Close chat options'}).click();
+ await model.click();await expect(page.locator('#chat-provider')).toBeVisible();await page.locator('#chat-model').selectOption('chosen-model');await page.getByRole('button',{name:'Close model settings'}).click();
  const saved=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.args?.patch?.draft==='Save my managed chat');
  await composer.fill('Save my managed chat');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Managed attachment')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();

@@ -145,7 +145,9 @@ try{
   await expect.poll(()=>popup.evaluate((el,jump)=>{
    const a=el.getBoundingClientRect(),b=document.querySelector(jump).getBoundingClientRect();
    const left=Math.max(a.left,b.left),right=Math.min(a.right,b.right),top=Math.max(a.top,b.top),bottom=Math.min(a.bottom,b.bottom);
-   if(right<=left||bottom<=top)return 'no overlap';
+   // Compact placement need not overlap the jump control; when separate,
+   // both controls must remain hit-testable. When they overlap, options win.
+   if(right<=left||bottom<=top)return el.contains(document.elementFromPoint(a.x+a.width/2,a.y+a.height/2))&&document.querySelector(jump).contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2));
    return el.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));
   },'.a-chat-jump button')).toBe(true);
   await page.getByRole('button',{name:'Close chat options',exact:true}).click();

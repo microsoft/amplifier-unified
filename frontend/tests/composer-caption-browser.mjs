@@ -1,3 +1,4 @@
+import {createShellHttpFixture} from './shell-http-fixture.mjs';
 // Source renderer; synthetic Host/SSE/catalog only. Never forwards runtime/model work.
 import {readComposerDraft} from './composer-test-helpers.mjs';
 // Run --probe first in the manager's DTU. Each invocation has one context/page and a 60s budget.
@@ -18,18 +19,14 @@ let state={revision:1,client:{hostInstanceId:'caption-fixture'},settings:{worksp
  workspaces:[{id:'project',name:'Fixture',path:workspace,available:true}],selectedSessionId:sid,selectedWorkspaceId:'project',
  setup:{providers:[provider],providersLoadedAt:1,providersWorkspace:workspace},
  registeredBundles:[{value:'work',label:'Work'}],runtimeControl:{[sid]:{'configuration.catalog':catalog}},canvas:{open:false}};
-const shell={revision:1,effectiveComposition:{instances:[],presentation:{}},
- slots:{'composer.actions':{default:'builtin.composer-actions'},'conversation.header':{default:'builtin.conversation-header'}},
- resolvedInstances:[{id:'core.composer.actions',slot:'composer.actions',package:'builtin.composer-actions'},
-  {id:'core.conversation.header',slot:'conversation.header',package:'builtin.conversation-header'}],
- snapshots:{}};
+const shell=createShellHttpFixture(()=>state);
 const calls=[],blocked=[],errors=[],held=[],proof={scope:'Source renderer; synthetic Host/SSE/catalog, no runtime or inference',
  contextCount:0,pageCount:0,widths:[]};
 const proofDir=process.env.COMPOSER_CAPTION_PROOF_DIR;
 let vite,browser,context,page,origin,timer;
 const persist=async name=>{if(proofDir){await mkdir(proofDir,{recursive:true});await writeFile(proofDir+'/'+name+'.json',JSON.stringify(proof,null,2))}};
 const snap=async name=>{if(proofDir){await page.screenshot({path:proofDir+'/'+name+'.png'});await writeFile(proofDir+'/'+name+'-state.json',JSON.stringify(await page.evaluate(()=>window.amplifier.getState()),null,2))}};
-const emit=async()=>{state.revision++;await page.evaluate(value=>window.emitState(value),state)};
+const emit=async()=>{state.revision++;await page.evaluate(value=>window.emitState(value),shell.state())};
 const composer=()=>page.getByRole('textbox',{name:'Message Amplifier',exact:true});
 const status=()=>page.locator('.a-composer .a-sr-only[role="status"]');
 const primary=()=>page.locator('[data-part="composer-primary-action"]');
@@ -91,7 +88,7 @@ async function run(){
   window.EventSource=class extends EventTarget{
    constructor(url){super();this.url=url;this.readyState=1;sources.push(this);window.captionBootstrap.sourceCount++;
     // The app installs its listeners in the constructor's stack, before this event.
-    queueMicrotask(()=>{window.captionBootstrap.baselineCount++;this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(initial)}));this.onopen?.()});
+    queueMicrotask(async()=>{const current=await fetch('/api/state').then(response=>response.json());window.captionBootstrap.baselineCount++;this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(current)}));this.onopen?.()});
    }
    close(){this.readyState=2}
   };
@@ -101,23 +98,22 @@ async function run(){
   const request=route.request(),url=new URL(request.url());
   if(url.origin!==origin){blocked.push(request.url());return route.abort()}
   if(!url.pathname.startsWith('/api/'))return route.continue();
-  if(url.pathname==='/api/clients/attach')return route.fulfill({json:{accepted:true,
-   client:{id:request.postDataJSON().clientId,hostInstanceId:state.client.hostInstanceId}}});
-  if(url.pathname==='/api/state')return route.fulfill({json:state});
-  if(url.pathname==='/api/shell')return route.fulfill({json:shell});
+  const shellResponse=shell.response(request);
+  if(shellResponse!==undefined)return route.fulfill({json:shellResponse});
+  if(url.pathname==='/api/state')return route.fulfill({json:shell.state()});
   if(url.pathname==='/api/actions'&&request.method()==='GET')return route.fulfill({json:[]});
   if(url.pathname==='/api/view')return route.fulfill({json:{accepted:true}});
   if(url.pathname!=='/api/actions'){blocked.push(url.pathname);return route.abort()}
-  const body=request.postDataJSON();calls.push(body);
+  const envelope=request.postDataJSON(),body=envelope.action==='shell.command'?(envelope.args.command||envelope.args):envelope;calls.push(body);
   if(body.action==='conversation.send'){held.push({route,body});return}
   if(body.action==='conversation.delivery')return route.fulfill({json:{accepted:true,result:{
-   delivery:'not_saved',message:'Fixture: no saved copy. Nothing was resent.'},state}});
+   delivery:'not_saved',message:'Fixture: no saved copy. Nothing was resent.'},state:shell.state()}});
   if(body.action==='view.update'){state.view={...state.view,...body.args.patch};state.revision++}
   else if(!['shell.report','attention.read','bundles.list','configuration.defaults','providers.list'].includes(body.action)&&
    !(body.action==='runtime.control'&&body.args.operation==='configuration.catalog')){
    blocked.push(body.action);return route.abort();
   }
-  return route.fulfill({json:{accepted:true,state}});
+  return route.fulfill({json:{accepted:true,operationId:body.id,state:shell.state()}});
  });
  await page.goto(origin,{waitUntil:'domcontentloaded',timeout:15000});
  await expect(composer()).toBeEditable();
@@ -181,7 +177,8 @@ async function run(){
   row.rejected={errorVisible:true,retryVisible:true,nextDraft:await readComposerDraft(composer()),sendPosts:sendCount()-before};
   await snap(width+'-rejected');
   await bubble.getByRole('button',{name:'Discard unsent message',exact:true}).click();await expect(bubble).toHaveCount(0);
-  // Unknown acknowledgement retains Check delivery/confirmation, never an automatic retry.
+  // Unknown local submission retains Check delivery and the original-identity
+  // retry action; merely checking must never resend or invent a new command.
   const uncertainText='Unknown send '+width;await composer().fill(uncertainText);await composer().press('Enter');
   const unknown=await nextSend();await composer().fill(nextDraft);
   await unknown.route.fulfill({status:504,json:{error:'Fixture delivery uncertain',code:'runtime_pending'}});
@@ -189,10 +186,10 @@ async function run(){
   await expect(uncertain.getByRole('alert')).toHaveText('Fixture delivery uncertain');await expect(uncertain.getByRole('alert')).toBeVisible();
   await expect(uncertain.getByRole('button',{name:'Retry',exact:true})).toHaveCount(0);
   await uncertain.getByRole('button',{name:'Check delivery',exact:true}).click();
-  await expect(uncertain.getByRole('button',{name:'Send again',exact:true})).toBeVisible();
+  await expect(uncertain.getByRole('button',{name:'Retry original submission',exact:true})).toBeVisible();
   assert.equal(sendCount()-before,2,'Checking uncertain delivery must not resend');
   await expect(composer()).toHaveDraft(nextDraft);await expect(composer()).toContainText(nextDraft);await expect(composer()).toBeEditable();
-  await expect(status()).toBeEmpty();row.unknown={checkVisible:true,confirmationAvailable:true,sendPosts:sendCount()-before};
+  await expect(status()).toBeEmpty();row.unknown={checkVisible:true,originalRetryAvailable:true,sendPosts:sendCount()-before};
   await snap(width+'-unknown');
   // Resolve through authoritative SSE rather than retrying the failed model input.
   state.sessions[0].messages.push({id:'accepted-'+unknown.body.id,inputId:unknown.body.id,role:'user',

@@ -1,16 +1,15 @@
-import {spawn} from 'node:child_process';
-import {fileURLToPath} from 'node:url';
+import {startChatFixture} from './chat-fixture.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'inherit'});
-for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
+const {base,stop}=await startChatFixture();
 const browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
 const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
 page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)});
 const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5V8AAAAASUVORK5CYII=','base64');
 try{
- await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
+ await page.goto(base);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
  assert.equal(await page.locator('.a-modality').count(),0);
  assert.equal(await page.locator('.a-conversation .a-operations,.a-conversation .a-computation').count(),0);
  const initial=await page.locator('.a-composer').boundingBox();assert.ok(initial.y>250&&initial.y<650);
@@ -93,4 +92,4 @@ try{
  await page.screenshot({path:'/tmp/amplifier-chat-mobile.png'});
  assert.deepEqual(errors,[]);console.log('Chat browser checks passed: composer, pin/effort, upload/paste/drop, Markdown, scroll containment, canvas, narrow layout.');
 }
-}finally{await browser.close();fixture.kill();}
+}finally{await browser.close();await stop();}

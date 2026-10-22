@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  const actions=[];page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const inspect=async()=>await(await page.request.get(url+'/fixture')).json();
- await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  const composer=page.getByRole('textbox',{name:'Message Amplifier'}),retainedDraft='Keep this private draft while replacing the removed connection.';
  await composer.fill(retainedDraft);await expect(composer).toHaveDraft(retainedDraft);
  const before=await inspect();
