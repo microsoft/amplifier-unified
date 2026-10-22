@@ -87,8 +87,40 @@ try{
  assert.equal(nextFrame.topDelta,0,'The original message must stay in place');
  const heldRoute=await Promise.race([held,new Promise((_,reject)=>setTimeout(()=>reject(Error('Reaction request did not reach HTTP within 3 seconds')),3000))]);
  if(proof)await assistant.screenshot({path:join(proof,'optimistic-reaction-held.png')});
+ await assistant.getByRole('button',{name:'Remove Heart reaction',exact:true}).click();
+ await expect(assistant.getByRole('button',{name:'Remove Heart reaction',exact:true})).toHaveCount(0);
+ await expect(assistant.getByRole('button',{name:'Remove Celebrate reaction',exact:true})).toBeVisible();
  pendingRoutes.delete(heldRoute);await heldRoute.continue();await page.unroute('**/api/actions',holdReaction);
- await expect.poll(async()=>(await control('inspect')).annotations[nextFrame.messageId]?.reactions||[]).toContain('❤️');
+ await expect.poll(async()=>(await control('inspect')).admissions.filter(row=>row.args.messageId===nextFrame.messageId&&row.args.emoji==='❤️'&&row.settledAt).length).toBe(2);
+ await expect.poll(async()=>(await control('inspect')).annotations[nextFrame.messageId]?.reactions||[]).not.toContain('❤️');
+ // A definite rejection rolls back only this emoji, not another reaction/draft.
+ await draft.fill('Draft survives reaction recovery');
+ const rejectReaction=route=>route.request().postDataJSON()?.action==='message.reaction'
+  ?route.fulfill({status:409,json:{accepted:false,error:'Synthetic unavailable message'}}):route.continue();
+ await page.route('**/api/actions',rejectReaction);
+ await assistant.getByRole('button',{name:'React to message',exact:true}).click();
+ await assistant.getByRole('button',{name:'Heart',exact:true}).click();
+ await expect(assistant.getByRole('alert')).toContainText('Synthetic unavailable message');
+ await expect(assistant.getByRole('button',{name:'Remove Heart reaction',exact:true})).toHaveCount(0);
+ await expect(assistant.getByRole('button',{name:'Remove Celebrate reaction',exact:true})).toBeVisible();
+ assert.equal(await readComposerDraft(draft),'Draft survives reaction recovery');
+ await page.unroute('**/api/actions',rejectReaction);
+ // Lose a real committed response, not its mutation. Recovery is a read only.
+ const beforeLost=(await control('inspect')).admissions.length;
+ const loseReceipt=async route=>{
+  if(route.request().postDataJSON()?.action!=='message.reaction')return route.continue();
+  await route.fetch();await route.abort('connectionfailed');
+ };
+ await page.route('**/api/actions',loseReceipt);
+ await assistant.getByRole('button',{name:'React to message',exact:true}).click();
+ await assistant.getByRole('button',{name:'Thumbs up',exact:true}).click();
+ await expect(assistant.getByRole('alert')).toContainText('not confirmed');
+ await page.unroute('**/api/actions',loseReceipt);
+ await assistant.getByRole('button',{name:'Check saved reaction',exact:true}).click();
+ await expect(assistant.getByRole('alert')).toHaveCount(0);
+ await expect(assistant.getByRole('button',{name:'Remove Thumbs up reaction',exact:true})).not.toHaveAttribute('data-pending','true');
+ assert.equal((await control('inspect')).admissions.length,beforeLost+1,'Unknown recovery must not replay the write');
+ assert.equal(await readComposerDraft(draft),'Draft survives reaction recovery');
  // The real host must persist/broadcast a reaction while a synthetic send is
  // blocked. The deliberately broken REACTION_TEST_TURN_GATE control fails here.
  const before=await control('hold');

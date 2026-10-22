@@ -408,7 +408,8 @@ async def test_annotation_route_requires_exact_owner_and_avoids_hydration():
     routed = Routes(app)
     routed.router = router
     install_routes(routed)
-    handler = router.add_post.call_args.args[1]
+    handler = next(call.args[1] for call in router.add_post.call_args_list
+                   if call.args[0] == '/api/conversation/annotations')
     for args in [{}, {'sessionId': ''}, {'sessionId': None}, []]:
         with pytest.raises(ValueError, match='explicit conversation'):
             await handler(SimpleNamespace(json=AsyncMock(return_value=args)))
