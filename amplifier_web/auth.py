@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import getpass
 import hashlib
 import html
 import hmac
@@ -64,6 +65,27 @@ def control_token(data_dir: Path) -> str:
 def data_identity(data_dir: Path) -> str:
     """Return the stable, private-data-directory identity used by local clients."""
     return hashlib.sha256(str(Path(data_dir).expanduser().resolve()).encode()).hexdigest()
+
+
+def history_scope(secret: str, credential: str, data_dir: Path) -> str:
+    """Opaque presentation partition, not a credential or a navigation record.
+
+    Only call after authentication. Reload/reconnect keep the same partition;
+    a new sign-in, process owner, data root or secret gets a different one.
+    Domain separation prevents this value from authenticating as a session.
+    """
+    owner = os.geteuid() if hasattr(os, "geteuid") else getpass.getuser()
+    payload = json.dumps(["navigation-history-v1", owner,
+                          data_identity(data_dir), credential], separators=(",", ":"))
+    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def with_history_scope(request: web.Request, snapshot: dict) -> dict:
+    """Decorate this request's browser response, never shared/persisted state."""
+    scope = request.get("history_scope")
+    if scope and snapshot.get("client", {}).get("kind") == "web":
+        return {**snapshot, "client": {**snapshot["client"], "historyScope": scope}}
+    return snapshot
 
 
 def validate_next_path(value: str | None) -> str:
@@ -170,6 +192,15 @@ def is_entry_navigation(request: web.Request) -> bool:
 
 @web.middleware
 async def auth_required(request: web.Request, handler):
+    async def authenticated(credential):
+        scope = history_scope(request.app["session_secret"], credential,
+                              request.app["service"].data_dir)
+        request["history_scope"] = scope
+        response = await handler(request)
+        if not response.prepared:
+            response.headers["X-Amplifier-History-Scope"] = scope
+        return response
+
     cross_site = request.headers.get("Sec-Fetch-Site") == "cross-site"
     if (cross_site and not is_entry_navigation(request)) or not allowed_origin(request):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
@@ -200,7 +231,7 @@ async def auth_required(request: web.Request, handler):
         return await handler(request)
     authorization = request.headers.get("Authorization", "")
     if authorization.lower().startswith("bearer ") and hmac.compare_digest(authorization[7:], request.app["control_token"]):
-        return await handler(request)
+        return await authenticated(authorization[7:])
     if authorization.lower().startswith(('bearer amt_', 'bearer amc_')):
         devices = request.app['terminal_setup'].devices
         identity = devices.identify(authorization[7:])
@@ -221,7 +252,7 @@ async def auth_required(request: web.Request, handler):
                 return await handler(request)
         return web.json_response({'error': 'Device access was removed or is invalid.'}, status=401)
     if _verified(request.app["session_secret"], request.cookies.get(SESSION_COOKIE), request.app["server_config"]["session_ttl_seconds"], "session"):
-        return await handler(request)
+        return await authenticated(request.cookies[SESSION_COOKIE])
     if is_api_request(request):
         return web.json_response({"error": "Authentication required."}, status=401)
     requested = request.path + (("?" + request.query_string) if request.query_string else "")
