@@ -57,7 +57,8 @@ def restore_redactions(value, old, *, _config=False):
             raise ValueError("A redacted value cannot be used for a new setting")
         return copy.deepcopy(old)
     if isinstance(value, dict):
-        if not _config and ("module" in value or isinstance(old, dict) and "module" in old) and (
+        if not _config and (isinstance(value.get("module"), str)
+                            or isinstance(old, dict) and isinstance(old.get("module"), str)) and (
                 not isinstance(old, dict) or identity(value) != identity(old)
                 or value.get("module") != old.get("module")
                 or value.get("source") != old.get("source")):
