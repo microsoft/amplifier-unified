@@ -4251,6 +4251,8 @@ class AppService:
                 if payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")} and not payload.get("backgroundOnly"):
                     settle_stream(session)
                     interrupt_unfinished(session)
+                    from .execution import interrupt_owned_workers
+                    interrupt_owned_workers(session, payload.get('runtimeOwnerId'))
                     if payload.get('reason') == 'shutdown' and session['status'] in {'working', 'starting', 'ready', 'stopping'}:
                         session['status'] = 'interrupted'
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
