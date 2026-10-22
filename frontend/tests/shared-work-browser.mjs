@@ -105,7 +105,26 @@ try {
  assert.equal(manifest.pendingWarmups,0);
  const action=(name,args={})=>bounded(page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),actionTimeoutMs,'Primary '+name);
  const state=()=>bounded(page.evaluate(()=>window.amplifier.getState()),actionTimeoutMs,'Primary state read');
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);
+ await page.waitForFunction(()=>window.amplifier);
+ // Current Home is a real navigation surface, not an already-open composer.
+ // Enter only the exact synthetic owner through its ordinary guarded control.
+ const ownerCard=page.locator(`article[data-session-id="${manifest.ownerSessionId}"]`);
+ await expect(ownerCard).toBeVisible();
+ await expect(ownerCard.getByRole('heading',{name:'Synthetic Work owner',exact:true})).toBeVisible();
+ const entryBefore=calls.length;
+ await ownerCard.getByRole('button',{name:/Continue chat/}).click();
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(manifest.ownerSessionId);
+ await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const entrySelects=calls.slice(entryBefore).filter(row=>row.action==='session.select');
+ assert.equal(entrySelects.length,1);
+ assert.equal(entrySelects[0].args.id,manifest.ownerSessionId);
+ const entryObservation=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
+ assert.deepEqual(entryObservation.forbiddenRuntimeCalls,[]);
+ assert.deepEqual(entryObservation.runtimeCallbackCounts,{start:0,send:0,prewarm:0});
+ assert.equal(entryObservation.pendingWarmups,0);
+ observer.assertHealthy();
  // The selected draft belongs to a different chat; reading Work must not touch it.
  const created=await action('session.create',{workspace:manifest.workspace.path,title:'Draft owner'});
  const draftOwner=created.result.sessionId;
@@ -271,6 +290,8 @@ try {
  await bounded(page.close(),actionTimeoutMs,'Primary page close');
  observer.assertHealthy();
  result={status:'passed',sourceFixture:!installed,installedWheel:!!installedIdentity,installedIdentity,launchOptions:launch,
+  homeEntry:{via:'ordinary Continue chat',sessionId:manifest.ownerSessionId,selectionActions:entrySelects.length,
+   surface:'chat',runtimeCallbackCounts:entryObservation.runtimeCallbackCounts},
   coldServiceReopen:{seedPid:seed.pid,reopenedPid:fixture.pid,readHydrationCalls:observation.coldReadCalls},
   dirtyCanvas:{refusal:true,mountPreserved:true,draftAndAttachmentPreserved:true},
   dirtySettings:{keepRefusedNavigation:true,privateDraftPreserved:true,discardWithoutSave:true},
