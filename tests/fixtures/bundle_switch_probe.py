@@ -33,16 +33,12 @@ async def main():
     workspace = root/'workspace'; workspace.mkdir(parents=True)
     home = root/'app'
     os.environ.update(AMPLIFIER_HOME=str(root/'shared'), AMPLIFIER_WEB_HOME=str(home),
-        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'),
-        AMPLIFIER_RUNTIME_IMMUTABLE='1')
-    import amplifier_module_loop_live
-    loop_source = str(Path(amplifier_module_loop_live.__file__).parent)
+        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'))
     from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
     settings = root/'shared/settings.yaml'; settings.parent.mkdir()
     # Exercise revision isolation using only the local modules defined below.
     # Ordinary defaults have their own installed-runtime acceptance coverage.
-    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
-        'sources': {'modules': {'loop-live': loop_source}}}))
+    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
     provider = root/'provider/amplifier_module_provider_fixture'; provider.mkdir(parents=True)
     calls = root/'model-calls'
     provider.joinpath('__init__.py').write_text('''from pathlib import Path
