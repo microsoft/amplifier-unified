@@ -297,7 +297,7 @@ class WorkInvocation:
             if not isinstance(inputs, list) or any(not isinstance(row, dict) for row in inputs):
                 self.work.error('Invocation input bindings are malformed.')
             requested = {row.get('inputId') for row in inputs}
-            if (not requested or not requested <= delivered
+            if (not requested <= delivered
                     or any(not isinstance(i, str) or not 1 <= len(i) <= 200 for i in requested)):
                 self.work.error('Invocation inputs were not observed delivered.')
             if len(delivered) > 16:
@@ -305,6 +305,8 @@ class WorkInvocation:
                 coverage.update(reason='input_coverage_overflow',
                                 deliveredInputCount=len(delivered), projectedInputCount=len(requested))
                 self.work.error('Invocation input coverage exceeds the bounded projection.')
+            if not requested:
+                self.work.error('Invocation inputs were not observed delivered.')
             header['inputIds'] = sorted(delivered)
             if requested != delivered:
                 coverage.update(reason='input_projection_incomplete',

@@ -417,13 +417,16 @@ async def test_mixed_delivered_inputs_cannot_hide_unsupported_lineage(app):
     assert app.runtime.inputs == inputs_before
 
 
-@pytest.mark.parametrize('projection', ['initial-only', 'last-eight', 'overflow'])
+@pytest.mark.parametrize('projection', [
+    'initial-only', 'last-eight', 'overflow', 'overflow-empty',
+    'complete-sixteen', 'complete-seventeen'])
 async def test_shortened_delivered_input_projection_is_explicitly_incomplete(app, projection):
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'projection')
     created, child = await assert_available_commission(app, owner, item, 'projection-commission')
     delivered = [created['initialInputId']]
-    for index in range(16 if projection == 'overflow' else 8):
+    followups = 16 if projection in {'overflow', 'overflow-empty', 'complete-seventeen'} else 15 if projection == 'complete-sixteen' else 8
+    for index in range(followups):
         identity = f'projection-followup-{index}'
         queued = await agent_action(app, owner, 'coordination.send', {
             'sessionId': child['id'], 'text': 'Ordinary untyped follow-up.', 'mode': 'queue'}, identity)
@@ -438,21 +441,28 @@ async def test_shortened_delivered_input_projection_is_explicitly_incomplete(app
     assert [row[1] for row in app.runtime.inputs] == delivered
     await generation(app, child, 'complete-delivered-set', delivered)
     before = retained_bytes(app)
-    supplied = delivered[:1] if projection == 'initial-only' else delivered[-8:]
+    supplied = (delivered[:1] if projection == 'initial-only' else []
+                if projection == 'overflow-empty' else delivered
+                if projection.startswith('complete-') else delivered[-8:])
     result = (await current_work(app, child, inputs=supplied))['required']
     assert result['status'] == 'unavailable' and result['version'] is None
     assert result['effectAuthorized'] is False
-    if projection == 'overflow':
+    if len(delivered) > 16:
         assert result['inputIds'] == [] and result['inputCount'] == len(delivered) == 17
         assert result['coverage']['reason'] == 'input_coverage_overflow'
         assert result['coverage']['deliveredInputCount'] == 17
-        assert result['coverage']['projectedInputCount'] == 8
+        assert result['coverage']['projectedInputCount'] == len(supplied)
         assert result['coverage']['complete'] is False
         assert retained_bytes(app) == before
         return
     assert set(result['inputIds']) == set(delivered)
-    assert result['coverage']['reason'] == 'input_projection_incomplete'
-    assert result['coverage']['missingInputIds'] == sorted(set(delivered) - set(supplied))
+    if projection == 'complete-sixteen':
+        assert 'reason' not in result['coverage']
+        assert result['coverage']['supportedInputIds'] == [created['initialInputId']]
+        assert {row['inputId'] for row in result['coverage']['unsupportedInputs']} == set(delivered[1:])
+    else:
+        assert result['coverage']['reason'] == 'input_projection_incomplete'
+        assert result['coverage']['missingInputIds'] == sorted(set(delivered) - set(supplied))
     assert result['coverage']['complete'] is False
     assert retained_bytes(app) == before
     complete = (await current_work(app, child))['required']

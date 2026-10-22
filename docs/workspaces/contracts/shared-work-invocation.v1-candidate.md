@@ -105,7 +105,8 @@ work:
     workCount
     requirementCount
     requirementsRef: workspace.work.invocation exact read handle
-    coverage: {complete, supportedInputIds, unsupportedInputs:[{inputId,reason}]}
+    coverage: {complete, supportedInputIds, unsupportedInputs:[{inputId,reason}],
+               reason?, missingInputIds?, deliveredInputCount?, projectedInputCount?}
     effectAuthorized: false
 ```
 
@@ -130,7 +131,13 @@ The transport projection must equal that host-observed set, not merely be its
 subset. A shortened projection is unavailable with `input_projection_incomplete`
 and the missing input IDs. More than sixteen host-observed inputs is explicitly
 `input_coverage_overflow`, with delivered/projected counts, no qualified version
-and no implied complete last-N window. These observations authorize no effect.
+and no implied complete last-N window. Overflow exposes `inputCount` and an empty
+bounded `inputIds` list, not an empty relevant set. These observations authorize no
+effect. The bundled worker must supply the complete set up to that bound and retain
+overflow explicitly; its earlier last-eight projection cannot qualify nine inputs.
+Delivery must preserve these bounded unavailable diagnostics without erasing
+independent discovery. The worker and delivery changes remain separately owned
+runtime integration prerequisites until their exact checks pass.
 
 The fingerprint binds the actual root/generation/input association, current Work
 record and promise revisions, source identities/digests, owner/link/Stop revisions,
