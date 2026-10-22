@@ -133,7 +133,67 @@ try{
  await page.evaluate(async()=>{await window.amplifier.dispatch('canvas.show',{kind:'html',content:'<input value="unfinished">'});const state=window.amplifier.getState(),v=state.canvasWorkspace.views.find(x=>x.viewId==='primary');await window.amplifier.dispatch('canvas.views.dirty',{viewId:v.viewId,resourceId:v.resourceId,resourceRevision:v.resourceRevision,generation:v.generation,dirty:true})});
  await link.click();await expect(panel()).toHaveCount(0);await expect(original.getByRole('alert')).toContainText('edit');
  await page.evaluate(async()=>{const v=window.amplifier.getState().canvasWorkspace.views.find(x=>x.viewId==='primary');await window.amplifier.dispatch('canvas.views.dirty',{viewId:v.viewId,resourceId:v.resourceId,resourceRevision:v.resourceRevision,generation:v.generation,dirty:false})});
+ // A real renderer-local edit can finish after preview has replaced its visible
+ // surface. Arm it while visible, then release its event only after preview opens.
+ const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const view=async()=>(await action('canvas.views.inspect')).result.views.find(v=>v.viewId==='primary');
+ const target=v=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,v[key]]));
+ const assertDraft=async()=>assert.deepEqual(await page.evaluate(()=>{
+  const s=window.amplifier.getState();
+  return {id:s.selectedSessionId,draft:s.view.draft,attachments:s.sessions.find(x=>x.id===s.selectedSessionId)?.draftAttachments||s.draftAttachments||[],document:window.peerDocument};
+ }),before);
+ await action('canvas.show',{kind:'markdown',title:'Retained local editor',content:'# Canonical source remains unchanged'});
+ const manifest={id:'example.peer-preservation-editor',label:'Peer preservation editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
+ const rendererSource=`export default ({React})=>function Editor({host}){
+  const [text,setText]=React.useState(""),[armed,setArmed]=React.useState(false),[mount]=React.useState(()=>crypto.randomUUID());
+  React.useEffect(()=>{const release=()=>{if(armed){setText("LATE UNSAVED EDIT");host.setDirty(true)}};document.addEventListener("peer-fixture-release-edit",release);return()=>document.removeEventListener("peer-fixture-release-edit",release)},[armed,host]);
+  return React.createElement("div",null,
+   React.createElement("label",null,"Retained local edit",React.createElement("input",{"data-mount":mount,"data-armed":armed,value:text,readOnly:true})),
+   React.createElement("button",{onClick:()=>setArmed(true)},"Queue late editor change"),
+   React.createElement("button",{onClick:()=>{setText("");setArmed(false);host.setDirty(false)}},"Cancel local edit"));
+ }`;
+ const renderer=(await action('shell.packages.stage',{manifest,source:rendererSource})).result.digest;
+ assert.equal((await action('shell.packages.validate',{digest:renderer})).result.status,'passed');
+ await action('canvas.views.renderer',{...target(await view()),renderer});
+ const editor=page.locator('[data-canvas-view="primary"]').getByLabel('Retained local edit');
+ await expect(editor).toBeVisible();await page.getByRole('button',{name:'Queue late editor change',exact:true}).click();
+ await expect(editor).toHaveAttribute('data-armed','true');
+ const lease=target(await view()),editorMount=await editor.getAttribute('data-mount');
  await link.click();await expect(panel()).toBeVisible();
+ await expect(editor).toBeHidden();
+ const previewMount=await panel().elementHandle();
+ await page.evaluate(()=>document.dispatchEvent(new Event('peer-fixture-release-edit')));
+ await expect(editor).toHaveValue('LATE UNSAVED EDIT');await expect.poll(async()=>(await view()).dirty).toBe(true);
+ await panel().getByRole('button',{name:'Open chat',exact:true}).click();
+ await expect(panel().getByRole('alert')).toContainText('primary viewer edit');
+ await assertDraft();assert.deepEqual(target(await view()),lease);
+ await expect(editor).toHaveValue('LATE UNSAVED EDIT');await expect(editor).toHaveAttribute('data-mount',editorMount);
+ assert.equal(await panel().evaluate((node,old)=>node===old,previewMount),true);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.content),'# Canonical source remains unchanged');
+ // Cancel using that same renderer's real control, not force-clear/recovery.
+ await panel().getByRole('button',{name:'Close source preview'}).click();await expect(editor).toBeVisible();
+ await page.getByRole('button',{name:'Cancel local edit',exact:true}).click();
+ await expect.poll(async()=>(await view()).dirty).toBe(false);await expect(editor).toHaveValue('');
+ assert.deepEqual(target(await view()),lease);await expect(editor).toHaveAttribute('data-mount',editorMount);
+ await link.click();await expect(panel()).toBeVisible();
+ // Settings edits now begin AFTER preview. A stale activation of the already
+ // mounted Open chat control must still run its real Settings guard. Dispatching
+ // its click models that late activation; it does not dismiss the modal overlay.
+ await openSettingsPage(page,'workspaces');
+ const lateSettings=page.locator('#default-workspace-root'),lateSettingsNode=await lateSettings.elementHandle();
+ await lateSettings.fill('/synthetic-late-unsaved-folder');
+ await expect(page.getByText('You have unsaved settings changes. They are kept while Settings stays open.',{exact:true})).toBeVisible();
+ await panel().getByRole('button',{name:'Open chat',exact:true}).dispatchEvent('click');
+ await expect(settingsGuard).toBeVisible();await settingsGuard.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await expect(lateSettings).toHaveValue('/synthetic-late-unsaved-folder');
+ assert.equal(await lateSettings.evaluate((node,old)=>node===old,lateSettingsNode),true);
+ await assertDraft();assert.deepEqual(target(await view()),lease);
+ await expect(editor).toHaveAttribute('data-mount',editorMount);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.content),'# Canonical source remains unchanged');
+ await page.getByRole('button',{name:/^Close (settings|panel)$/}).click();
+ await settingsGuard.getByRole('button',{name:'Discard changes',exact:true}).click();
+ await expect(page.locator('.a-settings-experience')).toHaveCount(0);await expect(panel()).toBeVisible();
+ await expect(panel().getByRole('button',{name:'Open chat',exact:true})).toBeEnabled();
  await page.route('**/api/peer/preview?**',async route=>{if(!new URL(route.request().url()).searchParams.has('metadata'))await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic read failure'})});else await route.continue()});
  await panel().getByRole('button',{name:'Refresh',exact:true}).click();await expect(panel().getByRole('alert')).toContainText('Previous snapshot retained');
  await page.unroute('**/api/peer/preview?**');await panel().getByRole('button',{name:'Refresh',exact:true}).click();
@@ -143,6 +203,7 @@ try{
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(facts.sourceA);assert.equal(await page.evaluate(()=>window.peerDocument),before.document);
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),facts.receiving);
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(facts.receiving);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),before.draft);
  assert.deepEqual(await page.evaluate(()=>{const s=window.amplifier.getState();return s.sessions.find(x=>x.id===s.selectedSessionId)?.draftAttachments||s.draftAttachments||[]}),before.attachments);
  await expect(summary).toBeVisible();if(await summary.getAttribute('aria-expanded')==='false')await summary.click();
  await link.click();await expect(panel()).toBeVisible();await change('revoke');
@@ -150,7 +211,7 @@ try{
  await expect(panel().getByRole('button',{name:'Open chat',exact:true})).toBeDisabled();
  const final=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();assert.deepEqual(final.effects,[]);assert.deepEqual(final.subprocesses,[]);assert.deepEqual(errors,[]);
  assert.ok(!commands.some(x=>['conversation.send','worker.spawn','session.warm','approval.respond'].includes(x)));
- results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,draftAttachmentsRetained:before.attachments.length,narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
+ results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,draftTextAfterReturn:true,draftAttachmentsRetained:before.attachments.length,lateDirtyPreservation:{canvasRefused:true,rendererMountAndLeaseRetained:true,settingsCancelled:true,settingsEditorRetained:true,canonicalSourceRetained:true,cleanOpenAccepted:true},narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
  if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-browser-result.json'),JSON.stringify(results,null,2));
  console.log(JSON.stringify(results));
 }catch(error){

@@ -107,7 +107,20 @@ async def test_dirty_canvas_and_exact_guarded_navigation(app):
         await service.dispatch('session.archive', {'id':source['id']})
         saved = service.state['conversationOrganization']['archived'][source['id']]
         assert service.peer_preview.open({'proof':meta['proof'], 'sourceSessionId':receiving['id']}, 'ui')['result']['archived']
-        await service.dispatch('session.select', {'id':source['id'], 'peerPreview':{'proof':meta['proof'], 'sourceSessionId':receiving['id']}})
+        navigation = {'id':source['id'], 'peerPreview':{'proof':meta['proof'], 'sourceSessionId':receiving['id']}}
+        # The edit is declared after a successful preview; Open chat must
+        # revalidate the same primary view under the selection lock.
+        await service.dispatch('canvas.views.dirty', {**target(current), 'dirty':True})
+        dirty = copy.deepcopy(service.canvas_views.summary('primary'))
+        draft = copy.deepcopy(service.clients.record().get('drafts'))
+        with pytest.raises(AppError, match='edit'):
+            await service.dispatch('session.select', navigation)
+        assert service.state['selectedSessionId'] == receiving['id']
+        assert service.canvas_views.summary('primary') == dirty
+        assert service.clients.record().get('drafts') == draft
+        assert service.state['canvas']['content'] == 'Unfinished'
+        await service.dispatch('canvas.views.dirty', {**target(current), 'dirty':False})
+        await service.dispatch('session.select', navigation)
         assert service.state['selectedSessionId'] == source['id']
         assert service.state['conversationOrganization']['archived'][source['id']] == saved
     assert service.clients.records['other-client']['selectedSessionId'] == receiving['id']
