@@ -43,7 +43,7 @@ async function open(page,name,scope='.a-composer'){
 }
 async function close(page,opener){await page.keyboard.press('Escape');await expect(page.locator('dialog[open]')).toHaveCount(0);await expect(opener).toBeFocused()}
 async function snapshot(page){const s=await state(page),i=await inspect(page);return {selected:s.selectedSessionId,canvas:s.canvas,drafts:i.drafts,attachments:i.attachments,sendCount:i.sends.length,scroll:await page.locator('.a-messages').evaluate(n=>n.scrollTop)}}
-async function contextFor(viewport,scheme){const context=await browser.newContext({viewport,colorScheme:scheme,hasTouch:viewport.width<500,isMobile:viewport.width<500,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await context.route('**/*',r=>new URL(r.request().url()).origin===base?r.continue():r.abort('blockedbyclient'));const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);page.on('pageerror',e=>report.errors.push(e.message));await page.goto(base);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id,null,{timeout:15000});await call(page,'session.create',{title:'Image study',bundle:'anchors'});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();return {context,page}}
+async function contextFor(viewport,scheme){const context=await browser.newContext({viewport,colorScheme:scheme,hasTouch:viewport.width<500,isMobile:viewport.width<500,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await context.route('**/*',r=>new URL(r.request().url()).origin===base?r.continue():r.abort('blockedbyclient'));const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);page.on('pageerror',e=>report.errors.push(e.message));await page.goto(base);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id,null,{timeout:15000});await call(page,'session.create',{title:'Image study',bundle:'anchors'});await call(page,'view.update',{patch:{scheme}});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();return {context,page}}
 async function run(name,fn){const row={name,status:'running'};report.cases.push(row);try{await fn();row.status='passed'}catch(e){row.status='failed';row.error=e.stack;primary??=e}await save()}
 try{
  const r=await ready;base=r.base;assert.equal(r.pid,fixture.pid);const build=await readFile(join(root,'amplifier_web/static/build.json'));assert.equal(hash(build),r.buildSha256);report.build={sha256:r.buildSha256,package:r.packageRoot,metadata:JSON.parse(build)};
@@ -64,9 +64,17 @@ try{
     const stage=page.getByLabel('Image viewport',{exact:true});await stage.focus();await page.keyboard.press('0');assertFit(await geometry(page));await page.keyboard.press('1');
     await stage.evaluate(n=>{n.scrollLeft=1e8;n.scrollTop=1e8});const pan=await geometry(page);assert.ok(pan.scroll[0]<=pan.scroll[2]-pan.stage[0]+2);assert.ok(pan.scroll[1]<=pan.scroll[3]-pan.stage[1]+2);
     await page.getByRole('button',{name:'Fit',exact:true}).click();assertFit(await geometry(page));
+    const closeBox=await page.getByRole('button',{name:'Close image preview'}).boundingBox();assert.ok(closeBox.x>=0&&closeBox.y>=0&&closeBox.x+closeBox.width<=width&&closeBox.y+closeBox.height<=height,'Close remains in viewport');
     await close(page,opener);
    }
    let opener=await open(page,'large.png');await page.screenshot({path:join(out,`viewer-${width}-${scheme}.png`)});
+   await page.setViewportSize({width:height,height:width});await expect.poll(async()=>{try{assertFit(await geometry(page));return true}catch{return false}}).toBe(true);
+   await page.setViewportSize({width,height});await expect.poll(async()=>{try{assertFit(await geometry(page));return true}catch{return false}}).toBe(true);
+   await page.getByRole('button',{name:'100%',exact:true}).click();const stage=page.getByLabel('Image viewport',{exact:true});
+   if(width>500){const box=await stage.boundingBox(),beforePan=await geometry(page);await page.mouse.move(box.x+100,box.y+100);await page.mouse.down();await page.mouse.move(box.x+30,box.y+30,{steps:5});await page.mouse.up();const afterPan=await geometry(page);assert.ok(afterPan.scroll[0]>beforePan.scroll[0]&&afterPan.scroll[1]>beforePan.scroll[1],'Actual mouse drag pans');}
+   for(let n=0;n<12;n++)if(await page.getByRole('button',{name:'Zoom in',exact:true}).isEnabled())await page.getByRole('button',{name:'Zoom in',exact:true}).click();
+   await expect(page.getByRole('button',{name:'Zoom in',exact:true})).toBeDisabled();assert.ok((await geometry(page)).width<=2400*8+.6);
+   await page.getByRole('button',{name:'Fit',exact:true}).click();
    const download=page.waitForEvent('download',{timeout:10000});await page.getByRole('link',{name:'Download original',exact:true}).click();const dl=await download;assert.equal(dl.suggestedFilename(),'large.png');const bytes=await readFile(await dl.path());assert.equal(hash(bytes),hash(large));report.downloads.push({width,sha256:hash(bytes),bytes:bytes.length});
    await drops(page,'.a-image-preview-tools',[{name:'blocked.png',base64:small.toString('base64')}]);await expect(page.getByText('Close the image preview before attaching files.',{exact:true})).toBeVisible();await close(page,opener);
    await expect(composer).toHaveDraft('Keep this unsent text');const after=await snapshot(page);assert.deepEqual(after,before,'Preview preserves chat, draft, Canvas, reading and sends');
@@ -77,6 +85,27 @@ try{
    // Send only to the isolated synthetic runtime to exercise the sent strip.
    const owner=(await state(page)).selectedSessionId;await composer.fill('Synthetic send');await page.getByRole('button',{name:'Send message',exact:true}).click();await expect.poll(async()=>(await inspect(page)).sends.filter(s=>s.sessionId===owner).length).toBe(1);const input=(await inspect(page)).sends.find(s=>s.sessionId===owner).inputId;await control(page,{op:'accept',inputId:input});await control(page,{op:'finish',inputId:input});await expect(page.locator('.a-composer .a-attachment')).toHaveCount(0);opener=await open(page,'small.png','.a-message');await close(page,opener);await original(page,files[0],small);
   }finally{try{await control(page,{op:'release-all'})}finally{await bounded(context.close(),10000,'Close viewer context')}}
+ });
+ await run('decode-error-identity-reload-and-dirty-canvas',async()=>{
+  const {context,page}=await contextFor({width:1280,height:900},'light');
+  try{
+   const aBytes=await png(page,640,480),bBytes=await png(page,32,24),a=await upload(page,'decode-a.png',aBytes),b=await upload(page,'decode-b.png',bBytes);
+   // Delay the real decode boundary, not a fabricated host projection.
+   await page.evaluate(url=>{const original=HTMLImageElement.prototype.decode;window.restoreDecode=()=>{HTMLImageElement.prototype.decode=original};HTMLImageElement.prototype.decode=function(){const work=original.call(this);if(this.src.endsWith(url))return work.then(()=>new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Decode gate deadline')),10000);window.releaseDecode=()=>{clearTimeout(timeout);resolve()}}));return work}},a.url);
+   const first=page.locator('.a-composer').getByRole('button',{name:'Preview decode-a.png',exact:true}).first();await first.click();await expect(page.getByText('Loading image…',{exact:true})).toBeVisible();await expect(page.locator('.a-image-preview-plane img')).toHaveCount(0);await page.waitForFunction(()=>!!window.releaseDecode);
+   await close(page,first);const second=await open(page,'decode-b.png');await page.evaluate(()=>window.releaseDecode());assert.deepEqual((await geometry(page)).natural,[32,24]);await close(page,second);await page.evaluate(()=>window.restoreDecode());
+   const fail=route=>route.fulfill({status:404,body:'Unavailable'});await page.route('**'+a.url,fail);
+   await first.click();await expect(page.getByRole('button',{name:'Retry preview'})).toBeVisible();await expect(page.locator('.a-image-preview-plane img')).toHaveCount(0);await page.unroute('**'+a.url,fail);await page.getByRole('button',{name:'Retry preview'}).click();await expect(page.locator('.a-image-preview-plane img')).toBeVisible();assertFit(await geometry(page));await close(page,first);
+   await page.reload();await expect(first).toBeVisible();const reopened=await open(page,'decode-b.png');assert.deepEqual((await geometry(page)).natural,[32,24]);await close(page,reopened);await original(page,a,aBytes);await original(page,b,bBytes);
+   await call(page,'view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
+   await call(page,'canvas.show',{kind:'markdown',title:'Kept editing',content:'# Original'});
+   const manifest={id:'example.attachment-dirty',label:'Attachment dirty check',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
+   const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");return React.createElement("label",null,"Unsaved attachment-test edit",React.createElement("input",{value:text,onChange:e=>{setText(e.target.value);host.setDirty(true)}}))}';
+   const digest=(await call(page,'shell.packages.stage',{manifest,source})).result.digest;assert.equal((await call(page,'shell.packages.validate',{digest})).result.status,'passed');
+   await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);const editor=page.getByLabel('Unsaved attachment-test edit');await editor.fill('Keep unsaved Canvas edit');await expect.poll(async()=>(await call(page,'canvas.views.inspect')).result.views.find(v=>v.viewId==='primary')?.dirty).toBe(true);
+   const before=(await call(page,'canvas.views.inspect')).result.views,opener=await open(page,'decode-a.png');await close(page,opener);await expect(editor).toHaveValue('Keep unsaved Canvas edit');assert.deepEqual((await call(page,'canvas.views.inspect')).result.views,before);
+   await drops(page,'[data-canvas-view="primary"]',[{name:'not-chat.png',base64:bBytes.toString('base64')}]);assert.equal((await inspect(page)).attachments[(await state(page)).selectedSessionId].length,2,'Canvas is not an attachment target');
+  }finally{await bounded(context.close(),10000,'Close identity context')}
  });
  await run('whole-chat-drop-and-owner',async()=>{
   const {context,page}=await contextFor({width:1280,height:900},'light');
