@@ -7,6 +7,7 @@ existing home, credentials or user transcript are used.
 """
 from __future__ import annotations
 import asyncio
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,16 @@ async def main():
     settings = root/'shared/settings.yaml'; settings.parent.mkdir()
     # Exercise revision isolation using only the local modules defined below.
     # Ordinary defaults have their own installed-runtime acceptance coverage.
-    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
+    # A prepared development environment supplies the real hook locally. Older
+    # native lane environments still resolve its normal ordinary-root source.
+    modules = {}
+    for name, module in [('loop-live', 'amplifier_module_loop_live'),
+                         ('hook-context-intelligence', 'amplifier_module_hook_context_intelligence')]:
+        spec = importlib.util.find_spec(module)
+        if spec and spec.origin:
+            modules[name] = str(Path(spec.origin).parent)
+    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
+                                    'sources': {'modules': modules}}))
     provider = root/'provider/amplifier_module_provider_fixture'; provider.mkdir(parents=True)
     calls = root/'model-calls'
     provider.joinpath('__init__.py').write_text('''from pathlib import Path
