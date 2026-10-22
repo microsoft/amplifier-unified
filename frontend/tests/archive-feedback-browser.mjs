@@ -155,7 +155,9 @@ try{
  // Managed chats land on the existing full chat list rather than their private folder.
  await action('session.create',{title:'Managed example',location:{kind:'managed'}});
  await headerArchive();await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='chats');
- await expect(page.getByRole('heading',{name:'All chats',exact:true})).toBeVisible();
+ const chatSearch=page.getByRole('region',{name:'Chat search',exact:true});
+ await expect(page.locator('[data-landing="chats"]').getByRole('heading',{name:'All chats',exact:true})).toBeVisible();
+ await expect(chatSearch.getByRole('searchbox',{name:'Search chats',exact:true})).toBeVisible();
  // An archive receipt arriving after Settings opens must preserve its private draft.
  // Settings is modal: clicking the covered chat header is not a real user path.
  const managed=(await state()).selectedSessionId;
