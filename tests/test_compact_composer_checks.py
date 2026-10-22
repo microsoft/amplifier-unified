@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 import sys
+import json
+import pytest
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -28,3 +30,22 @@ def test_manifest_binds_every_static_byte(tmp_path):
     (tmp_path / 'assets/app.js').write_text('changed')
     assert first != checks.manifest(tmp_path)
     assert set(first) == {'build.json', 'assets/app.js'}
+
+
+def test_installed_failure_is_retained_without_success(tmp_path, monkeypatch):
+    monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+    monkeypatch.setattr(sys, 'argv', ['compact_composer_checks.py'])
+    monkeypatch.setattr(checks, 'OUTPUT', tmp_path / 'evidence')
+    monkeypatch.setattr(checks, 'provenance', lambda: {'revision': 'synthetic'})
+    monkeypatch.setattr(checks, 'readiness', lambda: None)
+    monkeypatch.setattr(checks, 'run_scenarios', lambda *args, **kwargs: 0)
+    def broken_install(source):
+        raise RuntimeError('Synthetic wheel preparation failure')
+    monkeypatch.setattr(checks, 'installed', broken_install)
+    with pytest.raises(RuntimeError, match='Synthetic wheel preparation failure'):
+        checks.main()
+    result = json.loads((checks.OUTPUT / 'result.json').read_text())
+    assert result == {'sourceExit': 0, 'installedExit': 1,
+                      'installedNotStartedReason': None,
+                      'installedError': 'Synthetic wheel preparation failure',
+                      'passed': False}

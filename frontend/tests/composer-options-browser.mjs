@@ -92,6 +92,10 @@ try{
  await expect(settings).toHaveAttribute('data-settings-page','ai-connections');
  await settings.getByRole('button',{name:'Close settings',exact:true}).click();
  await expect(settings).toBeHidden();
+ await expect.poll(()=>page.evaluate(()=>{
+  const state=window.amplifier.getState();
+  return [state.view.panel??null,state.canvas?.kind==='settings'&&state.canvas.open===true,!!history.state?.amplifierSettings];
+ })).toEqual([null,false,false]);
  await expect(composer).toBeVisible();
  await expect(composer).toHaveDraft('Keep this draft while managing connections');
  assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1,'Opening and closing settings must not send again');

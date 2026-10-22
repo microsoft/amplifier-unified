@@ -147,7 +147,13 @@ def main():
     write(OUTPUT / 'source.json', source)
     source_code = run_scenarios(ROOT, plan(OUTPUT / 'source'), OUTPUT / 'source', budget=600, provenance=source)
     # Installed execution is meaningful only after the same source journeys pass.
-    installed_code = installed(source) if source_code == 0 else None
+    try:
+        installed_code = installed(source) if source_code == 0 else None
+    except Exception as error:
+        write(OUTPUT / 'result.json', {'sourceExit': source_code, 'installedExit': 1,
+              'installedNotStartedReason': None, 'installedError': str(error),
+              'passed': False})
+        raise
     write(OUTPUT / 'result.json', {'sourceExit': source_code, 'installedExit': installed_code,
           'installedNotStartedReason': 'source_failed' if installed_code is None else None,
           'passed': source_code == 0 and installed_code == 0})

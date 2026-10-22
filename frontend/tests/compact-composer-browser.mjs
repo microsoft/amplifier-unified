@@ -36,7 +36,23 @@ try{
   }
   evidence.installedServedAssets=served;
  }
- const presentation=async patch=>page.evaluate(async patch=>{const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,...patch}}});assertAccepted(prepared);const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});assertAccepted(applied);function assertAccepted(r){if(!r.accepted)throw Error(r.error||'Presentation refused');}},patch);
+ const presentation=async patch=>{
+  const revision=await page.evaluate(async patch=>{
+   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
+   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,...patch}}});
+   assertAccepted(prepared);
+   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
+   assertAccepted(applied);return applied.result.revision;
+   function assertAccepted(r){if(!r.accepted)throw Error(r.error||'Presentation refused');}
+  },patch);
+  // An accepted mutation precedes the SSE/rendered shell. The next change
+  // must use the acknowledged revision, even when the scheme stayed equal.
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
+  await expect.poll(()=>page.evaluate(patch=>{
+   const actual=window.amplifier.getShellState()?.effectiveComposition?.presentation;
+   return Object.fromEntries(Object.keys(patch).map(key=>[key,actual?.[key]]));
+  },patch)).toEqual(patch);
+ };
  const measure=()=>surface.evaluate(el=>{const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};const input=el.querySelector('[role=textbox]'),style=getComputedStyle(el),form=el.closest('form');return {surface:rect(el),input:rect(input),options:rect(form.querySelector('.a-model-trigger')),form:rect(form),border:style.borderTopWidth,borderStyle:style.borderTopStyle,background:style.backgroundColor,overflow:el.scrollWidth>el.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,buttons:[...el.querySelectorAll('button')].filter(b=>b.getClientRects().length).map(rect)};});
  const checkIdle=m=>{assert.ok(m.surface.height<=72,`Idle field is not compact: ${m.surface.height}`);assert.ok(m.surface.height>=44);assert.ok(m.options.y>=m.surface.y+m.surface.height-1,'Model control belongs below the writing field');assert.equal(m.border,'1px');assert.equal(m.borderStyle,'solid');assert.equal(m.overflow,false);assert.equal(m.pageOverflow,false);for(const box of m.buttons){assert.ok(box.width>=44&&box.height>=44,'Frequent actions retain touch hit areas');assert.ok(box.x>=m.surface.x&&box.x+box.width<=m.surface.x+m.surface.width+1);}};
  for(const width of [900,520,390,320]){
