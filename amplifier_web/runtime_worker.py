@@ -489,10 +489,21 @@ class Worker:
                 return
             await asyncio.sleep(2)
 
+    async def commit_replacement(self, replacement, *, deferred, stop_revision):
+        if deferred:
+            await self.bridge('configuration.nextMessage.admit', {})
+            # A Stop command can be processed after the host sent Allow but
+            # before this continuation runs. No await separates this local
+            # fence from deleting the journal.
+            if self.stop_revision != stop_revision or self.shutdown.is_set():
+                raise RuntimeError('Bundle application was stopped before commit.')
+        replacement.commit()
+
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         progress = None
         startup_capture = None
         replacement = None
+        stop_revision = self.stop_revision
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Loading your bundle and app behaviors; downloading or installing modules as needed."})
@@ -645,9 +656,8 @@ class Worker:
             public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
                 "tools", "agents", "provider_choices", "selection", "effective_selection", "delegationRouting", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
             if replacement:
-                if config.get('bundleReplacement', {}).get('deferred'):
-                    await self.bridge('configuration.nextMessage.admit', {})
-                replacement.commit()
+                await self.commit_replacement(replacement,
+                    deferred=config.get('bundleReplacement', {}).get('deferred'), stop_revision=stop_revision)
                 replacement = None
             from amplifier_web.support_diagnostics import runtime_versions
             public["support"] = runtime_versions()

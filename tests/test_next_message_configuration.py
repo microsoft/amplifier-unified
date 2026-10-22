@@ -317,3 +317,26 @@ async def test_revoked_original_bundle_grant_is_not_renewed_by_later_send(app, m
     assert session['pendingBundleSelection']['authority'] == authority
     assert session['pendingBundleSelection']['bundle'] == 'work'
     assert session['nextMessageStatus'] == 'not-applied'
+
+
+@pytest.mark.parametrize('stop', [False, True])
+async def test_worker_stop_after_host_allow_keeps_rollback_journal(tmp_path, stop):
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.bundle_selection import BundleTransaction
+    worker = Worker()
+    transaction = BundleTransaction(tmp_path/'app', tmp_path, 'synthetic')
+    transaction.begin()
+    before = transaction.path.read_bytes()
+    async def allow(*args):
+        if stop:
+            worker.stop_revision += 1
+        return {'allowed': True}
+    worker.bridge = allow
+    if stop:
+        with pytest.raises(RuntimeError, match='stopped before commit'):
+            await worker.commit_replacement(transaction, deferred=True, stop_revision=0)
+        assert transaction.path.read_bytes() == before
+        assert transaction.restore()
+    else:
+        await worker.commit_replacement(transaction, deferred=True, stop_revision=0)
+        assert not transaction.path.exists()
