@@ -278,6 +278,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
         'compact-composer': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/compact-composer'},
         'peer-preview': {'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-preview'},
+        'canvas-chrome': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canvas-chrome'},
         'storage-cleanup-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/storage-cleanup-settings'},
     }
     added = [row for row in rows if row['id'] in additions]
@@ -295,7 +296,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 111
+    assert len(original) == 65 and len(rows) == 112
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -335,6 +336,7 @@ def test_compact_composer_and_peer_preview_keep_automatic_inventory_owners():
     owners = {
         'delta.compact-composer': {'compact-composer'},
         'delta.peer-preview': {'peer-preview'},
+        'delta.canvas-chrome': {'canvas-chrome'},
     }
     for identity, names in owners.items():
         delta, = [row for row in ledger['changes'] if row['id'] == identity]
@@ -345,6 +347,13 @@ def test_compact_composer_and_peer_preview_keep_automatic_inventory_owners():
             assert row['command'] == ['node', f'tests/{name}-browser.mjs']
             assert 'AMPLIFIER_TEST_PACKAGE_ROOT' not in row.get('env', {})
             assert any(f'/output/browser-checks/{name}' in value for value in row['env'].values())
+    # Canvas chrome joins the plan, rather than replacing dirty-editor coverage.
+    canvas, = [row for row in plan['scenarios'] if row['id'] == 'canvas-chrome']
+    assert canvas['env'] == {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canvas-chrome'}
+    assert sum('{root}/output/browser-checks/canvas-chrome' in row.get('env', {}).values()
+               for row in plan['scenarios']) == 1
+    dirty, = [row for row in plan['scenarios'] if row['id'] == 'canvas-dirty']
+    assert dirty == {'id': 'canvas-dirty', 'command': ['node', 'tests/canvas-dirty-browser.mjs']}
 
 
 @pytest.mark.parametrize('change', ['diagnostic-noise', 'duplicate-step', 'duplicate-argument',
@@ -507,7 +516,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # New source journeys are automatic; their manual lanes add installed and
     # negative-control proof without replacing any existing ordinary owner.
     feature_additions = {f'tests/{name}-browser.mjs' for name in
-                         ('compact-composer', 'peer-preview')}
+                         ('compact-composer', 'peer-preview', 'canvas-chrome')}
     assert feature_additions <= extended_scripts - readiness_scripts
     # Options already has an automatic installed-readiness owner.
     assert 'tests/composer-options-browser.mjs' in readiness_scripts - extended_scripts
@@ -515,7 +524,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
     assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, pin_reorder} - feature_additions) == 146
-    assert len(readiness_scripts | extended_scripts) == 154
+    assert len(readiness_scripts | extended_scripts) == 155
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
