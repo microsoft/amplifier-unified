@@ -12,6 +12,7 @@ const url=`http://127.0.0.1:${port}`,proof=process.env.AMPLIFIER_PROOF_DIR;
 if(proof)mkdirSync(proof,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUOTE_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/message_interactions_ui_server.py',import.meta.url)),String(port)],{stdio:'inherit',cwd:process.env.AMPLIFIER_FIXTURE_CWD||process.cwd()});
 const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1280,height:900},hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),page=await context.newPage(),errors=[];
+context.setDefaultTimeout(10000);
 page.on('pageerror',e=>errors.push(e.message));
 const documentValue=()=>page.evaluate(()=>window.amplifier.getState().view.draftDocument);
 const commentary=doc=>doc.segments.filter(s=>s.type==='text').map(s=>s.text);
@@ -441,6 +442,9 @@ try{
  await page.getByRole('button',{name:'Quote selection',exact:true}).click();await expect(quotes).toHaveCount(2);
  assert.deepEqual(references(await documentValue()).map(row=>row.quote.excerpt),['A bold inside and label end.','Third paragraph café 😀 e\u0301 東京.']);
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();
+ await editor.fill(Array.from({length:30},(_,i)=>'Plain after removal '+i).join('\n'));
+ assert.ok((await editor.boundingBox()).height<=181,'Removing the last quote without remounting restores ordinary draft height');
+ await editor.fill('');
  // Keep keyboard activation, but do not leave the action over unrelated text
  // after scrolling the selected source away.
  await selectContents('p:nth-of-type(2)');await page.getByRole('button',{name:'Quote selection',exact:true}).focus();
@@ -488,26 +492,35 @@ try{
   // Optional private design comparison. The supplied HTML is data in an opaque
   // script-only sandbox, never product source or a privileged page.
   const comparisonContext=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+  comparisonContext.setDefaultTimeout(10000);
   const page=await comparisonContext.newPage();
+  const comparisonStages=[];
+  const stage=name=>{comparisonStages.push(name);writeFileSync(join(proof,'comparison-stages.json'),JSON.stringify(comparisonStages));};
+  stage('app navigation');
   await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
   const editor=page.getByRole('textbox',{name:'Message Amplifier'});
   const documentValue=()=>page.evaluate(()=>window.amplifier.getState().view.draftDocument);
   const referenceContext=await browser.newContext();
+  referenceContext.setDefaultTimeout(10000);
   const referencePage=await referenceContext.newPage();
   await referencePage.route('**/*',route=>route.abort());
   await referencePage.routeWebSocket('**/*',socket=>socket.close());
+  stage('sandbox document');
   await referencePage.setContent(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src about: 'self'; base-uri 'none'; form-action 'none'"><iframe id="reference" sandbox="allow-scripts" style="border:0;width:100%;height:1200px"></iframe>`);
   await referencePage.locator('iframe').evaluate((node,html)=>node.srcdoc=html,readFileSync(process.env.AMPLIFIER_QUOTE_REFERENCE,'utf8'));
   const reference=referencePage.frameLocator('#reference');
+  stage('reference sample');
   await reference.getByRole('button',{name:'Add three-quote example',exact:true}).click();
+  stage('sandbox connection guard');
   const sandboxCheck=await reference.locator('#editor').evaluate(async()=>{
-   const violations=[];document.addEventListener('securitypolicyviolation',event=>violations.push(event.violatedDirective));
-   const socket=new WebSocket('ws://127.0.0.1:1/blocked-reference-check');
-   const blocked=await new Promise(resolve=>{socket.onerror=()=>resolve(true);socket.onopen=()=>{socket.close();resolve(false);};});
-   return {blocked,violations};
+   window.referenceViolations=[];
+   document.addEventListener('securitypolicyviolation',event=>window.referenceViolations.push(event.violatedDirective));
+   try{const socket=new WebSocket('ws://127.0.0.1:1/blocked-reference-check');socket.onerror=()=>{};}
+   catch(error){window.referenceSocketError=error.message;}
   });
-  assert.ok(sandboxCheck.blocked&&sandboxCheck.violations.includes('connect-src'),'Private reference sandbox blocks WebSocket connections through CSP');
-  writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify(sandboxCheck,null,2));
+  await expect.poll(()=>reference.locator('#editor').evaluate(()=>window.referenceViolations)).toContain('connect-src');
+  writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify(await reference.locator('#editor').evaluate(()=>({violations:window.referenceViolations,error:window.referenceSocketError})),null,2));
+  stage('sample sources');
   const specimen=await reference.locator('#editor').evaluate(()=>({sources:sources(),blocks:draft().blocks}));
   const seeded=await context.request.post(url+'/fixture/quote-comparison',{data:specimen.sources.map(source=>({role:source.role,text:source.text}))});
   assert.equal(seeded.status(),200);const ids=(await seeded.json()).ids;
@@ -515,6 +528,7 @@ try{
   await page.locator('.a-file-input').setInputFiles({name:'outline.txt',mimeType:'text/plain',buffer:Buffer.from('Synthetic comparison attachment')});
   await page.getByRole('button',{name:'Remove outline.txt',exact:true}).waitFor();
   for(const block of specimen.blocks){
+   stage('insert '+block.type);
    if(block.type==='text'){
     if(block.value){await editor.focus();await editor.press('ControlOrMeta+End');await page.keyboard.insertText(block.value);}
    }else{
@@ -530,6 +544,7 @@ try{
   }
   assert.deepEqual(references(await documentValue()).map(row=>row.quote.excerpt),specimen.blocks.filter(row=>row.type==='quote').map(row=>row.excerpt));
   for(const width of [1280,390,320]){
+   stage('capture '+width);
    await referencePage.setViewportSize({width,height:1200});await page.setViewportSize({width,height:900});
    await editor.evaluate(node=>node.scrollTop=0);
    await reference.locator('.composer-panel').screenshot({path:join(proof,`reference-${width}.png`)});
