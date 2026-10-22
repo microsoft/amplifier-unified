@@ -189,13 +189,15 @@ jobs:
           PY
           uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/plan.json --output output/browser-checks --initialize
       - run: npm run build --prefix frontend
+      - name: Verify canonical attachment assets
+        run: git diff --exit-code -- amplifier_web/static
       - name: Attachment host ownership and consumption
         id: host
         continue-on-error: true
         run: |
           set -o pipefail
           uv run --no-sync pytest -q tests/test_attachments.py -k 'unnamed or accepted_attachments' --junitxml=output/attachment-experience/host.xml 2>&1 | tee output/attachment-experience/host.log
-          uv run --no-sync pytest -q tests/test_new_chat.py tests/test_message_delivery.py tests/test_live_clients.py tests/test_browser_check_runner.py --junitxml=output/attachment-experience/adjacent.xml 2>&1 | tee output/attachment-experience/adjacent.log
+          uv run --no-sync pytest -q tests/test_new_chat.py tests/test_message_delivery.py tests/test_live_clients.py tests/test_browser_check_runner.py tests/test_release_qualification.py --junitxml=output/attachment-experience/adjacent.xml 2>&1 | tee output/attachment-experience/adjacent.log
       - name: Attachment geometry and intake units
         id: units
         continue-on-error: true
