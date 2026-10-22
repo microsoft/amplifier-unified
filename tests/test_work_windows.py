@@ -548,6 +548,9 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
         service.clients.attach(identity, kind='web')
         with service.clients.bind(identity):
             await service.dispatch('session.select', {'id': selection})
+    # Complete initial catalog reconciliation before admitting observed Work.
+    # Joining only transcript readers cannot fence its later publication.
+    await service.history.refresh(force=False)
     windows = service.event_log_view.windows
     projector = FakeProjector(service.data_dir)
     projector.gate = asyncio.Event()
@@ -575,6 +578,9 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
         async with asyncio.timeout(5):
             for identity in (sid, other_sid):
                 await service.history.load(identity, only_if_changed=True, display=True)
+        # Startup diagnostics independently publishes a global frame. Settle
+        # that first snapshot before isolating Work's status-only notification.
+        await service.diagnostics.publish()
         # A real requested physical page waits at the projector boundary. Only
         # its completion may set ready; no status injection or broad publish.
         read = windows.request(sid)
