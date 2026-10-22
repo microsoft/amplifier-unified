@@ -408,7 +408,7 @@ def test_destination_history_evidence_gate_rejects_incomplete_results(tmp_path, 
     skip = int(fault == 'frontend-skip')
     (output / 'frontend.log').write_text(f'# tests 1\n# pass {1-skip}\n# fail 0\n# skipped {skip}\n# cancelled 0\n# todo 0\n')
     plan = [{'id': name, 'command': ['node', f'tests/{name}-browser.mjs']} for name in (
-        'destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch')]
+        'destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch', 'automation-hub')]
     (output / 'plan.json').write_text(json.dumps({'scenarios': plan}))
     rows = [{**row, 'status': 'passed', 'exitCode': 0, 'reason': None,
              'cleanup': {'remaining': [], 'terminated': 0}} for row in plan]
@@ -611,18 +611,20 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     assert not any(step.get('continue-on-error') for step in steps)
     run = '\n'.join(step.get('run', '') for step in steps)
     assert 'secrets.' not in json.dumps(focused)
-    assert "wanted = ('destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch')" in run
+    assert "wanted = ('destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch', 'automation-hub')" in run
     assert "sum(row['id'] == name for row in rows) == 1" in run
     assert 'browser_check_runner.py --plan output/destination-history/plan.json --output output/browser-checks --initialize' in run
     assert '--budget-seconds 1200' in run
     for target in ('test_history_scope.py', 'test_auth.py', 'test_client_navigation.py',
-                   'test_approachable_shell.py'):
+                   'test_approachable_shell.py', 'test_automation_overview.py', 'test_schedules.py',
+                   'test_schedule_new_tasks.py', 'test_schedule_policy.py'):
         assert f'tests/{target}' in run
     assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
     assert 'tests/test_release_qualification.py' not in run
     for target in ('destination-history', 'destination-history-ui', 'api',
                    'conversation-navigation', 'pending-view', 'settings-drafts',
-                   'work-shell', 'archive-action', 'archive-feedback', 'attention', 'shell-panels'):
+                   'work-shell', 'archive-action', 'archive-feedback', 'attention', 'shell-panels',
+                   'automation-hub', 'schedule-editor', 'submission-reset'):
         assert f'tests/{target}.test.mjs' in run
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
     assert len(uploads) == 1 and uploads[0]['if'] == 'always()'
