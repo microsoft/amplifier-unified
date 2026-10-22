@@ -2750,6 +2750,8 @@ class AppService:
                 elif action=='canvas.show':
                     sid=args.get('sessionId',self.state.get('selectedSessionId'))
                     destination = args.get('presentation', 'canvas')
+                    if args.get('kind') == 'settings' and destination != 'canvas':
+                        raise AppError('Settings opens in Canvas.', 409)
                     from .agent_canvas import scope
                     workspace_id=scope(self,sid)[1] if sid else self.state['selectedWorkspaceId']
                     scoped={**self.state,'selectedSessionId':sid,'selectedWorkspaceId':workspace_id}
@@ -2771,9 +2773,13 @@ class AppService:
                         if (not publication_message or self.clients.record() is None
                                 or sid != self.state.get('selectedSessionId')):
                             raise AppError('Inline presentation needs an originating turn in the attached chat.', 409)
-                    if scoped['canvas']['kind'] == 'settings' and destination != 'canvas':
-                        raise AppError('Settings opens in Canvas.', 409)
                     assert_clean(self, scoped['canvas']['id'])
+                    # Stage the publication before its presentation guard. A
+                    # refusal must not add a version/publication or change tabs.
+                    scoped['canvasArtifacts'] = [copy.deepcopy(row) if row['id'] == scoped['canvas']['id'] else row
+                                                 for row in scoped.get('canvasArtifacts', [])]
+                    if 'canvasTabs' in scoped:
+                        scoped['canvasTabs'] = copy.deepcopy(scoped['canvasTabs'])
                     remember(scoped,self.db)
                     diagnostic_result = {'id': scoped['canvas']['id'], 'revision': scoped['canvas'].get('revision', 1), 'reference': reference(scoped['canvas'])}
                     if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
@@ -2784,6 +2790,9 @@ class AppService:
                             if args.get('kind') == 'settings':
                                 self.state['view']['panel'] = None
                             self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
+                    self.state['canvasArtifacts'] = scoped['canvasArtifacts']
+                    if 'canvasTabs' in scoped:
+                        self.state['canvasTabs'] = scoped['canvasTabs']
                     diagnostic_result['presentation'] = destination
                 else:
                     canvas_command(self.state, action, args, origin)

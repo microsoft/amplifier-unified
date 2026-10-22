@@ -115,3 +115,38 @@ async def test_unsupported_inline_kind_is_rejected_without_partial_publication(a
     with pytest.raises(AppError, match='Canvas'):
         await command(app, 'canvas.show', {'kind': 'browser', 'url': 'https://example.test', 'presentation': 'inline'})
     assert app.state['canvasArtifacts'] == original
+
+
+async def test_canonical_file_presentation_refusal_does_not_publish_again(app, tmp_path):
+    await published(app)
+    path = tmp_path / 'example.html'
+    path.write_text('<input value="retained">')
+    saved = await command(app, 'canvas.show', {'kind': 'auto', 'path': str(path), 'presentation': 'inline'})
+    identity = saved['result']['id']
+    await command(app, 'canvas.views.inline', {'resourceId': identity, 'version': 1,
+        'messageId': 'inline-message', 'previewId': 'canonical', 'presentationRequest': True})
+    with app.clients.bind('one'):
+        app._session(app.state['selectedSessionId'])['messages'].append(
+            {'id': 'second-message', 'role': 'user', 'text': 'Keep the saved example'})
+        before = deepcopy(app.state['canvasArtifacts'])
+        tabs = deepcopy(app.state['canvasTabs'])
+    with pytest.raises(AppError) as refused:
+        await command(app, 'canvas.show', {'kind': 'auto', 'path': str(path)})
+    assert refused.value.code == 'canvas_preview_reset_required'
+    assert app.state['canvasArtifacts'] == before
+    with app.clients.bind('one'):
+        assert app.state['canvasTabs'] == tabs
+
+
+async def test_chat_return_preserves_inline_choice_and_disposed_primary(app):
+    first = await published(app)
+    with app.clients.bind('one'):
+        sid = app.state['selectedSessionId']
+    await command(app, 'canvas.select', {'id': first['resourceId'], 'version': 1,
+        'messageId': 'inline-message', 'presentation': 'inline'})
+    await command(app, 'session.create')
+    await command(app, 'session.select', {'id': sid})
+    with app.clients.bind('one'):
+        assert app.state['canvas']['_presentationDisposed']
+        assert not app.state['canvas']['open']
+    assert any(c['presentation'] == 'inline' for c in choices(app))

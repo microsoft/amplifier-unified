@@ -96,13 +96,14 @@ function ImageGallery({entries,...props}){
 }
 
 function DocumentOutput({item,state,dispatch,messageId,imageFrame=false}){
- const {row,version}=item,bodyId=useId(),toggle=useRef(),inFlight=useRef(false);
+ const {row,version}=item,bodyId=useId(),toggle=useRef(),inFlight=useRef(false),restoreFocus=useRef(false);
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[reset,setReset]=useState(null);
+ useEffect(()=>{if(!busy&&restoreFocus.current){restoreFocus.current=false;toggle.current?.focus({preventScroll:true})}},[busy]);
  const choice=state.canvasWorkspace?.presentations?.find(value=>value.id===row.id&&value.version===version);
  const primary=state.canvas,primaryOwns=primary?.id===row.id&&(primary.selectedVersion??primary.revision??1)===version&&!primary._presentationDisposed;
  // Generated images retain their established inline default. Authored artifacts
  // default to a compact card; a publication is not a request to mount a viewer.
- const expanded=choice?choice.presentation==='inline'&&choice.messageId===messageId:row.kind==='image'&&!primaryOwns;
+ const expanded=!primaryOwns&&(choice?choice.presentation==='inline'&&choice.messageId===messageId:row.kind==='image'&&(row.publications||[]).find(link=>link.version===version)?.messageId===messageId);
  const change=async(presentation,resetPreview=false)=>{
   if(inFlight.current)return;
   if((presentation==='canvas'||primaryOwns)&&hasLocalCanvasEdits()){setError('Save or cancel unfinished Canvas edits before changing the preview.');return}
@@ -110,7 +111,7 @@ function DocumentOutput({item,state,dispatch,messageId,imageFrame=false}){
   try{
    const result=await dispatch('canvas.select',{id:row.id,version,messageId,sessionId:row.sessionId,presentation,...(resetPreview?{resetPreview:true}:{})});
    if(!result?.accepted)throw Error('The presentation was not accepted.');
-   if(presentation==='saved')toggle.current?.focus({preventScroll:true});
+   if(presentation==='saved')restoreFocus.current=true;
   }catch(error){
    setError(error.message);
    if(error.code==='canvas_preview_reset_required')setReset(presentation);

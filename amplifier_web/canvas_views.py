@@ -71,7 +71,7 @@ class CanvasViews:
         if not scope(self.service.state, row):
             fail('This artifact belongs to another chat.', 409)
         version = args.get('version') or latest(row)
-        definition(row, version, self.service.db)
+        row = definition(row, version, self.service.db)
         destination = args.get('presentation', 'canvas')
         message = args.get('messageId')
         if destination == 'inline':
