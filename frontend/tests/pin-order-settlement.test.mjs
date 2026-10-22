@@ -20,14 +20,14 @@ async function fixture(dispatch=async()=>({accepted:true}),initial={}){
  const key=async(id,key)=>{await act(async()=>root.root.findByProps({'aria-label':'Reorder '+id}).props.onKeyDown({key,preventDefault(){}}))};
  return {root,host,calls,listeners,update,key,get current(){return current},order:()=>root.root.findAll(node=>node.type==='div'&&node.props['data-order-id']).map(node=>node.props['data-order-id']),busy:id=>root.root.findByProps({'aria-label':'Reorder '+id}).props['aria-disabled'],close:async()=>act(async()=>root.unmount())};
 }
-test('accepted command retains preview and blocks a second reorder until its exact query page arrives',async()=>{
+test('accepted command queues a second reorder until its exact query page arrives',async()=>{
  const f=await fixture();try{
-  await f.key('session:b','ArrowUp');assert.deepEqual(f.order(),expected);assert.equal(f.busy('session:b'),true);
+  await f.key('session:b','ArrowUp');assert.deepEqual(f.order(),expected);assert.equal(f.busy('session:b'),undefined);
   await f.update({pinnedItemIds:expected,navigationResourcePending:{pinnedNavigation:{status:'pending'}}});
   assert.deepEqual(f.order(),expected);await f.key('session:b','ArrowDown');assert.equal(f.calls.length,1);
   await f.update({pinnedNavigation:{...f.current.pinnedNavigation,items:expected.map(item)},navigationResourcePending:{}});
-  assert.equal(f.busy('session:b'),undefined);assert.deepEqual(f.order(),expected);assert.equal(f.listeners.size,0);
-  await f.key('session:b','ArrowDown');assert.deepEqual(f.calls[1],['navigation.pinOrder',{ids}]);
+  assert.equal(f.busy('session:b'),undefined);assert.deepEqual(f.order(),ids);
+  assert.deepEqual(f.calls[1],['navigation.pinOrder',{ids}]);
   await f.update({pinnedItemIds:ids,pinnedNavigation:{...f.current.pinnedNavigation,items:ids.map(item)}});
   assert.deepEqual(f.order(),ids);assert.equal(f.busy('session:b'),undefined);
  }finally{await f.close()}
@@ -76,15 +76,14 @@ test('two adjacent sequences move different items while preserving hidden and cr
  const f=await fixture(undefined,{pinnedItemIds:all,pinnedNavigation:{items:visible.map(item),total:3,index:0,pages:1}});
  const settle=async(total,shown)=>f.update({pinnedItemIds:total,pinnedNavigation:{...f.current.pinnedNavigation,items:shown.map(item)},navigationResourcePending:{}});
  try{
-  // A first, then a different item C. A pending display must fence every handle,
-  // not only the one that initiated the command.
+  // A first, then a different item C. Its optimistic gesture is kept locally
+  // until A's exact display is current, without sending from mismatched inputs.
   await f.key('session:a','ArrowDown');
   const first=['workspace:other','session:b','session:a','session:hidden','session:c'];
   assert.deepEqual(f.calls[0],['navigation.pinOrder',{ids:first}]);
   await f.update({pinnedItemIds:first,navigationResourcePending:{pinnedNavigation:{status:'pending'}}});
   await f.key('session:c','ArrowUp');assert.equal(f.calls.length,1);
   await settle(first,['session:b','session:a','session:c']);
-  await f.key('session:c','ArrowUp');
   const second=['workspace:other','session:b','session:c','session:a','session:hidden'];
   assert.deepEqual(f.calls[1],['navigation.pinOrder',{ids:second}]);
   await settle(second,['session:b','session:c','session:a']);
@@ -106,7 +105,7 @@ test('two adjacent sequences move different items while preserving hidden and cr
  }finally{await f.close()}
 });
 
-test('display before a delayed first receipt cannot admit another item until that receipt settles',async()=>{
+test('display before a delayed first receipt retains another item without sending it early',async()=>{
  let release;const firstReceipt=new Promise(resolve=>{release=resolve});
  let count=0;const all=['session:a','session:b','session:c'],first=['session:b','session:a','session:c'],second=['session:b','session:c','session:a'];
  const f=await fixture(()=>++count===1?firstReceipt:Promise.resolve({accepted:true}),{pinnedItemIds:all,pinnedNavigation:{items:all.map(item),total:3,index:0,pages:1}});
@@ -115,7 +114,7 @@ test('display before a delayed first receipt cannot admit another item until tha
   await f.update({pinnedItemIds:first,pinnedNavigation:{...f.current.pinnedNavigation,items:first.map(item)}});
   await f.key('session:c','ArrowUp');assert.equal(f.calls.length,1);
   await act(async()=>release({accepted:true}));assert.equal(f.busy('session:c'),undefined);
-  await f.key('session:c','ArrowUp');assert.deepEqual(f.calls[1],['navigation.pinOrder',{ids:second}]);
+  assert.deepEqual(f.calls[1],['navigation.pinOrder',{ids:second}]);
   await f.update({pinnedItemIds:second,pinnedNavigation:{...f.current.pinnedNavigation,items:second.map(item)}});
   assert.equal(f.calls.length,2);assert.deepEqual(f.order(),second);assert.equal(f.listeners.size,0);
  }finally{await f.close()}
@@ -169,7 +168,7 @@ test('lost resource coverage or scope cannot falsely settle a saved order '+JSON
   await f.key('session:b','ArrowUp');
   await f.update({pinnedItemIds:expected,pinnedNavigation:{...f.current.pinnedNavigation,items:expected.map(item)},...change});
   if(change.navigationResourceScope)assert.match(JSON.stringify(f.root.toJSON()),/Pinned view changed/);
-  else{assert.equal(f.busy('session:b'),true);assert.equal(f.listeners.size,1)}
+  else{assert.equal(f.listeners.size,1)}
   assert.equal(f.calls.length,1);
  }finally{await f.close()}
 });
@@ -262,4 +261,31 @@ test('external unpin after a timeout retires the old saved-order recovery',async
   assert.equal(refreshButton(f),undefined);assert.equal(f.listeners.size,0);assert.equal(f.calls.length,1);assert.equal(reads,0);
   assert.deepEqual(f.order(),['session:a']);
  }finally{t.mock.timers.reset();await f.close()}
+});
+
+test('two different moves before the first receipt and readback preserve both intents',async()=>{
+ let release;const receipt=new Promise(resolve=>{release=resolve});let count=0;
+ const all=['session:a','session:b','session:c'],first=['session:b','session:a','session:c'],second=['session:b','session:c','session:a'];
+ const f=await fixture(()=>++count===1?receipt:Promise.resolve({accepted:true}),{pinnedItemIds:all,pinnedNavigation:{items:all.map(item),total:3,index:0,pages:1}});
+ try{
+  await f.key('session:a','ArrowDown');await f.key('session:c','ArrowUp');
+  assert.deepEqual(f.order(),second);assert.equal(f.calls.length,1);
+  await act(async()=>release({accepted:true}));assert.equal(f.calls.length,1);
+  await f.update({pinnedItemIds:first,pinnedNavigation:{...f.current.pinnedNavigation,items:first.map(item)}});
+  assert.deepEqual(f.order(),second);assert.deepEqual(f.calls[1],['navigation.pinOrder',{ids:second}]);
+  await f.update({pinnedItemIds:second,pinnedNavigation:{...f.current.pinnedNavigation,items:second.map(item)}});
+  assert.deepEqual(f.order(),second);assert.equal(f.calls.length,2);assert.equal(f.listeners.size,0);
+ }finally{await f.close()}
+});
+
+for(const error of ['HTTP 409 rejected','Outcome unknown'])test(`queued different move is not sent after ${error}`,async()=>{
+ let reject;const receipt=new Promise((_,no)=>{reject=no});
+ const all=['session:a','session:b','session:c'];
+ const f=await fixture(()=>receipt,{pinnedItemIds:all,pinnedNavigation:{items:all.map(item),total:3,index:0,pages:1}});
+ try{
+  await f.key('session:a','ArrowDown');await f.key('session:c','ArrowUp');assert.equal(f.calls.length,1);
+  await act(async()=>reject(Error(error)));
+  assert.equal(f.calls.length,1);assert.deepEqual(f.order(),all);assert.equal(f.listeners.size,0);
+  assert.match(JSON.stringify(f.root.toJSON()),/Later queued moves were not sent/);
+ }finally{await f.close()}
 });

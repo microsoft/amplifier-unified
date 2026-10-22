@@ -384,17 +384,16 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
  useEffect(()=>{const current=owner.current;current.alive=true;return()=>{current.alive=false;current.version++;current.read?.controller.abort()}},[model.host]);
  const settle=usePinOrderSettlement(model.host);
  const items=page.items.map(item=>({...item,label:item.kind==='workspace'?(item.row.customName||item.row.name):(item.row.title||'Untitled conversation')})),visible=items.map(item=>item.id);
- const reorder=async(next,{id,to})=>{
+ const reorder=async(next,{id,basis,target,contextKey})=>{
   const version=++owner.current.version;owner.current.read?.controller.abort();setError(null);setReading(false);
   try{
    // A host publication may precede React's next render. Never combine its new
    // total vector with this render's old page/drag target.
    const current=model.host?.getSnapshot()||model.state;
-   if(pinOrderPending(current)||pinOrderScope(current)!==pinOrderScope(model.state)
-    ||current.pinnedNavigation?.items?.map(item=>item.id).join('\0')!==visible.join('\0')
-    ||(current.pinnedItemIds||[]).join('\0')!==(model.state.pinnedItemIds||[]).join('\0'))
+   if(pinOrderPending(current)||pinOrderScope(current)!==contextKey
+    ||current.pinnedNavigation?.items?.map(item=>item.id).join('\0')!==basis.join('\0'))
     throw Error('The pinned list is updating. Move the item again when it is ready.');
-   const previous=[...(current.pinnedItemIds||[])],expected=movePin(previous,id,visible[to]);
+   const previous=[...(current.pinnedItemIds||[])],expected=movePin(previous,id,target);
    await settle(()=>model.act('navigation.pinOrder',{ids:expected}),previous,expected,next);
   }catch(err){if(err.name!=='AbortError'&&owner.current.alive&&owner.current.version===version)setError({message:err.message||'Could not reorder pins. Please try again.',read:err.pinOrderDisplay===true,previous:err.pinOrderPrevious,expected:err.pinOrderExpected,visible:err.pinOrderVisible});throw err}
  };
@@ -430,7 +429,7 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
  };
  const open=row=>navigation?navigation.browse('workspace',row.workspaceId):workspaceModel.act('workspace.select',{id:row.workspaceId});
  const newChat=row=>workspaceModel.act('session.draft',{workspace:row.path,workspaceId:row.workspaceId,location:{kind:'workspace'}});
- return <><ReorderList items={items} ids={visible} busy={pinOrderPending(model.state)} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
+ return <><ReorderList items={items} ids={visible} busy={pinOrderPending(model.state)} queueChanges contextKey={pinOrderScope(model.state)} onQueueDiscard={()=>setError(value=>value?{...value,message:value.message+' Later queued moves were not sent.'}:value)} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
   {error&&<p role="alert" className="a-danger">{error.message}{error.read&&model.host?.refreshResources&&<> <button type="button" className="a-link" disabled={reading} onClick={refresh}>{reading?'Reading pins…':'Refresh pinned list'}</button></>}</p>}
   <ChatPagination page={page} label="pinned items" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
  </>;

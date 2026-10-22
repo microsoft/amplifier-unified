@@ -130,17 +130,13 @@ try{
  await expect.poll(async()=>(await shellPins()).ids).toEqual(expected);
  await expect.poll(async()=>(await shellPins()).pending?.status).toBe('pending');
  assert.deepEqual((await shellPins()).items,heldPageOrder);
- const heldRevision=(await state()).revision,different=expected[2];
- await expect(grip(page,different)).toHaveAttribute('aria-disabled','true');
- await grip(page,different).focus();await page.keyboard.press('ArrowUp');assert.equal(commands.length,heldCount+1);
- await control({holdPinsFor:null});
- // Do not wait for the second client before the next different-item gesture.
+ const different=expected[2],afterHeld=expectedMove(expected,different,expected[1]);
  await expect(grip(page,different)).not.toHaveAttribute('aria-disabled','true');
- assert.equal((await state()).revision,heldRevision);
- const afterHeld=expectedMove(expected,different,expected[1]);
- await grip(page,different).focus();await page.keyboard.press('ArrowUp');
+ await grip(page,different).focus();await page.keyboard.press('ArrowUp');assert.equal(commands.length,heldCount+1);
+ await expect.poll(()=>order(page)).toEqual(afterHeld);
+ await control({holdPinsFor:null});
  expected=afterHeld;await settled(expected,different);
- checks.push({gesture:'keyboard',projection:'delayed',sameAppRevision:true,otherItemBlocked:true,order:expected});
+ checks.push({gesture:'keyboard',projection:'delayed',otherItemQueued:true,order:expected});
  // Let real persistence/stream publication finish, but hold one HTTP receipt.
  // Another item's gesture must not sneak in while that outcome is outstanding.
  let receiptHeld=false;
@@ -156,13 +152,34 @@ try{
  await grip(page,source).focus();await page.keyboard.press('ArrowUp');
  await expect.poll(()=>receiptHeld).toBe(true);
  await expect.poll(shellPins).toEqual({ids:expected,items:expected,pending:null});
- const otherId=expected[0];await expect(grip(page,otherId)).toHaveAttribute('aria-disabled','true');
+ const otherId=expected[0],afterReceipt=expectedMove(expected,otherId,expected[1]);
+ await expect(grip(page,otherId)).not.toHaveAttribute('aria-disabled','true');
  await grip(page,otherId).focus();await page.keyboard.press('ArrowDown');assert.equal(commands.length,beforeCount+1);
- releaseReceipt();releaseReceipt=null;await settled(expected,source);await page.unroute('**/api/actions');
- checks.push({gesture:'keyboard',receipt:'delayed',otherItemBlocked:true,order:expected});
+ await expect.poll(()=>order(page)).toEqual(afterReceipt);
+ releaseReceipt();releaseReceipt=null;expected=afterReceipt;await settled(expected,otherId);await page.unroute('**/api/actions');
+ checks.push({gesture:'keyboard',receipt:'delayed',otherItemQueued:true,order:expected});
  const next=expected[0];expected=expectedMove(expected,next,expected[1]);
  await grip(page,next).focus();await page.keyboard.press('Alt+ArrowDown');await settled(expected,next);
  checks.push({gesture:'keyboard',source:next,order:expected});
+ // Two adjacent cycles: two DIFFERENT pointer moves before A reaches the host,
+ // so neither its HTTP response nor authoritative readback can arrive first.
+ for(let cycle=0;cycle<2;cycle++){
+  let intercepted=false;
+  const before=expected,count=commands.length,hold=new Promise(resolve=>{releaseReceipt=resolve});
+  await page.route('**/api/actions',async route=>{
+   const body=route.request().postDataJSON();
+   if(!intercepted&&body.action==='shell.command'&&body.args.action==='navigation.pinOrder'){
+    intercepted=true;await hold;
+   }
+   await route.continue();
+  });
+  const a=before[1],b=before[2],first=expectedMove(before,a,before[0]),final=expectedMove(first,b,first[0]);
+  await pointerMove(a,before[0]);await expect.poll(()=>intercepted).toBe(true);
+  await pointerMove(b,first[0]);await expect.poll(()=>order(page)).toEqual(final);
+  assert.deepEqual((await state()).pinnedItemIds,before);assert.equal(commands.length,count+1);
+  releaseReceipt();releaseReceipt=null;expected=final;await settled(expected,b);await page.unroute('**/api/actions');
+  assert.equal(commands.length,count+2);checks.push({cycle,twoDistinctMovesBeforeResponseAndReadback:true,order:expected});
+ }
  // Repeated explicit same-order intent is semantically idempotent.
  await action('navigation.pinOrder',{ids:expected});await settled(expected,next);
  // A saved order with a genuinely missing page stays honest, and an explicit
