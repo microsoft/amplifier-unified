@@ -1,5 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
-import {openSettingsPage} from './browser-settings.mjs';
+import {openSettingsDialog,openSettingsPage} from './browser-settings.mjs';
 import './composer-test-helpers.mjs';
 // Real host, production assets and filesystem; synthetic runtime only.
 import {spawn} from 'node:child_process';
@@ -133,7 +133,7 @@ try{
  await expect(resourceInput).toHaveValue('fixture-container');await expect(reservationKey).toHaveValue('preview:private-draft');
  assert.equal(await resourceInput.evaluate((node,original)=>node===original,originalResourceNode),true,'Home preserves the same tab-owned editor');
  await resourceInput.focus();
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await openSettingsDialog(page);
  await expect(page.getByRole('dialog',{name:'Settings',exact:true})).toBeVisible();
  await page.keyboard.press('Tab');
  assert.equal(await page.evaluate(()=>!!document.activeElement.closest('.a-overlay [role=dialog]')),true,'Settings keeps keyboard focus inside its modal');
