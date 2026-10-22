@@ -362,6 +362,8 @@ class WorkWindows:
 
     def _page(self, identity, group):
         owner = self._owner(identity)  # Current canonical authority, not cache presence.
+        if str(group).startswith('open-work:'):
+            return self.live_pages.open_fields.page(owner, group)
         page = self.pages.get(group)
         if page is None or page['sessionId'] != identity or source_identity(owner) != page.get('ownerSource', page['source']):
             raise ValueError('This saved work window expired. Open the recent window again.')
@@ -454,7 +456,7 @@ class WorkWindows:
         result = await self._worker().project({'operation': 'field', 'session': page['source'],
             'reference': reference, 'offset': int(args.get('offset', 0)),
             'limit': min(16384, max(1, int(args.get('limit', 16000))))}, key=owner['id'] + ':field:' + row['id'])
-        if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
+        if (self.closed or self._owner(owner['id']) is not owner or self._page(owner['id'], page['group']) is not page
                 or source_identity(owner) != page.get('ownerSource', page['source'])):
             raise ValueError('This saved field expired.')
         if result.get('status') != 'complete':
@@ -476,7 +478,7 @@ class WorkWindows:
         return owner, page, row, reference
 
     def check_recording(self, owner, page):
-        if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
+        if (self.closed or self._owner(owner['id']) is not owner or self._page(owner['id'], page['group']) is not page
                 or source_identity(owner) != page.get('ownerSource', page['source'])):
             raise ValueError('This provider recording expired. Reopen its saved work window.')
 

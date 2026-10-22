@@ -481,7 +481,12 @@ def test_removal_boundary_reports_bounded_phase_not_exception_text(library, tmp_
     monkeypatch.setattr(worker.json, 'dump', dump)
     result = removal_main(monkeypatch, value)
     assert fired == [fault], 'The intended boundary must actually be reached'
-    assert not result['ok'] and result['status'] == 'unknown'
+    assert not result['ok']
+    if fault == 'archive-validation':
+        assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+        assert result['phase'] == 'verifying' and result['code'] == 'archive_verification_failed'
+    else:
+        assert result['status'] == 'unknown'
     assert destroyed == (['owned'] if effect != 'not_dispatched' else [])
     serialized = json.dumps(result)
     assert marker not in serialized and str(tmp_path) not in serialized
@@ -852,6 +857,43 @@ def test_cleanup_recovery_preserves_all_files_and_verifies_absence(library, tmp_
         'version': 1, 'status': 'held', 'continuationAvailable': False, 'code': 'destroy_confirmation_recorded'}
     assert before == {str(p.relative_to(tmp_path)): (p.read_bytes(), p.stat().st_mtime_ns)
                       for p in tmp_path.rglob('*') if p.is_file()}
+
+
+def test_unsafe_selected_link_can_be_retained_without_extraction_before_cleanup(library, tmp_path, monkeypatch):
+    lib, calls = library
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    def no_extract(*a, **k):
+        pytest.fail('Cleanup must never extract retained archives or follow their links')
+    monkeypatch.setattr(tarfile.TarFile, 'extractall', no_extract)
+    monkeypatch.setattr(tarfile.TarFile, 'extract', no_extract)
+    original = lib.export_files
+    def export(identity, source, destination, **kwargs):
+        if source != '/artifacts':
+            return original(identity, source, destination, **kwargs)
+        calls.append(('export', (identity, source, destination), kwargs))
+        with tarfile.open(destination, 'w') as archive:
+            item = tarfile.TarInfo('artifacts'); item.type = tarfile.DIRTYPE; archive.addfile(item)
+            item = tarfile.TarInfo('artifacts/python'); item.type = tarfile.SYMTYPE
+            item.linkname = '/usr/local/bin/python3.13'; archive.addfile(item)
+        return Value(id=identity, source=source, destination=str(destination),
+                     bytes=destination.stat().st_size, sha256=hashlib.sha256(destination.read_bytes()).hexdigest())
+    lib.export_files = export
+    first = removal_main(monkeypatch, payload(tmp_path, 'remove'))
+    assert first['status'] == 'stopped' and first['effectAdmitted'] is False
+    assert first['phase'] == 'verifying' and first['code'] == 'archive_verification_failed'
+    assert not any(name == 'destroy' for name, *_ in calls)
+    retained = next(tmp_path.glob('retained-*'))
+    before = {p.name: p.read_bytes() for p in retained.iterdir()}
+    observations = iter(['stopped', 'stopped', 'absent'])
+    monkeypatch.setattr(worker, 'docker_reconcile', lambda *a: {
+        'status': (state := next(observations)),
+        'observation': {'ownership': 'matched', 'absenceConfirmed': state == 'absent'}})
+    retry = {**payload(tmp_path, 'finishCleanup'), 'requestId': 'archive-only-continuation'}
+    result = removal_main(monkeypatch, retry)
+    assert result['ok'] and result['retention']['archiveOnly'] is True
+    assert sum(name == 'destroy' for name, *_ in calls) == 1
+    assert sum(name == 'export' for name, *_ in calls) == 4  # Fresh custody, no partial export reuse.
+    assert before == {p.name: p.read_bytes() for p in retained.iterdir()}
 
 
 def test_failed_preservation_reports_known_phase_and_never_destroys(library, tmp_path):

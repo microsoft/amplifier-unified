@@ -1,6 +1,17 @@
 import React from 'react';
 import {AlertCircle,Check} from 'lucide-react';
 import {ReadWhenVisible} from './attention.jsx';
+import {updateReleaseSummary} from './update-release-summary';
+
+export function UpdateReleaseSummary({updates,application,overview}){
+ const summary=updateReleaseSummary(updates,application,overview);
+ return <section className="a-update-release-summary" data-part="update-release-summary" data-stage={summary.stage} aria-labelledby="update-release-heading">
+  <h4 id="update-release-heading">{summary.heading}{summary.version&&<>{summary.stage==='before'?' ':' · '}{summary.version}</>}</h4>
+  {summary.notes?<><p className="a-release-title">{summary.notes.title}</p><ul>{summary.notes.changes.map((change,index)=><li key={index}>{change}</li>)}</ul></>:
+   <p className="a-caption">{!Array.isArray(application.releaseNotes)?'Loading release notes…':summary.version?'Release notes for this version are unavailable.':'The update’s release version has not been confirmed. Check the update status for details.'}</p>}
+  {summary.url&&<a href={summary.url} target="_blank" rel="noreferrer">View published release<span className="a-sr-only"> {summary.version} (opens in a new tab)</span></a>}
+ </section>;
+}
 
 const identity=(release,notice)=>`release-notice:${release.version}:${notice.id}`;
 const version=value=>String(value||'').replace(/^v/,'').split('.').map(Number);

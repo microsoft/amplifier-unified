@@ -36,7 +36,18 @@ older turns remain visible. Turning the option off restores normal placement.
 
 ## Set up Unified on your computer
 
-For macOS and Linux (including WSL with systemd), paste this into your terminal:
+On a fresh **Ubuntu or Debian** computer (including WSL), first install the
+download prerequisites together:
+
+```sh
+sudo apt-get update && sudo apt-get install -y curl git ca-certificates
+```
+
+On **macOS**, install Apple's command line tools if Git is not already available:
+`xcode-select --install`. Other Linux distributions need curl, Git, and CA
+certificates from their package manager.
+
+Then, for macOS and Linux (including WSL with systemd), paste this into your terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/amplifier-unified/main/scripts/install.sh | bash
@@ -45,7 +56,8 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/amplifier-unified/main/sc
 The installer finds or installs uv and Python, verifies the latest stable release,
 installs Unified, starts its per-user service, and opens your browser. Git and curl
 must be available. Existing Amplifier CLI configuration, accounts, and history are
-kept. Run as your normal user, without sudo.
+kept. Run the Amplifier installer as your normal user, without sudo. You do not
+need to install uv or Python yourself, reopen your terminal, or reboot.
 
 For more detail, add `-s -- --verbose` after `bash`. Use `--version 0.20.101`
 for a specific stable release or `--no-open` to print the address without opening
