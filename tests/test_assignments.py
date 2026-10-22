@@ -38,6 +38,63 @@ async def child(app, source, identity='helper'):
     return target, created
 
 
+async def test_new_assignment_has_optional_execution_counts_and_bounded_members(app):
+    value = await start(app)
+    assert value['limits']['maxOpenTasks'] is None
+    assert value['limits']['maxConcurrentCalls'] is None
+    assert value['limits']['maxMembers'] == 64
+    source = app.state['sessions'][0]
+    # Execution ceilings are independent of the structural member bound.
+    await limits(app, source, maxOpenTasks=100, maxConcurrentCalls=100, maxMembers=1)
+    plan(app, source)
+    with pytest.raises(AppError, match='assignment member limit'):
+        await commission(app, source, 'over-roster')
+    assert len(app.assignments.current(source)['members']) == 1
+
+
+@pytest.mark.parametrize('counts', [(3, 2), (None, None)])
+async def test_saved_finite_and_explicit_uncapped_counts_survive_restart(app, counts):
+    source = app.state['sessions'][0]
+    await start(app)
+    await limits(app, source, maxOpenTasks=3, maxConcurrentCalls=2)
+    await limits(app, source, maxOpenTasks=counts[0], maxConcurrentCalls=counts[1])
+    before = copy.deepcopy(app.assignments.current(source))
+    app._save()
+    await app.close()
+    restored = AppService(app.data_dir, workspace=source['workspace'])
+    try:
+        assert restored.assignments.current(restored._session(source['id'])) == before
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('maxOpenTasks', 0), ('maxOpenTasks', True), ('maxConcurrentCalls', -1),
+    ('maxConcurrentCalls', 1.5), ('maxMembers', None), ('maxMembers', 65),
+])
+async def test_optional_execution_counts_still_validate_values(app, field, value):
+    source = app.state['sessions'][0]
+    before = await start(app)
+    with pytest.raises((AppError, ValueError)):
+        await limits(app, source, **{field: value})
+    assert app.assignments.current(source) == before
+
+
+@pytest.mark.parametrize('budget', ['maxTotalTokens', 'maxCostUsd'])
+async def test_uncapped_counts_keep_unknown_receipts_and_budget_policy(app, budget):
+    source = app.state['sessions'][0]
+    await start(app)
+    await limits(app, source, maxOpenTasks=None, maxConcurrentCalls=None, **{budget: 100})
+    row = call(source, 'unknown-budget-call')
+    assert (await admission(app, source['id'], {'call': row}))['allowed']
+    from amplifier_web.capacity import restore_observation
+    restore_observation(source)
+    before = copy.deepcopy(app.assignments.usage(app.assignments.current(source))['receipts'])
+    result = await admission(app, source['id'], {'call': call(source, 'blocked-by-budget')})
+    assert not result['allowed'] and any('unknown' in reason for reason in result['reasons'])
+    assert app.assignments.usage(app.assignments.current(source))['receipts'] == before
+
+
 async def test_nested_commissioning_cannot_evade_assignment_limits_or_take_control(app):
     source, independent = app.state['sessions']
     value = await start(app)

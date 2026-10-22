@@ -38,7 +38,12 @@ try{
  await page.goto(url);await ready();
  await expect(page.locator('.a-work-heading')).toHaveCount(0);
  await expect(page).toHaveTitle('Amplifier');
- await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toHaveCount(1);
+ await expect(page.locator('#workspace-navigation')).toBeHidden();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toBeVisible();
+ await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toHaveAttribute('aria-current','page');
+ await page.getByRole('button',{name:'Close navigation',exact:true}).click();
+ await expect(page.locator('#workspace-navigation')).toBeHidden();
  check('Fresh clients arrive at Home with app identity, no redundant header label and a sidebar Home icon');
 
  const fixtureHome=dirname((await state()).workspaceDefaults.root),projects=[],chats=[];

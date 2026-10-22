@@ -41,7 +41,13 @@ try{
  await chatSearch.fill('alpha-201');await expect(recent.locator('.a-nav-chat')).toHaveCount(1);
  const geometry=()=>chatrow(selected).evaluate(el=>({height:el.getBoundingClientRect().height,width:el.getBoundingClientRect().width}));
  const before=await geometry();await chatrow(selected).hover();await details.waitFor();
- assert.deepEqual(await geometry(),before);assert.equal(await chatrow(selected).locator('.a-nav-chat-title').evaluate(el=>getComputedStyle(el).whiteSpace),'nowrap');
+ assert.deepEqual(await geometry(),before);
+ // Full catalog cards wrap their titles; compact sidebar rows still truncate.
+ const landingTitle=chatrow(selected).locator('.a-nav-chat-title');
+ assert.equal(await landingTitle.evaluate(el=>getComputedStyle(el).whiteSpace),'normal');
+ assert.equal(await landingTitle.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+ await expect(chatrow(selected).locator('.a-nav-chat-select')).toHaveAccessibleName(await landingTitle.innerText());
+ assert.equal(await shortcuts.locator('.a-nav-chat-title').first().evaluate(el=>getComputedStyle(el).whiteSpace),'nowrap');
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,'alpha-201']);
  await page.context().grantPermissions(['clipboard-read','clipboard-write']);
  await details.getByRole('button',{name:'Copy session id',exact:true}).click();
@@ -57,7 +63,7 @@ try{
  await recent.getByRole('button',{name:'Show more conversations'}).click();
  await expect.poll(async()=>(await snapshot()).sidebarNavigation.search.index).toBe(1);
  assert.equal(await recent.locator('.a-nav-chat').count(),40);assert.equal((await info()).state.selectedSessionId,selected);
- await recent.locator('summary').click();await recent.getByLabel('Filter chats by status').selectOption('attention');
+ await recent.locator('summary').click();await recent.getByRole('group',{name:'Filter work',exact:true}).getByRole('button',{name:/^Needs you/}).click();
  await expect(recent.locator('.a-nav-chat')).toHaveCount(2);
  const agentPage=await api('/api/fixture/agent',{args:{action:'shell.query',args:{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'chats'}}});
  assert.equal(agentPage.result.sidebarNavigation.search.total,2);
