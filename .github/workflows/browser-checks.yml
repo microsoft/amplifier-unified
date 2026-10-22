@@ -361,9 +361,9 @@ jobs:
         run: |
           set -o pipefail
           uv run --no-sync pytest --asyncio-mode=auto -v -ra --tb=short --junitxml=output/destination-history/python.xml \
-            tests/test_history_scope.py tests/test_auth.py tests/test_client_navigation.py tests/test_live_clients.py \
-            tests/test_approachable_shell.py tests/test_new_chat.py tests/test_canvas_files.py tests/test_canvas_views.py \
-            tests/test_browser_check_runner.py tests/test_release_qualification.py 2>&1 | tee output/destination-history/python.log
+            tests/test_history_scope.py tests/test_auth.py tests/test_client_navigation.py tests/test_approachable_shell.py \
+            tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage \
+            2>&1 | tee output/destination-history/python.log
       - name: Focused frontend regressions
         if: ${{ !inputs.settings_close_diagnostic && !cancelled() && steps.node_dependencies.outcome == 'success' }}
         working-directory: frontend

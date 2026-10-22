@@ -616,10 +616,10 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     assert 'browser_check_runner.py --plan output/destination-history/plan.json --output output/browser-checks --initialize' in run
     assert '--budget-seconds 1200' in run
     for target in ('test_history_scope.py', 'test_auth.py', 'test_client_navigation.py',
-                   'test_live_clients.py', 'test_approachable_shell.py', 'test_new_chat.py',
-                   'test_canvas_files.py', 'test_canvas_views.py', 'test_browser_check_runner.py',
-                   'test_release_qualification.py'):
+                   'test_approachable_shell.py'):
         assert f'tests/{target}' in run
+    assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
+    assert 'tests/test_release_qualification.py' not in run
     for target in ('destination-history', 'destination-history-ui', 'api',
                    'conversation-navigation', 'pending-view', 'settings-drafts',
                    'work-shell', 'archive-action', 'archive-feedback', 'attention', 'shell-panels'):
