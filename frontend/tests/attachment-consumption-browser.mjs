@@ -84,7 +84,7 @@ async function settled(page,command){
 }
 async function setupPage(){
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- await context.route('**/*',route=>new URL(route.request().url()).origin===base?route.continue():route.abort('blockedbyclient'));
+ await context.route(url=>url.origin!==base,route=>route.abort('blockedbyclient'));
  await context.addInitScript(installAttachmentObserver);
  await context.addInitScript(()=>{
   const Native=window.WebSocket;

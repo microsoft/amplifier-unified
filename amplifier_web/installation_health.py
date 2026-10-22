@@ -16,6 +16,19 @@ def doctor(home):
     import yaml
     from .tls import ssl_context
     checks = []
+    from .host_dependencies import MissingHostDependency, require_uv, tool_path
+    import shutil
+    try:
+        require_uv()
+        checks.append({'ok': True, 'message': 'Setup helper is available'})
+    except MissingHostDependency as error:
+        checks.append({'ok': False, 'message': str(error)})
+    if shutil.which('git', path=tool_path()):
+        checks.append({'ok': True, 'message': 'Component download support is available'})
+    else:
+        guidance = ('Run xcode-select --install, then retry.' if sys.platform == 'darwin'
+                    else 'Install Git with your Linux package manager (Ubuntu/Debian: sudo apt-get install git), then retry.')
+        checks.append({'ok': False, 'message': 'Component downloads need Git. ' + guidance})
     try:
         config = load_server_config(home)
         checks.append({"ok": True, "message": "Settings are valid"})

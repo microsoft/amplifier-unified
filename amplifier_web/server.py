@@ -10,7 +10,7 @@ from aiohttp import web
 
 from . import __version__
 from .attachments import MAX_REQUEST_BYTES
-from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
+from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret, with_history_scope
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
 from .runtime import RuntimeOperationPending
@@ -149,7 +149,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if session_id is not None and (not session_id or len(session_id) > 200):
             raise AppError("Choose a valid conversation ID.")
         await service._flush_pending_progress()
-        return web.json_response(service.browser_state(session_id=session_id))
+        return web.json_response(with_history_scope(request, service.browser_state(session_id=session_id)))
 
     async def state_detail(request):
         from .agent_state import read_state
@@ -164,6 +164,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def conversation_detail(request):
         from .browser_detail import page, read_text
+        if request.query.get('peerPreview'):
+            return web.json_response(await service.peer_preview.read_text(dict(request.query)))
         session = service._session(request.query.get('sessionId'), hydrate=False)
         from .work_windows import web_context
         windows = service.event_log_view.windows
@@ -647,6 +649,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state/detail", state_detail)
     from .message_interactions import install_routes as install_message_annotation_routes
     install_message_annotation_routes(app)
+    async def peer_preview(request):
+        return web.json_response(await service.peer_preview.read(dict(request.query)))
+
+    app.router.add_get("/api/peer/preview", peer_preview)
     app.router.add_get("/api/conversation/detail", conversation_detail)
     app.router.add_get("/api/conversation/provider-recording", provider_recording)
     app.router.add_get("/api/conversation/navigation", conversation_navigation)

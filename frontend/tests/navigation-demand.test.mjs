@@ -5,6 +5,13 @@ import {navigationResources,hasNavigationResource} from '../src/shell/navigation
 import {shellScope} from '../src/shell/resources.js';
 
 const sidebar=['pinnedNavigation','recentNavigation','workspaceShortcuts'];
+test('Canvas demand tolerates bootstrap without state and follows only visible overview',()=>{
+ for(const state of [null,undefined])assert.deepEqual(navigationResources(state,false),[]);
+ const state={canvas:{open:true},view:{canvasDraft:{library:true}}};
+ assert.deepEqual(navigationResources(state,false),['recentNavigation','workspaceShortcuts']);
+ assert.deepEqual(navigationResources({...state,canvas:{open:false}},false),[]);
+ assert.deepEqual(navigationResources({...state,view:{settingsCanvas:true}},false),[]);
+});
 test('Status requests only open groups, independently of Home filters; hidden navigation requests no rows',()=>{
  const view={navMode:'status',navStatusCollapsed:['idle','working'],workHomeScope:'project',workHomeQuery:'private search'};
  assert.deepEqual(navigationResources({view}),['workStatusAttention','workStatusUnread']);

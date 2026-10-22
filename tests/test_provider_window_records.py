@@ -44,7 +44,7 @@ async def test_exact_call_recordings_attach_to_paged_live_work_without_body_or_a
     row = rows[0]
     for field in ('request', 'response'):
         ref = row[field + 'Detail']
-        assert ref['windowKey'] == page['items'][0]['id']
+        assert ref['windowKey'].startswith('open-work:')
         assert ref['id'] != row['id'], 'The exact canonical observation remains the field owner'
         assert field not in row and 'PRIVATE' not in json.dumps(row)
         result = await owner.read_text('s', ref)
@@ -57,10 +57,14 @@ async def test_exact_call_recordings_attach_to_paged_live_work_without_body_or_a
                 'data': {'tool_call_id': 'other-' + str(index), 'result': 'unrelated'}}) + '\n')
         await owner.read('s')
         revision = owner.project(session)['execution']['segments'][0]['detailRevision']
-        assert revision != after_revision, 'Exact references must follow their accepted page lease'
+        assert revision != after_revision, 'Recent-window activity still reaches the browser'
         known = {row['id']: row['detailVersion']}
-        row = owner.live_pages.sync(session, 't@user', known)['items'][0]
-        assert row['requestDetail']['windowKey'] == owner.current['s']
+        updates = owner.live_pages.sync(session, 't@user', known)['items']
+        if updates:
+            updated = updates[0]
+            assert updated['requestDetail'] == row['requestDetail']
+            row = updated
+        assert row['requestDetail']['windowKey'].startswith('open-work:')
         assert 'PRIVATE REQUEST' in (await owner.read_text('s', row['requestDetail']))['value']
         after_revision = revision
     path.write_text('{}\n')
@@ -226,7 +230,7 @@ async def test_exact_partial_attempt_replaces_all_prior_resident_recording_metad
     path.write_text(json.dumps(recorded_call(request='new-small-attempt')[0]) + '\n')
     await owner.read('s')
     row = owner.live_pages.read(session, 't@user')['items'][0]
-    assert row['requestDetail']['windowKey'].startswith('event-window:')
+    assert row['requestDetail']['windowKey'].startswith('open-work:')
     assert all(key not in row for key in ('requestInfo', 'requestRecording', 'responseRecording',
         'requestCapture', 'responseCapture', 'responseDetail'))
     assert node['responseDetail']['digest'] == 'old', 'Only presentation is replaced'

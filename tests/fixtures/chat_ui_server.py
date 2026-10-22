@@ -1,5 +1,5 @@
 """Isolated chat shell fixture. Never contacts a model provider."""
-import asyncio, copy, sys
+import asyncio, copy, json, os, signal, sys
 from pathlib import Path
 import tempfile
 from aiohttp import web
@@ -68,8 +68,26 @@ async def main(home):
  app.router.add_get('/fixture/message-source',inspect)
  return app
 
+async def serve_dynamic(home):
+ app=await main(home);runner=web.AppRunner(app);await runner.setup()
+ stopped=asyncio.Event();loop=asyncio.get_running_loop()
+ signals=(signal.SIGTERM,signal.SIGINT) if os.name=='posix' else ()
+ for signum in signals:loop.add_signal_handler(signum,stopped.set)
+ try:
+  site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+  base=f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+  app['allowed_origins']=app['allowed_origins']|{base}
+  print(json.dumps({'fixture':'chat-ui','pid':os.getpid(),'base':base}),flush=True)
+  await stopped.wait()
+ finally:
+  try:await runner.cleanup()
+  finally:
+   for signum in signals:loop.remove_signal_handler(signum)
+
 if __name__=='__main__':
  with tempfile.TemporaryDirectory(prefix='amplifier-chat-ui-') as tmp:
+  if '--dynamic-port' in sys.argv:
+   asyncio.run(serve_dynamic(Path(tmp)));sys.exit(0)
   # aiohttp calls this only after the fixture itself successfully binds.
   ready=(lambda _: print('PWA fixture bound http://127.0.0.1:8958',flush=True)) if '--print-ready' in sys.argv else None
   web.run_app(main(Path(tmp)),host='127.0.0.1',port=8958,print=ready)

@@ -62,6 +62,12 @@ async def stage(manager):
 
 
 async def finish(manager, pending):
+    if manager.service.state['updates'].get('runnerAvailabilityCheck'):
+        # Once the app/component sequence has resumed, runner results belong
+        # only to their own rows. Never overwrite its phase, errors, inventory
+        # or restart continuation with a capacity wait or a late completion.
+        await manager.publish(pendingSmartTools=pending, runnerAvailabilityCheck=bool(pending))
+        return
     failures = [row for row in pending if row.get('failure')]
     if pending and any(row.get('runnerUpdate') and not row.get('failure') for row in pending):
         await manager.publish(phase='staged', pendingSmartTools=pending, error=None,
@@ -160,7 +166,8 @@ async def retry(manager, identity_value):
         if not item or not item.get('failure'):
             raise ValueError('This tool has no failed update to retry.')
         item.pop('failure')
-        await manager.publish(phase='staging', error=None, pendingSmartTools=pending)
+        independent = item.get('runnerSource') and manager.service.state['updates'].get('runnerAvailabilityCheck')
+        await manager.publish(pendingSmartTools=pending, **({} if independent else {'phase': 'staging', 'error': None}))
         if not item.get('target'):
             source = item.get('runnerSource') or {'installationId': item['previous'], 'latest': item['revision']}
             target = await attempt(manager, item, 'stage', manager.service.smart_tools.stage_update, source)
@@ -168,7 +175,7 @@ async def retry(manager, identity_value):
                 item['target'] = target['id']
                 if target.get('runnerUpdate'):
                     item['runnerUpdate'] = target['runnerUpdate']
-        await manager.publish(phase='staged', pendingSmartTools=pending)
+        await manager.publish(pendingSmartTools=pending, **({} if independent else {'phase': 'staged'}))
     await activate(manager)
 
 

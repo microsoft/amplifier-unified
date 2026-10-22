@@ -40,38 +40,40 @@ try{
  assert.deepEqual((await catalog()).sort(),[...before,sid].sort(),'Exactly one chat added; all previous chats retained');
  await page.waitForFunction(id=>window.amplifier.getState().sessions.find(s=>s.id===id)?.messages?.some(m=>m.role==='user'&&m.text.startsWith('Help me finish setting up')),sid);
  const bounds=await page.locator('.a-conversation').boundingBox();if(bounds)assert.ok(bounds.width>=350&&bounds.width<500,JSON.stringify(bounds));
- // Narrow desktop panes show a single options button and one action row.
- const options=page.getByRole('button',{name:'Chat options',exact:true});
+ // The compact composer keeps one model/options control below the writing
+ // field, including a narrow desktop pane beside the setup assistant.
+ const options=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
  await expect(options).toBeVisible();
- await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toHaveCount(0);
+ await expect(options).toHaveCount(1);
  await expect(page.getByRole('button',{name:'Conversation bundle',exact:true})).toHaveCount(0);
- const optionBox=await options.boundingBox(),attachBox=await page.getByRole('button',{name:'Add attachments',exact:true}).boundingBox();
- assert.ok(Math.abs(optionBox.y-attachBox.y)<5);
- await page.screenshot({path:'/tmp/readiness107-narrow-composer.png'});
+ const belowField=async()=>{
+  const optionBox=await options.boundingBox(),surface=await page.locator('[data-part="composer-surface"]').boundingBox();
+  assert.ok(optionBox.y>=surface.y+surface.height-1,'Model control stays below the writing field');
+  await expect(page.getByRole('button',{name:'Add attachments',exact:true})).toBeVisible();
+ };
+ await belowField();
+ await page.screenshot({path:join(evidence,'readiness107-narrow-composer.png')});
  await options.click();const menu=page.getByRole('dialog',{name:'Chat options',exact:true});
  await expect(menu).toBeVisible();
  await expect(menu.getByLabel('Provider',{exact:true})).toBeVisible();
  await expect(menu.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
  await expect(menu.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeVisible();
- await expect(menu.getByText('Advanced model options',{exact:true})).toBeVisible();
- const box=await menu.boundingBox();assert.ok(box.height>200&&box.y>=0&&box.y+box.height<=1000,JSON.stringify(box));
- await menu.getByText('Advanced model options',{exact:true}).click();
  await expect(menu.getByRole('button',{name:'Refresh models',exact:true})).toBeVisible();
- await page.screenshot({path:'/tmp/readiness107-options-open.png'});
+ const box=await menu.boundingBox();assert.ok(box.height>200&&box.y>=0&&box.y+box.height<=1000,JSON.stringify(box));
+ await page.screenshot({path:join(evidence,'readiness107-options-open.png')});
  await menu.getByRole('button',{name:'Done',exact:true}).click();await expect(menu).toHaveCount(0);
  await options.click();await menu.getByRole('button',{name:'Close chat options',exact:true}).press('Escape');
  await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
  await options.click();await page.locator('.a-messages').click({position:{x:40,y:40}});await expect(menu).toHaveCount(0);
  await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
  for(const width of [320,390]){
-  await page.setViewportSize({width,height:650});await expect(options).toBeVisible();await options.click();await expect(menu).toBeVisible();
+  await page.setViewportSize({width,height:650});await expect(options).toBeVisible();await belowField();await options.click();await expect(menu).toBeVisible();
   await expect.poll(async()=>{const b=await menu.boundingBox();return b.x>=0&&b.y>=0&&b.x+b.width<=width&&b.y+b.height<=650}).toBe(true);
   await menu.getByRole('button',{name:'Done',exact:true}).click();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
  }
  await page.setViewportSize({width:1600,height:1000});
- await expect(options).toHaveCount(0);
- await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toBeVisible();
+ await expect(options).toHaveCount(1);await expect(options).toBeVisible();await belowField();
  await page.evaluate(()=>window.amplifier.dispatch('canvas.show',{kind:'settings'}));
  await expect(page.locator('.a-settings-canvas')).toBeVisible();
  // Dragging must commit the new split instead of snapping back on render.
@@ -96,7 +98,7 @@ try{
  assert.ok((await page.locator('.a-conversation').boundingBox()).width>550);
  await divider.press('ArrowRight');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.canvasWidth)).toBe(resizedWidth-20);
- await page.screenshot({path:'/tmp/readiness103-settings-canvas.png'});
+ await page.screenshot({path:join(evidence,'readiness103-settings-canvas.png')});
  // Settings is an on-demand artifact with the same close/reopen lifecycle.
  await page.evaluate(()=>window.amplifier.dispatch('canvas.show',{kind:'text',title:'Notes',content:'Keep this tab'}));
  await expect(page.getByRole('tab',{name:'Notes',exact:true})).toHaveAttribute('aria-selected','true');

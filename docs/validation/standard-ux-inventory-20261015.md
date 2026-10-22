@@ -1,5 +1,39 @@
 # Standard UX inventory and execution plan
 
+## Source preparation failure follow-up (October 22)
+
+**TEST-SOURCE-PRELAUNCH** extends the managed test-environment checklist: when
+source snapshot preparation returns `repository-source-changed`, show the failed
+check and explain that no environment or command started. Inspecting its exact
+retired owner must preserve the original failure without replay, cleanup, or a
+physical-absence claim. A new explicit check is distinct from repeating that ID.
+Changed owner, launch, backend or receipt evidence, pending preparation and
+uncertain effects remain held under normal recovery.
+
+`tests/test_prelaunch_source_failure.py` owns the deterministic helper and real
+dispatch/journal regressions in Full Python checks and the focused managed-removal
+lane. Existing `test-environments` browser checks retain unknown-command and
+ownership coverage. This adds backend failure-state coverage; it does not claim a
+new rendered-browser or physical-backend acceptance pass or alter frozen counts.
+
+## Expired configuration request follow-up (October 22)
+
+`approval-lifecycle` is an additive extended-browser owner in
+`frontend/tests/browser-checks.json`. Its report and screenshots are retained
+under `output/browser-checks/approval-lifecycle`; the runner also retains the
+exact command, source/plan/build identities, raw outcome and process cleanup.
+The journey covers cold stale/current requests, passive scope review, exact
+dismissal without work startup, late scope/expiry changes, two clients,
+adjacent requests, reload/private drafts and narrow keyboard-reachable controls.
+`tests/test_capability_lifecycle.py` owns authority and native-waiter boundaries;
+the existing `approval-layout` owner remains separate and unchanged.
+
+This adds ownership, not a new release gate or a passing test claim. Original
+incident causes/effects remain unknown, synthetic runtime checks do not qualify
+real-provider behavior, and the frozen inventory/counts/hash remain unchanged.
+See [configuration authority](../workspaces/configuration-authority.md) for the
+request/grant and dismissal boundaries.
+
 ## Completion-hook response follow-up (October 18)
 
 **RESPONSE-833** covers two ordinary answers with an internal completion check
@@ -742,6 +776,28 @@ state isolation. The new smoke is a regression owner, not a requirement to rerun
 the unrelated browser census before release. Frozen inventory counts remain
 unchanged; current results must name the actual source/build and cleanup outcome.
 
+### Fresh Linux installation and helper recovery (October 21)
+
+Before the first AI connection, exercise a restricted initial PATH with no uv
+and missing curl/Git. Ubuntu instructions must identify all missing prerequisites
+together and must never prescribe Xcode. The installer provisions its helper
+and passes its directory to the app and generated service without a shell reload
+or reboot. Repeat with uv already in `~/.local/bin`, legacy `~/.cargo/bin`, and a
+custom PATH location; preserve custom executable precedence and dispatcher names.
+
+Start with a stale service PATH, then retry after installing the helper. Both
+ChatGPT sign-in and API-key model discovery must identify an unavailable host
+helper accurately; generic provider errors and secrets remain redacted. Doctor
+checks helper discovery; reset keeps the existing service/data ownership and
+uses the same startup environment. Owners: `test_installer_script.py`,
+`test_host_dependencies.py`, `test_deployment_service.py`, and `test_setup.py`.
+These run in Public readiness; use focused DTU checks for installation changes.
+The maintained `chatgpt-sign-in` browser journey also checks both launch links
+(Open ChatGPT and Continue with ChatGPT) for keyboard focus and at least 4.5:1
+text contrast at desktop/phone widths in light/dark appearance. Accessible names
+alone do not prove the visible text can be read. Synthetic downloads and
+subprocess/browser checks do not prove live account sign-in.
+
 ### Everyday settings draft ownership (October 19)
 
 The existing `settings-everyday-browser.mjs` Public readiness journey starts by
@@ -973,3 +1029,30 @@ remote cleanup boundaries, concurrent scheduler passes, restart and the exact
 initial-allocation cancellation gap. Unknown or advanced owners remain held. This
 is controlled-backend and rendered-client evidence, not live runner deployment.
 No new broad test lane or publication gate is added.
+
+## Compact composer and peer preview integration (October 22)
+
+The additive `compact-composer` and `peer-preview` browser scenarios run in the
+automatic extended source smoke plan. The existing `composer-options` owner
+remains in Public readiness without duplication. Together they cover the
+ordinary writing/options controls and grouped incoming-message source preview;
+the existing composer primary-action and peer-attribution journeys retain their
+separate assertions. The frozen original inventory and 65-scenario hash remain
+unchanged. The delta ledger records the specific paths, expected results and
+synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
+qualify installed wheels and negative controls; they do not replace these
+automatic ordinary-path owners.
+
+## Immutable multi-quote integration (October 22)
+
+The additive `multi-quote` source journey uses the existing automatic browser
+runner and `output/browser-checks/multi-quote` evidence directory. It retains
+literal, independently expected commentary before/between/after immutable
+references through reload, removal/reorder, delayed addition and normal Send.
+The same journey checks compact writing-wrapper containment and narrow layout;
+it does not substitute quote-shaped Markdown for immutable source identity.
+The Composer and Peer owners above and the frozen baseline remain unchanged.
+The manual multi-quote lane adds two deliberate commentary-loss/misplacement
+controls, byte-exact restoration and installed-wheel proof. Physical-device,
+real OS IME, live-provider and lost-Send-ACK browser coverage remain explicit
+limits; registering this owner is not a new passing result.

@@ -79,6 +79,24 @@ test('saved older update intervals are explained without silently choosing or su
 
 const release={version:'0.6.4',title:'Shared settings',changes:['Workspace settings now apply.'],notices:[{id:'shared',title:'Review shared settings',detail:'A setting affects other apps.',action:'Check your workspace.'}]};
 const noticeId='release-notice:0.6.4:shared';
+test('initial compact state waits for note details instead of reporting them missing',()=>{
+ assert.match(render(),/Loading release notes…/);
+ assert.doesNotMatch(render(),/Release notes for this version are unavailable/);
+ assert.match(render({application:{...application,releaseNotes:[]}}),/Release notes for this version are unavailable/);
+});
+test('release summary is before controls and outside disclosures without marking notices read',async()=>{
+ const calls=[];let root;
+ const initial=state({application:{...application,status:'update',latest:'v0.6.4',releaseNotes:[release]}});
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:initial,act:(...args)=>calls.push(args)}))});
+ const card=root.root.findByProps({'data-part':'update-release-summary'});
+ assert.match(card.findByType('li').children.join(''),/Workspace settings now apply/);
+ for(let parent=card.parent;parent;parent=parent.parent)assert.notEqual(parent.type,'details');
+ assert.deepEqual(calls,[]);
+ const html=render(initial.updates);
+ assert.ok(html.indexOf('data-part="update-release-summary"')<html.indexOf('data-part="update-controls"'));
+ assert.ok(html.indexOf('aria-label="Changelog"')<html.indexOf('data-part="ecosystem-update-details"'));
+ await renderAct(async()=>root.unmount());
+});
 test('changelog separates installed, upcoming and earlier versions and escapes authored text',()=>{
  const html=render({application:{...application,releaseNotes:[release,{...release,version:'0.6.3',notices:[]},{...release,version:'0.6.2',title:'<script>bad()</script>',notices:[]}]}});
  assert.match(html,/Changelog/);assert.match(html,/Upcoming/);assert.match(html,/Earlier release/);
@@ -490,6 +508,19 @@ test('runner-only wait keeps availability refresh usable without exposing unrela
   await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state({...base,...change}),act:()=>{}})));
   assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,true);
  }
+ await renderAct(async()=>root.unmount());
+});
+
+test('runner wait leaves Update Amplifier actionable and retains its separate result',async()=>{
+ const runner={previous:'old',runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check',runnerWaiting:'unknown'};
+ const updates={phase:'available',application:{status:'update',current:'0.20.205',latest:'v0.20.207'},pendingSmartTools:[runner]};
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(updates),act:name=>calls.push(name)}))});
+ const install=root.root.findByProps({'data-action':'updates.install'});
+ assert.equal(install.props.disabled,false);
+ assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,false);
+ assert.equal(root.root.findAllByProps({'aria-label':'Smart Tool update results'}).length,1);
+ await renderAct(async()=>install.props.onClick());assert.deepEqual(calls,['updates.install']);
  await renderAct(async()=>root.unmount());
 });
 

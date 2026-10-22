@@ -263,8 +263,8 @@
           "title": "Archive with truthful progress, guarded navigation, and Undo",
           "scope": "standard-path",
           "entryPath": [
-            "Chat \u2192 Archive",
-            "Row Details \u2192 Archive"
+            "Chat → Archive",
+            "Row Details → Archive"
           ],
           "prerequisites": [
             "Synthetic isolated archive fixture; no real user files or runtime execution"
@@ -284,7 +284,7 @@
             "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
             "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
             "Undo is available after archive confirmation even while the following navigation is stalled.",
-            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
+            "A newer navigation intention, including A→B→A, prevents the old archive from redirecting.",
             "Archiving a different row or invoking the raw public action does not navigate the current view.",
             "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
             "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
@@ -1563,7 +1563,7 @@
           "entryPath": [
             "Settings",
             "Testing & resources",
-            "This machine\u2019s test resources"
+            "This machine’s test resources"
           ],
           "prerequisites": [
             "Isolated synthetic machine authority; no production machine policy or runner effects"
@@ -2113,6 +2113,482 @@
         }
       ],
       "qualification": "docs/EXECUTION-INSPECTION.md"
+    },
+    {
+      "id": "delta.update-release-summary",
+      "sourceCommit": "6293d964e",
+      "reason": "Approved update summary is visible before, during and after installation; older guidance and Changelog remain expandable without changing the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "updates.release-summary",
+          "family": "updates",
+          "title": "Understand the exact release before, during and after an update",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Updates"
+          ],
+          "prerequisites": [
+            "Synthetic update transitions through the real HTTP/SSE owner; no installation or restart effects"
+          ],
+          "steps": [
+            "Read the offered release without expanding a disclosure",
+            "Discover a newer release while an earlier target is queued",
+            "Reload during restart and after app confirmation with a runner still pending",
+            "Read high-impact guidance separately and inspect a missing-notes fallback at phone width"
+          ],
+          "expectedResults": [
+            "Summary follows the actual update target, then the verified installed version.",
+            "Newer availability never relabels an in-flight target.",
+            "Ordinary summary visibility does not acknowledge high-impact notices.",
+            "Missing notes remain honest and never prevent existing update actions."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout",
+            "reload",
+            "offline-notes"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/update-progress-browser.mjs",
+              "relation": "Existing registered owner now covers release-summary transitions, notice acknowledgment and phone layout"
+            },
+            {
+              "path": "frontend/tests/update-release-summary.test.mjs",
+              "relation": "Exact target, revision mismatch, feature preparation and stale confirmation cases"
+            }
+          ],
+          "limits": [
+            "Synthetic update presentation; actual updater installation and restart are unchanged."
+          ]
+        }
+      ],
+      "qualification": "docs/UPDATES.md"
+    },
+    {
+      "id": "delta.pin-rapid-reorder",
+      "sourceCommit": "b806bbc37eec1b9152be7472b73cfe3bde835c89",
+      "reason": "Consecutive pin gestures and saved-display recovery gain an additive browser owner; preserve the frozen inventory and original 65-scenario plan hash.",
+      "workflowsAdded": [
+        {
+          "id": "navigation.pin-rapid-reorder",
+          "family": "navigation",
+          "title": "Reorder different sidebar pins while an earlier move settles",
+          "scope": "standard-path",
+          "entryPath": [
+            "Sidebar",
+            "Pinned"
+          ],
+          "prerequisites": [
+            "Production bundled client with synthetic mixed session and workspace pins",
+            "Two fixture clients and controlled receipt/projection delivery; no live pins or model calls"
+          ],
+          "steps": [
+            "Move two different pins before the first response and authoritative readback",
+            "Repeat an adjacent sequence and compare both clients and reload",
+            "Hold a second drag across the first move's success or unknown result",
+            "Recover a saved-display error through Refresh pinned list without replay",
+            "Use keyboard reordering and the narrow drag target"
+          ],
+          "expectedResults": [
+            "Both admitted intents remain in the preview and execute once in order after exact predecessor settlement.",
+            "The complete canonical vector preserves hidden and cross-workspace IDs; final display, second client and reload agree.",
+            "A matching successful commit preserves the held gesture; rejection or unknown outcome cancels later unsent gestures.",
+            "One bounded read can recover cold display completion without reconnect, duplicate mutation or model startup.",
+            "Externally stale pages block new moves; keyboard and narrow controls remain usable."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "delayed-projection",
+            "unknown-outcome",
+            "second-client",
+            "reload"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/pin-rapid-reorder-browser.mjs",
+              "relation": "Registered additive owner pin-rapid-reorder; evidence in output/browser-checks/pin-rapid-reorder"
+            },
+            {
+              "path": "frontend/tests/pin-order-settlement.test.mjs",
+              "relation": "Complete hidden-ID vector, scope, queue capacity, stale read, rejection and supersession boundaries"
+            },
+            {
+              "path": "tests/test_pinned_navigation.py",
+              "relation": "Canonical mixed identities, idempotence, revision conflict and safe authoritative read"
+            }
+          ],
+          "limits": [
+            "Synthetic source-host checks, not installed/native/live-user acceptance.",
+            "Historical old-race negative-control proof is retained separately; registration alone is not a current pass."
+          ]
+        }
+      ],
+      "qualification": "docs/navigation.md"
+    },
+    {
+      "id": "delta.approval-lifecycle",
+      "sourceCommit": "c275d53a0c67d320691a6c40704f21620b8c5043",
+      "reason": "Expired capability requests gain an additive maintained browser owner; preserve the frozen inventory, baseline hash and all existing scenario entries.",
+      "workflowsAdded": [
+        {
+          "id": "decisions.expired-request-review",
+          "family": "decisions",
+          "title": "Review and dismiss an obsolete configuration request without restarting work",
+          "scope": "standard-path",
+          "entryPath": ["Chat", "Previous permission requests"],
+          "prerequisites": [
+            "Authenticated production service and bundled client with synthetic saved old and current requests",
+            "Two clients, cold host records and a runtime that records any attempted startup or input; no live grants or provider calls"
+          ],
+          "steps": [
+            "Inspect the reason on a legacy pending request after Stop and open passive current-scope review",
+            "Dismiss only the old request with the keyboard while a newer request remains pending",
+            "Confirm history, second-client state, a late decision refusal and reload with the private draft intact",
+            "Change scope and expiry after review, then exercise the stale decision preflight",
+            "Read the narrow-layout reason, scroll to the hit-testable Dismiss control and complete the adjacent request"
+          ],
+          "expectedResults": [
+            "Stale requests have an evidenced reason and no Allow/Deny controls; unavailable scope remains unknown.",
+            "Scope review starts no worker, model, runtime control or input and does not grant, renew or request authority.",
+            "Exact dismissal retains history and notes, clears only that request's pending attention and leaves newer requests and active authority unchanged.",
+            "Late scope or expiry changes cannot be silently approved; a failed decision refreshes display without replay.",
+            "Both clients, reload and the adjacent cycle agree; private drafts remain intact and narrow controls are reachable."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "late-decision", "changed-scope", "expired-request", "second-client", "reload"],
+          "existingTests": [
+            {
+              "path": "frontend/tests/approval-lifecycle-browser.mjs",
+              "relation": "Registered additive owner approval-lifecycle; exact run report and screenshots under output/browser-checks/approval-lifecycle"
+            },
+            {
+              "path": "tests/test_capability_lifecycle.py",
+              "relation": "Canonical request/revision/hash, missing-record dismissal, live grant preservation, native Deny-once delivery and storage/await races"
+            },
+            {
+              "path": "frontend/tests/approval-layout-browser.mjs",
+              "relation": "Existing separate reading-column, keyboard visibility and light/dark/split/narrow layout owner"
+            }
+          ],
+          "limits": [
+            "Synthetic request records and runtime, not real-provider or live-user incident acceptance.",
+            "Registration is not a new passing check or a claim about the original UNKNOWN effect; current candidate qualification remains separate."
+          ]
+        }
+      ],
+      "qualification": "docs/workspaces/configuration-authority.md"
+    },
+    {
+      "id": "delta.compact-composer",
+      "sourceCommit": "f1c10e55961bbba30acd9c9c08154f3f3592d3fb",
+      "reason": "Keep ordinary compact writing and configuration paths in automatic source smoke coverage; preserve the frozen checklist.",
+      "workflowsAdded": [
+        {
+          "id": "composer.compact-options",
+          "family": "composer",
+          "title": "Write, attach and configure a chat from the compact composer",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Composer",
+            "Model and reasoning settings"
+          ],
+          "prerequisites": [
+            "Synthetic host/runtime with built client; no account, live provider or real audio"
+          ],
+          "steps": [
+            "Inspect idle and expanded input at desktop and phone widths across detail/theme choices",
+            "Write multiline text, paste quotes and attach/remove files without sending",
+            "Open model/reasoning/bundle options; close with keyboard and retain focus/draft",
+            "Reload with a retained draft and verify long-input actions stay reachable"
+          ],
+          "expectedResults": [
+            "Idle field remains compact with usable touch targets and no horizontal overflow.",
+            "IME composition and Shift+Enter do not send; private input stays out of ordinary readback.",
+            "Options remain usable without losing unsent text or attachments."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "detail-levels",
+            "reload",
+            "zoom-equivalent"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/compact-composer-browser.mjs",
+              "relation": "Automatic compact-composer owner; bounded geometry, input, privacy and retained draft assertions"
+            },
+            {
+              "path": "frontend/tests/composer-options-browser.mjs",
+              "relation": "Existing automatic Public readiness composer-options owner; choices, invalid controls and keyboard/focus continuity"
+            },
+            {
+              "path": "scripts/compact_composer_checks.py",
+              "relation": "Separate fixed manual source/installed-wheel and adjacent regression qualification"
+            }
+          ],
+          "limits": [
+            "Synthetic source smoke; no live provider, physical keyboard or native audio claim.",
+            "Separate immutable quote-node behavior remains independently owned."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.peer-preview",
+      "sourceCommit": "e0155b968c38b5bd8940e827d9e0d07bcb6991b1",
+      "reason": "Give grouped incoming peer messages and read-only source preview an automatic ordinary-path smoke owner.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.peer-preview",
+          "family": "conversation",
+          "title": "Read grouped peer messages and inspect their source without leaving a draft",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Messages from another chat",
+            "Preview source chat"
+          ],
+          "prerequisites": [
+            "Synthetic peer messages with canonical delivery receipts; no live history or model calls"
+          ],
+          "steps": [
+            "Expand grouped peers, inspect formatted content and copy exact original Markdown",
+            "Preview source chat, load earlier pages and refresh without reordering or losing place",
+            "Return to the original chat with unsent text and attachment retained",
+            "Attempt preview during dirty Canvas/Settings transitions; cancel and preserve the current owner",
+            "Repeat at narrow widths and verify no runtime starts or page reload"
+          ],
+          "expectedResults": [
+            "Grouping preserves exact content and reliable sender attribution.",
+            "Preview is bounded and read-only; source rows retain formatting and ordering.",
+            "Drafts, selected chat, dirty editors and renderer leases remain intact."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "dirty-settings",
+            "dirty-canvas"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/peer-preview-browser.mjs",
+              "relation": "Automatic peer-preview owner for grouped formatting, paging, copy, draft and dirty-owner continuity"
+            },
+            {
+              "path": "tests/test_peer_preview.py",
+              "relation": "Canonical source authorization, exact delivery receipts and bounded pagination"
+            },
+            {
+              "path": "scripts/peer_message_qualification.py",
+              "relation": "Separate fixed manual negative-formatting and installed-wheel qualification"
+            }
+          ],
+          "limits": [
+            "Synthetic source smoke; no live-history scale or provider-latency claim."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.canvas-chrome",
+      "sourceCommit": "274c7dff01026478de685ced242aa5cf77c85cdf",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/991",
+      "reason": "Register the maintained Canvas overview and navigation journey once in automatic source coverage; preserve existing canvas-dirty ownership and the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "canvas.overview-navigation",
+          "family": "canvas",
+          "title": "Read the full chat overview and navigate open documents without losing state or focus",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Container-header Canvas toggle",
+            "Chat overview / open documents"
+          ],
+          "prerequisites": [
+            "Built production client and isolated production-service fixture with synthetic outputs and runtime",
+            "No personal data, live provider or production settings changes"
+          ],
+          "steps": [
+            "Scroll a long Outputs list to lower overview sections and collapse/reopen sections",
+            "Scroll open document tabs while keeping Overview reachable; use the bounded Open documents list",
+            "Read version and compact document controls at wide and narrow widths",
+            "Hide/reopen Canvas and reload only after exact visibility/details receipts settle",
+            "Close a document with a held response, move Home, and retain newer focus intent",
+            "Repeat ordinary close recovery, keyboard navigation and initial/live reduced-motion settings"
+          ],
+          "expectedResults": [
+            "The bounded overview scroll region reaches the lower sections without clipping or wheel forwarding.",
+            "Overview remains visible and clickable beside native horizontally scrolling tabs; Open documents lists every open tab.",
+            "Disclosure, search, reading position and selected document state survive overview/document and panel visibility transitions.",
+            "Compact navigation and document controls remain reachable at narrow widths and layout-zoom equivalence.",
+            "Delayed accepted close cannot steal newer keyboard focus; the owning close interaction still restores focus.",
+            "Exact accepted receipts precede reload and the final HTTP audit exposes failed or unsettled actions."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "reduced-motion",
+            "delayed-receipt",
+            "reload",
+            "zoom-equivalent"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/canvas-chrome-browser.mjs",
+              "relation": "Automatic source owner canvas-chrome; owned AMPLIFIER_TEST_ARTIFACTS under output/browser-checks/canvas-chrome"
+            },
+            {
+              "path": "frontend/tests/canvas-dirty-browser.mjs",
+              "relation": "Existing independent automatic canvas-dirty owner remains unchanged"
+            },
+            {
+              "path": "scripts/canvas_qualification.py",
+              "relation": "Separate fixed manual source/installed-package qualification retains adjacent journeys and negative-control evidence"
+            }
+          ],
+          "limits": [
+            "Registration is not a new browser execution or installed-package result; exact unchanged product proof remains separately attributed.",
+            "Synthetic browser input and geometry do not establish physical touch, screen-reader, native overlay or live-provider behavior.",
+            "The OS reduced-motion preference is exercised; no separate app-level Less motion preference is introduced."
+          ]
+        }
+      ],
+      "qualification": "https://github.com/microsoft/amplifier-unified/actions/runs/39749556899"
+    },
+    {
+      "id": "delta.multi-quote",
+      "sourceCommit": "063f6b6dc21d628d2fa3ebecfe8f21d6d9eb2ee4",
+      "reason": "Register the reviewed immutable-quote journey as an ordinary automatic source owner, integrated with compact writing; preserve every frozen and additive owner.",
+      "workflowsAdded": [
+        {
+          "id": "composer.immutable-multi-quote",
+          "family": "composer",
+          "title": "Collect exact references and interleave commentary in the compact composer",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Message actions",
+            "Choose passage or Reply to message"
+          ],
+          "prerequisites": [
+            "Synthetic current-chat messages and attachments; built client; no live history or provider"
+          ],
+          "steps": [
+            "Select two nonadjacent passages and quote a whole message while typing literal commentary before, between and after",
+            "Reload, keyboard-reorder and remove only a quote, preserving exact commentary and attachment",
+            "Hold an addition, move the caret and insertion mode, then verify the new instance at its captured target",
+            "Change commentary while a receipt is held; verify journal ownership and reject the late addition",
+            "Inspect narrow compact layout, send once, copy the exact saved message and repeat a plain cycle"
+          ],
+          "expectedResults": [
+            "Immutable blocks retain exact Unicode, whitespace, source spans and independent identity without replacing earlier content.",
+            "Independently authored DOM, editor and canonical-draft order survives quote manipulation and reload.",
+            "The compact writing wrapper retains full-width references, accessible controls and no horizontal overflow.",
+            "No collection, composition or quote-removal action sends; normal Send preserves exact interleaving and attachments.",
+            "Delayed additions retain their captured target or fail visibly; newer journaled commentary remains owned."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "touch-emulated",
+            "reload",
+            "delayed-receipt"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/multi-quote-browser.mjs",
+              "relation": "Automatic multi-quote source owner; artifacts at output/browser-checks/multi-quote"
+            },
+            {
+              "path": "scripts/multi_quote_checks.py",
+              "relation": "Separate fixed focused source/installed qualification with both meaningful commentary mutants"
+            }
+          ],
+          "limits": [
+            "Registration is not a passing result; current raw run evidence must be inspected.",
+            "No physical device, real OS IME, live provider or screen-reader claim.",
+            "Lost Send acknowledgement and late quote across chat switch remain narrower host/model checks, not this browser journey."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.artifact-one-surface",
+      "sourcePullRequest": 1032,
+      "reason": "Give one-surface artifact presentation and late-hide focus preservation one automatic source smoke owner; keep the frozen inventory and all existing owners.",
+      "workflowsAdded": [
+        {
+          "id": "canvas.artifact-one-surface",
+          "family": "canvas",
+          "title": "Present one exact saved version in chat or Canvas without losing current work",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Saved artifact card",
+            "Preview in chat / Open in canvas"
+          ],
+          "prerequisites": [
+            "Built client with synthetic authored artifacts and controlled local fixture; no live history or provider calls"
+          ],
+          "steps": [
+            "Show HTML once and count actual mounted primary/inline frames and leases",
+            "Cancel a reset, then transition inline to Canvas and back, hide, reopen and reload",
+            "Use exact historical versions, another client and short Markdown/code/JSON cards",
+            "Hold an accepted Hide response while focusing the composer or an unrelated iframe",
+            "Toggle inline content while preserving unrelated dirty Canvas, unsent draft and Settings"
+          ],
+          "expectedResults": [
+            "One exact artifact version never automatically mounts two full renderers, even hidden ones.",
+            "Cancelled HTML reset retains the original frame and local input; completed transitions preserve exact saved identity.",
+            "Ordinary keyboard Hide returns focus to its disclosure; a newer composer or iframe focus choice wins over a late receipt.",
+            "Unrelated dirty Canvas and unsaved Settings remain mounted and unchanged; replacement still uses the existing guard.",
+            "Shared card controls remain labeled and usable at desktop and narrow widths; presentation creates no additional saved artifacts or messages."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "dirty-settings",
+            "dirty-canvas",
+            "second-client",
+            "reload"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/artifact-one-surface-browser.mjs",
+              "relation": "Automatic artifact-one-surface owner; real mount counts, delayed focus, versions and draft guards; evidence in output/browser-checks/artifact-one-surface"
+            },
+            {
+              "path": "tests/test_artifact_presentation.py",
+              "relation": "Canonical exact-version ownership, reset refusal and dirty-view transitions"
+            }
+          ],
+          "limits": [
+            "Automatic source smoke, not installed-wheel, physical-device or assistive-screenreader acceptance.",
+            "Registration alone is not a pass. The separate historical negative duplicate-default and installed-boundary receipts remain exact-source evidence, not automatic assertions."
+          ]
+        }
+      ],
+      "qualification": "docs/canvas.md"
     }
   ]
 }

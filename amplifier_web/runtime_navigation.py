@@ -2,6 +2,7 @@
 SECTIONS = {
     "overview": "overview", "direction": "direction", "limits": "limits", "tools": "tools",
     "computer": "computer", "screen-source": "computer", "desktop-host": "computer", "capture": "computer",
+    "schedules": "direction",
 }
 
 
@@ -25,7 +26,7 @@ def update(view, patch):
         # Server-owned revision makes repeat reveals observable, without
         # accepting arbitrary CSS selectors or browser script from an agent.
         draft["revealRevision"] = view.get("runtimeDraft", {}).get("revealRevision", 0)+1
-        patch = {**patch, "panel": "runtime"}
+        patch = {**patch, "panel": "chat-work" if section == "schedules" else "runtime"}
     else:
         draft["revealRevision"] = view.get("runtimeDraft", {}).get("revealRevision", 0)
         if "tab" in change:

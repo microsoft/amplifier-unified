@@ -21,6 +21,12 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
 
 ## Keep the development release loop fast
 
+Every release needs an authored What's new entry, including fixes-only and
+maintenance releases. Before choosing a version or preparing a release PR,
+follow [version choice and release notes](docs/validation/release-qualification.md#version-choice-and-release-notes).
+The release owner checks the shipped changes and high-impact guidance; a version
+bump and passing format validator alone are not a complete release summary.
+
 User direction, October 14, 2026: keep the foreground development-to-release loop
 to a few minutes. Qualify affected behavior locally in the owned DTU, retaining
 exact-source evidence and explicit limits. Aim for 1–3 minutes of focused checks

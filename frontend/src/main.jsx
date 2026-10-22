@@ -1,4 +1,4 @@
-import {ApprovalCard} from './approval-card';
+import {ApprovalPanel} from './approval-card';
 import {AutomationHub} from './automation-hub';
 import {createArchiveAction} from './archive-action.js';
 import {ArchiveContext,ArchiveNotice} from './archive-feedback.jsx';
@@ -22,6 +22,8 @@ import {WorkNavigationContext,workSurface,browsePatch} from './work-navigation';
 import {WorkHeader,WorkSurface,AppFooter,ComposerWorkspace,WorkspaceCreation,LiveChatActivity} from './work-shell';
 import workShellCss from './work-shell.css?raw';
 import mainRefreshCss from './main-refresh.css?raw';
+import canvasExperienceCss from './canvas-experience.css?raw';
+import compactComposerCss from './compact-composer.css?raw';
 import {bindWindowControlsOverlay} from './window-controls-overlay';
 import windowControlsOverlayCss from './window-controls-overlay.css?raw';
 import './window-controls-overlay.css';
@@ -34,6 +36,7 @@ import {useMessageOutbox,outboxMessages} from './message-outbox';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
+import {readDetail} from './detail-read.js';
 import {trackAction,setFeedbackEventStream} from './feedback-diagnostics';
 import {ConversationError,ConversationSelect} from './conversation-controls';
 import {useShell,ShellContext,ShellSlot} from './shell/runtime';
@@ -43,12 +46,17 @@ import {ArtifactLinks} from './inline-artifacts';
 import {withArtifactRows} from './artifact-placement';
 import {ReplyPreview,MessageFocus} from './message-interactions';
 import {MessageEntry,newestMessageIds,completedTurnEnds} from './message-actions';
+import {PeerPresentation,PeerRun} from './peer-message';
+import {chatArtifacts} from './canvas-library';
+import {peerRuns} from './peer-groups.js';
+import {usePeerPreview,PeerPreviewCanvas} from './peer-preview';
 import {WorkspaceRail,AgentCanvas,CanvasToggle,SessionHistoryControls} from './shell-panels';
 import {FeedbackAction,MoreAppActions} from './app-toolbar';
 import {MobileChatTitle,useNarrowScreen} from './responsive-navigation';
 import {NewChatSetup,newChatSetup} from './new-chat';
 import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,readAttachment} from './chat-controls';
+import {useChatFileDrop} from './chat-file-drop.js';
 import {ComposerOptions} from './composer-options';
 import {CoordinationPanel,selectWorkspaceChat} from './coordination';
 import {AttentionBadge,ActivityPanel,useReadCompletion} from './attention';
@@ -62,7 +70,9 @@ import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
-import {createConversationNavigation,isNavigationAction} from './conversation-navigation';
+import {createConversationNavigation,isNavigationAction,usesNavigationQueue} from './conversation-navigation';
+import {createDestinationHistory,destinationCommand} from './destination-history.js';
+import {onAuthenticationChange} from './api';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
 import {VoiceClient} from './voice';
@@ -70,12 +80,13 @@ import {VoiceVisualClient,ComputerVisualClient} from './voice-visual';
 import {VoiceVisualControls,SharingIndicator} from './voice-visual.jsx';
 import {sessionStatus} from './session-status';
 import {Markdown} from './markdown';
+import './markdown-content.css';
 import {FeedbackPanel,FeedbackNotice} from './feedback';
 import {notificationBody,desktopNotificationsEnabled,notificationMessages} from './notifications';
 import {ConversationWork,useInterimReplies} from './interim-replies.jsx';
 import {executionData,turnPlacements,splitWork,conversationWorkRows} from './timeline-data';
 import {LiveActivity} from './live-activity';
-import {resizeComposer,composerPrimaryAction} from './composer';
+import {resizeComposer,composerPrimaryAction,composerExpanded} from './composer';
 import {ComposerOwnership} from './composer-ownership';
 import {Questions,QuestionNotice} from './questions';
 import {NewChatHandoffs} from './new-chat-handoffs.jsx';
@@ -105,12 +116,16 @@ function App(){
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null);
  const dictationControl=useRef(null);
  const [streamClient,setStreamClient]=useState(null);
- const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
+ const [destinationTrail,setDestinationTrail]=useState(null),destinationHistory=useRef(null);
+ if(!destinationHistory.current)destinationHistory.current=createDestinationHistory({changed:setDestinationTrail});
+ useEffect(()=>onAuthenticationChange(scope=>{destinationHistory.current.invalidate(scope);setBootAttempt(value=>value+1)}),[]);
+ const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false);
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
  const draftJournalEntries=useRef(new WeakMap()),[draftStorageError,setDraftStorageError]=useState(false);
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
+ const quoteApi=useRef(null),addingQuote=useRef(false),[quoteNotice,setQuoteNotice]=useState(''),[quoteReturn,setQuoteReturn]=useState(null);
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const [awayFromBottom,setAwayFromBottom]=useState(false);
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
@@ -156,7 +171,7 @@ function App(){
  effectHandler.current=handleEffects;
  const stateWaiters=useRef(new Set()),stateRecovery=useRef(null);
  const enqueueSettings=useRef(createSettingsActionQueue()),providerReadQueue=useRef(Promise.resolve()),handledActionResults=useRef(new WeakSet());
- const acceptState=useCallback(next=>{
+ const acceptState=useCallback((next,historyOptions={})=>{
   if(!next||typeof next!=='object')return;
   if(serverState.current && next.client?.hostInstanceId===serverState.current.client?.hostInstanceId && next.revision<serverState.current.revision)return;
   if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const m of notificationMessages(next))lastNotify.current.add(m.id)}
@@ -167,6 +182,7 @@ function App(){
    if(anchor){historyScrollAnchor.current={sessionId:nextSession.id,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top};stickToBottom.current=false}
   }
   serverState.current=next;conversationNavigation.current.remember(next);
+  destinationHistory.current.observe(next,historyOptions);
   for(const wake of stateWaiters.current)wake(next);
   latest.current=conversationNavigation.current.apply(next);if(!document.hidden)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
@@ -188,18 +204,41 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  const chatReference=action==='session.select'&&args.chatReference;
+  const chatReference=action==='session.select'&&(args.chatReference||args.peerPreview);
   if(chatReference&&meta.chatReferenceIntent!==undefined&&meta.chatReferenceIntent!==archiveRevision.current)
    return Promise.resolve({accepted:false,superseded:true,error:'A newer navigation kept this chat reference from opening.'});
   if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return Promise.resolve({accepted:false});
   if(!meta.archiveIsCurrent&&!(chatReference&&meta.chatReferenceIntent!==undefined)&&(isNavigationAction(action,args)||action==='session.create'||action==='view.update'&&['panel','workWorkspaceTab'].some(key=>Object.hasOwn(args.patch||{},key))))archiveRevision.current++;
   if(chatReference)meta={...meta,chatReferenceIntent:meta.chatReferenceIntent??archiveRevision.current};
   if(meta.chatLink&&!meta.chatLinkIsCurrent())return Promise.resolve({accepted:false});
-  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
+  const presentationOnly=['canvas.select','canvas.show'].includes(action)&&args.presentation&&args.presentation!=='canvas'&&args.id!==latest.current?.canvas?.id;
+  const leavingSettings=!!meta.historyVisit||!presentationOnly&&(['peer.preview','session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action));
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,superseded:!!chatReference&&meta.chatReferenceIntent!==archiveRevision.current,error:'Settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
-  const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
+  if(action==='message.reply'&&!meta.quotePrepared){
+   if(addingQuote.current||!quoteApi.current||args.sessionId!==latest.current?.selectedSessionId)return Promise.reject(Error('Choose an available message in this conversation; a quote may already be pending.'));
+   const api=quoteApi.current,target=api.capture(),sessionId=args.sessionId;
+   addingQuote.current=true;setQuoteNotice('Adding quote…');
+   return (async()=>{
+    let prepared={...args,snapshotOnly:true};
+    const source=meta.quoteDetail?await readDetail(meta.quoteDetail,async(url,options)=>{
+     const page=await request(url,options);
+     if(page.total>12000)throw Error('Choose a passage of at most 12,000 characters. Nothing was shortened.');
+     return page;
+    }):meta.quoteSource;
+    if(typeof source==='string'){
+     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source));
+     const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
+     prepared=args.selection?{...prepared,selection:{...args.selection,sourceDigest:digest}}:{...prepared,expectedSourceDigest:digest};
+    }
+    return dispatch(action,prepared,{...meta,quotePrepared:true});
+   })().then(result=>{
+    if(api!==quoteApi.current||latest.current?.selectedSessionId!==sessionId)throw Error('The conversation changed. The quote was not added.');
+    api.insert(result.result.quote,target);setQuoteNotice('Quote added. Earlier quotes, commentary and attachments kept.');return result;
+   }).catch(error=>{setQuoteNotice(error.message);throw error}).finally(()=>{addingQuote.current=false;});
+  }
+  const referenceAction=action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
   if(referenceAction&&!meta.referencePrepared){
    if(referenceDraftLock.current)return Promise.reject(Error('A reference is already being added.'));
    const current=pendingView.current.apply(latest.current),sessionId=current?.selectedSessionId,expectedDraft=current?.view?.draft||'';
@@ -236,10 +275,26 @@ function App(){
    if(chatReference&&(meta.chatReferenceIntent!==archiveRevision.current||
      latest.current?.selectedSessionId!==chatReference.sourceSessionId))
     return {accepted:false,superseded:true,error:'The view changed. Open the reference from its original reply.'};
-   const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
-   if(result.state)acceptState(result.state);
-   else await awaitState(result);
-   return result;
+   // Begin only when this queued command executes, after local/settings guards.
+   // No file-open/create action is replayed by a history traversal.
+   const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):null;
+   if(meta.historyVisit&&!historyVisit)return {accepted:false};
+   try{
+    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+    if(historyVisit)destinationHistory.current.finish(result);
+    if(result.state)acceptState(result.state);
+    // Exact annotation and read-only preview receipts settle locally. Navigation
+    // still waits for its authoritative frame and exact history confirmation.
+    else if(!['message.reaction','peer.preview'].includes(action))await awaitState(result);
+    if(historyVisit){
+     // awaitState's recovery may return without the receipt's revision. The
+     // history model requires its own exact route/host/revision evidence.
+     if(destinationHistory.current.snapshot().pending)destinationHistory.current.finish(null);
+     const confirmed=await historyVisit.confirmed;
+     if(!confirmed)throw Error('Navigation was not confirmed. History was kept; no action was retried.');
+    }
+    return result;
+   }catch(error){if(historyVisit)destinationHistory.current.finish(null);throw error}
   };
   // Browse and chat selections share intent order. A later optimistic browse
   // stays pending until an earlier selection can no longer replace its scope.
@@ -250,7 +305,7 @@ function App(){
   // Optional plan summaries have their own exact read result; they must not
   // hold up browsing or ordered mutations while canonical files are read.
   const planRead=action==='session.plans';
-  const queue=navigation?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  const queue=usesNavigationQueue(action,args)?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
   const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
@@ -291,6 +346,8 @@ function App(){
  const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect)});
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
  const act=useCallback((name,args={},meta={})=>dispatch(name,args,meta).catch(e=>reportError(e)),[dispatch,reportError]);
+ const peerPreview=usePeerPreview(state,dispatch),[peerOpen,setPeerOpen]=useState({});
+ const peerPresentation=useMemo(()=>({open:peerOpen,setOpen:setPeerOpen,preview:peerPreview.open}),[peerOpen,peerPreview.open]);
  useEffect(()=>{
   if(!chatLinkReceiver.current)chatLinkReceiver.current=createChatLinkReceiver({location,history,
    launchQueue:window.launchQueue,onChange:setChatLink});
@@ -321,11 +378,11 @@ function App(){
    // The stream supplies the authoritative baseline. A separate state GET would
    // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
-   let streamState;
-   setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);setStreamClient(streamState.client?.id===clientId?streamState.client:null);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
+   let streamState,historyBaseline=true;
+   setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState,{baseline:historyBaseline});historyBaseline=false;setStreamClient(streamState.client?.id===clientId?streamState.client:null);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
    source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);setStreamClient(streamState.client?.id===clientId?streamState.client:null);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setStreamClient(null);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
-   source.onopen=()=>{setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
+   source.onopen=()=>{historyBaseline=true;setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
     if(!alive||restarting)return;
     setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false);setStreamClient(null);
     // CONNECTING is owned by EventSource's native retry. CLOSED cannot recover
@@ -367,7 +424,11 @@ function App(){
  const workPlacement=useMemo(()=>turnPlacements(messages,execution),[messages,execution]),newest=useMemo(()=>newestMessageIds(messages),[messages]);
  const rawConversationRows=useMemo(()=>withArtifactRows(conversationWorkRows(messages,workPlacement)),[messages,workPlacement]);
  const interim=useInterimReplies(rawConversationRows,execution,shell.composition?.presentation?.collapseInterimReplies===true,session?.id,messagesPane,state?.view?.executionExpanded,act);
- const conversationRows=interim.rows;
+ const artifactBoundaries=useMemo(()=>new Set([
+  ...chatArtifacts(state||{}).flatMap(row=>(row.publications||[{messageId:row.messageId}]).map(link=>link.messageId)),
+  ...(session?.execution?.imageGeneration||[]).map(job=>job.messageId),
+ ]),[state?.canvasArtifacts,state?.selectedSessionId,state?.selectedWorkspaceId,session?.execution?.imageGeneration]);
+ const conversationRows=useMemo(()=>peerRuns(interim.rows,artifactBoundaries),[interim.rows,artifactBoundaries]);
  const [recordingTarget,setRecordingTarget]=useState(null);
  useLayoutEffect(()=>{
   if(!recordingTarget)return;
@@ -450,7 +511,7 @@ function App(){
   const previous=panelReturnFocus.current||document.activeElement;
   const dialog=root.current?.querySelector('.a-overlay [role=dialog]');
   if(!dialog)return;
-  const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')].filter(el=>el.getClientRects().length);
+  const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],summary')].filter(el=>el.getClientRects().length);
   if(!dialog.contains(document.activeElement)||!document.activeElement?.getClientRects().length)controls()[0]?.focus();
   const handler=e=>{
    if(e.key==='Escape'){if(settingsNavigation.current)settingsNavigation.current.close();else {setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})}}
@@ -483,19 +544,34 @@ function App(){
   })();
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
- function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};const journalEntry=draftJournal.stage(sessionId,value);draftJournalEntries.current.set(payload,journalEntry);setDraftStorageError(!journalEntry.persisted);stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)}
+ function editDraft(value,documentValue){
+  if(referenceDraftLock.current)return;
+  if(documentValue===undefined&&value&&quoteApi.current?.document()){
+   if(value.startsWith(lastDraft.current)){try{quoteApi.current.append(value.slice(lastDraft.current.length));}catch(error){reportError(error)}return;}
+   setError('Quoted content was kept. Edit its commentary in the composer.');return;
+  }
+  documentValue??=null;
+  const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const patch={draft:value,draftDocument:documentValue},token=pendingView.current.add(patch,sessionId),payload={patch,sessionId};const journalEntry=draftJournal.stage(sessionId,value,documentValue);draftJournalEntries.current.set(payload,journalEntry);setDraftStorageError(!journalEntry.persisted);stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)
+ }
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace&&typeof workspace==='object'?workspace:workspace?{workspace}:{})}
- async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||newChatSetup(pendingView.current.apply(latest.current))),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
+ function creationSetup(){return {...newChatSetup(pendingView.current.apply(latest.current)),expectedDraftId:latest.current?.attachmentDraftId}}
+ async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||creationSetup()),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
   const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
   if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
   return created;
  }).finally(()=>{creatingSession.current=null});return creatingSession.current}
  function addFiles(files){
   if(!files?.length||executionUnavailable||historyPending)return;
-  const target=latest.current?.selectedSessionId??null,selected=Array.from(files);
+  const target=latest.current?.selectedSessionId??null,selected=Array.from(files),expectedDraftId=target===null?latest.current?.attachmentDraftId:undefined;
+  const admittedClient=latest.current?.client?.id,admittedHost=latest.current?.client?.hostInstanceId;
+  if(target===null&&!expectedDraftId){setError('The new-chat draft is not ready. Try attaching again after it loads.');return;}
   uploadCount.current++;setUploading(true);setError('');
   const run=async()=>{let index=0;try{
-   for(;index<selected.length;index++){const file=selected[index];await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file),...(file.attachmentSource?{source:file.attachmentSource}:{})})}
+   for(;index<selected.length;index++){
+    const file=selected[index],base64=await readAttachment(file);
+    if(admittedClient!==latest.current?.client?.id||admittedHost!==latest.current?.client?.hostInstanceId)throw Error('The connection changed before this file was uploaded. Choose the remaining files again in the intended chat.');
+    await dispatch('attachment.add',{sessionId:target,...(expectedDraftId?{expectedDraftId}:{}),name:file.name,base64,...(file.attachmentSource?{source:file.attachmentSource}:{})});
+   }
   }catch(error){
    // Keep uncertain transport outcomes in the existing recovery flow. For a
    // known file failure, explain which selection stopped this upload batch.
@@ -504,12 +580,13 @@ function App(){
   }finally{uploadCount.current--;setUploading(uploadCount.current>0)}};
   uploadQueue.current=uploadQueue.current.then(run,run);
  }
+ const chatDrop=useChatFileDrop({ownerKey:JSON.stringify([session?.id??null,state?.attachmentDraftId,state?.selectedWorkspaceId]),enabled:!!state&&workSurface(state)==='chat'&&!executionUnavailable&&!historyPending&&!referencingDraft,onFiles:addFiles,onError:setError});
  async function deliver(entry){
   if(deliveries.current.has(entry.id))return;
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
   try{
    if(!entry.sessionId){const current=await ensureSession(entry.creation);entry=outbox.update(entry.id,{sessionId:current.id});}
-   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
+   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.document?{document:entry.document}:{}),...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
    const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
@@ -527,8 +604,9 @@ function App(){
  }
  async function retryMessage(message,text){
   const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending')return;
+  if(previous.document&&text!==undefined){setError('Retry this quoted message unchanged, or discard it and compose a correction.');return;}
   if(previous.status==='unknown'&&text!==undefined)return;
-  const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}:previous.creation;
+  const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:creationSetup()}:previous.creation;
   const currentGeneration=latest.current?.sessions?.find(row=>row.id===previous.sessionId)?.collaborationGeneration;
   const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,...(text!==undefined?{text}:{})}:{}),status:'sending',error:''});
   if(text!==undefined)act('view.update',{patch:{messageEdit:null}});
@@ -538,14 +616,15 @@ function App(){
   dictationControl.current?.cancel();
   e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable)return;
   preserveOtherDraft(session?.id??null);
-  const submittedText=draft,id=crypto.randomUUID(),attachments=availableAttachments;
+  const submittedText=draft,editorDocument=quoteApi.current?.document(),id=crypto.randomUUID(),attachments=availableAttachments;
+  const submittedDocument=editorDocument?.segments.some(part=>part.type==='quote')?editorDocument:null;
   const activeGeneration=session?.collaborationGeneration;
   const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
   if(detail.focused)detail.latest(false);
   chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:creationSetup()}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
    const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
    // The outbox already owns this exact submitted text. A slow/ lost draft
@@ -605,6 +684,12 @@ function App(){
  const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
+ const visitHistory=async key=>{
+  const entry=destinationHistory.current.snapshot().entries.find(row=>row.key===key);
+  if(!entry||destinationHistory.current.snapshot().pending)return;
+  const [action,args]=destinationCommand(entry);
+  try{await dispatch(action,args,{historyVisit:key})}catch(error){reportError(error)}
+ };
  if(!archiveAction.current)archiveAction.current=createArchiveAction({
   getState:()=>pendingView.current.apply(latest.current),getRevision:()=>archiveRevision.current,dispatch,
   onChange:setArchiveFeedback,
@@ -624,18 +709,21 @@ function App(){
   },
  });
  const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
- const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,
+ const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,history:destinationTrail,visitHistory,
   sidebarView:view,updateSidebar:patch=>act('view.update',{patch}),
   home:(extra={})=>act('view.update',{patch:homePatch(presentation,extra,view)}),
   setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};
- const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:settingsState;
+ const previewVisible=!!peerPreview.active&&!browsing;
+ const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:previewVisible?{...settingsState,peerPreview:true,canvas:{...state?.canvas,open:true}}:settingsState;
+ const renderMessage=row=><MessageEntry key={row.id} message={row.message} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch}/>;
+ const renderRow=row=>row.kind==='artifacts'?<ArtifactLinks key={row.id} state={state} message={row.message} act={act} dispatch={dispatch}/>:row.kind==='work'?<ConversationWork key={row.id} row={row} data={execution} state={state} act={act} dispatch={dispatch} session={session} working={working}/>:row.kind==='peers'?<PeerRun key={row.id} row={row} session={session} state={state} renderMessage={renderMessage}/>:renderMessage(row);
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
- return <ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
+ return <PeerPresentation.Provider value={peerPresentation}><ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
   {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
-  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style>
+  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style><style>{canvasExperienceCss}</style><style>{compactComposerCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 
-  <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>
+  <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation} fileDropHandlers={browsing?undefined:chatDrop.handlers}/>
   <AppReloadNotice/>
   {!panel&&<ArchiveNotice value={archiveValue}/>}
   {chatLink?.status==='failed'&&<div className="a-alert" role="alert" data-chat-link-failure><span>Couldn’t open chat: {actionErrorMessage(chatLink.error)}</span><button type="button" onClick={()=>chatLinkReceiver.current.retry()}>Retry opening chat</button><button type="button" aria-label="Dismiss chat link" onClick={()=>chatLinkReceiver.current.dismiss()}><X/></button></div>}
@@ -643,26 +731,53 @@ function App(){
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} act={act}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
-  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation"><WorkSurface shell={shell} state={state} act={act}/>
-   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(row=>row.kind==='artifacts'?<ArtifactLinks key={row.id} state={state} message={row.message} act={act} dispatch={dispatch}/>:row.kind==='work'?<ConversationWork key={row.id} row={row} data={execution} state={state} act={act} dispatch={dispatch} session={session} working={working}/>:<React.Fragment key={row.id}><MessageEntry message={row.message} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch}/></React.Fragment>)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-message-body"><Markdown text={session.streaming}/></div></article>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} dispatch={dispatch}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
+  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act}/>
+   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-message-body"><Markdown text={session.streaming}/></div></article>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} dispatch={dispatch}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
    {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    <LiveActivity session={state.sessions.find(row=>row.id===session?.id)||session}/>
-   {!!session?.approvals?.filter(a=>a.status==='pending'||!a.status).length&&<section className="a-card a-approvals" data-part="approvals"><div className="a-card-header"><h2>Needs your attention</h2></div>{session.approvals.filter(a=>a.status==='pending'||!a.status).map(a=><ApprovalCard key={a.id} approval={a} sessionId={session.id} act={act}/>)}</section>}
+   <ApprovalPanel session={session} act={act} dispatch={dispatch} freshnessKey={`${connected}:${session?.interruptionRevision}:${session?.executionRevision}`}/>
    {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
-   <form className={`a-composer ${dragOver?'drag-over':''}`} data-part="composer" data-action="conversation.send" onSubmit={send} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();if(!executionUnavailable)setDragOver(true)}}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget))setDragOver(false)}} onDrop={e=>{if(e.dataTransfer.files.length){e.preventDefault();setDragOver(false);addFiles([...e.dataTransfer.files])}}}>
+   <form className="a-composer a-compact-composer" data-part="composer" data-action="conversation.send" onSubmit={send}>
     {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>
-    {!session&&<ComposerWorkspace state={state} act={act}/>}<AttachmentStrip privateDraft items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}{dragOver&&<p className="a-upload-status">Drop files or images to attach</p>}
+    {!session&&<ComposerWorkspace state={state} act={act}/>}
+    <div className="a-compose-surface" data-part="composer-surface" data-expanded={composerExpanded({draft,attachments:availableAttachments,quote:state.view?.messageReply||state.view?.draftDocument?.segments?.some(part=>part.type==='quote')})}>
+    <div className="a-compose-writing">
+    <AttachmentStrip privateDraft sessionId={session?.id??null} items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}
     <ReplyPreview quote={state.view?.messageReply} sessionId={session?.id} dispatch={dispatch}/>
-    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} value={draft} onChange={editDraft} onSend={send} onFiles={files=>{setDragOver(false);addFiles(files)}} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} quoteApi={quoteApi} value={draft} document={state.view?.draftDocument} onChange={editDraft} onSend={send} onReveal={async(quote,button)=>{
+     const sid=session?.id,owner=quoteApi.current;
+     if(quote.sessionId!==sid)throw Error('This source is from another chat. Cross-chat quotation is not available.');
+     const top=messagesPane.current?.scrollTop;
+     const find=()=>[...document.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===quote.messageId);
+     let node=find();if(!node){await interim.ensureVisible?.(quote.messageId);node=find();}
+     if(!node){const found=await detail.around(quote.messageId,{isCurrent:()=>latest.current?.selectedSessionId===sid&&quoteApi.current===owner});if(!found)throw Error('Original unavailable. The saved quotation remains.');}
+     if(latest.current?.selectedSessionId!==sid||quoteApi.current!==owner)return;
+     setQuoteReturn({sid,top,button});if(node){node.tabIndex=-1;node.scrollIntoView({block:'center'});node.focus({preventScroll:true});}
+     const source=session.messages?.find(row=>row.id===quote.messageId);
+     if(!source||source.textDetail)return 'Saved quotation retained; source version could not be compared.';
+     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.text||''));
+     const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
+     return digest===quote.sourceDigest?'Original revealed. Saved quotation is unchanged.':'Source changed since quoting. The earlier snapshot is retained.';
+    }} onFiles={addFiles} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    {quoteNotice&&<small role="status">{quoteNotice}</small>}
+    {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
+    </div>
     <div role="status" aria-live="polite" aria-atomic="true" className="a-sr-only">{sendingHere?'Sending message…':''}</div>
-    <div className="a-compose-bottom"><div className="a-compose-tools"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button><ShellSlot name="composer.actions"><ComposerOptions state={state} session={session} act={act} working={working}/></ShellSlot></div><DictationButton key={session?.id??'dictation-new'} draft={draft} onChange={value=>{if((latest.current?.selectedSessionId??null)===(session?.id??null))editDraft(value)}} controlRef={dictationControl} disabled={executionUnavailable||historyPending||referencingDraft||sendingHere||browsing||callActive}/><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
+    <div className="a-compose-add"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button></div>
+    <div className="a-compose-end"><DictationButton key={session?.id??'dictation-new'} draft={draft} onChange={value=>{if((latest.current?.selectedSessionId??null)===(session?.id??null))editDraft(value)}} controlRef={dictationControl} disabled={executionUnavailable||historyPending||referencingDraft||sendingHere||browsing||callActive}/><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
+    </div>
+    <div className="a-compose-configuration">
+     {session&&responseActive&&!callActive&&primaryAction.action!=='conversation.stop'&&<button type="button" className="a-compose-stop" aria-label="Stop response" data-action="conversation.stop" disabled={session.status==='stopping'||executionUnavailable} onClick={()=>act('conversation.stop',{sessionId:session.id})}>{session.status==='stopping'?'Stopping…':'Stop'}</button>}
+     <ShellSlot name="composer.actions"><ComposerOptions state={state} session={session} act={act} working={working}/></ShellSlot>
+    </div>
     </ComposerOwnership>
    </form>
-  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas suppressed={browsing} state={settingsState} act={act} dispatch={dispatch} settingsSurface={settingsSurface}/></McpAppThemeProvider></WorkspaceLayout>
+  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas suppressed={browsing||previewVisible} state={settingsState} act={act} dispatch={dispatch} settingsSurface={settingsSurface}/></McpAppThemeProvider>
+  {previewVisible&&<PeerPreviewCanvas key={peerPreview.active.source.sourceId} active={peerPreview.active} onClose={peerPreview.close} state={layoutState} dispatch={dispatch}/>}</WorkspaceLayout>
   {creatingWorkspace&&<WorkspaceCreation state={state} act={act} onClose={()=>setCreatingWorkspace(false)}/>}
   <FeedbackNotice state={state} act={act}/>
   {panel&&<div className={`a-overlay ${panel==='session-details'?'a-chat-info-overlay':''} ${(panel==='settings'||panel==='appearance')?'a-settings-overlay a-settings-redesign-overlay':''}`} data-part="overlay" onPointerDown={e=>{outsidePointer.current=e.target===e.currentTarget}} onClick={e=>{if(outsidePointer.current&&e.target===e.currentTarget)close()}}><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||panel==='coordination'||panel==='automation'||Object.hasOwn(chatPageTitles,panel)||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{appearance:'Settings',agent:'What the agent sees',settings:'Settings',activity:'Ready for you',automation:'Automation',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Delete chat?',runtime:'Advanced',...chatPageTitles,'subagent-history':'Subagent history',coordination:'Workspace work'}[panel]||panel}</h2>{(panel==='settings'||panel==='appearance')&&<div className="a-settings-header-assistance" data-settings-help/>}<button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
@@ -680,6 +795,6 @@ function App(){
    {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, open panels, and nonprivate controls. Unsent messages, message edits and attachments are excluded from ordinary readback. When you ask for help with a draft, the agent can inspect that draft in this chat by explicitly selecting its browser.</p><div className="a-form-grid"><div><label>Local browser state (includes private input)</label><pre data-private="true" className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),theme:{name:state.theme?.name,css:`${state.theme?.css?.length||0} characters`},view:{...view,themeDraft:view.themeDraft?`${view.themeDraft.length} characters`:undefined}})}</pre></div><div><label>Visible controls</label><pre data-private="true" className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){reportError(e)}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
    {panel==='delete-session'&&<ChatDelete key={session?.id} id={session?.id} act={dispatch} cancel={close}/>}{(panel==='settings'||panel==='appearance')&&settingsSurface }
   </section></div>}
- </div></AppReloadContext.Provider></ShellContext.Provider></WorkNavigationContext.Provider></ArchiveContext.Provider>;
+ </div></AppReloadContext.Provider></ShellContext.Provider></WorkNavigationContext.Provider></ArchiveContext.Provider></PeerPresentation.Provider>;
 }
 createRoot(document.getElementById('root')).render(<App/>);

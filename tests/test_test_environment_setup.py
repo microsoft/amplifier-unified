@@ -259,6 +259,11 @@ def test_capacity_defaults_use_host_memory_conservatively(monkeypatch):
         assert policy['minFreeBytes'] == 4 * 1024 ** 3
 
 
+def test_verified_native_setup_relies_on_resource_admission_not_fixed_counts():
+    assert setup.capacity_defaults(resource_admission=True) == {
+        'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 4 * 1024**3}
+
+
 async def test_shutdown_holds_setup_ownership_until_inflight_thread_settles(app, monkeypatch):
     import threading
     entered, release = asyncio.Event(), threading.Event()
@@ -326,6 +331,7 @@ async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app
     monkeypatch.setattr(setup.shutil, 'which', lambda _: '/usr/bin/uv')
     monkeypatch.setattr(worker, 'package_digest', lambda _: worker.QUALIFIED_PACKAGES['0.4.3'])
     monkeypatch.setattr(worker, 'file_digest', lambda *a: ('c' * 64, 10))
+    monkeypatch.setattr(worker, 'host_target', lambda *a: {'supported': True, 'machineId': 'fixture'})
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[0] == '/usr/bin/uv':
@@ -364,6 +370,7 @@ async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app
         return
     config, proof = await setup.setup_incus({'backend': 'incus'}, {'executable': '/usr/bin/incus'}, tmp_path, record, step)
     assert config['incus']['image'] == fingerprint
+    assert config['incus']['maxRunning'] == config['incus']['maxInstances'] == 0
     assert config['incus']['packageSha256'] == worker.QUALIFIED_PACKAGES['0.4.3']
     install = next(call for call in calls if 'install' in call)
     assert install[-1] == 'git+' + setup.LEGACY_REPOSITORY + '@' + setup.LEGACY_COMMIT

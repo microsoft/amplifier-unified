@@ -3,6 +3,41 @@ import asyncio
 import copy
 
 
+def bind_runtime(service):
+    bind = getattr(service.runtime, 'bind_configuration_revision', None)
+    if callable(bind):
+        bind(lambda: service.state.get('configurationRevision', 0))
+
+
+def reported_selection(service, session):
+    """Only a report prepared from current settings can update next-input defaults."""
+    if (session.get('runtimeReportConfigurationRevision', 0) != service.state.get('configurationRevision', 0)
+            or session.get('configurationPending') or session.get('configurationBusy')):
+        return None
+    return session.get('runtimeReport', {}).get('effective_selection')
+
+
+def accept_report(service, session, payload):
+    """Reduce a host-observed report under the service lock, including warmup."""
+    owner = payload.get('runtimeOwnerId')
+    if owner is not None:
+        row = getattr(service.runtime, 'workers', {}).get(session['id'], {})
+        if (row.get('runtimeOwnerId') != owner or row.get('closing')
+                or row['process'].returncode is not None):
+            return
+    session['runtimeReport'] = payload['report']
+    session['runtimeReportConfigurationRevision'] = payload.get('configurationRevision', 0)
+    if payload['report'].get('root_bundle'):
+        session['bundle'] = payload['report']['root_bundle']
+    effective = reported_selection(service, session)
+    if effective:
+        selected = session.get('pendingModelSelection') or session.get('selection')
+        for key in ('configuration.catalog', 'configuration.providers'):
+            catalog = service.state.get('runtimeControl', {}).get(session['id'], {}).get(key)
+            if catalog is not None and catalog.get('configurationRevision', 0) == service.state.get('configurationRevision', 0):
+                catalog['effective'] = copy.deepcopy(selected or effective)
+
+
 def publish_catalogs(management, entries):
     from .model_catalogs import retain
     target = management.service.state.setdefault('modelCatalogs', {})
@@ -57,7 +92,8 @@ async def browse(management, session, *, refresh=False):
                     management.provider_catalog.put(model_key(identity), value)
         current = service._session(sid)
         selection = current.get('selection') or result.get('selection')
-        result.update(effective=selection or result.get('effective', {}), pinned=bool(selection), phase='ready', configurationRevision=revision)
+        result.update(effective=current.get('pendingModelSelection') or selection or reported_selection(service, current) or result.get('effective', {}),
+                      pinned=bool(selection), phase='ready', configurationRevision=revision)
         control = service.state.setdefault('runtimeControl', {}).setdefault(sid, {})
         changed = control.get('configuration.catalog') != result
         control['configuration.catalog'] = result

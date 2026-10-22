@@ -158,10 +158,18 @@ async def main():
 
         # Faults affect only this requested presentation resource, leaving
         # commands, client state, canonical history and other clients intact.
-        faults = {'holdClient': None, 'omissions': 0, 'unnamedId': None, 'unnamedClient': None}
+        faults = {'holdClient': None, 'omissions': 0, 'unnamedId': None, 'unnamedClient': None,
+                  'holdPinsClient': None, 'pinOmissions': 0}
         original_navigation = service.shell.navigation
 
         def navigation(*args, **kwargs):
+            if (faults['holdPinsClient'] is not None
+                    and kwargs.get('identity') == faults['holdPinsClient']
+                    and args[1]['id'] == 'chats' and kwargs.get('_page_only')
+                    and 'pinnedNavigation' in kwargs.get('navigation_resources', ())):
+                from amplifier_web.shell_query_owner import PendingQuery
+                faults['pinOmissions'] += 1
+                raise PendingQuery()
             if (faults['holdClient'] is not None
                     and kwargs.get('identity') == faults['holdClient']
                     and args[1]['id'] == 'chats' and kwargs.get('_page_only')
@@ -192,6 +200,18 @@ async def main():
 
         async def control(request):
             args = await request.json()
+            if 'holdPinsFor' in args:
+                identity = args['holdPinsFor']
+                assert identity is None or identity in service.clients.records
+                previous = faults['holdPinsClient']
+                faults['holdPinsClient'] = identity
+                if identity is not None and args.get('invalidatePins'):
+                    service.shell.resources.invalidate({'pinnedItemIds'})
+                    service.shell.notify(identity)
+                if identity is None and previous is not None and not args.get('quietPinRelease'):
+                    # Wake the existing resource owner, without changing the
+                    # app revision or inventing a completed projection.
+                    service.shell.notify(previous)
             if 'holdRecentFor' in args:
                 identity = args['holdRecentFor']
                 assert identity is None or identity in service.clients.records
@@ -243,7 +263,8 @@ async def main():
             return web.json_response({'selected': selected['id'], 'commissioned': commissioned['id'],
                 'pinned': pinned['id'], 'fork': fork['id'], 'legacy': legacy['id'],
                 'excluded': [row['id'] for row in sessions[-2:]], 'runtimeCalls': runtime.calls,
-                'mutations': mutations, 'withheldRecentProjections': faults['omissions'], 'sessionCount': len(service.state['sessions']),
+                'mutations': mutations, 'withheldRecentProjections': faults['omissions'],
+                'withheldPinProjections': faults['pinOmissions'], 'sessionCount': len(service.state['sessions']),
                 'sessionsUnchanged': service.state['sessions'] == initial_sessions,
                 'sessionDifferences': differences, 'durableClients': durable_clients,
                 'bundle': selected['bundle'], 'selection': selected.get('selection')})

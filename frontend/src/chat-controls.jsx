@@ -8,9 +8,14 @@ import {newChatSetup,draftDefaults,draftDefaultsKey} from './new-chat';
 import {useComposerPopover} from './composer-popover';
 import {providerOptions} from './provider-options';
 import {useDraftDiscovery} from './use-draft-discovery';
+import {AttachmentPreview} from './attachment-preview';
+import {imageAttachment} from './attachment-view.js';
 const EMPTY={};
 export function AttachmentStrip({items=[],remove,act,sessionId,privateDraft=false}){
- const [error,setError]=useState(''),[pending,setPending]=useState(null);
+ const [error,setError]=useState(''),[pending,setPending]=useState(null),[image,setImage]=useState(null);
+ useEffect(()=>{if(image&&(image.sessionId!==sessionId||!items.some(file=>file.id===image.file.id)))setImage(null)},[sessionId,items,image]);
+ const showImage=(file,event)=>setImage({file,sessionId,opener:event.currentTarget});
+ const imageVisible=image&&image.sessionId===sessionId&&items.some(file=>file.id===image.file.id);
  async function preview(file){
   if(pending)return;setPending(file.id);setError('');
   try{await act('canvas.openAttachment',{sessionId,id:file.id})}
@@ -18,13 +23,13 @@ export function AttachmentStrip({items=[],remove,act,sessionId,privateDraft=fals
   finally{setPending(null)}
  }
  if(!items.length)return null;
- return <div className="a-attachments" data-private={privateDraft||undefined}>{items.map(file=><div className="a-attachment" key={file.id}>{file.mime?.startsWith('image/')?<a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name}/></a>:<Paperclip/>}{act&&sessionId&&file.mime==='text/plain'&&file.size<=1000000?<button type="button" className="a-link" disabled={!!pending} data-action="canvas.openAttachment" onClick={()=>preview(file)}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>}{act&&sessionId&&<a href={file.url} download={file.name} aria-label={"Download "+file.name}><Download size={14}/></a>}{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}{error&&<span role="alert">{error}</span>}</div>;
+ return <div className="a-attachments" data-private={privateDraft||undefined}>{items.map(file=><div className="a-attachment" key={file.id} data-attachment-id={file.id}>{imageAttachment(file)?<button type="button" className="a-attachment-preview-button" aria-haspopup="dialog" aria-label={'Preview '+file.name} onClick={e=>showImage(file,e)}><img src={file.url} alt={file.name}/></button>:<Paperclip/>}{imageAttachment(file)?<button type="button" className="a-attachment-preview-button a-attachment-preview-name" aria-haspopup="dialog" aria-label={'Preview '+file.name} title={file.name} onClick={e=>showImage(file,e)}>{file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:act&&sessionId&&file.mime==='text/plain'&&file.size<=1000000?<button type="button" className="a-link" disabled={!!pending} data-action="canvas.openAttachment" onClick={()=>preview(file)}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>}{act&&sessionId&&<a href={file.url} download={file.name} aria-label={"Download "+file.name}><Download size={14}/></a>}{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}{error&&<span role="alert">{error}</span>}{imageVisible&&<AttachmentPreview key={image.file.id} {...image} privateDraft={privateDraft} onClose={()=>setImage(null)}/>}</div>;
 }
 function configuredEffort(row,model){
  const field=providerFields(row,{model,default_model:model}).find(field=>field.id==='reasoning_effort');
  return row?.effort||row?.config?.reasoning_effort||row?.info?.defaults?.reasoning_effort||field?.default||'';
 }
-export function ModelControl({state,session,act,working,embedded=false}){
+export function ModelControl({state,session,act,working,embedded=false,compact=false,children}){
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
  // A bundle change validates defaults in the background. Keep the current
  // workspace's resolved choices visible until the new result is ready.
@@ -77,7 +82,22 @@ export function ModelControl({state,session,act,working,embedded=false}){
   act('view.update',{patch:{composerModel:{...shared,open:true,sessionId}}});
   return()=>{act('view.update',{patch:{composerModel:{open:false,sessionId}}})};
  },[embedded,sessionId]);
- useOutsideDismiss(open&&!embedded,popover,()=>edit({open:false}),panelRef);
+ const focusRequested=useRef(false);
+ const close=reason=>{focusRequested.current=false;edit({open:false});if(compact&&reason!=='outside')popover.current?.querySelector('button')?.focus()};
+ useOutsideDismiss(open&&!embedded,popover,close,panelRef);
+ useEffect(()=>{
+  if(compact&&open&&position.visibility==='visible'&&focusRequested.current){
+   focusRequested.current=false;
+   (panelRef.current?.querySelector('select:not(:disabled)')||panelRef.current?.querySelector('button:not(:disabled)'))?.focus();
+  }
+ },[compact,open,position.visibility]);
+ useEffect(()=>{focusRequested.current=false},[sessionId]);
+ const previousPanel=useRef(state.view?.panel);
+ useEffect(()=>{
+  if(previousPanel.current===state.view?.panel)return;
+  previousPanel.current=state.view?.panel;
+  if(compact&&open)close('outside');
+ },[state.view?.panel]);
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:state.modelCatalogs?.[selected?.sharedCatalogKey]||controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map()),modelCacheKey=JSON.stringify([isDraft?draftDefaultsKey(setup):sessionId,configurationRevision,draft.instance,selected?.sharedCatalogKey||entry?.sharedCatalogKey||null]);let models=modelOptions(entry?.models||[]);
@@ -98,7 +118,8 @@ export function ModelControl({state,session,act,working,embedded=false}){
  useEffect(()=>{
   if(open&&!touched.current){const instance=effective.instance||effective.id||draft.instance||'',row=providers.find(p=>p.id===instance);edit({instance,model:effective.model||draft.model||row?.info?.defaults?.model||'',effort:effectiveEffort||draft.effort||''})}
  },[open,sessionId,providers.map(row=>row.id).join('|'),effective.instance,effective.id,effective.model,effectiveEffort]);
- function show(){touched.current=false;setError('');if(open){edit({open:false});return}
+ function show(){touched.current=false;setError('');if(open){close();return}
+  focusRequested.current=compact;
   edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effectiveEffort||''});
  }
  async function apply(patch){
@@ -131,9 +152,9 @@ export function ModelControl({state,session,act,working,embedded=false}){
  const delayed=isDraft&&checkingDefaults&&discovery.delayed;
  const renderPanel=embedded?content=>content:renderPopover,Advanced=embedded?'details':React.Fragment;
  return <div className="a-model-control" ref={popover}>
-  {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{!effective.model&&(delayed||failure)?'Model settings unavailable':modelLabel}</span><ChevronDown/></button>}
-  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":"a-model-popover a-compact-popover"} style={embedded?undefined:position} aria-label="Conversation model">
-   {!embedded&&<div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>}
+  {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" aria-haspopup={compact?'dialog':undefined} disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{!effective.model&&(delayed||failure)?'Model settings unavailable':compact?modelAndEffort:modelLabel}</span><ChevronDown/></button>}
+  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":`a-model-popover a-compact-popover${compact?' a-composer-options-panel':''}`} style={embedded?undefined:position} role={compact?'dialog':undefined} aria-label={compact?'Chat options':'Conversation model'}>
+   {!embedded&&<div className="a-settings-row"><strong>{compact?'Chat options':'Conversation model'}</strong><button type="button" className="a-icon" aria-label={compact?'Close chat options':'Close model settings'} data-action="view.update" onClick={close}><X/></button></div>}
    {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}
    {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
    <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={draft.instance||''} data-action={isDraft?'view.update':'runtime.control'} disabled={working} onChange={e=>chooseProvider(e.target.value)}>
@@ -151,7 +172,9 @@ export function ModelControl({state,session,act,working,embedded=false}){
    {isDraft&&(failure||delayed)&&<div className="a-discovery-recovery" role="status">{delayed&&!failure&&<p>Model settings are taking longer than expected. You can retry without refreshing or losing your draft.</p>}<button type="button" className="a-soft" onClick={discovery.retry}>Retry model settings</button></div>}
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}
+   {children}
+   {compact&&<button type="button" className="a-primary a-composer-options-done" onClick={close}>Done</button>}
   </section>)}
  </div>;
 }
-export function readAttachment(file){return new Promise((resolve,reject)=>{if(file.size>32*1024*1024||!file.size){reject(new Error('Choose a nonempty file up to 32 MB.'));return}const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('Could not read '+file.name));reader.readAsDataURL(file)})}
+export function readAttachment(file){return new Promise((resolve,reject)=>{if(file.size>32*1024*1024||!file.size){reject(new Error('Choose a nonempty file up to 32 MB.'));return}const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('Could not read '+file.name));reader.onabort=()=>reject(new Error('Reading '+file.name+' was cancelled. Nothing was uploaded.'));reader.readAsDataURL(file)})}

@@ -5,6 +5,33 @@ import re
 import time
 
 
+def current_terminal_failure(session):
+    """A saved cause belongs to the current failed root, not an old UI turn.
+
+    This preserves observations only. It grants no recovery/admission authority
+    and does not reconstruct a cause for older unbound failures.
+    """
+    failure = session.get('failure') or {}
+    active = session.get('collaborationGeneration') or {}
+    terminal = next((row for row in reversed(session.get('generations', []))
+        if row.get('sessionId', session['id']) == session['id']
+        and row.get('rootSessionId', session['id']) == session['id']), {})
+    if (not failure or not active.get('id') or not active.get('terminal')
+            or active.get('completed') or terminal.get('event') != 'generation.failed'
+            or terminal.get('generation_id') != active['id']
+            or set(terminal.get('input_ids') or []) != set(active.get('inputIds') or [])):
+        return False
+    if failure.get('generationId'):
+        return (failure['generationId'] == active['id']
+            and set(failure.get('inputIds') or []) == set(terminal.get('input_ids') or []))
+    # A legacy generic exit has no binding to improve. Keep its saved diagnosis
+    # while warming; peer recovery still requires its separate exact receipts.
+    return (failure.get('category') == 'unknown'
+        and isinstance(failure.get('recordedAt'), (int, float))
+        and isinstance(terminal.get('at'), (int, float))
+        and failure['recordedAt'] >= terminal['at'])
+
+
 def generation_failure(event):
     """Project loop-live's bounded failure vocabulary, never arbitrary messages."""
     category = event.get('error_category')

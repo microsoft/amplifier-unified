@@ -408,6 +408,8 @@ def test_real_helper_receives_identity_and_retention_override_only_for_remove(tm
 
 @pytest.mark.parametrize('evidence', ['missing', 'forged', 'stale'])
 async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files(app, backend, library, monkeypatch, evidence):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxEnvironmentsPerChat':1}})
     """Host preservation only, NOT a phase-proof consumer/validator test."""
     row = (await start(app))['resource']
     row = (await act(app, 'stop', row, 'legacy-stop'))['resource']
@@ -1897,6 +1899,12 @@ async def test_removal_discovery_rejects_unrepresentable_page_offset_without_eff
 async def test_finish_cleanup_preserves_original_unknown_and_keeps_owner(app, backend, monkeypatch):
     # Integration contract deliberately differs from the upstream positive
     # UNKNOWN continuation: stopped inventory cannot settle an old executor.
+    # Make the retained owner consume a configured slot; counts default to unlimited.
+    current = (await app.dispatch('testing.execution.read', {}))['result']
+    await app.dispatch('testing.execution.save', {
+        'expectedRevision': current['revision'], 'queue': {}, 'profiles': {},
+        'concurrency': {'maxEnvironmentsPerChat': 1},
+    })
     original = owner.invoke
     row = (await start(app))['resource']
     row = (await act(app, 'stop', row, 'stop'))['resource']

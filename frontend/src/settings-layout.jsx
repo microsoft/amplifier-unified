@@ -65,18 +65,24 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
   const push=entry=>{current.entries.splice(current.index);current.entries.push(entry);current.index=current.entries.length;history.pushState({...original,amplifierSettings:{token,index:current.index}},'');};
   if(!inherited)latest.current.trail.forEach(push);
   const pop=async event=>{
+   if(session.current!==current)return;
    const marker=event.state?.amplifierSettings;
    if(marker?.token!==token){
     if(current.confirming)return;
     if(current.closing){latest.current.close();return;}
     current.confirming=true;setConfirming(true);
     const accepted=await latest.current.confirmClose();current.confirming=false;
+    if(session.current!==current)return;
     if(accepted){current.closing=true;latest.current.close();}
     else {for(let index=1;index<=current.index;index++)history.pushState({...original,amplifierSettings:{token,index}},'');}
     setConfirming(false);
     return;
    }
    current.index=marker.index;const entry=current.entries[current.index-1];if(!entry)return;
+   // Discard/save can shorten the trail and call history.go to reconcile its
+   // index. That pop already describes the current page: publishing it again
+   // can queue a Settings reopen behind the user's pending tab close.
+   if(entry.key===latest.current.trail.at(-1)?.key)return;
    const orderEditor=Object.keys(entry.navigation).find(name=>entry.navigation[name]?.orderOpen===true);
    // A completed/cancelled order has no draft to reopen with browser Forward.
    if(orderEditor&&!latest.current.view[orderEditor]?.order){history.back();return;}

@@ -5,6 +5,14 @@ export function isNavigationAction(action,args={}){
   ||action==='view.update'&&['workSurface','workWorkspaceId'].some(key=>Object.hasOwn(args.patch||{},key));
 }
 
+// Drawer display changes share navigation ordering without becoming a new
+// destination or invalidating a pending archive/reference navigation intent.
+export function usesNavigationQueue(action,args={}){
+ if(action==='shell.command')return usesNavigationQueue(args.action,args.args);
+ return isNavigationAction(action,args)
+  ||action==='view.update'&&['navExpanded','navPinned'].some(key=>Object.hasOwn(args.patch||{},key));
+}
+
 export function createConversationNavigation(limit=32){
  const cache=new Map(),pending=new Map();let epoch;
  const selected=state=>state?.sessions?.find(row=>row.id===state.selectedSessionId);
@@ -34,7 +42,7 @@ export function createConversationNavigation(limit=32){
   const session={...metadata,draft:saved?.session.draft??summary.draft,historyLoading:true,messages:[],workers:[],approvals:[]};
   return {...state,selectedSessionId:id,selectedWorkspaceId:session.workspaceId??state.selectedWorkspaceId,navigationPending:true,
    sessions:[...(state.sessions||[]).filter(row=>row.id!==id),session],
-   view:{...state.view,workSurface:'chat',draft:session.draft||''},
+   view:{...state.view,workSurface:'chat',draft:session.draft||'',draftDocument:null},
    canvas:{open:false},canvasWorkspace:{views:[]},canvasArtifacts:[]};
  }
  return {remember,begin,apply,settle:token=>pending.delete(token)};

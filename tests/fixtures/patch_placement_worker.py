@@ -57,7 +57,8 @@ class PlacementWorker(FixtureWorker):
             self.execution = asyncio.create_task(self.shutdown.wait())
             self.controls = RuntimeControls(session, self.runtime)
             self.activation_gate = SimpleNamespace(reset=lambda token: None)
-            publish({'type': 'runtime.ready', 'report': {}})
+            publish({'type': 'runtime.ready', 'report': {},
+                     'workerIdentity': {'pid': os.getpid(), 'sessionId': sid}})
         elif data['op'] == 'fixture.tool':
             tools = self.session.coordinator.get('tools')
             result = await tools[data['name']].execute(data['arguments'])

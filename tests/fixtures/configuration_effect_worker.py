@@ -5,6 +5,7 @@ HTTP service, or native history is required. This does not qualify full mounting
 """
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -58,7 +59,8 @@ class FixtureWorker(Worker):
             self.controls.state_path().parent.mkdir(parents=True, exist_ok=True)
             if not self.controls.state_path().exists():
                 self.controls.state_path().write_text(json.dumps({"configurator": {"disabled": {"tools": ["tool-fixture"]}}}))
-            publish({"type": "runtime.ready", "report": {}})
+            publish({"type": "runtime.ready", "report": {},
+                     "workerIdentity": {"pid": os.getpid(), "sessionId": sid}})
         elif data["op"] == "fixture.busy":
             self.runtime.queued_inputs = data["count"]
             publish({"op": "reply", "id": data["id"], "result": {"queued": data["count"]}})

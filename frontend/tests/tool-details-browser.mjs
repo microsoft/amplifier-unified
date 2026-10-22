@@ -67,5 +67,45 @@ try{
  await older.scrollIntoViewIfNeeded();await page.screenshot({path:join(outputDir,'older-tool-details.png')});
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:join(outputDir,'older-tool-details-mobile.png')});
+ // Keep exact open fields while newer events cross the latest-100 cutoff
+ // and retire all eight original recent-window receipts.
+ await page.setViewportSize({width:1300,height:1050});
+ await control({op:'bounded-provider-records',retention:true});
+ await page.reload();await showFixtureConversation(page);
+ const retainedTurn=page.locator('[data-group-id="recordings@recording-question"]');
+ await retainedTurn.locator(':scope > button.a-execution-turn-line').click();
+ const retainedTool=retainedTurn.locator('[data-node-id$=":retained-tool"]');
+ await retainedTool.locator(':scope > button.a-execution-action-line').click();
+ await expect(retainedTool.getByRole('button',{name:/Show all .* lines/})).toHaveCount(2);
+ for(let index=0;index<2;index++)await retainedTool.getByRole('button',{name:/Show all .* lines/}).first().click();
+ await expect(retainedTool).toContainText('TOOL-INPUT-END');
+ await expect(retainedTool).toContainText('TOOL-OUTPUT-END');
+ const retainedModel=retainedTurn.locator('[data-kind="llm"]').filter({hasText:'bounded-recording'});
+ await retainedModel.locator(':scope > button.a-execution-action-line').click();
+ for(const field of ['request','response']){
+  await retainedModel.getByRole('button',{name:new RegExp('^View '+field)}).click();
+  await retainedModel.getByRole('button',{name:new RegExp('^'+field[0].toUpperCase()+field.slice(1)+' Object')}).click();
+ }
+ await expect(retainedModel).toContainText('RECORDED-REQUEST');
+ await expect(retainedModel).toContainText('RECORDED-RESPONSE');
+ const retainedBefore=await control({op:'inspect-work-source'});
+ const fieldReadsBefore=reads.length;
+ for(const count of [99,101,...Array(9).fill(1)]){
+  console.log('Retention rollover',count);
+  const synced=count===99?page.waitForResponse(response=>new URL(response.url()).pathname==='/api/conversation/work-sync'&&response.request().postDataJSON()?.group==='recordings@recording-question'):null;
+  const changed=await control({op:'append-retention-records',count});
+  await page.waitForFunction(revision=>window.amplifier.getState().revision>=revision,changed.revision);
+  if(synced){const update=await synced;assert.ok(update.ok(),await update.text());}
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  // Reconciliation has reached the open view, with no toggle or reload.
+  await expect(retainedTool).toContainText('TOOL-INPUT-END');
+  await expect(retainedModel).toContainText('RECORDED-REQUEST');
+ }
+ await expect(retainedTool).toContainText('TOOL-OUTPUT-END');
+ await expect(retainedModel).toContainText('RECORDED-RESPONSE');
+ await expect(retainedModel.getByRole('link',{name:'Download full recorded request (JSON)',exact:true})).toBeVisible();
+ assert.equal(reads.length,fieldReadsBefore,'Rollover must not discard and re-fetch already loaded fields');
+ assert.deepEqual(await control({op:'inspect-work-source'}),retainedBefore,'Inspection and rollover do not replay work');
+ await page.screenshot({path:join(outputDir,'open-fields-after-rollover.png')});
  console.log('Bounded older exact, delegate and child fields render; legacy observations remain separate; inspection preserves runtime and source state.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}

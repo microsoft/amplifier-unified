@@ -2,12 +2,15 @@
 
 `workspace.tests.submit` queues bounded checks per root conversation. The global
 **Settings → Testing & resources → Advanced execution limits** controls both the
-total pending queue and **Maximum pending checks per chat** (default 1). These
-positive limits count all waiting and active checks, including those beyond the
-first displayed page. Raising the per-chat pending limit admits more waiting requests. The global
-**Owned test environments per chat** limit (default 1) separately controls
-concurrency. A request with `independent: true` may overlap other independent
-checks in distinct owned environments; default requests preserve ordered work. The
+total pending queue (default 64) and **Maximum pending checks per chat** (default
+0: no per-chat count ceiling). **Owned test environments per chat** also defaults
+to 0. Positive saved values remain operator ceilings and count all waiting/active
+checks or retained environments, including those beyond the first displayed page.
+A request with `independent: true` may overlap other independent checks in distinct
+owned environments, subject to physical resource admission and retained-owner
+bounds; default requests preserve ordered work. Queue wait defaults to 0 (until
+Stop or cancellation). An explicit wait limit and already-accepted deadlines keep
+their original meaning; changing defaults never rewrites a queued receipt. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
 command once, stops the exact owned environment, exports source and artifacts,
@@ -58,10 +61,11 @@ The result does not satisfy a shared-task dependency or prove product acceptance
 - Checks use submission order across local and registered remote machines.
   A standard request waits for earlier checks and owned cleanup; it also blocks
   later independent requests until it settles. Consecutive explicitly independent
-  requests may overlap within the current per-chat environment ceiling. Each
+  requests may overlap within any positive per-chat environment ceiling. Each
   request keeps its own source snapshot, resource ID, result and cleanup journal.
-  An unknown outcome never frees an owned slot, even after restart. Independent
-  work may use other free slots without retrying or resolving that unknown.
+  An unknown outcome never discards its retained owner, even after restart.
+  Independent work may use available capacity without retrying or resolving that
+  unknown; an earlier ordered check remains a barrier until its cleanup settles.
   Manual environments count against the same per-chat ceiling. Waiting reasons
   remain visible in the existing check list.
 - A host admits FIFO among its eligible roots. One physical capacity observation
@@ -70,6 +74,32 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   admission performs its own atomic recheck; a snapshot is not a reservation.
 
 ## Capacity policy
+
+The optional per-source **Outstanding task chats per manager** count also defaults
+to 0. Explicit zero disables only that count gate, not assignment, causal-depth,
+notification or ownership checks. Saved positive settings remain unchanged.
+The global pending queue, retained resource-owner and reservation bounds remain
+positive protections for bounded journals and ownership records; zero does not
+disable them. Removing a chat count ceiling does not itself provide machine
+resource admission for ordinary model workers. Test environments continue to use
+their separate physical resource authority described below.
+
+New managed setups with a verified native machine authority use CPU/memory
+reservations and observed memory, disk and CPU pressure instead of a fixed
+running/retained-environment count. Dependency preparation uses those same
+resource reservations; its default is no separate build-count ceiling. Explicit
+saved operator ceilings remain effective. Existing configurations are not
+silently rewritten: an operator can set the running and retained counts to zero
+in Settings to use resource admission while keeping the disk reserve. A daemon
+without verified native resource admission keeps conservative setup defaults.
+
+The fixed updater qualification probe is independent of ordinary count quotas,
+including retained-owner counts. Its exact owner still reserves one CPU and
+512 MiB, checks current physical pressure and backend storage, and journals each
+effect before dispatch. Unknown launches and cleanup keep their owner; quota
+independence never authorizes deleting another environment or replaying work.
+App/component updates can proceed while this isolated check waits for genuine
+resource availability. No ordinary action argument grants the updater lane.
 
 Global **Settings → Testing & resources → Advanced limits** exposes running
 and total retained environment ceilings and the free-disk reserve. These apply
@@ -85,7 +115,9 @@ policy, not the immutable backend configuration used by owned environments.
 Consequently existing queued receipts, source bindings, and cleanup snapshots
 remain valid after settings edits, including receipts written before this UI.
 A save clears queue backoff and wakes waiting checks. Capacity observations and
-the final guarded launch admission use the current policy; a policy decrease
+the final guarded launch admission use the current policy. Setup readiness uses
+the same effective limits and invalidates its observation cache when they change;
+retained backend defaults must not appear as a current capacity refusal. A policy decrease
 never kills already admitted work. Changes to backend identity, installation,
 endpoint, credentials, source/image or placement retain their existing refusal
 and cleanup rules. Direct edits to the old backend configuration remain exact
@@ -95,9 +127,9 @@ Runner overrides identify the qualified **connection**, not a universal machine.
 Changing connection aliases can select a different override; global defaults
 still apply. Docker and Incus retain their own physical daemon/project admission
 locks, but this UI does not synchronize policies across other app installations,
-users, or container systems. CPU/memory budgets, queue size/wait policies,
-resource-aware scheduling and automatic routing across machines remain separate
-work. This screen does not claim those controls exist.
+users, or container systems. The machine resource authority and queue settings
+remain separate owners; their current controls are shown separately in Settings.
+Registered machines use their own verified target authority.
 
 The Docker configuration may set `maxRunning` (default 15), `maxInstances`
 (default 256 retained plus active), and `minFreeBytes` (default 10 GiB). Zero
@@ -218,7 +250,7 @@ next admission check.
 - Queue depth/wait controls, profile execution timeout controls, artifact retention
   limits and broader host registration remain distinct from these resource budgets.
 
-### Legacy export-limit cleanup continuation
+### Returned preservation failure cleanup continuation
 
 A qualified legacy returned export-limit failure keeps its original UNKNOWN
 receipt. If its separately admitted cleanup verifies guest removal but cannot
@@ -229,14 +261,31 @@ dependency cleanup. It does not issue another guest removal or create another
 operation identity. Missing or changed qualification, another unresolved removal,
 and unverified guest removal remain held. Restart does not weaken these checks.
 
+The same continuation also accepts an exact retained helper response reporting
+`verify-exports` / `phase_failed` / `destroyEffect: not_dispatched`, after the
+host drained and reaped that helper. Passive `workspace.environments.removal.read`
+reports `returned_archive_verification_failure` for this case. It does not read
+archive contents or infer execution from diagnostic files. A generic UNKNOWN,
+missing response, dispatch uncertainty or another unresolved removal stays held.
+
+Fresh archive validation failures report `archive_verification_failed` before
+any removal effect, so existing queue cleanup can continue through `finishCleanup`.
+The continuation exports both filesystems again, verifies bounded archive-only
+custody without extracting or following links, rechecks the stopped owner and
+backend, then verifies removal and finishes dependency cleanup. Existing exports
+alone never authorize destruction. The original uncertain receipt remains intact;
+its ordered queue barrier clears only when the canonical resource owner retires.
+
 ## Work concurrency settings
 
 The same Advanced execution limits form exposes global limits for outstanding
-task chats per manager (default 8), owned test environments per chat (default 1),
+task chats per manager (default 0: no count ceiling), owned test environments per
+chat (default 0: no count ceiling),
 all non-retired resource owners (default 512), and resource owners per chat
 (default 32), and cooperative reservations per installation (default 1024) and
-per chat including nested workers (default 64). These are positive whole numbers,
-not model-selected overrides.
+per chat including nested workers (default 64). Retained-owner and reservation
+bounds must stay positive; the first two counts accept zero. These are operator
+settings, not model-selected overrides.
 An empty setting restores the default. The host-defaults authority and exact
 settings revision protect changes through either the UI or agent actions.
 Machine CPU, memory, storage and backend limits remain additional admission gates;

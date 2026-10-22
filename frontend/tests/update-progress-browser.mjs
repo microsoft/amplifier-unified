@@ -131,6 +131,41 @@ try{
  await updates.getByRole('button',{name:'Return to chat',exact:true}).click();
  await expect(page.locator('.a-settings-experience')).not.toBeVisible();
  await openSettingsPage(page,'updates');await expect(overview).toContainText('Finishing your update');
+ // The release card follows the target through discovery, restart and component
+ // completion; reading its ordinary changes does not acknowledge guidance.
+ await stage('summary-before');
+ const summary=updates.locator('[data-part="update-release-summary"]');
+ await expect(summary).toBeVisible();await expect(summary).toContainText('What’s new in 0.20.206');
+ await expect(summary).toContainText('See what an update includes before installing.');
+ assert.equal(await summary.evaluate(el=>!!el.closest('details')),false);
+ assert.equal(await summary.evaluate(el=>!!(el.compareDocumentPosition(document.querySelector('[data-part="update-controls"]'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
+ const noticeRead=()=>page.evaluate(()=>window.amplifier.getState().attention?.items?.find(item=>item.id==='release-notice:0.20.206:summary-guidance')?.read);
+ await expect.poll(noticeRead).toBe(false);
+ await page.screenshot({path:output+'-release-before.png'});
+ await stage('summary-queued');await expect(summary).toContainText('Included in this update · 0.20.206');
+ await expect(summary).not.toContainText('Later release');await expect(overview).toContainText('Latest v0.20.207');
+ await page.reload();await openSettingsPage(page,'updates');await expect(summary).toContainText('Included in this update · 0.20.206');
+ await stage('summary-restarting');await expect(summary).toContainText('Included in this update · 0.20.206');
+ await expect(summary).not.toContainText('Now installed');
+ await page.screenshot({path:output+'-release-during.png'});
+ await stage('summary-after');await expect(summary).toContainText('Now installed · 0.20.206');
+ await expect(overview).toContainText('Finishing test runner update');await expect(overview).toContainText('Application updated successfully');
+ await page.reload();await openSettingsPage(page,'updates');await expect(summary).toContainText('Now installed · 0.20.206');
+ await expect.poll(noticeRead).toBe(false);
+ await page.screenshot({path:output+'-release-after.png'});
+ await page.setViewportSize({width:320,height:844});
+ await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+ await summary.scrollIntoViewIfNeeded();await page.screenshot({path:output+'-release-phone.png'});
+ // High-impact acknowledgment still requires viewing that separate content.
+ await updates.locator('[data-part="important-release-changes"]>summary').click();
+ await updates.getByText('Example important guidance',{exact:true}).first().scrollIntoViewIfNeeded();
+ await expect.poll(noticeRead).toBe(true);
+ await stage('summary-missing');await expect(summary).toContainText('Included in this update · 0.20.204');
+ await expect(summary).toContainText('Release notes for this version are unavailable');
+ await expect(summary.getByRole('link')).toHaveAttribute('href','https://github.com/microsoft/amplifier-unified/releases/tag/v0.20.204');
+ await expect(summary).not.toContainText('Clearer update summaries');
+ await stage('summary-reset');await page.setViewportSize({width:1280,height:950});
+ result.releaseSummary={before:true,exactQueuedTarget:true,newerDiscovery:true,uncertainRestart:true,confirmedWithRunnerWait:true,reload:true,missingNotes:true,phone:true,noticeReadSeparate:true};
  // Ordinary preferences retain an unfamiliar saved interval until explicitly changed.
  await stage('installed');
  const observations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};

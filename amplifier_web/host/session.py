@@ -641,12 +641,16 @@ def required_components():
 def module_source(config, snapshot, module, source, components=None):
     components = components or required_components()
     selected = components.source(module, source, installed=True)
-    if components.owns(module, source):
-        return selected
-    result = source if snapshot else config.module_sources.get(module) or source
+    owned = components.owns(module, source)
+    result = selected if owned else source if snapshot else config.module_sources.get(module) or source
     observer = getattr(config, '_source_policy_observer', None)
     if observer:
-        observer.observe(result, config, explicit_local=bool(not snapshot and config.module_sources.get(module)))
+        # Observe the winning host declaration too. A resolved relative module
+        # may still belong to its observed Git-backed behavior; only an actual
+        # local override or installed host component adds local-only intent.
+        explicit_local = bool(not snapshot and config.module_sources.get(module) == result)
+        explicit_local |= owned and module in getattr(components, 'installed', {})
+        observer.observe(result, config, explicit_local=explicit_local)
     return result
 
 

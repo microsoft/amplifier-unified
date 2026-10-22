@@ -19,8 +19,11 @@ export function updateOverview(updates={},options={}){
  const failed=updates.pendingReplacement!=null||!!updates.error||['error','interrupted'].includes(updates.phase)||updates.pendingRestart?.requestStatus==='rejected'||app.status==='check_failed'||!!(seq.stage==='included'&&seq.included?.issues);
  const active=['checking','staging','validating','activating'].includes(updates.phase);
  const pending=!!(updates.pendingApp||updates.pendingRelease||updates.pendingRestart||updates.pendingSmartTools?.length);
- const waiting=!failed&&!active&&!updates.pendingRestart&&pending&&!(updates.pendingRelease&&updates.plan?.activation==='per-worker'&&!updates.pendingApp&&!updates.pendingSmartTools?.length);
- const runnerOnlyPending=!!updates.pendingSmartTools?.length&&updates.pendingSmartTools.every(row=>row.runnerSource)&&!updates.pendingApp&&!updates.pendingRelease&&!updates.pendingRestart;
+ const runnerPending=!!updates.pendingSmartTools?.length&&updates.pendingSmartTools.every(row=>row.runnerSource);
+ const runnerOnlyPending=runnerPending&&!updates.pendingApp&&!updates.pendingRelease&&!updates.pendingRestart;
+ const independentUpdate=runnerOnlyPending&&(appAvailable||rows.some(row=>row.kind!=='smart tool'&&row.status==='update'));
+ const blockingPending=pending&&!independentUpdate;
+ const waiting=!failed&&!active&&!updates.pendingRestart&&blockingPending&&!(runnerOnlyPending&&seq.nextStage)&&!(updates.pendingRelease&&updates.plan?.activation==='per-worker'&&!updates.pendingApp&&(!updates.pendingSmartTools?.length||runnerPending));
  const blockers=updates.blockers||[],chats=new Set(blockers.filter(row=>row.kind==='conversation'&&row.sessionId).map(row=>row.sessionId));
  const stage=seq.nextStage||seq.stage||'application';
  const batch=updates.diagnostics?.batch;
@@ -35,7 +38,7 @@ export function updateOverview(updates={},options={}){
  const progress=updates.probeProgress;
  const currentProgress=currentBatch&&progress?.attemptId===currentBatch.attemptId&&updates.phase==='validating'&&
   Number.isInteger(progress.total)&&Number.isInteger(progress.completed)&&progress.total>=0&&progress.completed>=0&&progress.completed<=progress.total?progress:null;
- const result={stage,installable,blocked,runnerOnlyPending,busy:active||(!failed&&(pending||!!seq.nextStage))||updates.pendingReplacement!=null,waiting,processing:!failed&&!waiting&&(active||pending||!!seq.nextStage),continuing:!!seq.install,currentBatch,currentProgress,applicationResult,componentFailure:!!componentFailure,completedBatches:(updates.diagnostics?.completedBatches||[]).slice(-5),title:'Check for updates',detail:'We’ll check Amplifier and the components it uses.',tone:'neutral'};
+ const result={stage,installable,blocked,runnerOnlyPending,busy:active||(!failed&&(blockingPending||!!seq.nextStage))||updates.pendingReplacement!=null,waiting,processing:!failed&&!waiting&&(active||blockingPending||!!seq.nextStage),continuing:!!seq.install,currentBatch,currentProgress,applicationResult,componentFailure:!!componentFailure,completedBatches:(updates.diagnostics?.completedBatches||[]).slice(-5),title:'Check for updates',detail:'We’ll check Amplifier and the components it uses.',tone:'neutral'};
  if(componentFailure){
   const names=(currentBatch.components||[]).slice(0,5),count=currentBatch.componentCount||names.length;
   const affected=names.length?` Affected batch: ${names.join(', ')}${count>names.length?` and ${count-names.length} more`:''}.`:'';
@@ -47,7 +50,7 @@ export function updateOverview(updates={},options={}){
  if(failed)return {...result,title:'Updates need attention',tone:'error',detail:updates.pendingReplacement!=null?'The installation needs verification before work can continue. Open details for the recovery steps.':updates.pendingRestart?'The app update needs help finishing its restart. Open details for the next step.':seq.included?.issues?'Some required components could not be updated. Your existing configuration is preserved. Review the issue below.':'The update could not finish. Review the issue below before trying again.'};
  if(updates.initialPreparation&&stage!=='complete'&&!waiting&&(active||seq.nextStage||options.autoInstall!==false))return {...result,title:'Getting Amplifier ready',detail:'Preparing and checking components for your first chat. You can set up your AI connection while this finishes.',tone:'working'};
  if(updates.pendingRestart)return {...result,title:updates.pendingRestart.requestStatus==='uncertain'?'Waiting for restart confirmation':'Restarting Amplifier',detail:'Waiting for a healthy restarted app before continuing with the remaining updates.',tone:'working'};
- if(updates.pendingRelease&&updates.plan?.activation==='per-worker'&&!updates.pendingApp&&!updates.pendingSmartTools?.length)return {...result,title:'Finishing your update',detail:'We’re getting the updated components ready for new work. This continues automatically; active chats can keep going.',tone:'working'};
+ if(updates.pendingRelease&&updates.plan?.activation==='per-worker'&&!updates.pendingApp&&(!updates.pendingSmartTools?.length||runnerPending))return {...result,title:'Finishing your update',detail:'We’re getting the updated components ready for new work. This continues automatically; active chats can keep going.',tone:'working'};
  if(waiting&&runnerOnlyPending)return {...result,title:'Finishing test runner update',detail:updates.pendingSmartTools.some(row=>row.runnerWaiting==='unknown')?'We’re confirming the isolated check’s result before switching runners. Existing chats and checks can continue.':'The updated runner is waiting for machine capacity or completing its isolated check. Existing chats and checks can continue.',tone:'working'};
  if(waiting)return {...result,title:chats.size&&blockers.every(row=>row.kind==='conversation')?`Waiting for ${chats.size} ${chats.size===1?'chat':'chats'} to finish`:'Waiting for your work to finish',detail:updates.pendingApp?'Your update is ready. Amplifier will restart automatically when active work finishes. Your conversations and drafts will be kept.':'Your update is ready. It will continue automatically when active work and calls finish.',tone:'working'};
  if(active){

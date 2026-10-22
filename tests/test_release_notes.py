@@ -74,7 +74,7 @@ def test_history_limits_and_exact_published_version():
     assert release_notes.parse(document([entry('98.0.0'),entry()]),'99.0.0')[0]['version']=='99.0.0'
 
 
-@pytest.mark.parametrize('count', [101, release_notes.MAX_RELEASES])
+@pytest.mark.parametrize('count', [101, 257, release_notes.MAX_RELEASES])
 def test_history_retains_more_than_one_hundred_releases_within_bounds(monkeypatch, count):
     notes = release_notes.parse(document([entry(f'0.1.{i}') for i in range(count)]))
     monkeypatch.setattr(release_notes, 'bundled', lambda: notes)

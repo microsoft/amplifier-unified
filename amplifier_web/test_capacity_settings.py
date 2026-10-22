@@ -95,12 +95,17 @@ def effective(config, policy):
     return values, sources
 
 
-def apply(app, config):
+def apply(app, config, *, _qualification=False):
     """Called at the existing guarded admission point; never mutates its input."""
     value = copy.deepcopy(config)
     limits, _ = effective(value, load(app))
     target = value['incus'] if value.get('backend') == 'incus' else value
     target.update(limits)
+    if _qualification:
+        # The fixed updater probe has its own exact owner and physical-host
+        # reservation. Ordinary job counts must not prevent repairing a runner.
+        # This is private call context, never an action argument or saved policy.
+        target.update(maxRunning=0, maxInstances=0)
     return value
 
 

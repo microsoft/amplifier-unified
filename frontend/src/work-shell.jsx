@@ -12,7 +12,8 @@ import {useNavigationController,ChatList,NavigationEditor,ChatSearch} from './sh
 import {WorkspaceCleanup} from './storage-settings';
 import {WorkspaceExplorer} from './workspace-explorer';
 import {WorkspaceForm,WorkspacePicker} from './workspace-setup';
-import {WorkspaceReadiness,WorkspaceResources} from './workspace-starters';
+import {WorkspaceReadiness} from './workspace-starters';
+import {WorkspaceResourcesOwner,WorkspaceResourcesSlot} from './workspace-resource-inventory';
 import {WorkspaceBundleDefault} from './bundle-controls';
 import {newChatSetup} from './new-chat';
 import {useActivityClock,CopyDetail} from './navigation-details';
@@ -25,6 +26,7 @@ import {sessionStatus} from './session-status';
 import {ownershipState} from './ownership';
 import {hasNavigationResource} from './shell/navigation-demand';
 import {NavigationResourceStatus} from './shell/navigation-resource-status';
+import {DestinationHistory} from './destination-history.jsx';
 
 export function WorkDialog({label,onClose,children,initialFocus}){
  const ref=useRef(null);useModalFocus(ref,true,onClose);
@@ -53,7 +55,7 @@ export function AppFooter({state,connected,open,act}){
   <div className="a-footer-status"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span>{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options"><button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button></ActionMenu></ShellSlot></div>
  </div>;
 }
-export function WorkHeader({state,session,act,open,narrow,presentation}){
+export function WorkHeader({state,session,act,open,narrow,presentation,fileDropHandlers}){
  const nav=useContext(WorkNavigationContext),surface=workSurface(state),browsing=surface!=='chat';
  const displayTitle=useChatTitle(session,{eager:!browsing}).title;
  const setup=!session&&!browsing?newChatSetup(state):null;
@@ -67,12 +69,13 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   return()=>{observer.disconnect();window.removeEventListener('resize',measure)};
  },[]);
  const title=surface==='home'?'Home':surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
- return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel}>
+ return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel} {...fileDropHandlers}>
   <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
   <button id="navigation-toggle" type="button" className="a-icon a-work-nav-toggle" aria-label={navOpen?'Close navigation':'Open navigation'} aria-expanded={navOpen} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:!navOpen,...(!navigationNarrow?{navPinned:!navOpen}:{}),toolbarMenuOpen:false}})}><PanelLeft/>{!navOpen&&<AttentionBadge state={state}/>}</button>
+  <DestinationHistory history={nav.history} onVisit={nav.visitHistory} disabled={!!state.navigationPending}/>
   <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb"><button type="button" className="a-work-crumb a-work-home-crumb" onClick={()=>nav.home({navExpanded:false})}><HomeIcon/><span>Home</span></button><ChevronRight aria-hidden="true"/>{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page">{title}</strong></nav>}</ShellSlot>
   <div className="a-work-header-actions">
-   {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
+   {!browsing&&session&&<><ActionMenu label="Chat" icon={<MessageCircle/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
     <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
     <button onClick={()=>open('chat-share')}><Share2/>Share or save</button>
@@ -113,7 +116,7 @@ export function WorkspaceFiles({workspace,state,act}){
  }
  return <section className="a-work-files" aria-label="Workspace files"><p className="a-caption">Files on {state.workspaceDefaults?.hostLabel||'this host'}. Viewing this list does not add files to a message.</p><div className="a-work-file-path"><button className="a-icon" type="button" disabled={path===workspace.path||!!opening} aria-label="Parent folder" onClick={()=>browseFolder(listing?.parent||workspace.path)}><ArrowLeft/></button><code>{path}</code></div>{busy&&<p role="status">Loading files…</p>}{failure&&<p role="alert">{failure}</p>}{listing?.path===path&&listing.entries.map(row=><div className="a-work-file-row" key={row.path}>{row.directory?<Folder/>:<FileText/>}<button type="button" disabled={!!opening||!row.directory&&(!canOpen||state.navigationPending)} data-action={row.directory?undefined:'canvas.openFile'} aria-busy={opening===row.path||undefined} onClick={()=>row.directory?browseFolder(row.path):openFile(row)}><span>{row.name}</span>{!row.directory&&canOpen&&<small>{opening===row.path?'Opening…':destination}</small>}</button><button type="button" className="a-icon" aria-label={'Copy path for '+row.name} onClick={()=>navigator.clipboard.writeText(row.path).then(()=>setCopied(row.name),()=>setError('Clipboard unavailable.'))}><Copy/></button></div>)}{listing?.truncated&&<p>Showing the first 300 entries. Browse a subfolder to see more.</p>}{!canOpen&&<p className="a-caption">Open a chat in this workspace to preview a file beside it.</p>}{copied&&<p role="status">Path copied: {copied}</p>}</section>;
 }
-function WorkBrowser({host,workspaceHost,state,act,presentation}){
+function WorkBrowser({host,workspaceHost,state,act,presentation,resourceSlot}){
  const model=useNavigationController(host,'chats'),workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),now=useActivityClock(),nav=useContext(WorkNavigationContext);
  const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=!['chat','home'].includes(surface);
  const identity=surface+(surface==='workspace'?':'+state.view.workWorkspaceId:'');
@@ -130,7 +133,7 @@ function WorkBrowser({host,workspaceHost,state,act,presentation}){
  return <WorkLandingFrame mode={mode} presentation={presentation} identity={identity} readingKey={readingKey} ready={!page?.pending&&!workspacePending&&(surface!=='workspaces'||hasNavigationResource(workspaceModel.state,'workspaceExplorer'))} title={title} description={description}
   toolbar={<LandingToolbar mode={mode} onMode={setMode} presentation={presentation} actions={<button type="button" className="a-home-create a-soft" aria-label={surface==='workspaces'?'New workspace':'New chat'} disabled={surface==='workspace'&&(workspacePending||!workspace)} onClick={()=>surface==='workspaces'?nav.create():nav.newChat(surface==='workspace'?workspace?.path:undefined)}><Plus/><span>{surface==='workspaces'?'New workspace':'New chat'}</span></button>}/>}
  ><NavigationEditor model={model} deleteOwner={active}/><NavigationEditor model={workspaceModel}/>
- <WorkspaceResources state={state} act={act} workspaceId={surface==='workspace'&&tab==='details'?workspace?.id:undefined}/>{active&&<>
+ <WorkspaceResourcesSlot connect={resourceSlot} workspace={surface==='workspace'&&tab==='details'&&!workspacePending&&workspace?.available!==false?workspace:undefined} unavailableId={surface==='workspace'&&tab==='details'&&!workspacePending&&(!workspace||workspace.available===false)?state.view.workWorkspaceId:undefined}/>{active&&<>
   {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceBundleDefault key={workspace.id} workspace={workspace} state={state} act={act}/>}
   {surface==='workspaces'?<><NavigationResourceStatus state={workspaceModel.state} resource="workspaceExplorer" label="workspaces" refresh={workspaceModel.refreshResources}/>{hasNavigationResource(workspaceModel.state,'workspaceExplorer')?<WorkspaceExplorer state={workspaceModel.state} act={workspaceModel.act} onEdit={workspaceModel.setDraft} heading={false} layout={mode} identity={identity} onSelect={row=>nav.browse('workspace',row.workspaceId)}/>:!workspaceModel.state.navigationResourcePending?.workspaceExplorer&&<p role="status">Loading workspaces…</p>}</>:<>
    {surface==='workspace'&&workspace&&!workspacePending&&<WorkspaceWork key={workspace.id} workspace={workspace} session={state.sessions?.find(row=>row.id===state.selectedSessionId)} dispatch={act} onOpenChat={id=>act('session.select',{id})}/>}
@@ -145,7 +148,7 @@ function WorkBrowser({host,workspaceHost,state,act,presentation}){
 export function WorkSurface({shell,state,act}){
  const chats=shell.composition.instances.find(row=>row.package==='builtin.chats'),workspaces=shell.composition.instances.find(row=>row.package==='builtin.workspaces');
  if(!chats)return <div className="a-work-browser"><p>Your custom navigation is available in the sidebar. This browser uses the standard Chats component.</p><a href="?shell=recovery">Open with standard navigation</a></div>;
- return <div className="a-work-browser-host" hidden={workSurface(state)==='chat'}>{workSurface(state)==='home'?<AdaptiveWorkHome host={shell.hostFor(chats)} state={state} act={act} presentation={shell.composition.presentation}/>:<WorkBrowser key={workSurface(state)+':'+(state.view.workWorkspaceId||'')} presentation={shell.composition.presentation} host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/>}</div>;
+ return <WorkspaceResourcesOwner key={state.client?.id||'local'} state={state} act={act}>{resourceSlot=><div className="a-work-browser-host" hidden={workSurface(state)==='chat'}>{workSurface(state)==='home'?<AdaptiveWorkHome host={shell.hostFor(chats)} state={state} act={act} presentation={shell.composition.presentation}/>:<WorkBrowser key={workSurface(state)+':'+(state.view.workWorkspaceId||'')} presentation={shell.composition.presentation} host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act} resourceSlot={resourceSlot}/>}</div>}</WorkspaceResourcesOwner>;
 }
 
 // Live controls stay outside the conversation, which is hidden during browsing.

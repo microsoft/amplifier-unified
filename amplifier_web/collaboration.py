@@ -1627,44 +1627,45 @@ class Collaboration:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 return duplicate
-            # A root occupies one slot while executable work is outstanding.
-            # Idle history and uncertain historical receipts are not work; their
-            # evidence stays unknown and is never resolved/replayed by this cap.
-            roots = [row for row in self.service.state["sessions"]
-                     if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]]
             from .test_execution_settings import concurrency
             maximum = concurrency(self.service)['maxTaskChatsPerSource']
-            outstanding = set()
-            for row in roots:
-                active = row.get("collaborationGeneration") or {}
-                task = row.get("task") or self.service.coordination.task(row["id"]) or {}
-                if (row.get("status") in {"starting", "working", "running", "busy", "stopping"}
-                        or active.get("id") and not active.get("terminal")
-                        or row["id"] in getattr(self.service.runtime, "_preparations", {})
-                        or task.get("id") and task.get("status") in {"active", "running", "working"}):
-                    outstanding.add(row["id"])
-            # Idle presentation can be nonresident while a durable task or an
-            # unsubmitted input still occupies a slot. Count exact directory
-            # owners without admitting or reading unrelated saved bodies.
-            sql, bound = self.service.directory.effective()
-            outstanding.update(row[0] for row in self.service.db.execute(sql + """
-                SELECT d.id FROM directory_rows d
-                WHERE json_extract(d.summary,'$.collaboration.creatorSessionId')=?
-                AND (json_extract(d.summary,'$._coordinationTaskActive')=1 OR EXISTS(
-                    SELECT 1 FROM commands c
-                    WHERE json_extract(c.receipt,'$.commandAction')='coordination.send'
-                    AND json_extract(c.receipt,'$.target.sessionId')=d.id
-                    AND json_extract(c.receipt,'$.delivery') IN ('queued','submitting','pending_steer')))
-                LIMIT ?""", (*bound, source['id'], maximum)))
-            pending = self.service.db.execute("""SELECT receipt FROM commands
-                WHERE json_extract(receipt,'$.commandAction')='coordination.create'
-                AND json_extract(receipt,'$.senderSessionId')=?
-                AND json_extract(receipt,'$.protocol')=?
-                AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""",
-                (source["id"], PROTOCOL)).fetchall()
-            outstanding.update(json.loads(row[0])["sessionId"] for row in pending)
-            if len(outstanding) >= maximum:
-                self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
+            if maximum:
+                # A root occupies one slot while executable work is outstanding.
+                # Idle history and uncertain historical receipts are not work; their
+                # evidence stays unknown and is never resolved/replayed by this cap.
+                roots = [row for row in self.service.state["sessions"]
+                         if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]]
+                outstanding = set()
+                for row in roots:
+                    active = row.get("collaborationGeneration") or {}
+                    task = row.get("task") or self.service.coordination.task(row["id"]) or {}
+                    if (row.get("status") in {"starting", "working", "running", "busy", "stopping"}
+                            or active.get("id") and not active.get("terminal")
+                            or row["id"] in getattr(self.service.runtime, "_preparations", {})
+                            or task.get("id") and task.get("status") in {"active", "running", "working"}):
+                        outstanding.add(row["id"])
+                # Idle presentation can be nonresident while a durable task or an
+                # unsubmitted input still occupies a slot. Count exact directory
+                # owners without admitting or reading unrelated saved bodies.
+                sql, bound = self.service.directory.effective()
+                outstanding.update(row[0] for row in self.service.db.execute(sql + """
+                    SELECT d.id FROM directory_rows d
+                    WHERE json_extract(d.summary,'$.collaboration.creatorSessionId')=?
+                    AND (json_extract(d.summary,'$._coordinationTaskActive')=1 OR EXISTS(
+                        SELECT 1 FROM commands c
+                        WHERE json_extract(c.receipt,'$.commandAction')='coordination.send'
+                        AND json_extract(c.receipt,'$.target.sessionId')=d.id
+                        AND json_extract(c.receipt,'$.delivery') IN ('queued','submitting','pending_steer')))
+                    LIMIT ?""", (*bound, source['id'], maximum)))
+                pending = self.service.db.execute("""SELECT receipt FROM commands
+                    WHERE json_extract(receipt,'$.commandAction')='coordination.create'
+                    AND json_extract(receipt,'$.senderSessionId')=?
+                    AND json_extract(receipt,'$.protocol')=?
+                    AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""",
+                    (source["id"], PROTOCOL)).fetchall()
+                outstanding.update(json.loads(row[0])["sessionId"] for row in pending)
+                if len(outstanding) >= maximum:
+                    self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
             if not args['title'].strip() or not args['text'].strip():
                 self.error('Enter a task title and brief.', 400)
             self.require_causal_depth(self.causal_depth(source, lineage, origin))

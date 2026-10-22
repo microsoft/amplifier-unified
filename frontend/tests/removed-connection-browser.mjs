@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  const actions=[];page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const inspect=async()=>await(await page.request.get(url+'/fixture')).json();
- await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await page.goto(url);await showFixtureConversation(page);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  const composer=page.getByRole('textbox',{name:'Message Amplifier'}),retainedDraft='Keep this private draft while replacing the removed connection.';
  await composer.fill(retainedDraft);await expect(composer).toHaveDraft(retainedDraft);
  const before=await inspect();
@@ -27,7 +28,7 @@ try{
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(composer).toHaveDraft(retainedDraft);
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
- const panel=page.getByRole('region',{name:'Conversation model',exact:true});
+ const panel=page.getByRole('dialog',{name:'Chat options',exact:true});
  await expect(panel.locator('#chat-provider')).toBeEnabled();
  try{await expect(panel.locator('#chat-provider option[value="replacement-account"]')).toHaveCount(1)}catch(error){
   console.error(JSON.stringify({actions,inspect:await inspect()}));
@@ -38,7 +39,7 @@ try{
  assert.deepEqual((await inspect()).started,[],'Browsing a failed chat cannot start its worker');
  await panel.locator('#chat-provider').selectOption('replacement-account');
  await expect.poll(async()=>(await inspect()).pending).toEqual({instance:'replacement-account',model:'new-model'});
- await panel.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.reload();
  await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toContainText('new-model');
  await expect(composer).toHaveDraft(retainedDraft);

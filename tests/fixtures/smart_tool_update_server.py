@@ -33,7 +33,12 @@ async def serve():
                              for name in ('unavailable', 'healthy')]
         await manager.installSmartTools()
         async def inspect(request):
-            return web.json_response({'calls': calls, 'pending': service.state['updates'].get('pendingSmartTools', [])})
+            return web.json_response({'calls': calls, 'pending': service.state['updates'].get('pendingSmartTools', []),
+                                      'pendingApp': service.state['updates'].get('pendingApp'),
+                                      'phase': service.state['updates'].get('phase'),
+                                      'error': service.state['updates'].get('error'),
+                                      'applicationStatus': service.state['updates'].get('application', {}).get('status'),
+                                      'checkQueued': bool(manager.check_task and not manager.check_task.done())})
         async def failed(request):
             await manager.publish(phase='error', error='One tool needs attention.', pendingSmartTools=[{
                 'previous': 'skip-example', 'revision': 'c' * 40, 'component': 'skip-example',
@@ -41,6 +46,54 @@ async def serve():
             return web.json_response({'ok': True})
         app.router.add_get('/fixture/tool-updates', inspect)
         app.router.add_post('/fixture/tool-updates', failed)
+        async def runner_wait(request):
+            # The real dispatcher/update coordinator sees an independent runner
+            # receipt plus a newer app. Only app preparation is synthetic: never
+            # replace or restart the fixture's installation.
+            async def stage_app():
+                calls.setdefault('application', []).append('stage')
+                await manager.publish(phase='app-staged', pendingApp={'latest': 'v9.9.9'},
+                                      detail='Waiting for work to finish.')
+            manager.app = stage_app
+            manager.inventory = []
+            service.state['settings']['updates']['autoInstall'] = False
+            await manager.publish(phase='available', error=None, appAvailable=True, available=1,
+                runnerAvailabilityCheck=True, sequence={'stage': 'application', 'install': False},
+                application={'id': 'application', 'label': 'Amplifier Unified', 'kind': 'app',
+                             'status': 'update', 'current': amplifier_web.__version__,
+                             'latest': 'v9.9.9', 'releaseNotes': [{'version': '9.9.9', 'title': 'Fixture release',
+                             'changes': ['New app remains available while the runner waits.'], 'notices': []}]},
+                items=[], pendingSmartTools=[{'previous': 'a' * 24, 'target': 'b' * 24,
+                    'runnerUpdate': 'c' * 32, 'runnerWaiting': 'unknown',
+                    'runnerSource': {'runnerKind': 'managed-dtu-core'}}])
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/runner-update', runner_wait)
+        observation_release = asyncio.Event()
+        observation_task = None
+        async def hold_observation(request):
+            nonlocal observation_task
+            from amplifier_web import app_updates
+            offered = dict(service.state['updates']['application'])
+            async def available():
+                calls.setdefault('checks', []).append('available')
+                return offered
+            app_updates.check = available
+            await manager.publish(phase='staged', pendingApp=None, appAvailable=False,
+                                  available=0, detail='Waiting for runner capacity.')
+            entered = asyncio.Event()
+            async def observe():
+                async with manager.lock:
+                    entered.set()
+                    await observation_release.wait()
+            observation_task = asyncio.create_task(observe())
+            await entered.wait()
+            return web.json_response({'ok': True})
+        async def release_observation(request):
+            observation_release.set()
+            await observation_task
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/runner-observation/hold', hold_observation)
+        app.router.add_post('/fixture/runner-observation/release', release_observation)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, '127.0.0.1', 0)

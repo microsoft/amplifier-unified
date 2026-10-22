@@ -31,6 +31,16 @@ its receipt. An interrupted or timed-out command remains uncertain and is never
 automatically replayed. A read can observe containers without proving that an
 earlier command finished. Stop of a conversation revokes agent approval; it does
 not itself claim to stop an environment or cancel an in-container command.
+
+A returned `repository-source-changed` failure during source preparation is a
+terminal failed check: no dependency preparation, guest launch or test command
+started. Keep the source stable and submit a **new** check explicitly; the failed
+request is never replayed. Reconciliation can recognize an already-retired
+allocation from its exact original failed receipt and private owner/backend
+binding. This reports the historical no-launch result, not current physical
+absence, and performs no cleanup. Missing or changed evidence, pending preparation,
+admitted work and genuine unknown outcomes retain the existing recovery rules.
+
 Manual operations serialize for each environment. Queued checks use durable
 guest supervision: cancellation requests termination, host restarts observe the
 same job, and cleanup waits for a confirmed terminal result. The manual execute

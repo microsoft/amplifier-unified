@@ -9,7 +9,7 @@ const port=await new Promise((resolve,reject)=>{let output='';const timer=setTim
 const base=`http://127.0.0.1:${port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
 const control=async body=>{const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});if(!response.ok)throw Error(await response.text()+' '+log);return response.json()};
 await control({op:'inspection'});
-const browser=await chromium.launch({headless:true});
+const browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});
 try{
  const page=await browser.newPage({viewport:{width:1300,height:950},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers}),errors=[],detailReads=[];
  page.setDefaultTimeout(15000);
@@ -43,22 +43,27 @@ try{
  await expect(tool.getByRole('button',{name:'Copy file content',exact:true})).toBeEnabled();
  assert.match(await tool.innerText(),/Bearer owned-log-value/);
  assert.equal(await tool.locator('details').count(),0);
- assert.equal(await tool.locator('.a-execution-payload').filter({hasText:'File content'}).locator('pre').innerText(),Array(10).fill('Result line.').join('\n'));
+ const fileContent=tool.locator('.a-execution-payload').filter({hasText:'File content'}),fullResult='Result line.\n'.repeat(2000)+'RESULT-END';
+ assert.equal(await fileContent.locator('pre').innerText(),Array(10).fill('Result line.').join('\n')+'\n…');
+ await expect(fileContent.getByText('Showing a preview.',{exact:true})).toBeVisible();
+ await tool.getByRole('button',{name:'Copy file content',exact:true}).click();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),fullResult,'Copy includes the original complete result while its display is shortened');
  await tool.getByRole('button',{name:'Show all 2001 lines',exact:true}).click();
- assert.match(await tool.innerText(),/RESULT-END/);
+ assert.equal(await fileContent.locator('pre').innerText(),fullResult);
+ await expect(fileContent.getByText('Showing a preview.',{exact:true})).toHaveCount(0);
  assert.equal(await tool.getByRole('link',{name:'https://example.com/artifact',exact:true}).getAttribute('href'),'https://example.com/artifact');
- await tool.getByRole('button',{name:'Copy file content',exact:true}).click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/RESULT-END/);
+ await tool.getByRole('button',{name:'Copy file content',exact:true}).click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),fullResult);
  // A browser clipboard denial must retain the readable full result and offer
  // an honest fallback; it must not refetch the record or claim another copy.
  await page.evaluate(()=>{window.savedClipboardWrite=navigator.clipboard.writeText.bind(navigator.clipboard);navigator.clipboard.writeText=async()=>{throw new DOMException('Fixture clipboard denied','NotAllowedError')}});
  await tool.getByRole('button',{name:'Copy file content',exact:true}).click();
  await expect(tool.getByRole('status')).toHaveText('Select the text to copy it manually.');
  await expect(tool.getByRole('button',{name:'Copy file content',exact:true})).toHaveText('Copy');
- assert.match(await tool.locator('.a-execution-payload').filter({hasText:'File content'}).locator('pre').innerText(),/RESULT-END/);
+ assert.equal(await fileContent.locator('pre').innerText(),fullResult);
  await page.evaluate(()=>{navigator.clipboard.writeText=window.savedClipboardWrite;delete window.savedClipboardWrite});
  await tool.getByRole('button',{name:'Copy file content',exact:true}).click();
  await expect(tool.getByRole('status')).toHaveText('Copied');
- assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/RESULT-END/);
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),fullResult);
  assert.equal(detailReads.filter(url=>url.searchParams.get('field')==='output').length,2);
  await control({op:'inspection-finish'});await expectCurrentWork();await expect(modelLine).toContainText('120 tokens');
  assert.match(await page.locator('[data-group-id="inspect@question"] > .a-execution-turn-line').innerText(),/120 tokens · \$0.004/);
@@ -67,5 +72,5 @@ try{
  await page.reload();await expectCurrentWork();await model.waitFor();assert.equal(await modelLine.innerText(),finalTimer);
  await answer.scrollIntoViewIfNeeded();await page.getByRole('button',{name:'Retry loading full text'}).click();await page.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();
  await tool.getByRole('link',{name:'https://example.com/artifact',exact:true}).waitFor();
- assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; clipboard denial retains selectable full content and explicit retry succeeds without another detail read; long fences preview 10 lines; model one-liners stay visible; live timing and usage settle across reload.');
+ assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; clipboard denial retains selectable full content and explicit retry succeeds without another detail read; long fences preview 10 lines plus an explicit ellipsis; model one-liners stay visible; live timing and usage settle across reload.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}

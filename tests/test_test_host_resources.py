@@ -117,6 +117,15 @@ def test_build_slots_release_on_confirmed_launch_not_time(machine):
     assert host.snapshot()['reserved']['count'] == 2
 
 
+def test_default_preparation_uses_resource_reservations_not_a_two_build_cap(machine):
+    values = [row('builder-' + str(i), profile='browser-test', preparing=True) for i in range(3)]
+    assert all(reserve(value)['admitted'] for value in values)
+    assert host.snapshot()['reserved']['preparing'] == 3
+    # Pending allocations reserve memory before their usage is observable.
+    machine[1]['availableMemoryMiB'] = 20000
+    assert 'memoryPressure' in reserve(row('next', profile='browser-test', preparing=True))['blockers']
+
+
 def test_unobserved_admissions_reserve_available_headroom(machine):
     _, observation = machine
     observation['availableMemoryMiB'] = 2500

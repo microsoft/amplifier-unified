@@ -33,6 +33,10 @@ def update(service, args, command_id, fingerprint, *, include_state):
                 restore(service.state, service.db, open_panel=True)
                 canvas = client['canvas']
                 cached = None
+            if canvas.get('_presentationDisposed'):
+                service.canvas_views.select_presentation({'id': canvas['id'],
+                    'version': canvas.get('selectedVersion') or canvas.get('revision', 1)}, 'ui')
+                cached = None
         views = service.canvas_views.record()
         # Preserve the renderer generation when hiding an already mounted view.
         # Reopening also freezes an existing hidden binding before it changes.

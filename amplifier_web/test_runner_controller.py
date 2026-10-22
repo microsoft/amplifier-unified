@@ -250,6 +250,8 @@ def dispatch(request, *, _configuration=None, _engine_owner=None):
         return {'ok': True, 'backendPolicy': backend_policy.save(base, identity, config, payload['expectedRevision'], payload['limits'])}
     if action == 'capacity':
         config = backend_policy.apply(base, identity, config)
+        if _engine_owner:
+            config.update(maxRunning=0, maxInstances=0)
         result = worker.execute_call({'action': 'capacity', 'root': str(base), 'incus': config}, **({'_engine_owner': _engine_owner} if _engine_owner else {}))
         result['machineResources'] = machine.snapshot()
         return result
@@ -305,6 +307,10 @@ def dispatch(request, *, _configuration=None, _engine_owner=None):
             # create, test, stop or export effect; keep it after lost replies.
         if action in {'start', 'prepareDependencies'}:
             config = backend_policy.apply(base, identity, config)
+            if _engine_owner:
+                # Only the private, exact-owner update probe has this context.
+                # Storage thresholds and the machine reservation remain active.
+                config.update(maxRunning=0, maxInstances=0)
             reservation = machine.reserve(row, target)
             if not reservation.get('admitted'):
                 return {'ok': False, 'status': 'not-started', 'effectAdmitted': False, 'admissionDenied': True,

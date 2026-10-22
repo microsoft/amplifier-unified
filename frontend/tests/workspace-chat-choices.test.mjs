@@ -84,3 +84,44 @@ test('visited workspace resource forms keep private edits while hidden and stop 
   assert.equal(requests.length,queries+1);
  }finally{await act(async()=>root?.unmount());globalThis.window=priorWindow}
 });
+
+test('resource drafts and late save receipts stay with their registered workspace',async()=>{
+ let root,finishSave;const calls=[],priorWindow=globalThis.window,other={id:'other',name:'Other',path:'/other'};
+ globalThis.window={addEventListener(){},removeEventListener(){}};
+ const dispatch=async(name,args)=>{
+  calls.push([name,args]);
+  if(name==='workspace.resources.add')await new Promise(resolve=>{finishSave=resolve});
+  return {accepted:true,result:name==='workspace.resources.list'?{resources:[]}:{items:[],nextOffset:null}};
+ };
+ const element=(row,unavailableId)=>React.createElement(WorkspaceResources,{state:{workspaces:row?[row]:[]},act:dispatch,workspaceId:row?.id,unavailableId});
+ const editors=()=>root.root.findAllByProps({'aria-label':'Workspace resources'});
+ const editor=id=>editors().find(node=>node.findAllByType('h3')[0].children.join('').includes(id));
+ const click=async(node,label)=>act(async()=>node.findAllByType('button').find(button=>button.children.join('')===label).props.onClick());
+ const fill=async(node,value)=>act(async()=>node.findAllByType('input')[1].props.onChange({target:{value}}));
+ const value=node=>node.findAllByType('input')[1]?.props.value;
+ try{
+  await act(async()=>{root=create(element({...workspace,name:'First'}))});
+  await click(editor('First'),'Record resource');await fill(editor('First'),'first draft');
+  await act(async()=>editor('First').findByType('form').props.onSubmit({preventDefault(){}}));
+  assert.ok(finishSave);assert.equal(calls.filter(([name])=>name==='workspace.resources.add').length,1);
+  await act(async()=>root.update(element(other)));
+  await click(editor('Other'),'Record resource');await fill(editor('Other'),'other draft');
+  await act(async()=>finishSave());
+  assert.equal(value(editor('Other')),'other draft');
+  assert.equal(editor('First').findAllByType('form').length,0,'only the initiating form clears after its receipt');
+  assert.equal(calls.find(([name])=>name==='workspace.resources.add')[1].workspaceId,workspace.id);
+  await act(async()=>root.update(element({...workspace,name:'First'})));
+  assert.equal(value(editor('Other')),'other draft','bounded registration absence does not discard another workspace');
+  await act(async()=>root.update(element(other)));
+  await click(editor('Other'),'Cancel resource');await click(editor('Other'),'Record resource');assert.equal(value(editor('Other')),'');
+  await fill(editor('Other'),'must not follow replacement');
+  await act(async()=>root.update(element({...other,path:'/replacement'})));
+  assert.equal(editor('Other').findAllByType('form').length,0,'replacement path cannot inherit the former editor');
+  await click(editor('Other'),'Record resource');await fill(editor('Other'),'removed registration draft');
+  await act(async()=>root.update(element(null,other.id)));
+  assert.equal(editors().some(node=>node.findAllByType('h3')[0].children.join('').includes('Other')),false);
+  await act(async()=>root.update(element({...other,path:'/replacement'})));
+  assert.equal(editor('Other').findAllByType('form').length,0,'explicit unavailability discards the retired registration');
+  assert.equal(calls.filter(([name])=>name==='workspace.resources.add').length,1,'navigation never replays saves');
+ }finally{await act(async()=>root?.unmount());globalThis.window=priorWindow}
+});

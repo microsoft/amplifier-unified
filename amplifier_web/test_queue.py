@@ -154,7 +154,7 @@ class TestQueue:
                 reason = 'Waiting for an earlier check in this chat to finish and clean up.'
         if reason is None and other_owners and not independent:
             reason = 'Waiting for this chat’s previous test environment cleanup to be confirmed.'
-        if reason is None and not own and len(occupants) >= limit:
+        if reason is None and not own and limit and len(occupants) >= limit:
             reason = 'Waiting for this chat’s test environment capacity and cleanup to be confirmed.'
         if reason is None and not own and (total >= limits['maxOwnedResources'] or root_total >= limits['maxOwnedResourcesPerChat']):
             reason = 'Waiting for retained resource owner capacity. Inspect retained resources or adjust Advanced execution limits in Settings.'
@@ -373,7 +373,7 @@ class TestQueue:
             config, _, reason = environments.configuration(self.app)
             if not config:
                 owner.error(reason, 409)
-            if self.pending_count(sid=source['id']) >= queue_policy['maxPendingPerChat']:
+            if queue_policy['maxPendingPerChat'] and self.pending_count(sid=source['id']) >= queue_policy['maxPendingPerChat']:
                 owner.error('This chat’s pending check limit has been reached. Inspect its checks or adjust Advanced execution limits in Settings.', 429)
             if self.pending_count() >= queue_policy['maxPending']:
                 owner.error('The saved queue limit has been reached. Inspect pending checks or adjust Advanced execution limits in Settings.', 429)

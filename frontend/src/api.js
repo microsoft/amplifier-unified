@@ -4,6 +4,22 @@ import {createDraftJournal} from './draft-journal.js';
 export const clientId=crypto.randomUUID();
 export const draftJournal=createDraftJournal(clientId);
 let attachment,journalResumed=false;
+let authenticationScope=null,authenticationGeneration=0,authenticationExpired=false;
+const authenticationListeners=new Set();
+export function onAuthenticationChange(listener){authenticationListeners.add(listener);return()=>authenticationListeners.delete(listener)}
+function observeAuthentication(res,generation){
+  const scope=res.headers?.get?.('X-Amplifier-History-Scope');
+  if(generation!==authenticationGeneration)return null;
+  const expired=res.status===401&&!authenticationExpired;
+  const replaced=!!scope&&!!authenticationScope&&scope!==authenticationScope;
+  if(expired||replaced){
+    authenticationGeneration++;
+    for(const listener of authenticationListeners)listener(res.status===401?null:scope);
+  }
+  if(res.status===401){authenticationScope=null;authenticationExpired=true}
+  else if(scope){authenticationScope=scope;authenticationExpired=false}
+  return scope;
+}
 export function clientUrl(path){
   if(!path.startsWith('/api/'))return path;
   const url=new URL(path,location.origin);url.searchParams.set('clientId',clientId);
@@ -18,7 +34,7 @@ export function attachClient(signal){
       // Restore into this new private view before opening its state stream. No
       // message is submitted and no runtime/conversation action is replayed.
       for(const entry of draftJournal.entries()){
-        try{await request('/api/actions',{method:'POST',signal,body:{action:'view.update',args:{sessionId:entry.sessionId,patch:{draft:entry.text}}}})}
+        try{await request('/api/actions',{method:'POST',signal,body:{action:'view.update',args:{sessionId:entry.sessionId,patch:{draft:entry.text,draftDocument:entry.document??null}}}})}
         catch(error){if(error.status!==404)throw error;continue} // Keep missing-chat text locally; never block opening the app.
         draftJournal.acknowledge(entry);
       }
@@ -48,6 +64,7 @@ export async function request(path, options = {}) {
   finally{row.elapsedMs=Math.round(performance.now()-started);requestTimings.push(row);if(requestTimings.length>30)requestTimings.shift()}
 }
 async function measuredRequest(path, options, timing) {
+  const authenticationAtStart=authenticationGeneration;
   const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId,'X-Amplifier-State-Transport':'delta-v1'}:{}), ...options.headers };
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
@@ -57,6 +74,7 @@ async function measuredRequest(path, options, timing) {
   };
   let res;
   try{res=await fetch(path,{...options,body,headers,credentials:'same-origin'})}catch(error){throw unavailable(error)}
+  const historyScope=observeAuthentication(res,authenticationAtStart);
   timing.status=res.status;timing.requestId=res.headers?.get?.('X-Amplifier-Request-Id')||undefined;
   const server=/app;dur=([0-9.]+)/.exec(res.headers?.get?.('Server-Timing')||'');if(server)timing.serverMs=Number(server[1]);
   const dated=Date.parse(res.headers?.get?.('date'));
@@ -68,6 +86,7 @@ async function measuredRequest(path, options, timing) {
   // A repeated command can return its original rejection inside an HTTP 200 receipt.
   const rejectionStatus=res.ok&&data.accepted===false?(Number.isInteger(data.status)&&data.status>=400&&data.status<600?data.status:400):res.status;
   if(!res.ok || data.accepted===false) throw Object.assign(new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${rejectionStatus})`),{code:data.code,state:data.state,receipt:data.receipt,status:rejectionStatus});
+  if(historyScope&&data.state?.client?.kind==='web')data.state={...data.state,client:{...data.state.client,historyScope}};
   return data;
 }
 export function download(filename, content, type='application/json') {

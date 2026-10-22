@@ -303,6 +303,18 @@ async def main():
                     row['execution']['nodes'].append({'id': 'earlier-' + str(i), 'kind': 'tool',
                         'turnId': 'recordings', 'label': 'Earlier check', 'phase': 'completed',
                         'startedAt': now - 8, 'endedAt': now - 7})
+                if args.get('retention'):
+                    row['execution']['nodes'] = []
+                    emitted_tools=[]
+                    tools=LoggedEvents(aid,emitted_tools.append);tools.turn_id='recordings'
+                    arguments={'code':'// retained tool input\n'*100+'TOOL-INPUT-END'}
+                    for event in ('tool:pre','tool:post'):
+                        data={'tool_call_id':'retained-tool','tool_name':'tool_exec','tool_input':arguments}
+                        if event=='tool:post':
+                            data['result']={'success':True,'output':'retained output\n'*100+'TOOL-OUTPUT-END'}
+                        tools.hook(aid,event,data)
+                    for event in emitted_tools:
+                        kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
                 hooks, capabilities, emitted = HookRegistry(), {}, []
                 coordinator = SimpleNamespace(hooks=hooks, get_capability=capabilities.get,
                     register_capability=lambda key, value: capabilities.update({key: value}))
@@ -350,6 +362,13 @@ async def main():
                 def no_complete_projection(*args, **kwargs):
                     raise AssertionError('This fixture must use bounded event windows only')
                 service.event_log_view.read = no_complete_projection
+            elif op == 'append-retention-records':
+                count=args.get('count',1)
+                assert type(count) is int and 0<count<=201
+                for index in range(count):
+                    log_hook(aid,'tool:post',{'tool_call_id':f'unrelated-{time.time_ns()}-{index}',
+                        'tool_name':'Newer saved work','result':{'success':True}})
+                await service.event_log_view.windows.read(aid)
             elif op == 'flush-provider-records':
                 # Only canonical bytes arrive: no execution event can wake an
                 # already open completed call on behalf of the product.

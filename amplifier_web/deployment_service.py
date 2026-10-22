@@ -96,7 +96,8 @@ def _service_values(data_dir: Path, workspace: str | Path | None) -> tuple[list[
     # The runtime discovers uv by PATH, just like the installer's shell. A
     # fixed short PATH loses Snap, Homebrew, or custom installs. Preserve
     # lexical paths: /snap/bin/uv is a dispatcher, not its resolved target.
-    service_path = os.environ.get("PATH") or f"{Path.home() / '.local' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
+    from .host_dependencies import tool_path
+    service_path = tool_path()
     if any(ord(char) < 32 or ord(char) == 127 for char in service_path):
         raise ValueError("PATH must not contain control characters.")
     # Freeze the installer's resolved root. A user service need not inherit the

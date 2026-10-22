@@ -7,6 +7,55 @@ spent 9m28s rebuilding the same Core Git commit as the preceding attempts;
 its 24 actual tests took 4.57s. Application packaging and its install probe took
 six seconds.
 
+## Version choice and release notes
+
+The release owner chooses the version from the combined changes since the last
+published tag, and records the bump type and reason in the release PR.
+
+- **Patch (`0.y.z` → `0.y.z+1`)**: repairs, performance, dependency/security
+  maintenance, documentation and refinements to an existing workflow, preserving
+  the supported contracts. Patch count and elapsed time do not force a minor bump.
+- **Minor (`0.y.z` → `0.y+1.0`)**: a meaningful new user capability or workflow,
+  a new supported client/integration surface, or a public-contract addition or
+  deprecation. While on `0.x`, an intentional incompatible contract change also
+  requires a minor bump, explicit owner review and migration guidance; do not
+  hide it in a patch. Batch a coherent feature when useful, not one minor per PR.
+- **1.0 and later**: declaring the stable supported public contracts is an
+  explicit product decision, not a patch-count milestone. Thereafter follow
+  [Semantic Versioning](https://semver.org/spec/v2.0.0.html): compatible fixes are
+  patches, compatible functionality/deprecations are minors, and incompatible
+  public-contract changes require a major. Bundled client/server edits still
+  ship together; independently released clients retain their own contracts.
+
+For **every release**, including fixes-only, dependency, packaging and test-only
+maintenance releases:
+
+1. Review the actual shipped diff/merged PRs since the previous published tag.
+   Add its exact version to `amplifier_web/release-notes.json` with a short title
+   and at least one useful plain-language change. Say what changed for users;
+   if it is maintenance only, say so and identify the area. Do not copy a commit
+   list, claim unmerged work, or describe an earlier pass as current verification.
+2. Separately assess high-impact `notices`: changed defaults/permissions,
+   migrations, existing workflows, automatic behavior or required action. State
+   the effect and what the person should do. Ordinary fixes need an entry, not
+   an attention badge; `notices: []` is valid. Preserve existing notice IDs and
+   acknowledgments. Substantive wording corrections may require review again.
+3. Check that skipped releases remain represented and that a person can tell
+   what they are installing. Backfill omissions under the version that actually
+   shipped the behavior, using verified source/release evidence. Deliver those
+   corrections in the next package; never rewrite published tags or assets.
+4. In the release PR, state the version rationale and whether high-impact
+   guidance is included (or why none is needed). Use the existing release-notes
+   tests, Fast release checks and package validation; no extra broad gate.
+
+The same data supplies installed/offline history and GitHub release text.
+The validator already requires the current entry and a nonempty changes list,
+and rejects invalid, duplicate or future versions; it cannot judge whether the
+words cover the shipped behavior. Keep within `release_notes.py`'s bounded
+history limits (512 entries and 256,000 UTF-8 bytes); plan retention deliberately
+before either bound is reached rather than silently dropping notes. The entry
+limit accommodates the authored backfill; the independent byte cap remains in force.
+
 ## Preparing a version change
 
 The frontend embeds the package version from `pyproject.toml` in both its

@@ -65,6 +65,14 @@ async def main(home):
     seed_connection(home / 'shared-settings')
     from aiohttp import web
     from amplifier_web.server import create_app
+    import amplifier_web
+    package_root = Path(amplifier_web.__file__).resolve().parent
+    expected_package_root = os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT')
+    installed_package_verified = bool(expected_package_root) and package_root == Path(expected_package_root).resolve()
+    if expected_package_root:
+        assert installed_package_verified, 'Fixture imported source instead of the installed wheel'
+    static_identity = {str(p.relative_to(package_root / 'static')): hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in (package_root / 'static').rglob('*') if p.is_file()} if expected_package_root else None
 
     workspace = home / "workspace"
     workspace.mkdir()
@@ -102,12 +110,23 @@ async def main(home):
 
     async def inspect(request):
         return web.json_response({"foundationCachePresent": (home / "app/foundation").exists(),
+            "installedPackageVerified": installed_package_verified, "staticSha256": static_identity,
             "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
             "registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 
     app.router.add_get("/fixture", inspect)
+    if '--navigation-history' in sys.argv:
+        async def history_message(request):
+            service = app['service']
+            session = service._session((await request.json())['sessionId'])
+            await service.on_runtime_event('assistant.message', {
+                'sessionId': session['id'], 'text': 'Open the related conversation.',
+                'generationId': 'history-fixture-generation',
+            })
+            return web.json_response({'messageId': session['messages'][-1]['id']})
+        app.router.add_post('/fixture/history-message', history_message)
     if '--startup-failure' in sys.argv:
         async def fail_startup(request):
             runtime.start_gate.set()
@@ -134,6 +153,8 @@ async def main(home):
             session = service._session(data['sessionId'])
             session['status'] = data.get('status', 'working')
             session['workers'] = data.get('workers', [])
+            if 'plan' in data:
+                session.setdefault('execution', {})['plan'] = data['plan']
             service._publish()
             return web.json_response({'ok': True})
 

@@ -156,8 +156,8 @@ def read_removal(app, args, origin, caller, *, listing=False):
                         or app.operations.requests.read(sid, args['originalRequestId']) != original
                         or root_binding() != captured):
                     raise AppError('Removal inspection changed or is busy.', 409)
-                from .test_environment_legacy import returned_export_limit
-                legacy = returned_export_limit(row, original)
+                from .test_environment_legacy import returned_preservation_failure
+                legacy = returned_preservation_failure(row, original)
                 available = bool(legacy and row.get('environmentState') == 'stopped')
                 if available:
                     from .task_environments import require_resolved_removal
@@ -169,7 +169,7 @@ def read_removal(app, args, origin, caller, *, listing=False):
                     'version': 1, 'sessionId': sid, 'id': rid, 'revision': row['revision'],
                     'original': {'requestId': args['originalRequestId'], 'state': state},
                     'status': 'qualified' if legacy else 'held',
-                    'code': 'returned_legacy_export_limit' if legacy else
+                    'code': legacy['kind'].replace('-', '_') if legacy else
                             'original_binding_missing' if original.get('resourceId') is None
                             else 'original_binding_unverified',
                     'executor': 'returned_and_reaped' if legacy else 'unobserved',
@@ -242,12 +242,66 @@ def verify(row, result):
     return True
 
 
+def prelaunch_source_failure(app, row):
+    """Inspect an exact returned source refusal, never infer physical absence.
+
+    Older helpers used generic UNKNOWN prose, but the host journal records the
+    failed prepare before admission and the queue retires that logical owner.
+    Missing flags alone, an inventory, or a caller-supplied result is not proof.
+    """
+    from . import task_environments as owner
+    from .test_environment_worker import read_private_record, binding
+    if (row.get('status') != 'retired' or row.get('environmentState') != 'not-started'
+            or row.get('backendType') != 'docker' or not row.get('backendConfigRetained')
+            or row.get('owner', {}).get('sessionId') != row.get('sessionId')
+            or any(row.get(key) for key in ('backendAdmitted', 'preparationPending',
+                'preparedDependencies', 'hostReservation', 'snapshot', 'durableJob', 'pendingRequest'))):
+        return None
+    try:
+        original = app.operations.requests.read(row['sessionId'], row['commandId'])
+        result = original.get('result', {})
+        if (original != row.get('lastOperation')
+                or original.get('requestId') != row['commandId']
+                or original.get('sessionId') != row['sessionId']
+                or original.get('resourceId') != row['id']
+                or original.get('action') != 'workspace.environments.start'
+                or original.get('state') != 'failed' or result.get('ok') is not False
+                or result.get('effectAdmitted') is True
+                or result.get('status') != 'not-started' or result.get('snapshot') is not None
+                or result.get('code') != 'repository-source-changed'
+                or not row.get('universeId') or result.get('universeId') != row['universeId']
+                or not row.get('launchOperationId')
+                or owner.storage.observe(app.data_dir, row)['observation'] != 'present'):
+            return None
+        recorded = read_private_record(owner.storage.directory(app.data_dir, row) / 'backend-binding.json')
+        actual = backend_identity(recorded.get('backendIdentity') if isinstance(recorded, dict) else None)
+        if (actual['backend'] != 'docker'
+                or row.get('backendIdentity') is not None and row['backendIdentity'] != actual
+                or recorded != binding({'rootOwner': row['sessionId'], 'operationId': row['launchOperationId']},
+                                       row['universeId'], actual)):
+            return None
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        return None
+    return {'ok': True, 'status': 'not-started', 'effectAdmitted': False,
+            'preLaunchFailure': {'originalRequestId': original['requestId'],
+                'code': result['code'], 'resourceId': row['id'], 'rootOwner': row['sessionId'],
+                'operationId': row['launchOperationId'], 'backendKey': row['backendKey'],
+                'backendIdentity': actual, 'universeId': row['universeId']},
+            'message': 'The original source snapshot failed before launch. No environment or test command was started. The failed request is retained; use stable source for a new check.'}
+
+
 def project(app, row, request):
     from . import task_environments as owner
     if (request.get('action') != ACTION or request.get('state') != 'completed'
             or request.get('resourceId') != row['id'] or request.get('sessionId') != row['sessionId']):
         raise ValueError('The recovery receipt does not match this environment.')
     result = request['result']
+    if 'preLaunchFailure' in result:
+        if prelaunch_source_failure(app, row) != result:
+            raise ValueError('The original pre-launch failure binding changed.')
+        return owner.save(app.data_dir, row, pendingRecovery=None, lastRecovery=request,
+            observation={'status': 'observed', 'observedAt': time.time(), 'source': 'original-launch-receipt'},
+            reason=result['message'])
     verified = verify(row, result)
     changes = {'pendingRecovery': None, 'lastRecovery': request,
                'observation': {'status': 'observed' if verified else 'unverified', 'observedAt': time.time()},
@@ -300,11 +354,16 @@ def reconcile(app, row, args, config, request, admit):
                 row = owner.project_result(home, row, prior)
         admit()
         row = owner.save(home, row, pendingRecovery=request['requestId'])
-        result = owner.invoke(config, home, row, 'reconcile', args)
+        result = prelaunch_source_failure(app, row)
+        if result is None:
+            result = owner.invoke(config, home, row, 'reconcile', args)
         observed = True
         admit()
         if result.get('ok'):
-            verify(row, result)
+            if 'preLaunchFailure' not in result:
+                verify(row, result)
+            elif result != prelaunch_source_failure(app, row):
+                raise ValueError('The original pre-launch failure binding changed.')
             request = app.operations.requests.finish(request, 'completed', resourceId=row['id'], result=result,
                 message=result.get('message', 'Current state was inspected; earlier uncertain operations are unchanged.'))
             row = project(app, row, request)

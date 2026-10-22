@@ -54,7 +54,7 @@ try{
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`${width}: no page overflow`);
    const chat=await page.locator('.a-conversation').boundingBox(),composer=await page.locator('.a-composer').boundingBox();
    assert.ok(chat.x+chat.width<=width+1&&composer.x+composer.width<=width+1,`${width}: chat and composer fully visible`);
-   if(width<520){await page.getByRole('button',{name:'Chat options',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Done',exact:true}).click();}
+   if(width<520){await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Done',exact:true}).click();}
    await page.getByRole('button',{name:'Open canvas',exact:true}).click();await expect(panel).toBeVisible();
    if(width<660)assert.ok((await panel.boundingBox()).width<=width);
    await page.getByRole('button',{name:width<=760?'Back to chat':'Close canvas panel',exact:true}).click();
@@ -64,7 +64,7 @@ try{
  await page.setViewportSize({width:1440,height:1000});
  await page.getByRole('button',{name:'Preview in chat',exact:true}).click();
  await expect(page.locator('.a-inline-artifact').getByRole('heading',{name:'A clearer first impression',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Close preview of Website refresh brief',exact:true}).click();
- await expect(page.getByRole('button',{name:'Show preview',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Hide preview',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Preview in chat',exact:true})).toBeVisible();
  assert.deepEqual(errors,[]);console.log('PASS: conversation, compact overview, artifact selection, separate durable widths, focus, Activity, Settings, Options, and five light/dark viewport sizes.');
 }finally{await browser?.close();fixture.kill()}

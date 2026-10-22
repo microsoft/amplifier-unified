@@ -1381,6 +1381,12 @@ previously suppressed or unknown requests are not replayed.
 
 A fresh human-backed owner request can admit one reconciliation input to a failed commissioned member. The host requires a recorded terminal generation, no active child work, and the existing native ownership lock proving the previous worker is absent. A classified provider cause gains terminal identity only when its observed admitted input and active generation match the failure event; later generic worker errors retain that cause. Ownership stays held through the saved receipt. The failed generation and its effects remain evidence; no input or command is retried. A newer failure, Stop, membership change, human input or pending access change invalidates admission.
 
+The current failed root generation owns its diagnosis even when the last UI turn
+is older or the generation includes a native delegate observation. Preparing a
+replacement worker preserves that diagnosis until a new generation starts;
+worker readiness alone does not recover the failed turn. Historical peer-receipt
+requirements and all admission guards remain unchanged.
+
 Explicit provider/tool safety failures block peer resumption even after ordinary Stop changes the displayed status. Passive inspection and a separate permitted human request through normal chat admission remain available; this is not a permanent ban on unrelated work or a mechanism for clearing the halted operation.
 
 Unknown assignment Stop receipts retain their original outcomes. A later durable recovery receipt can settle only its explicitly listed session/Stop pairs, using the native ownership proof held through that recovery commit. Further recovery consumes this historical evidence instead of reacquiring a detached former member's new independent writer. Current bound members must still settle, and any new or unproved unknown Stop still needs native ownership proof.
@@ -1395,6 +1401,10 @@ A released receipt wakes waiters; each checks the current input, generation, Sto
 configuration, native owner and actual cumulative/assignment policy again. Unknown
 outcomes remain held and are never inferred complete to free a slot. Disconnect or
 cancellation removes waiting entries; admitted calls finish independently.
+When unknown and live calls share the concurrency ceiling, live completions can
+still release their own slots, so new calls wait without changing the unknown
+receipts. Unknown reservations alone at or above the ceiling remain a hard pause.
+Cumulative token/cost and unknown-usage policies still apply at every admission.
 
 Settings → Advanced → Performance & runtime → Model capacity applies across this
 host. The default permits 256 waiting calls with no time limit; the user can change

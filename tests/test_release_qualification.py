@@ -446,7 +446,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
     ('patch-placement-recovery', ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py']),
     ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
-    ('managed-removal-recovery', ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
+    ('managed-removal-recovery', ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
 def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):
@@ -538,24 +538,80 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
     assert browser_runner_commands([{'run': joined}]) == [joined]
 
 
+def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['canvas-qualification']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert 'secrets.' not in str(job)
+    assert job['steps'][0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    commands = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'uv sync --locked --group dev --group artifacts --no-build-package amplifier-core' in commands
+    assert 'npm ci --prefix frontend' in commands
+    assert 'npx playwright install --with-deps chromium' in commands
+    assert 'python scripts/canvas_qualification.py run' in commands
+    upload = next(step for step in job['steps'] if step.get('uses') == 'actions/upload-artifact@v4')
+    assert 'always()' in upload['if'] and upload['with']['if-no-files-found'] == 'error'
+    source = (ROOT / 'scripts/canvas_qualification.py').read_text()
+    assert 'from browser_check_runner import run_scenarios' in source
+    assert "BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs'," in source
+    assert "'destination-history-browser.mjs', 'automation-hub-browser.mjs'," in source
+    assert job['steps'][1]['env']['MIXED'] == (
+        '${{ inputs.attachment_experience || inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption '
+        '|| inputs.destination_history || inputs.settings_close_diagnostic }}')
+    assert "raise ValueError('Qualification already started; no replay')" in source
+    assert "'installed-harness'" in source and "'installed-identity.json'" in source
+    assert "assert static == json.loads((OUT / 'static.json').read_text())" in source
+
+
 def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
-    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption'}
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
+                           'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
+                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages'}
+    assert inputs['canvas_qualification']['type'] == 'boolean'
+    assert inputs['canvas_qualification']['default'] == 'false'
+    assert inputs['multi_quote']['type'] == 'boolean'
+    assert inputs['multi_quote']['default'] == 'false'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert inputs['attachment_experience']['type'] == 'boolean'
+    assert inputs['attachment_experience']['default'] == 'false'
+    assert inputs['peer_messages']['type'] == 'boolean'
+    assert inputs['peer_messages']['default'] == 'false'
+    assert inputs['settings_close_diagnostic']['type'] == 'boolean'
+    assert inputs['settings_close_diagnostic']['default'] == 'false'
+    assert inputs['destination_history']['type'] == 'boolean'
+    assert inputs['destination_history']['default'] == 'false'
     assert inputs['attachment_consumption']['type'] == 'boolean'
     assert inputs['attachment_consumption']['default'] == 'false'
     assert inputs['app004_qualification']['type'] == 'boolean'
     assert inputs['app004_qualification']['default'] == 'false'
     assert inputs['mcp_boundary']['type'] == 'boolean'
     assert inputs['mcp_boundary']['default'] == 'false'
+    assert inputs['compact_composer']['type'] == 'boolean'
+    assert inputs['compact_composer']['default'] == 'false'
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}"
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
+    history = workflow['jobs']['destination-history']
+    assert history['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
+    assert history['steps'][0] == {
+        'name': 'Require the fixed navigation selection for diagnostic mode',
+        'if': '${{ inputs.settings_close_diagnostic && !inputs.destination_history }}',
+        'run': 'exit 1',
+    }
+    assert history['steps'][1] == {
+        'name': 'Reject mixed navigation selections',
+        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience }}',
+        'run': 'exit 1',
+    }
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
     incompatible = mcp['steps'][1]
     assert incompatible['name'] == 'Reject incompatible browser proof selections'
@@ -565,6 +621,16 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
         'exit 1',
     ]
     steps = job['steps']
+    assert next(s for s in steps if s.get('name') == 'Reject mixed multi-quote selections') == {
+        'name': 'Reject mixed multi-quote selections',
+        'if': '${{ inputs.multi_quote && (inputs.attachment_consumption || inputs.app004_qualification || inputs.mcp_boundary) }}',
+        'run': 'exit 1',
+    }
+    assert next(s for s in mcp['steps'] if s.get('name') == 'Reject mixed MCP and attachment selection') == {
+        'name': 'Reject mixed MCP and attachment selection',
+        'if': '${{ inputs.attachment_consumption || inputs.multi_quote || inputs.attachment_experience }}',
+        'run': 'exit 1',
+    }
     commands = browser_runner_commands(steps)
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
@@ -600,7 +666,15 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
              if step.get('if') != '${{ inputs.attachment_consumption }}']
     next_step = after[0]
     assert next_step['name'] == 'Run all extended browser scenarios serially'
-    assert 'if' not in next_step  # Implicit success gate leaves initialized rows unrun on failure.
+    # Multi-quote replaces only this explicitly selected run; default/APP004
+    # retain the existing plan and implicit success gate on earlier failures.
+    assert next_step['if'] == '${{ !inputs.multi_quote }}'
+    assert next(s for s in steps if '--initialize' in s.get('run', ''))['if'] == '${{ !inputs.multi_quote }}'
+    assert next(s for s in steps if s.get('name') == 'Run fixed multi-quote source and installed proof') == {
+        'name': 'Run fixed multi-quote source and installed proof',
+        'if': '${{ inputs.multi_quote }}',
+        'run': 'uv run --no-sync python scripts/multi_quote_checks.py --output output/multi-quote --installed',
+    }
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
     continued = [step for step in steps if 'continue-on-error' in step]
     assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts'}
@@ -611,6 +685,37 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert diagnostics['if'] == 'always()'
     assert diagnostics['uses'] == 'actions/upload-artifact@v4'
     assert 'output/browser-checks/' in diagnostics['with']['path']
+
+
+def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert 'compact_composer' not in workflow['on']['workflow_call']['inputs']
+    job = workflow['jobs']['compact-composer']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
+    assert job['timeout-minutes'] == '30'
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[1] == {'name': 'Reject mixed selections',
+                       'if': '${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}',
+                       'run': 'exit 1'}
+    assert steps[2]['run'] == 'python scripts/compact_composer_checks.py --initialize'
+    commands = [step['run'] for step in steps if 'run' in step]
+    assert commands.count('uv run --no-sync python scripts/compact_composer_checks.py') == 1
+    assert 'uv sync --locked --group dev --group artifacts' in commands
+    assert 'npm ci --prefix frontend' in commands
+    assert 'npm run build --prefix frontend' in commands
+    assert all('${{' not in command for command in commands)
+    assert all('continue-on-error' not in step for step in steps)
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    assert len(uploads) == 2
+    assert uploads[0]['if'] == "${{ steps.compact-build.outcome == 'success' }}"
+    assert uploads[0]['with']['path'] == 'amplifier_web/static/'
+    assert uploads[0]['with']['include-hidden-files'] == 'true'
+    assert uploads[1]['if'] == 'always()'
+    assert uploads[1]['with']['path'] == 'output/compact-composer/'
+    assert all(step['with']['if-no-files-found'] == 'error' for step in uploads)
+    assert 'secrets.' not in str(job)
 
 
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():

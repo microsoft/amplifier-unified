@@ -28,7 +28,11 @@ collapsed unless explicitly expanded; their saved state survives reloads and
 collapsing a group preserves the individual action expansion choices inside it.
 Group size is measured from the skimmed rows, not the size of unopened payloads.
 Code fences show all content through 15 lines, then preview the
-first 10 lines with a single expand control. Exceptionally long unbroken text is
+first 10 lines followed by a separate ellipsis and a preview label, with a single
+expand control. Expansion shows the complete content without the preview marker;
+structured JSON may be formatted for readability. Copy retains the original saved
+text. Copying the shortened view still copies the complete saved field.
+Exceptionally long unbroken text is
 also previewed. Commands, output and exit status, file contents, patches, task
 lists and delegated actions have typed presentations. Additional recorded
 arguments and result fields remain visible without a duplicate raw-input/result
@@ -41,8 +45,9 @@ Parsing and file reads run off the server event loop. A replaced log invalidates
 old references; failed reads retain the preview and offer retry. Partial final
 JSONL records are retried after the next append. Inspection never executes tools.
 
-Collapsed tool rows retain the tool name and a bounded command, code, file, or
-action preview, plus an available error and exit status. These are display hints,
+Collapsed tool rows retain the tool name beside the action verb and a bounded
+command, code, file, or action preview, plus an available error and exit status.
+On narrow screens, that preview may wrap onto two lines below the tool label. These are display hints,
 not complete arguments or execution evidence. Image-tool lifecycle hints (`image_generate` and
 `nano-banana`, including analysis) omit prompt/path and result-text hints; the
 shared normalizer also clears previously supplied hints. Their original saved
@@ -81,6 +86,18 @@ requests another bounded page; it never scans the whole history or enumerates
 child directories. Lookup leases are bound to the web client, source identity,
 open Work group, admitted row position and observation ID. At most 100 matching
 observations and eight window pages are retained in memory.
+
+Already-open resident Work rows retain their accepted exact field references when
+newer events leave the recent 100-observation window. These leases follow the
+existing admitted-row/group lifetime (up to eight groups, each with up to 800
+admitted rows); no complete log, payload, or source page is retained. At most
+seven field descriptors and 512-character previews are retained per row:
+2,867,200 preview characters per maximally admitted group, plus bounded
+descriptors. A different tool observation or provider attempt cannot inherit
+those fields. Reads and downloads still verify the exact canonical bytes and
+the current client, owner, source, admitted position and identity before and
+after asynchronous work. Closing/retiring the group releases its references;
+normal recent-window turnover alone does not erase an open detail.
 
 Older history without an exact host observation ID shows related saved records
 as separately expandable observations. Matching call IDs, tool names or times

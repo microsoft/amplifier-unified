@@ -45,17 +45,37 @@ resized gets the remaining room. Keyboard users can focus a divider and use
 arrows (20 pixels), Home (minimum), or End (maximum). On narrow windows, the
 canvas covers the workspace instead of squeezing both panes.
 
-The canvas has a compact 36-pixel title row. Hover over it or open **Canvas
-controls** to reveal tabs, files, websites, source and viewer tools. Pin those
-controls to keep them visible. Rendering failures stay visible even when controls
-are collapsed. HTML, browser and MCP App views use the full content area without
-host padding. Documents retain readable internal margins.
+Canvas has one navigation row: **Overview** and the open documents. Overview
+stays at the leading edge while the document strip scrolls; its label contracts
+to an icon without resizing the strip. **Open documents** offers the same open
+items in a bounded, searchable list, with named close actions. Closing a tab
+keeps its saved output. Arrow keys move tab focus; Enter selects and Delete closes
+a focused document tab.
 
-**Focus canvas** fills the app frame; **Exit canvas focus** returns to the split
+The artifact's compact action row keeps version identity, Copy, Download and
+**Details** together. Details retains exact-version, renderer, source and
+format-specific controls. Images, PDFs and diagrams retain their dedicated tools.
+Rendering failures stay visible when Details is closed. HTML, browser and MCP
+App views retain their unpadded content area; documents retain readable margins.
+
+Every present Overview section is collapsible. Counts, status and attention
+remain in its heading. Section choices, output search and reading positions stay
+in the originating browser tab, scoped to the chat, across document visits and
+Canvas hide/reopen. The overview has one bounded scroll region through Publishing;
+Outputs is not a second nested scroller. The container-header Canvas button hides
+or shows the panel without closing the selected artifact or discarding edits.
+There is no separate Back to chat control inside Canvas.
+
+The short Overview-label transition respects `prefers-reduced-motion`, including
+runtime changes. This revision has no separate app-level Less motion setting.
+
+**Focus canvas** fills the space below the container header; **Exit canvas focus** returns to the split
 layout. Escape also exits when focus is in the host UI (embedded apps may consume
 keyboard events). Resizing and focusing keep the current viewer mounted; they do
 not reload its content or reconnect its tool server. Closing or changing tabs
-still follows the viewer's normal lifecycle.
+still follows the viewer's normal lifecycle. The container-header Canvas toggle
+remains reachable in focused and narrow views. A nested dialog handles Escape
+before the focused Canvas does.
 
 All layout controls use `view.update` and are available to agents:
 
@@ -72,6 +92,51 @@ pane bounds and divider minimum/maximum/current widths. Closing the canvas clear
 full-frame mode while retaining preferred split widths.
 
 ## Agent awareness and access
+
+### One full presentation per saved version
+
+`canvas.show` saves content and chooses `presentation: "canvas"` by default.
+The originating turn keeps a compact exact-version card, not another executing
+preview. Use `"inline"` for a short review in chat without replacing unrelated
+Canvas work, or `"saved"` for the compact card only. Inline needs an attached
+client displaying the chat, an originating publication turn, and a supported
+kind. PDF, browser, Settings, A2UI and app viewers remain Canvas-only.
+
+`canvas.select {id, version, presentation, messageId}` changes the presentation
+of existing saved content; inline requires its exact publication `messageId`.
+It never creates another artifact, revises content or starts conversation work.
+The choice belongs to this client and exact artifact version, survives reload,
+and does not change another client's choice. Old calls without `presentation`
+still open Canvas. Generated-image receipts retain their inline default unless
+the user chooses Canvas or hides the preview.
+
+The card keeps its title, type and version while **Preview in chat** / **Hide
+preview** toggles its body. Opening Canvas does not force full-frame focus.
+Dirty-view refusals keep the current renderer and show the error beside the
+card. Ordinary HTML/3D has no lossless state-transfer protocol: moving a mounted
+frame requires the user's explicit **Reset preview** choice, or **Keep current
+preview** preserves it. Reset never bypasses a declared dirty edit. Closing the
+Canvas panel alone retains its existing view; it does not request inline display.
+`canvas.views.inline` is the lower-level renderer-lease API, not a card-expansion
+action. No CSS-hidden second executing renderer satisfies the one-surface rule.
+
+### Artifact controls and reuse
+
+This is a bounded control inventory, not a new renderer registry or design system.
+The shell's extension slots remain a separate contract. Before adding artifact
+controls, reuse the owning entry or record the necessary semantic difference.
+
+| Control / owner | Variants, state and reuse boundary | Accessibility / focused evidence |
+| --- | --- | --- |
+| Compact exact-version card and disclosure: `frontend/src/inline-artifacts.jsx` (`DocumentOutput`, `Preview`, `ArtifactLinks`) | HTML, documents, diagrams and images share title/type/version/open/disclosure; image gallery and specialized renderer bodies remain distinct. Client-local placement, pending/error and explicit HTML reset are not generic card state. | Native buttons; stable `aria-expanded`/`aria-controls`; titled open target; status errors; preserved focus. `tests/test_artifact_presentation.py`, `frontend/tests/artifact-one-surface-browser.mjs`, `frontend/tests/inline-artifacts-browser.mjs`. |
+| Viewer controls: `frontend/src/canvas-controls.jsx`, `canvas-viewer.jsx`, `canvas-workspace.jsx` | Existing renderer host, exact source binding, source/copy/download, portal placement and inline toolbar suppression. Do not add a competing inline toolbar or renderer registry. | Existing keyboard controls, labels and dirty/reload guards; `tests/test_canvas_views.py` and viewer browser tests. |
+| Saved output inspection: `frontend/src/outputs.jsx`, shared `image-actions.jsx` | Snapshot read/download/lineage and image follow-up; output HTML is **not** an executable preview. See [Outputs](OUTPUTS.md). | Exact-target download and draft-preserving follow-up; `tests/test_output_images.py` and inline-artifact browser tests. |
+
+When changing these owners, format routing, placement or action semantics,
+update the affected entry (or state why its contract is unchanged) and extend its
+focused test. HTML/Markdown parity checks must exercise the same disclosure and
+exact-version open path, not merely compare CSS. This index and review discipline
+do not claim universal control conformance.
 
 The host mounts `app_control` and injects canvas guidance as ephemeral system
 context on every provider request, including resumed conversations. Delegated

@@ -54,10 +54,19 @@ try{
 
  // Incoming peers are compact, exact payloads are rendered only on expansion.
  const peer=article(facts.agent),summary=peer.locator('.a-peer-summary');
+ const group=page.locator('.a-peer-run').filter({has:peer}),groupSummary=group.locator('.a-peer-run-summary');
+ await expect(group).toHaveCount(1);
+ await expect(groupSummary).toHaveAttribute('aria-expanded','false');
+ await expect(summary).toBeHidden();
+ await groupSummary.press('Enter');
+ await expect(groupSummary).toBeFocused();
+ await expect(groupSummary).toHaveAttribute('aria-expanded','true');
+ await expect(summary).toBeVisible();
  await expect(summary).toHaveAttribute('aria-expanded','false');
  await expect(peer.locator('.a-peer-content')).toHaveCount(0);
  assert.equal(detailReads.length,0,'Collapsed peer must not fetch its full payload');
  await summary.press('Enter');await expect(summary).toHaveAttribute('aria-expanded','true');
+ await expect(summary).toBeFocused();
  await expect(peer.locator('.a-delegate-markdown')).toContainText('Exact α 🐈');
  assert.equal(detailReads.length,0,'Expanding a preview does not eagerly fetch long text');
  await peer.getByRole('button',{name:'Show full text',exact:true}).click();
@@ -83,6 +92,12 @@ try{
  await expect(badge).toBeVisible();
  await page.reload();await expect(badge).toBeVisible();
  await expect(summary).toHaveAttribute('aria-expanded','false');
+ await expect(groupSummary).toHaveAttribute('aria-expanded','false');
+ await expect(summary).toBeHidden();
+ await groupSummary.press('Space');
+ await expect(groupSummary).toBeFocused();
+ await expect(groupSummary).toHaveAttribute('aria-expanded','true');
+ await expect(summary).toBeVisible();
  assert.ok((await react(false)).ok());await expect(badge).toHaveCount(0);
  await expect(article(facts.quote)).toHaveClass(/a-user/);
  await expect(article(facts.quote).getByRole('button',{name:'Edit message',exact:true})).toHaveCount(1);

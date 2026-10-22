@@ -238,6 +238,7 @@ class RuntimeManager:
         self._closed = False
         self._retired = {}
         self._execution_state = None
+        self._configuration_revision = lambda: 0
         self.home = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
@@ -245,6 +246,10 @@ class RuntimeManager:
     def bind_execution_state(self, read):
         """Host-owned synchronous authority; never supplied by a model command."""
         self._execution_state = read
+
+    def bind_configuration_revision(self, read):
+        """Capture host configuration provenance before asynchronous preparation."""
+        self._configuration_revision = read
 
     def _check_execution(self, sid, session=None, *, allow_fenced=False):
         if self._execution_state is None:
@@ -301,9 +306,8 @@ class RuntimeManager:
         if self.command:
             return list(self.command)
         worker = Path(__file__).with_name("runtime_worker.py")
-        uv = shutil.which("uv")
-        if not uv:
-            raise RuntimeError("Install uv to prepare the Amplifier runtime.")
+        from .host_dependencies import require_uv
+        uv = require_uv()
         # The packaged manifest is copied to a writable cache: installed package
         # directories may be read-only and uv creates its lock and .venv there.
         from .updates import active_release
@@ -374,6 +378,7 @@ class RuntimeManager:
             raise RuntimeHostClosingError()
         sid = session["id"]
         self._check_execution(sid, session)
+        configuration_revision = self._configuration_revision()
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
@@ -511,7 +516,7 @@ class RuntimeManager:
                         candidate.unlink(missing_ok=True)
                     except OSError:
                         pass  # Preserve the original failed setup diagnosis.
-        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
+        row = {"process": proc, "emit": emit, "runtimeOwnerId": str(uuid.uuid4()), "configurationRevision": configuration_revision, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
@@ -749,9 +754,18 @@ class RuntimeManager:
                         await self._emit_progress(sid, row)
                 elif data.get("type") == "runtime.ready":
                     if not row["ready"].done():
+                        # uv is the managed launcher, not necessarily the Python
+                        # worker. Bind configuration effects to the identity on
+                        # this worker's own pipe, scoped to the started session.
+                        identity = data.get("workerIdentity")
+                        if (isinstance(identity, dict)
+                                and identity.get("sessionId") == row.get("runtime_id")
+                                and type(identity.get("pid")) is int and identity["pid"] > 0):
+                            row["native_worker_pid"] = identity["pid"]
                         row["ready"].set_result(data.get("report", {}))
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
+                        "runtimeOwnerId": row['runtimeOwnerId'], "configurationRevision": row['configurationRevision'],
                         "report": data.get("report", {})})
                 elif data.get("type") == "runtime.ownership":
                     row['yielded'] = data.get('status') == 'yielded'
@@ -837,6 +851,11 @@ class RuntimeManager:
                         # Closing a process for maintenance is not a user Stop.
                         normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
+                        if normalized[0] == 'worker.updated' and not normalized[1].get('activityOnly'):
+                            # Only lifecycle receipts on this process's pipe
+                            # bind its native jobs/children. Progress and peer
+                            # chats cannot acquire that execution ownership.
+                            normalized[1]['runtimeOwnerId'] = row['runtimeOwnerId']
                         await row["emit"](*normalized)
             code = await row["process"].wait()
             if not row["closing"] and not reported_error:
@@ -881,10 +900,11 @@ class RuntimeManager:
                                              else RuntimeError("Amplifier worker disconnected"))
 
     async def _execution_ended(self, sid, row, status):
-        """Only a confirmed process exit settles independent background calls."""
+        """Only confirmed process exit settles its native children/background calls."""
         if row.get("executionEnded"): return
         shutdown = row.get('stop_reason') == 'shutdown'
         await row["emit"]("runtime.ended", {"sessionId": sid, "status": 'interrupted' if shutdown else status,
+            **({'runtimeOwnerId': row['runtimeOwnerId']} if row.get('runtimeOwnerId') else {}),
             **({'reason': 'shutdown'} if shutdown else {}), "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
         # The reader can be cancelled while delivery waits for the service
         # lock. Only successful delivery suppresses the stop-path retry.

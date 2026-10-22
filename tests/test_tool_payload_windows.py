@@ -126,6 +126,8 @@ async def test_saved_lookup_fields_expire_on_rebind_eviction_and_cross_client(tm
     service.clients.current.set('one')
     assert 'saved-command' in (await owner.read_text('s', field))['value']
     owner.pages.clear()
+    assert 'saved-command' in (await owner.read_text('s', field))['value']
+    owner.live_pages.groups.clear()
     with pytest.raises(ValueError, match='expired'): await owner.read_text('s', field)
     await owner.close()
 

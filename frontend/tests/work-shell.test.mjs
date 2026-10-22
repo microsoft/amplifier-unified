@@ -100,21 +100,26 @@ test('mixed keyboard ordering preserves hidden pins and typed IDs, and workspace
  await act(async()=>root.unmount());
 });
 test('pending mixed reorder handles concurrent unpin without rendering an identity-less row',async()=>{
- let settle,root;
+ let settle,root;const calls=[];
  const pins=[{id:'session:a',kind:'session',row:{id:'a',title:'One',pinned:true}},
              {id:'workspace:b',kind:'workspace',row:{...row,pinned:true}}];
- const current={...snapshot,pinnedItemIds:pins.map(item=>item.id)};
- const model={state:current,act:()=>new Promise(resolve=>{settle=resolve}),view:{},setDraft(){},choose(){}};
  let pinPage={items:pins,total:2,index:0,pages:1};
+ const current={...snapshot,pinnedItemIds:pins.map(item=>item.id),pinnedNavigation:pinPage};
+ const model={state:current,host:{...host,getSnapshot:()=>current},
+  act:(...args)=>{calls.push(args);return new Promise(resolve=>{settle=resolve})},view:{},setDraft(){},choose(){}};
  const element=()=>React.createElement(PinnedItems,{page:pinPage,model,now:0});
  await act(async()=>{root=create(element())});
  await act(async()=>root.root.findByProps({'aria-label':'Reorder Research'}).props.onKeyDown({key:'ArrowUp',preventDefault(){}}));
+ assert.deepEqual(calls,[['navigation.pinOrder',{ids:['workspace:b','session:a']}]]);
+ assert.equal(typeof settle,'function','the reorder must be admitted and unresolved before unpin');
  current.pinnedItemIds=['session:a'];pinPage={...pinPage,items:[pins[0]],total:1};
+ current.pinnedNavigation=pinPage;
  await act(async()=>root.update(element()));
  assert.equal(root.root.findAllByProps({'aria-label':'Reorder Research'}).length,0);
  assert.equal(root.root.findAllByProps({className:'a-nav-chat-select'}).length,1);
  assert.equal(root.root.findByProps({className:'a-nav-chat-select'}).props['aria-label'],'One');
  await act(async()=>settle({accepted:false,error:'Pins changed'}));
+ assert.equal(calls.length,1,'rejection must not replay the reorder');
  await act(async()=>root.unmount());
 });
 test('standalone chat sidebar exposes a workspace edit without replacing an active chat edit',async()=>{
@@ -237,7 +242,7 @@ test('collapsed navigation gives all space back, including between chat and canv
 test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
  const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
  assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
- assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-sliders-horizontal/);
+ assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-message-circle/);
  assert.doesNotMatch(html,/<span>Overview<\/span>|lucide-ellipsis/);
  const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(expanded,/Open navigation/);
