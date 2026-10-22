@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.25.1",
+      "title": "Keep delegated work and saved history clear and reliable",
+      "changes": [
+        "Read delegated requests, replies and follow-ups in chronological order, with clearer sender labels and expandable operation details on desktop and phone.",
+        "Keep saved Work details tied to their original turn when reopening older history or loading earlier pages. Exact operation details remain available after inactive history is released from memory.",
+        "Keep a newer bundle catalog and its status when overlapping refreshes finish out of order, including when an older refresh fails.",
+        "Align discovery, native-runtime, approval and catalog checks with the current app contracts, preserving their existing safety and recovery assertions."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.25.0",
       "title": "Follow shared work and keep clearer failure and test evidence",
       "changes": [
