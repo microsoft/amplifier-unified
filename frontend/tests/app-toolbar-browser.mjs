@@ -28,7 +28,7 @@ try{
  const more=page.getByRole('button',{name:'App options',exact:true}),menu=page.getByRole('group',{name:'App options',exact:true});
  const footer=async(target=page)=>{if(!await target.getByRole('button',{name:'App options',exact:true}).isVisible())await target.getByRole('button',{name:'Open navigation',exact:true}).click();await expect(target.getByRole('button',{name:'App options',exact:true})).toBeVisible()};
  const closeNavigation=async()=>{const close=page.getByRole('button',{name:'Close navigation',exact:true});if(await close.isVisible()){await close.click();await expect(close).toBeHidden()}};
- const toggle=page.locator('.a-work-header .a-canvas-toggle'),canvas=page.getByRole('region',{name:'Canvas',exact:true});
+ const toggle=page.locator('.a-work-header .a-canvas-toggle'),canvas=page.getByRole('complementary',{name:'Canvas',exact:true});
  await expect(page.getByRole('button',{name:'Open workspace canvas'})).toHaveCount(0);
  // The current WorkHeader omits chat-only controls before creation; the retired
  // app toolbar kept a disabled Canvas button. Both prevent an ownerless Canvas.
