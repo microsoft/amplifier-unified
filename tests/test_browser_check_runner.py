@@ -258,6 +258,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
+        'pin-rapid-reorder': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-rapid-reorder'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
         'destination-history': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/destination-history'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
@@ -292,7 +293,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 108
+    assert len(original) == 65 and len(rows) == 109
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
