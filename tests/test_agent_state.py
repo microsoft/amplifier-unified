@@ -573,3 +573,62 @@ async def test_legacy_session_configuration_normalizes_to_canonical_owner(
         assert not absent.success and 'does not exist' in absent.error['message']
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('native_role', ['root', 'child'])
+async def test_configuration_resource_fragment_preserves_module_context(tmp_path, native_role):
+    from amplifier_web.resource_files import put
+    from amplifier_web import cold_display
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        original = {'key': 'SYNTHETIC_TEAM_PULSE_CREDENTIAL', 'url': 'https://pulse.example.invalid'}
+        ref = put(app.db, original)
+        plan = {'tools': [{'module': 'tool-team-pulse', 'config': ref}]}
+        app._session()['configuration'] = {'plan': plan}
+        tool = await _configuration_tool(app, sid, native_role)
+        overview = await _tool_read(tool, {})
+        path = overview['session']['$statePath'] + '/configuration/plan/tools/0/config'
+        assert (await _tool_read(tool, {'path': path + '/key'}))['value'] == '[REDACTED]'
+        assert (await _tool_read(tool, {'path': path + '/url'}))['value'] == original['url']
+        assert app._session()['configuration']['plan'] == plan
+        assert app.state_resource(ref['$resource']) == original
+        # Internal cold manifests must not provide an unprojected resource alias.
+        saved = {'configuration': {'plan': _redaction_plan()}}
+        frozen = put(app.db, saved['configuration'])
+        row = cold_display.ColdRecord({'id': sid, cold_display.MARKER: {'configuration': frozen}}, app.db)
+        state = {'revision': 1, 'sessions': [row]}
+        for suffix in ('', '/configuration', '/configuration/plan/tools/0/config/key'):
+            with pytest.raises(ValueError, match='does not exist'):
+                read_state(state, {'path': '/sessions/0/_coldFields' + suffix}, session_id=sid,
+                           resolve=app.state_resource)
+        assert dict.__contains__(row, cold_display.MARKER)
+        assert not dict.__contains__(row, 'configuration')
+    finally:
+        await app.close()
+
+
+def test_configuration_projection_is_lazy_and_does_not_sanitize_arbitrary_user_json(monkeypatch):
+    from amplifier_web import cold_display
+    raw = {'tools': [{'module': 'tool-team-pulse', 'config': {'key': 'ordinary example'}}],
+           'api_key': 'user-authored example', 'field_type': 'secret', 'default': 'user text'}
+    row = cold_display.ColdRecord({'id': 'root', 'title': 'Visible',
+        'structuredData': copy.deepcopy(raw),
+        cold_display.MARKER: {'configuration': {'$resource': 'unused'}}}, None)
+    state = {'revision': 1, 'sessions': [row], 'runtimeControl': {}}
+    def unexpected(*args):
+        pytest.fail('Unrelated read must not load cold configuration/resources')
+    monkeypatch.setattr(cold_display, 'load', unexpected)
+    assert read_state(state, {'path': '/revision'}, session_id='root', resolve=unexpected)['value'] == 1
+    assert read_state(state, {'path': '/sessions/0/title'}, session_id='root', resolve=unexpected)['value'] == 'Visible'
+    page = read_state(state, {'path': '/sessions/0', 'limit': 1}, session_id='root', resolve=unexpected)
+    assert page['items'][0]['value'] == 'root'
+    page = read_state(state, {'path': '/sessions'}, session_id='root', resolve=unexpected)
+    public = page['items'][0]['value']
+    assert public['configuration'] == {'$statePath': '/sessions/0/configuration'}
+    assert public['structuredData'] == raw
+    assert not dict.__contains__(row, 'configuration')
+    # The generic resource pager is not an app-state or credential-schema API.
+    generic = {'sessions': [{'configuration': raw}]}
+    assert read_state(generic, {'path': '/sessions/0/configuration/api_key'})['value'] == raw['api_key']

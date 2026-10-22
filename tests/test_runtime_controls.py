@@ -385,3 +385,20 @@ async def test_configuration_providers_preserves_metadata_but_omits_declared_sec
         assert 'SYNTHETIC_METADATA_' not in json.dumps(row[surface])
     finally:
         await controls.close()
+
+
+@pytest.mark.parametrize('changed', ['module', 'source', 'duplicate'])
+def test_redacted_restore_cannot_borrow_another_source_or_ambiguous_identity(changed):
+    import copy
+    from amplifier_web.runtime_controls import REDACTED
+    old = {'tools': [{'module': 'tool-team-pulse', 'id': 'pulse',
+                     'source': 'https://example.invalid/original',
+                     'config': {'key': 'SYNTHETIC_PRIOR'}}]}
+    edited = copy.deepcopy(old)
+    edited['tools'][0]['config']['key'] = REDACTED
+    if changed == 'duplicate':
+        old['tools'].append(copy.deepcopy(old['tools'][0]))
+    else:
+        edited['tools'][0][changed] = 'different'
+    with pytest.raises(ValueError, match='redacted value cannot be used'):
+        restore_redactions(edited, old)

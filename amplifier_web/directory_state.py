@@ -121,6 +121,7 @@ def _overview(directory, state, session_id):
 
 def _sessions(directory, state, args, resolve, reference_key, session_id):
     from .agent_state import read_state, _preview, _size
+    from .configuration_state import project
     path = args['path']
     tokens = path.split('/')[1:]
     if len(tokens) == 1:
@@ -129,7 +130,9 @@ def _sessions(directory, state, args, resolve, reference_key, session_id):
         for position, metadata in _ranked(directory, limit=limit, offset=offset):
             pointer = '/sessions/' + str(position)
             item = {'key': position, 'path': pointer,
-                    'value': _preview(_owner(directory, metadata, state, session_id), pointer, 2500, reference_key=reference_key)}
+                    'value': _preview(project(_owner(directory, metadata, state, session_id),
+                                              pointer, reference_key=reference_key),
+                                      pointer, 2500, reference_key=reference_key)}
             size = _size(item)
             if items and used + size > 24000:
                 break
@@ -150,7 +153,8 @@ def _sessions(directory, state, args, resolve, reference_key, session_id):
     # A one-key mapping resolves this exact pointer without allocating a sparse
     # list or rewriting any paths inside user-provided JSON values.
     return read_state({**state, 'sessions': {tokens[1]: _owner(directory, rows[0][1], state, session_id)}},
-                      args, session_id=session_id, resolve=resolve, reference_key=reference_key)
+                      args, session_id=session_id, resolve=resolve, reference_key=reference_key,
+                      configuration_projection=True)
 
 
 def _runtime(directory, state, args, resolve, reference_key, session_id):
@@ -177,7 +181,8 @@ def _runtime(directory, state, args, resolve, reference_key, session_id):
             if value is not None:
                 values[identity] = ColdRecord(value, directory.db)
     result = read_state({**state, 'runtimeControl': values}, {**args, **({'offset': 0} if path == '/runtimeControl' else {})},
-                        session_id=session_id, resolve=resolve, reference_key=reference_key)
+                        session_id=session_id, resolve=resolve, reference_key=reference_key,
+                        configuration_projection=True)
     if path == '/runtimeControl':
         end = offset + len(result['items'])
         result.update(offset=offset, total=total, nextOffset=end if end < total else None)
@@ -197,7 +202,10 @@ def _read(directory, state, args, *, session_id=None, resolve=None, reference_ke
     if path == '':
         # A root page advertises the complete catalog, not just its residents.
         from .agent_state import read_state
-        result = read_state(state, args, session_id=session_id, resolve=resolve, reference_key=reference_key)
+        # Replace these collections before previewing, not after loading them.
+        bounded = {**state, 'sessions': [], 'runtimeControl': {}}
+        result = read_state(bounded, args, session_id=session_id, resolve=resolve, reference_key=reference_key,
+                            configuration_projection=True)
         for item in result.get('items', []):
             if item['key'] == 'sessions':
                 item['value'] = {reference_key: '/sessions', 'type': 'list', 'size': _count(directory)}

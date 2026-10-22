@@ -18,15 +18,24 @@ SECTIONS = ("providers", "tools", "hooks")
 PLAN_KEYS = {*SECTIONS, "session", "agents", "spawn", "context", "instruction"}
 
 
-def public_config(value):
+def credential_field(key, *, module=None):
+    """Classify a configuration field with its owning module, never a bare key."""
+    return (any(term in str(key).lower() for term in
+                ("api_key", "secret", "password", "authorization", "cookie",
+                 "access_token", "refresh_token", "github_token", "copilot_agent_token"))
+            or module == "tool-team-pulse" and key == "key")
+
+
+def public_config(value, *, module=None):
     if is_dataclass(value):
         value = asdict(value)
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
-        return {str(key): REDACTED if any(term in str(key).lower() for term in
-                    ("api_key", "secret", "password", "authorization", "cookie", "access_token", "refresh_token", "github_token", "copilot_agent_token"))
-                else public_config(item) for key, item in value.items()}
+        return {str(key): REDACTED if credential_field(key, module=module)
+                else public_config(item, module=value.get("module") if key == "config" else None)
+                for key, item in value.items()
+                if not (value.get("field_type") == "secret" and key in {"default", "value"})}
     if isinstance(value, (list, tuple)):
         return [public_config(item) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -47,8 +56,13 @@ def restore_redactions(value, old):
         return {key:restore_redactions(item, old.get(key) if isinstance(old, dict) else None)
                 for key,item in value.items()}
     if isinstance(value, list):
-        previous = {identity(row):row for row in old or [] if isinstance(row, dict) and identity(row)} if isinstance(old, list) else {}
-        return [restore_redactions(row, previous.get(identity(row)) if isinstance(row, dict) else None) for row in value]
+        def previous(row):
+            matches = [item for item in old if isinstance(item, dict)
+                       and identity(item) == identity(row)
+                       and item.get("module") == row.get("module")
+                       and item.get("source") == row.get("source")] if isinstance(old, list) and identity(row) else []
+            return matches[0] if len(matches) == 1 else None
+        return [restore_redactions(row, previous(row) if isinstance(row, dict) else None) for row in value]
     return copy.deepcopy(value)
 
 
@@ -216,7 +230,7 @@ class RuntimeControls:
                 enabled = row.get("enabled", True) and key not in snapshot.get(section, {}).get("disabled", [])
                 row["enabled"] = enabled
                 modules.append({"section": section, "module": row["module"], "id": key, "enabled": enabled,
-                                "source": row.get("source"), "config": public_config(row.get("config", {}))})
+                                "source": row.get("source"), "config": public_config(row.get("config", {}), module=row["module"])})
         provenance = {}
         if self.configurator:
             for section in ("tools", "providers", "hooks", "agents", "context", "behaviors"):
