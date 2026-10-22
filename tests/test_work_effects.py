@@ -264,3 +264,70 @@ async def test_unqualified_deferred_effect_owner_refuses_before_admission(app):
     with pytest.raises(AppError, match='no qualified final effect owner'):
         await app_effect(app, child, 'coordination.send', args, 'deferred', witness)
     assert retained_bytes(app) == before
+
+
+@pytest.mark.parametrize('fault', ['none', 'uncovered', 'changed_args', 'host_stop', 'promise'])
+@pytest.mark.parametrize('target', ['tool', 'app_control'])
+async def test_real_delivery_worker_and_service_join_at_effect(app, fault, target):
+    """Real read/fit/admission/origin/dispatch/service pipeline; synthetic provider."""
+    from types import SimpleNamespace
+    from amplifier_core import ToolResult
+    from amplifier_core.message_models import ToolCall
+    from amplifier_web.runtime_worker import Worker
+    from test_coordination_delivery import installed_work_adapter
+    adapter, child, required = await installed_work_adapter(app)
+    c = adapter.coordinator
+    c.cancellation.is_cancelled = False
+    worker = Worker()
+    worker.session = SimpleNamespace(coordinator=c)
+    worker.runtime = SimpleNamespace(generation={'id': required['generationId'],
+        'input_ids': list(required['inputIds'])}, closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
+    actual_bridge = worker.app_access_bridge(c)
+    async def host(operation, arguments):
+        return await app.app_bridge(operation, arguments, child['id'])
+    worker.bridge = host
+    adapter.dispatch_bridge = actual_bridge
+    adapter.delivery.begin_work.__self__.origin_scope = c.get_capability('web.work_origin_scope')
+    if fault != 'uncovered':
+        await adapter.fill(required)
+    effects = []
+    class Probe:
+        name = 'write_file'
+        async def execute(self, value):
+            effects.append(value)
+            return ToolResult(success=True, output='Synthetic recorded effect.')
+    adapter.tools['write_file'] = Probe()
+    c.get_capability('web.work_guard_tools')()
+    arguments = ({'operation': 'dispatch', 'args': {'action': 'session.pin',
+        'args': {'id': child['id'], 'pinned': True}, 'id': 'joined-pin'}}
+        if target == 'app_control' else {'path': 'owned', 'content': 'exact'})
+    name = 'app_control' if target == 'app_control' else 'write_file'
+    class Provider:
+        async def complete(self, value, **options):
+            return SimpleNamespace(model_dump=lambda: {'content': [{
+                'type': 'tool_call', 'id': 'joined-call', 'name': name, 'input': arguments}]})
+    await adapter.capabilities['web.provider_transform'](Provider()).complete(adapter.request())
+    if fault == 'host_stop':
+        await app.dispatch('conversation.stop', {'sessionId': child['id']}, command_id='joined-stop')
+    elif fault == 'promise':
+        owner = app.state['sessions'][0]
+        work = (await app.dispatch('workspace.work.context', {'sessionId': owner['id']}))['result']['items'][0]
+        current = (await read(app, owner, work['id']))['item']
+        await revise(app, owner, current, 'joined-promise',
+                     source=source(app, owner, 'New current condition.'), constraints=['New condition.'])
+    if fault == 'changed_args':
+        arguments = {**arguments, 'unexpected': True}
+    call = ToolCall(id='joined-call', name=name, arguments=arguments)
+    before = retained_bytes(app)
+    _, _, result = await adapter.loop._execute_tool_only(call, adapter.tools, adapter.hooks, None, c)
+    if fault == 'none':
+        if target == 'tool':
+            assert effects == [arguments]
+        else:
+            assert 'joined-pin' in retained_bytes(app) and child['id'] in app._state['pinnedSessionIds']
+        assert adapter.admissions
+    else:
+        assert effects == [] and 'joined-pin' not in retained_bytes(app)
+        assert retained_bytes(app) == before
+        assert result
