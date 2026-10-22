@@ -78,12 +78,16 @@ def guard(service, action, arguments, origin, caller, *, final=False):
     if caller != request['sessionId']:
         raise AppError('Work effect calling root changed.', 409)
     query = {key: copy.deepcopy(request[key]) for key in ('toolName', 'toolInput', 'toolCallId')}
+    if recovery_read(query['toolName'], query['toolInput']):
+        # Let the existing read/report owner enforce its exact principal, scope,
+        # status code and currentness. Work coverage adds no read authority.
+        return
     # Missing origin must deny a bound mutation, not accidentally bypass policy.
     query['toolCallId'] = query['toolCallId'] or 'unavailable-origin'
     result = check(service.work_invocation, caller, query)
     if not result['allowed']:
-        raise AppError(result['reason'], 409, code='work_coverage_unavailable')
-    if not result['applicable'] or recovery_read(query['toolName'], query['toolInput']):
+        raise AppError('Work precondition: ' + result['reason'], 409, code='work_coverage_unavailable')
+    if not result['applicable']:
         return
     supported = (action in {
         'workspace.work.create', 'workspace.work.revise', 'workspace.work.link',
