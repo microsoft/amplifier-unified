@@ -222,3 +222,67 @@ async def test_reset_then_explicit_pin_does_not_silently_discard_pin(app):
     await app.dispatch('conversation.configure', choices(app, 1, selection=selected))
     assert app._session()['pendingBundleSelection']['resetModel'] is False
     assert app._session()['pendingModelSelection'] == selected
+
+
+async def test_immediate_switch_cannot_override_unapplied_bundle(app, monkeypatch):
+    from amplifier_web.bundle_actions import perform
+    monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock(side_effect=AssertionError('worker')))
+    await app.dispatch('conversation.configure', choices(app, bundle='work'))
+    with pytest.raises(ValueError, match='Next message'):
+        await perform(app.management, 'bundle.switch', {'sessionId': app._session()['id'], 'bundle': 'other'})
+    assert app._session()['pendingBundleSelection']['bundle'] == 'work'
+    assert not app._session().get('configurationBusy')
+
+
+async def test_stale_preview_settles_only_its_own_operation(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.bundle_actions import preview_saved
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def resolve(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return {'bundle': 'work', 'modelCompatible': True}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    task = asyncio.create_task(preview_saved(app.management, {'sessionId': app._session()['id'], 'bundle': 'work'}))
+    await entered.wait()
+    await app.dispatch('conversation.configure', choices(app, bundle='other'))
+    release.set()
+    await task
+    assert app._session()['bundleChange']['phase'] == 'stale'
+    assert 'bundlePreview' not in app._session()
+
+
+async def test_unsupported_model_listing_stays_unsupported_after_cached_browse(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.conversation_models import browse
+    from amplifier_web.provider_catalog import model_key
+    from amplifier_web.next_message_configuration import validate_selection
+    result = valid_catalog()
+    result['providers'][0]['info'] = {'defaults': {'model': 'chosen'}}
+    result['catalogs']['one'].update(supported=False, models=[])
+    resolver = AsyncMock(return_value=result)
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolver)
+    await browse(app.management, deepcopy(app._session()))
+    await browse(app.management, deepcopy(app._session()))
+    assert resolver.await_count == 1
+    cached = app.management.provider_catalog.peek(model_key('one'))
+    assert cached['modelsSupported'] is False
+    validate_selection({'instance': 'one', 'model': 'chosen'}, {
+        'providers': result['providers'],
+        'catalogs': {'one': {'phase': 'ready', 'supported': cached['modelsSupported'],
+                             'models': cached['models'], 'metadata': cached['providerMetadata']}}})
+
+
+async def test_incompatible_bundle_keeps_explicit_default_recovery(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.next_message_configuration import prepare
+    from amplifier_web.runtime import RuntimeStartupError
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', AsyncMock(return_value={'modelCompatible': False}))
+    await app.dispatch('conversation.configure', choices(app, bundle='work',
+        selection={'instance': 'one', 'model': 'chosen'}))
+    with pytest.raises(RuntimeStartupError):
+        await prepare(app, deepcopy(app._session()))
+    assert app._session()['nextMessageFailure'] == {'code': 'incompatible-model', 'bundle': 'work'}
+    await app.dispatch('conversation.configure', choices(app, 1, bundle='work', resetModel=True))
+    assert 'nextMessageFailure' not in app._session()
+    assert app._session()['pendingBundleSelection']['resetModel'] is True

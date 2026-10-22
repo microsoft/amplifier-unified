@@ -70,6 +70,7 @@ def save(service, args, authority=None):
             session['pendingBundleSelection']['resetModel'] = False
     session['nextMessageRevision'] = revision + 1
     session.pop('nextMessageError', None)
+    session.pop('nextMessageFailure', None)
     session['nextMessageStatus'] = 'saved'
     return {'revision': revision + 1, 'status': 'saved', 'applies': 'next-message', 'mounted': False}
 
@@ -121,6 +122,7 @@ async def prepare(service, captured):
     check = guard_for(service, captured)
     pending = session.get('pendingBundleSelection')
     selection = session.get('pendingModelSelection')
+    failure = None
     try:
         check()
         if pending:
@@ -130,6 +132,7 @@ async def prepare(service, captured):
                     'workingDirectory': session.get('workingDirectory')})
             check()
             if not checked.get('modelCompatible') and not pending.get('resetModel'):
+                failure = {'code': 'incompatible-model', 'bundle': pending['bundle']}
                 raise ValueError('The saved model connection is not available in this bundle. Choose a compatible model or explicitly use the bundle default.')
             session['bundleReplacement'] = {**checked, 'resetModel': pending.get('resetModel', False),
                 'replaceSavedSelection': True, 'deferred': True}
@@ -165,6 +168,8 @@ async def prepare(service, captured):
             if current.get('nextMessageRevision', 0) == session.get('nextMessageRevision', 0):
                 current['nextMessageStatus'] = 'not-applied'
                 current['nextMessageError'] = str(exc) if isinstance(exc, ValueError) else 'Could not validate Next message settings. Your choices are kept.'
+                if failure:
+                    current['nextMessageFailure'] = failure
                 service._publish_changes(sessions={session['id']})
         raise RuntimeStartupError('Next message settings were not applied. No input was sent. Your choices are kept.') from exc
 
@@ -230,3 +235,4 @@ def applied(session, payload):
     session['nextMessageStatus'] = 'applied'
     session['appliedConfigurationRevision'] = payload['revision']
     session.pop('nextMessageError', None)
+    session.pop('nextMessageFailure', None)

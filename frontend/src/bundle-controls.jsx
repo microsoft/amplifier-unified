@@ -27,7 +27,10 @@ function CompactBundleControl({state,session,act,working,embedded=false}){
   if(guard.current||blocked)return;guard.current=true;setPending(true);setError('');edit({bundle});
   try{if(session)await nextMessage.configure({bundle,resetModel});else await act('view.update',{patch:{newSessionDraft:{...setup,bundle}}})}catch(e){setError(e.message)}finally{guard.current=false;setPending(false)}
  }
- const needsModel=session?.bundlePreview&&session.bundlePreview.bundle===draft.bundle&&session.bundlePreview.modelCompatible===false&&session?.bundleChange?.phase!=='ready';
+ const pendingBundle=session?.pendingBundleSelection?.bundle;
+ const failedBundle=pendingBundle&&session?.nextMessageFailure?.code==='incompatible-model'&&session.nextMessageFailure.bundle===pendingBundle?pendingBundle:null;
+ const previewBundle=session?.bundlePreview&&session.bundlePreview.bundle===draft.bundle&&session.bundlePreview.modelCompatible===false&&session?.bundleChange?.phase!=='ready'?session.bundlePreview.bundle:null;
+ const resetBundle=failedBundle||previewBundle;
  const renderPanel=embedded?content=>content:renderPopover;
  return <div className="a-model-control a-bundle-control" ref={popover}>
   {!embedded&&<button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" disabled={!!unavailable} aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current})}><Layers/><span>{current?bundleLabel(state,current):rows.length?'Choose a bundle':catalogPhase==='ready'?'No bundle choices':defaults.phase==='error'||catalogPhase==='error'?'Bundle unavailable':'Loading bundle…'}</span>{session?.pendingBundleSelection&&<small>Next message</small>}<ChevronDown/></button>}
@@ -36,13 +39,13 @@ function CompactBundleControl({state,session,act,working,embedded=false}){
    <select id={embedded?"composer-options-bundle":undefined} aria-label="Registered root bundles" value={current||''} disabled={blocked} data-action={session?'conversation.configure':'view.update'} onChange={e=>choose(e.target.value)}>{!current&&<option value="" disabled>{rows.length?'Choose a bundle':catalogPhase==='ready'?'No bundle choices':catalogPhase==='error'?'Bundle choices unavailable':'Loading bundles…'}</option>}{current&&!rows.some(row=>row.value===current)&&<option value={current}>{bundleLabel(state,current)}</option>}{rows.map(row=><option key={row.value} value={row.value}>{row.label||row.value}</option>)}</select>
    {rows.find(row=>row.value===current)?.description&&<p className="a-caption a-composer-bundle-description">{rows.find(row=>row.value===current).description}</p>}
    <BundleCatalogStatus state={state} act={act} value={current} disabled={blocked}/>
-   {needsModel&&<><p>Your pinned model is unavailable in this bundle.</p><button type="button" className="a-soft" disabled={blocked} onClick={()=>choose(draft.bundle,true)}>Use the new bundle’s model</button></>}
+   {resetBundle&&<><p>Your pinned model is unavailable in this bundle.</p><button type="button" className="a-soft" disabled={blocked} onClick={()=>choose(resetBundle,true)}>Use the new bundle’s model</button></>}
    {(error||session?.nextMessageError||session?.bundleChange?.phase==='error')&&<small className="a-danger" role="status">{error||session?.nextMessageError||session.bundleChange.error}</small>}
   </section>)}
  </div>;
 }
 function DetailedBundleControl({state,session,act,working}){
- const shared=state.view?.composerBundle||EMPTY,[draft,setDraft]=useState(shared),[submitting,setSubmitting]=useState(null),[error,setError]=useState(''),submittingRef=useRef(false);
+ const shared=state.view?.composerBundle||EMPTY,[draft,setDraft]=useState(shared),[submitting,setSubmitting]=useState(null),[previewing,setPreviewing]=useState(false),[error,setError]=useState(''),submittingRef=useRef(false),previewRef=useRef(false);
  const nextMessage=useNextMessageConfiguration(session,act);
  const draftRevision=useRef({sessionId:session?.id,revision:session?.nextMessageRevision||0});
  if(draftRevision.current.sessionId!==session?.id)draftRevision.current={sessionId:session?.id,revision:session?.nextMessageRevision||0};
@@ -51,20 +54,25 @@ function DetailedBundleControl({state,session,act,working}){
  const setup=newChatSetup(state),current=session?.pendingBundleSelection?.bundle||session?.bundle||setup.bundle||state.bundleDefaults?.effective||state.settings?.bundle||'work',open=draft.open&&draft.sessionId===(session?.id||null);
  const popover=useRef(null);useOutsideDismiss(open,popover,()=>edit({open:false}));
  const operation=session?.bundleChange,preview=session?.bundlePreview;
- const pending=!!submitting||!!session?.configurationBusy||operation?.phase==='working';
+ // Preview reads may overlap saves; neither completion owns the other's guard.
+ const previewPending=previewing||(operation?.phase==='working'&&operation.action==='bundle.preview');
+ const pending=!!submitting||!!session?.configurationBusy||(operation?.phase==='working'&&operation.action!=='bundle.preview');
  const ready=preview?.bundle===draft.bundle&&preview?.previewId;
  const unavailable=!!state.navigationPending||session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||conversationHistoryPending(session);
  const blocked=nextMessageBlocked(session,working),disabled=blocked||pending||unavailable||!draft.bundle?.trim();
  const needsModel=ready&&!preview.modelCompatible&&!draft.resetModel;
- const activeAction=submitting||operation?.action;
+ const activeAction=submitting||(previewPending?'bundle.preview':operation?.action);
  const progress=activeAction==='bundle.preview'?'Previewing bundle changes…':activeAction==='bundle.fork'?'Creating a conversation with this bundle…':'Saving Next message settings…';
  async function run(action){
-  if(submittingRef.current||disabled||action==='bundle.fork'&&working)return;submittingRef.current=true;setSubmitting(action);setError('');
+  const isPreview=action==='bundle.preview';
+  if(submittingRef.current||disabled||((isPreview||action==='bundle.fork')&&(previewRef.current||previewPending))||(action==='bundle.fork'&&working))return;
+  if(isPreview){previewRef.current=true;setPreviewing(true)}else{submittingRef.current=true;setSubmitting(action)}
+  setError('');
   try{
    if(action==='conversation.configure')await nextMessage.configure({bundle:draft.bundle,resetModel:!!draft.resetModel},draftRevision.current.revision);
    else await act(action,action==='view.update'?{patch:{newSessionDraft:{...newChatSetup(state),bundle:draft.bundle},composerBundle:{},panel:null}}:{sessionId:session.id,bundle:draft.bundle,...(action!=='bundle.preview'?{...(ready?{previewId:preview.previewId}:{}),resetModel:!!draft.resetModel}:{})});
   }catch(error){setError(error.message)}
-  finally{submittingRef.current=false;setSubmitting(null)}
+  finally{if(isPreview){previewRef.current=false;setPreviewing(false)}else{submittingRef.current=false;setSubmitting(null)}}
  }
  return <div className="a-model-control a-bundle-control" ref={popover}>
   <button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" disabled={unavailable} aria-expanded={!!open} data-action="view.update" onClick={()=>{draftRevision.current={sessionId:session?.id,revision:session?.nextMessageRevision||0};setError('');edit({open:!open,sessionId:session?.id||null,bundle:current,resetModel:false})}}><Layers/><span>{!session&&!setup.bundle?'Workspace default':bundleLabel(state,current)}</span>{session?.pendingBundleSelection&&<small>Next message</small>}<ChevronDown/></button>
@@ -82,11 +90,11 @@ function DetailedBundleControl({state,session,act,working}){
     </div>}
     <div className="a-dialog-actions">
      <button type="button" className="a-primary" disabled={disabled||needsModel||(draft.bundle===current&&!draft.resetModel)} data-action="conversation.configure" onClick={()=>run('conversation.configure')}>Save for Next message</button>
-     <button type="button" className="a-soft" disabled={disabled} data-action="bundle.preview" onClick={()=>run('bundle.preview')}>Preview changes</button>
-     <button type="button" className="a-soft" disabled={disabled||working||needsModel} data-action="bundle.fork" onClick={()=>run('bundle.fork')}>Fork with this bundle</button>
+     <button type="button" className="a-soft" disabled={disabled||previewPending} data-action="bundle.preview" onClick={()=>run('bundle.preview')}>Preview changes</button>
+     <button type="button" className="a-soft" disabled={disabled||previewPending||working||needsModel} data-action="bundle.fork" onClick={()=>run('bundle.fork')}>Fork with this bundle</button>
     </div>
     {blocked&&<p>Finish active work and resolve held configuration or ownership before saving Next message settings.</p>}
-    {(pending||error||session?.nextMessageError||session?.pendingBundleSelection||operation)&&<ResultNotice phase={pending?'working':error||session?.nextMessageError?'error':session?.pendingBundleSelection?'ready':operation?.phase} message={pending?progress:error||session?.nextMessageError||(session?.pendingBundleSelection?'Next message settings saved; not applied yet.':operation?.error||(operation?.phase==='ready'?operation.action==='bundle.preview'?'Preview ready':operation.action==='bundle.fork'?'Fork created':'Bundle applied':''))}/>}
+    {(pending||previewPending||error||session?.nextMessageError||session?.pendingBundleSelection||operation)&&<ResultNotice phase={pending||previewPending?'working':error||session?.nextMessageError?'error':session?.pendingBundleSelection?'ready':operation?.phase} message={pending||previewPending?progress:error||session?.nextMessageError||(session?.pendingBundleSelection?'Next message settings saved; not applied yet.':operation?.error||(operation?.phase==='ready'?operation.action==='bundle.preview'?'Preview ready':operation.action==='bundle.fork'?'Fork created':'Bundle applied':''))}/>}
    </>:<div className="a-dialog-actions"><button type="button" className="a-primary" disabled={disabled} data-action="view.update" onClick={()=>run('view.update')}>Use bundle</button><button type="button" className="a-soft" disabled={pending||!setup.bundle} data-action="view.update" onClick={()=>act('view.update',{patch:{newSessionDraft:{...setup,bundle:''},composerBundle:{}}})}>Use workspace default</button></div>}
   </section>}
  </div>;

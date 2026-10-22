@@ -6,7 +6,6 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
-import signal
 import sys
 
 SOURCE = Path(__file__).resolve().parents[2]
@@ -47,6 +46,12 @@ async def until(predicate):
 
 
 async def run(root, regression=False):
+    root.mkdir(parents=True, exist_ok=False)
+    home, shared, workspace = (root/name for name in ('app', 'shared', 'workspace'))
+    shared.mkdir(); workspace.mkdir()
+    os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_HOME=str(shared),
+        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'),
+        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root/'capture'), AMPLIFIER_RUNTIME_IMMUTABLE='1')
     import amplifier_module_context_simple
     import amplifier_module_loop_live
     from amplifier_web.runtime import RuntimeManager
@@ -58,14 +63,9 @@ async def run(root, regression=False):
     from amplifier_foundation.session.history import SessionHistoryStore
     from amplifier_web.session_files import sessions_dir
     from aiohttp.test_utils import TestClient, TestServer
+    from amplifier_web.auth import SESSION_COOKIE, new_session
     import yaml
 
-    root.mkdir(parents=True, exist_ok=False)
-    home, shared, workspace = (root/name for name in ('app', 'shared', 'workspace'))
-    shared.mkdir(); workspace.mkdir()
-    os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_HOME=str(shared),
-        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'),
-        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root/'capture'), AMPLIFIER_RUNTIME_IMMUTABLE='1')
     for key in list(os.environ):
         if key.endswith(('_API_KEY', '_ACCESS_TOKEN')):
             os.environ.pop(key, None)
@@ -101,14 +101,15 @@ async def run(root, regression=False):
         startup_timeout=45, retention={'prewarm_on_select': False})
     app = await create_app(home, workspace=workspace, runtime=runtime, voice=False,
         background_updates=False, preload_providers=False)
-    service = app['service']; runtime.app_bridge = service.app_bridge
+    service = app['service']; runtime.app_bridge, runtime.home = service.app_bridge, home
     client = TestClient(TestServer(app))
     report = {'regression': regression, 'versions': {name: importlib.metadata.version(name) for name in
         ('amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live', 'amplifier-module-context-simple')},
         'processes': []}
     try:
         await client.start_server()
-        headers = {'Authorization': 'Bearer '+app['control_token']}
+        headers = {'Cookie': SESSION_COOKIE+'='+new_session(app['session_secret']),
+                   'X-Amplifier-State-Transport': 'delta-v1'}
         async def action(name, args, identity):
             response = await client.post('/api/actions', headers=headers, json={'action': name, 'args': args, 'id': identity})
             value = await response.json()
@@ -132,8 +133,12 @@ async def run(root, regression=False):
                 return startup, guard
             runtime._input_configuration = stale
         await action('conversation.send', {'sessionId':sid,'text':'FIRST_GENUINE_INPUT','expectedConfigurationRevision':2}, 'input-one')
+        await until(lambda: sid in runtime.workers or current.get('status') == 'error')
+        assert sid in runtime.workers, current.get('error')
         report['processes'].append(runtime.workers[sid]['process'].pid)
-        await until(lambda: current.get('status') == 'idle' and calls.exists())
+        await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
+        assert calls.exists(), current.get('error')
+        await until(lambda: runtime.workers[sid].get('parked'))
         first = [json.loads(line) for line in calls.read_text().splitlines()]
         assert len(first) == 1 and first[0]['root'] == 'b' and first[0]['model'] == 'first' and first[0]['effort'] == 'low', first
         assert current['appliedConfigurationRevision'] == 2 and not current.get('pendingBundleSelection')
@@ -141,12 +146,13 @@ async def run(root, regression=False):
             'selection':{'instance':'fixture','model':'second','effort':'high'}}, 'save-adjacent')
         assert len(calls.read_text().splitlines()) == 1
         await action('conversation.send', {'sessionId':sid,'text':'SECOND_GENUINE_INPUT','expectedConfigurationRevision':3}, 'input-two')
+        await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
+        await until(lambda: runtime.workers[sid].get('parked'))
         report['processes'].append(runtime.workers[sid]['process'].pid)
-        await until(lambda: current.get('status') == 'idle' and len(calls.read_text().splitlines()) == 2)
         observed = [json.loads(line) for line in calls.read_text().splitlines()]
         assert observed[1]['root'] == 'a' and observed[1]['model'] == 'second' and observed[1]['effort'] == 'high', observed
         assert len(set(report['processes'])) == 2
-        messages = SessionHistoryStore(sessions_dir(workspace)/sid).load_messages()
+        messages = SessionHistoryStore(sessions_dir(workspace)/runtime.workers[sid]['runtime_id']).load_messages()
         ids = [(message.get('metadata') or {}).get('amplifier_input',{}).get('id') for message in messages]
         assert ids.count('input-one') == ids.count('input-two') == 1, ids
         report.update(passed=True, calls=observed, inputsExactlyOnce=True, adjacentCycle=True)

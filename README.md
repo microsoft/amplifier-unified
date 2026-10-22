@@ -11,6 +11,16 @@ or **Ctrl+Enter** to continue writing. In a list, these continue the list;
 Undo and redo work as usual. Pasted images remain attachments, and pasted text
 longer than 10,000 characters becomes a **Pasted text** attachment.
 
+### Choose settings before resuming a chat
+
+The conversation's model and bundle controls save **Next message** choices
+without starting its worker. You can read history, browse saved artifacts and
+rename the chat while preparation is unavailable. Saved choices are not a claim
+that the runtime has applied them. The next genuine input validates the selected
+bundle, provider, model and effort before delivery; a failed check keeps the
+choices and does not silently substitute another model. Active work and unresolved
+configuration operations keep their existing guards. Automatic prewarming is not enabled.
+
 ### Collapse interim replies (experimental)
 
 In **Settings → Appearance**, enable **Collapse interim replies** to move earlier

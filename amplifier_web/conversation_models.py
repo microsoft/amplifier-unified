@@ -42,7 +42,8 @@ async def browse(management, session, *, refresh=False):
         result={'providers':copy.deepcopy(choices) if current_catalog else [{'id':row['id'],'sharedCatalogKey':row['sharedCatalogKey'],
                    'info':{'display_name':row.get('display_name'),'defaults':{'model':row.get('model'),'reasoning_effort':row.get('effort')}}}
                   for row in choices], 'effective':previous.get('effective',{}) if current_catalog else report.get('effective_selection',{}),
-                'catalogs':{key:{'phase':'ready','models':value.get('models',[]),'metadata':value['providerMetadata']}
+                'catalogs':{key:{'phase':'ready','models':value.get('models',[]),'metadata':value['providerMetadata'],
+                                'supported':value.get('modelsSupported',True)}
                             for key,value in cached.items()}}
     else:
         result = await resolve_defaults(service.data_dir, session['workspace'], pending_bundle['bundle'] if pending_bundle else session.get('bundle'),
@@ -90,6 +91,7 @@ async def select(management, session, requested):
         current['nextMessageRevision'] = current.get('nextMessageRevision', 0) + 1
         current['nextMessageStatus'] = 'saved'
         current.pop('nextMessageError', None)
+        current.pop('nextMessageFailure', None)
         if current.get('pendingBundleSelection'):
             current['pendingBundleSelection']['resetModel'] = False
         control = service.state.setdefault('runtimeControl', {}).setdefault(current['id'], {})

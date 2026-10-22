@@ -31,9 +31,14 @@ async def preview_saved(management, args):
         error = 'Bundle preview is unavailable. Your saved choices are unchanged; retry when its source is available.'
     async with app.lock:
         current = app._session(sid, hydrate=False)
-        if (current.get('bundlePreviewRequest') != token or revision != (
-                app.state.get('configurationRevision', 0), current.get('nextMessageRevision', 0),
-                current.get('interruptionRevision', 0))):
+        if current.get('bundlePreviewRequest') != token:
+            return
+        if revision != (app.state.get('configurationRevision', 0), current.get('nextMessageRevision', 0),
+                        current.get('interruptionRevision', 0)):
+            if current.get('bundleChange', {}).get('action') == 'bundle.preview':
+                current['bundleChange'] = {'phase': 'stale', 'action': 'bundle.preview',
+                    'bundle': args['bundle'], 'detail': 'Choices changed. Preview again for current settings.'}
+                app._publish_changes(sessions={sid})
             return
         if result is not None:
             current['bundlePreview'] = result
@@ -57,6 +62,8 @@ async def perform(management, action, args):
             raise ValueError('Cancel or finish the queued module changes before changing bundles.')
         if not management.configuration_idle(current):
             raise ValueError('Finish the current turn and its workers before changing bundles.')
+        if action == 'bundle.switch' and current.get('pendingBundleSelection'):
+            raise ValueError('A Next message bundle choice is saved. Change that choice, or cancel it by selecting the current bundle, before switching immediately.')
         current['configurationBusy'] = True
         current['bundleChange'] = {'phase': 'working', 'action': action, 'bundle': args['bundle']}
         source = copy.deepcopy(current)

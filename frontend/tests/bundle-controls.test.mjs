@@ -51,6 +51,81 @@ test('Next message save and explicit fork need no preview and show immediate pen
  assert.deepEqual(calls[1],{name:'bundle.fork',args:{sessionId:'chat',bundle:'work',resetModel:false}});
  await renderAct(async()=>{release();await operation;root.unmount()});
 });
+for(const first of ['save','preview'])test(`a slow preview permits a new bundle save with independent pending guards (${first} settles first)`,async()=>{
+ const calls=[],releases={};let root,previewOperation,saveOperation;
+ const act=(name,args)=>{calls.push({name,args});return ['bundle.preview','conversation.configure'].includes(name)&&!releases[name]?new Promise(resolve=>{releases[name]=resolve}):Promise.resolve({accepted:true,result:{revision:5}})};
+ const state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'anchors'},{value:'work'},{value:'other'}]};
+ let session={id:'chat',bundle:'anchors',nextMessageRevision:4};
+ const render=()=>React.createElement(BundleControl,{state,session,act,working:false});
+ const button=action=>root.root.findByProps({'data-action':action});
+ const picker=()=>root.root.findAllByProps({id:'conversation-bundle'}).find(n=>n.type==='select');
+ const settle=async kind=>{
+  if(kind==='save'){
+   releases['conversation.configure']({accepted:true,result:{revision:5}});await saveOperation;
+   session={...session,nextMessageRevision:5,pendingBundleSelection:{bundle:'other',resetModel:false}};
+  }else{releases['bundle.preview']({accepted:true});await previewOperation}
+  session={...session,bundleChange:{phase:'ready',action:'bundle.preview'}};
+  root.update(render());
+ };
+ try{
+  await renderAct(async()=>{root=create(render())});
+  await renderAct(async()=>{previewOperation=button('bundle.preview').props.onClick();await button('bundle.preview').props.onClick();await button('bundle.fork').props.onClick()});
+  assert.equal(calls.filter(c=>c.name==='bundle.preview').length,1);assert.equal(calls.some(c=>c.name==='bundle.fork'),false);
+  assert.equal(picker().props.disabled,false);assert.equal(button('conversation.configure').props.disabled,false);
+  assert.equal(button('bundle.preview').props.disabled,true);assert.equal(button('bundle.fork').props.disabled,true);
+  assert.match(JSON.stringify(root.toJSON()),/Previewing bundle changes/);
+  session={...session,bundleChange:{phase:'working',action:'bundle.preview'}};
+  await renderAct(async()=>root.update(render()));
+  assert.equal(picker().props.disabled,false);assert.equal(button('conversation.configure').props.disabled,false);
+  await renderAct(async()=>picker().props.onChange({target:{value:'other'}}));
+  await renderAct(async()=>{saveOperation=button('conversation.configure').props.onClick();await button('conversation.configure').props.onClick()});
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure'),[{name:'conversation.configure',args:{sessionId:'chat',expectedRevision:4,bundle:'other',resetModel:false}}]);
+  assert.equal(picker().props.disabled,true);assert.equal(button('conversation.configure').props.disabled,true);
+  assert.equal(button('bundle.preview').props.disabled,true);assert.equal(button('bundle.fork').props.disabled,true);
+  assert.match(JSON.stringify(root.toJSON()),/Saving Next message settings/);
+  await renderAct(async()=>settle(first));
+  assert.equal(picker().props.disabled,first==='preview','Only the unfinished save locks the picker');
+  assert.equal(button('conversation.configure').props.disabled,true,'An unfinished save or unchanged saved choice cannot be saved again');
+  assert.equal(button('bundle.preview').props.disabled,true);assert.equal(button('bundle.fork').props.disabled,true);
+  await renderAct(async()=>settle(first==='save'?'preview':'save'));
+  assert.equal(picker().props.disabled,false);assert.equal(picker().props.value,'other');
+  assert.equal(button('conversation.configure').props.disabled,true);
+  assert.equal(button('bundle.preview').props.disabled,false);assert.equal(button('bundle.fork').props.disabled,false);
+  assert.equal(calls.filter(c=>c.name==='bundle.preview').length,1);
+  assert.equal(calls.some(c=>c.name==='bundle.switch'||c.name==='conversation.send'||c.name==='bundle.fork'),false);
+ }finally{
+  await renderAct(async()=>{releases['bundle.preview']?.({accepted:true});releases['conversation.configure']?.({accepted:true,result:{revision:5}});await Promise.all([previewOperation,saveOperation]);root?.unmount()});
+ }
+});
+test('a host-reported preview allows editing but keeps active, configuration and unsaved-choice guards',async()=>{
+ const calls=[],act=record(calls),base={id:'chat',bundle:'anchors',bundleChange:{phase:'working',action:'bundle.preview'}};
+ let session=base,state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'anchors'},{value:'work'}]},root;
+ const render=()=>React.createElement(BundleControl,{state,session,act,working:false});
+ const button=action=>root.root.findByProps({'data-action':action});
+ const picker=()=>root.root.findAllByProps({id:'conversation-bundle'}).find(n=>n.type==='select');
+ try{
+  await renderAct(async()=>{root=create(render())});
+  assert.equal(picker().props.disabled,false);assert.equal(button('conversation.configure').props.disabled,false);
+  assert.equal(button('bundle.preview').props.disabled,true);assert.equal(button('bundle.fork').props.disabled,true);
+  await renderAct(async()=>{await button('bundle.preview').props.onClick();await button('bundle.fork').props.onClick()});
+  assert.equal(calls.some(c=>c.name==='bundle.preview'||c.name==='bundle.fork'),false);
+  for(const guard of [{configurationBusy:true},{pendingConfiguration:{phase:'queued'}},{status:'working'},{ownership:{status:'yielded'}}]){
+   session={...base,...guard};await renderAct(async()=>root.update(render()));
+   assert.equal(picker().props.disabled,true);assert.equal(button('conversation.configure').props.disabled,true);
+   await renderAct(async()=>button('conversation.configure').props.onClick());
+  }
+  session=base;
+  for(const bundle of ['anchors',' ']){
+   state={...state,view:{composerBundle:{open:true,sessionId:'chat',bundle}}};await renderAct(async()=>root.update(render()));
+   assert.equal(button('conversation.configure').props.disabled,true);
+  }
+  state={...state,view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}}};
+  session={...base,bundlePreview:{bundle:'work',previewId:'prior-preview',modelCompatible:false}};
+  await renderAct(async()=>root.update(render()));
+  assert.equal(button('conversation.configure').props.disabled,true);
+  assert.equal(calls.some(c=>c.name==='conversation.configure'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
 test('an incompatible preview requires an explicit model choice before saving',async()=>{
  const calls=[],act=record(calls);
  const state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}}},session={id:'chat',bundle:'anchors',bundlePreview:{bundle:'work',previewId:'choice',modelCompatible:false}};
@@ -132,6 +207,48 @@ test('compact Next message save locks pending choice and failed completion does 
   assert.match(JSON.stringify(root.toJSON()),/Save unavailable/);
   assert.equal(calls.filter(row=>row.name==='conversation.configure').length,1);
   assert.equal(calls.some(row=>row.name==='conversation.send'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('compact model-reset recovery uses the failed pending bundle without a preview or the stale draft',async()=>{
+ const calls=[],act=record(calls),state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'stale-draft'}},registeredBundles:[{value:'anchors'},{value:'work'},{value:'stale-draft'}]};
+ let session={id:'chat',bundle:'anchors',nextMessageRevision:6,pendingBundleSelection:{bundle:'work',resetModel:false},nextMessageFailure:{code:'incompatible-model',bundle:'work'},nextMessageError:'Pinned model unavailable',bundleChange:{phase:'ready',action:'bundle.preview'}},root;
+ const render=()=>React.createElement(BundleControl,{compact:true,state,session,act,working:false});
+ const recovery=()=>root.root.findAllByType('button').filter(n=>n.children.includes('Use the new bundle’s model'));
+ try{
+  await renderAct(async()=>{root=create(render())});
+  assert.equal(session.bundlePreview,undefined);assert.equal(root.root.findByType('select').props.value,'work');
+  assert.equal(recovery().length,1);assert.equal(recovery()[0].props.disabled,false);
+  await renderAct(async()=>recovery()[0].props.onClick());
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure'),[{name:'conversation.configure',args:{sessionId:'chat',expectedRevision:6,bundle:'work',resetModel:true}}]);
+  assert.equal(calls.find(c=>c.name==='view.update').args.patch.composerBundle.bundle,'work');
+  assert.equal(calls.some(c=>c.name==='bundle.preview'||c.name==='bundle.switch'||c.name==='conversation.send'),false);
+  session={...session,nextMessageRevision:7,pendingBundleSelection:{bundle:'work',resetModel:true},nextMessageFailure:null,nextMessageError:null};
+  await renderAct(async()=>root.update(render()));assert.equal(recovery().length,0);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('compact model-reset recovery ignores failures not tied to the current pending bundle',async()=>{
+ const calls=[],state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'work'}]};
+ const base={id:'chat',bundle:'work',pendingBundleSelection:{bundle:'work',resetModel:false},nextMessageError:'Pinned model unavailable'};
+ let session=base,root;
+ const render=()=>React.createElement(BundleControl,{compact:true,state,session,act:record(calls),working:false});
+ try{
+  await renderAct(async()=>{root=create(render())});
+  for(const change of [{},{nextMessageFailure:{code:'incompatible-model',bundle:'old-root'}},{nextMessageFailure:{code:'other-failure',bundle:'work'}},{pendingBundleSelection:null,nextMessageFailure:{code:'incompatible-model',bundle:'work'}}]){
+   session={...base,...change};await renderAct(async()=>root.update(render()));
+   assert.equal(root.root.findAllByType('button').some(n=>n.children.includes('Use the new bundle’s model')),false);
+  }
+  assert.equal(calls.some(c=>c.name==='conversation.configure'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('compact preview-based model-reset recovery remains explicit',async()=>{
+ const calls=[],state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'anchors'},{value:'work'}]};
+ const session={id:'chat',bundle:'anchors',nextMessageRevision:3,bundlePreview:{bundle:'work',previewId:'choice',modelCompatible:false},bundleChange:{phase:'error',action:'bundle.switch',error:'Pinned model unavailable'}};
+ let root;
+ try{
+  await renderAct(async()=>{root=create(React.createElement(BundleControl,{compact:true,state,session,act:record(calls),working:false}))});
+  assert.equal(calls.some(c=>c.name==='conversation.configure'),false);
+  await renderAct(async()=>root.root.findAllByType('button').find(n=>n.children.includes('Use the new bundle’s model')).props.onClick());
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure'),[{name:'conversation.configure',args:{sessionId:'chat',expectedRevision:3,bundle:'work',resetModel:true}}]);
  }finally{await renderAct(async()=>root?.unmount())}
 });
 
