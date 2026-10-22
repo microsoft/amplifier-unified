@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.213",
+      "title": "Remove optional per-chat quotas and recover verified cleanup failures",
+      "changes": [
+        "Allow task-chat, per-chat environment and pending-test count limits to be turned off. New execution settings default to no count limit for these controls; saved limits, machine resource checks and independent safety limits remain respected.",
+        "Let test-environment cleanup continue after an exactly recorded archive-verification failure before removal. The continuation preserves fresh archive copies without extracting links, checks ownership again and leaves uncertain removal outcomes blocked.",
+        "Make the composer voice smoke test explicitly finish its setup fixture, preventing unrelated first-use settings from interrupting the check."
+      ],
+      "notices": [
+        {
+          "id": "execution-count-defaults-213",
+          "title": "New per-chat execution settings have no count limit",
+          "detail": "New execution settings no longer cap task chats per source, environments per chat or pending tests per chat. Existing saved limits are unchanged. Zero means no count limit; machine resource checks, global queue bounds and ownership safeguards still apply.",
+          "action": "Review Testing & resources execution settings if you want explicit per-chat count limits."
+        }
+      ]
+    },
+    {
       "version": "0.20.212",
       "title": "Keep updates moving and let parallel work use available capacity",
       "changes": [
