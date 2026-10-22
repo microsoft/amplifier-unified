@@ -12,6 +12,8 @@ import pytest
 from amplifier_web import test_dependency_layers as layers
 from amplifier_web import test_environment_preparation as preparation
 
+NATIVE_OBSERVATION = layers.native  # Exercise the real reader with fake engine bytes.
+
 PROJECT = '[project]\nname="fixture"\nversion="1"\ndependencies=["third-party==1"]\n'
 LOCK = '''version=1
 [[package]]
@@ -375,3 +377,36 @@ def test_docker_size_excludes_shared_base_content(tmp_path, monkeypatch):
              'backendIdentity': {'backend': 'docker', 'daemon': 'fixture'}, 'baseImage': 'base@sha256:' + '1' * 64}}
     assert layers.native(config, tmp_path, value) == 200
     assert not replies
+
+
+@pytest.mark.parametrize('error', [ValueError('Image is absent'), ValueError('Malformed native reply'), TimeoutError('Backend unavailable'), OSError('Engine command unavailable')])
+def test_unavailable_native_layer_keeps_cold_path_without_cache_mutation(prepared, tmp_path, monkeypatch, error):
+    run, calls, _ = prepared
+    first, _ = run('first')
+    settle(first)
+    entry = layers.store(tmp_path) / layers.read(first / 'preparation/dependency-reuse.json')['entry']
+    before = {str(path.relative_to(entry)): path.read_bytes() for path in entry.rglob('*') if path.is_file()}
+    def unavailable(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(layers, 'native', unavailable)
+    second, result = run('second', 'fresh source')
+    assert result['status'] == 'ready'
+    assert [row['mode'] for row in calls] == ['layer', 'finalize', None]
+    assert calls[-1]['contents']['fixture.py'] == 'fresh source'
+    assert not (second / 'preparation/dependency-borrow.json').exists()
+    assert not (second / 'preparation/dependency-seed.json').exists()
+    assert before == {str(path.relative_to(entry)): path.read_bytes() for path in entry.rglob('*') if path.is_file()}
+
+
+@pytest.mark.parametrize('reply', [None, {}, [None], [{}]])
+def test_actual_native_reader_malformed_json_shape_falls_back(prepared, monkeypatch, reply):
+    run, calls, _ = prepared
+    first, _ = run('first')
+    settle(first)
+    monkeypatch.setattr(layers, 'native', NATIVE_OBSERVATION)
+    monkeypatch.setattr(preparation, 'run', lambda *args, **kwargs: json.dumps(reply))
+    second, result = run('second', 'fresh source')
+    assert result['status'] == 'ready'
+    assert [row['mode'] for row in calls] == ['layer', 'finalize', None]
+    assert not (second / 'preparation/dependency-borrow.json').exists()
+    assert not (second / 'preparation/dependency-seed.json').exists()

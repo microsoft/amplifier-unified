@@ -353,7 +353,14 @@ def acquire(directory, config, task, expected, archive, deadline):
                 return None
             else:
                 value = receipt(entry)
-                native(config, entry / 'preparation', value)
+                try:
+                    native(config, entry / 'preparation', value)
+                except (OSError, ValueError, TimeoutError, KeyError, TypeError, AttributeError):
+                    # An unavailable, removed or changed native image is not
+                    # reusable, but optional reuse must not block an otherwise
+                    # supported source preparation. Preserve the uncertain
+                    # entry; do not replay its seed or acquire its borrow.
+                    return None
                 hit = True
         if value is None:
             entry, value = seed(directory, key, config, expected, material, deadline, task)

@@ -340,3 +340,8 @@ blocking the original owner's recovery lock. Each finalizer records its borrow
 before native creation and holds it until its task image is confirmed removed.
 The existing global Storage retention settings govern unused dependency images;
 there is no separate background cleanup scheduler or source/result deletion.
+
+If a recorded reusable image is absent, unavailable or malformed at native
+observation, the check uses ordinary cold preparation without modifying or
+rebuilding that uncertain cache entry. Saved owner/receipt corruption still
+requires inspection.
