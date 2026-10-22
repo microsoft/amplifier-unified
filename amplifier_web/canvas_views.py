@@ -83,6 +83,14 @@ class CanvasViews:
                     raise AppError('Finish or cancel the ' + label + ' edit before leaving it. '
                                    'Use viewer recovery only to discard that edit.', 409, code='canvas_view_dirty')
 
+        # Question state is shared. A close in any client (or by an agent) must
+        # not strand another client's question-bound editor after its card moves.
+        if action in {'question.answer', 'question.cancel', 'question.supersede'}:
+            for client in self.service.clients.records.values():
+                check(client, [identity for identity, binding in client.get('canvasViews', {}).get('inline', {}).items()
+                               if binding.get('sessionId') == args['sessionId']
+                               and binding.get('questionId') == args['id']])
+            return
         # Deleting shared history can unmount another client's whole canvas.
         if action == 'session.delete':
             for client in self.service.clients.records.values():

@@ -235,8 +235,9 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
-   // Chat navigation has its own queue; it must not overtake a declared edit.
-   if(navigation&&dirtyBarrier)await dirtyBarrier;
+   // Navigation and answers have separate queues; neither may overtake an
+   // already declared renderer edit when its transition can remove the view.
+   if((navigation||['question.answer','question.cancel','question.supersede'].includes(action))&&dirtyBarrier)await dirtyBarrier;
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
    if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return {accepted:false};
    if(chatReference&&(meta.chatReferenceIntent!==archiveRevision.current||

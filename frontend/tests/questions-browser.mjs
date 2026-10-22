@@ -227,9 +227,37 @@ try{
  assert.equal((await check()).sent.length,3,'Review actions never send or answer');
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
  if(output)await page.screenshot({path:join(output,'question-html-review.png')});
- await second.getByRole('button',{name:/^Hide preview:/}).click();
+ // Synthetic renderer-declared dirty state is a supported contract probe.
+ // It does not claim the built-in Markdown/HTML reader has a document editor.
+ const reviewTarget=await page.evaluate(id=>{
+  const view=window.amplifier.getState().canvasWorkspace.views.find(v=>v.viewId.startsWith('inline-')&&v.resourceId===id);
+  return Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
+ },review.html.id);
+ const reviewAction=async(action,args)=>page.evaluate(async({action,args})=>{
+  try{return await window.amplifier.dispatch(action,args)}
+  catch(error){return {accepted:false,code:error.code,error:error.message}}
+ },{action,args});
+ assert.equal((await reviewAction('canvas.views.dirty',{...reviewTarget,dirty:true})).accepted,true);
+ const mountedFrame=await second.locator('iframe').elementHandle();
  await q.getByRole('button',{name:'Submit answer'}).click();
+ await expect(q.getByRole('alert')).toContainText('Finish or cancel');
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ assert.equal((await check()).questions.find(row=>row.id===review.question.id).status,'pending');
+ assert.equal((await check()).sent.length,3,'Rejected dirty answer must not send');
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Dirty rejection preserves the mounted renderer');
+ await expect(frame.locator('#value')).toHaveText('1');
+ assert.equal((await reviewAction('session.draft',{})).code,'canvas_view_dirty');
+ if(output)await page.screenshot({path:join(output,'question-dirty-answer-rejected.png')});
+ assert.equal((await reviewAction('canvas.views.dirty',{...reviewTarget,dirty:false})).accepted,true);
+ // New explicit click after confirmed rejection; the same draft must work.
+ await q.getByRole('button',{name:'Submit answer'}).click();
+ await expect(q.getByText('Answer saved and delivered to Amplifier.')).toBeVisible();
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Status revision and delivery updates preserve the open review');
+ await expect(frame.locator('#value')).toHaveText('1');
+ assert.equal((await check()).sent.length,4);
+ await second.getByRole('button',{name:/^Hide preview:/}).click();
  await expect(q).toHaveCount(0);
+ await mountedFrame.dispose();
  await history();await expect(card(review.question.id).locator('.a-question-result strong').filter({hasText:'Proceed'})).toBeVisible();
  const savedQuestion=(await check()).questions.find(row=>row.id===review.question.id);
  assert.equal(savedQuestion.answer.text,answerDraft);assert.equal(savedQuestion.answer.questionRevision,1);
@@ -237,6 +265,34 @@ try{
  assert.equal(savedQuestion.answer.artifacts[0].id,review.markdown.id);
  if(output)await page.screenshot({path:join(output,'question-formatted-answer.png')});
  await close();
+ for(const action of ['question.cancel','question.supersede']){
+  const seeded=await page.request.post(ready.url+'/fixture/reviews');
+  assert.equal(seeded.status(),200,await seeded.text());
+  const data=await seeded.json(),item=card(data.question.id),document=item.locator('.a-compact-artifact').first();
+  await document.getByRole('button',{name:/^Preview here:/}).click();
+  await expect(document.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
+  const body=await document.locator('.a-inline-artifact-body').elementHandle();
+  const target=await page.evaluate(id=>{
+   const view=window.amplifier.getState().canvasWorkspace.views.find(v=>v.viewId.startsWith('inline-')&&v.resourceId===id);
+   return Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
+  },data.markdown.id);
+  const args={sessionId:ready.sessionId,id:data.question.id,expectedRevision:1,
+   ...(action==='question.supersede'?{prompt:'Replacement review question',required:false,dependency:'Choose'}:{})};
+  assert.equal((await reviewAction('canvas.views.dirty',{...target,dirty:true})).accepted,true);
+  assert.equal((await reviewAction(action,args)).code,'canvas_view_dirty');
+  assert.equal((await check()).questions.find(row=>row.id===data.question.id).status,'pending');
+  assert.equal(await body.evaluate(element=>element.isConnected),true);
+  assert.equal((await check()).sent.length,4,'Cancel/supersede cannot send an answer');
+  assert.equal((await reviewAction('canvas.views.dirty',{...target,dirty:false})).accepted,true);
+  const closed=await reviewAction(action,args);assert.equal(closed.accepted,true);
+  await expect(item.getByText(action==='question.cancel'?'Question cancelled without an answer.':'Replaced by a newer question.')).toBeVisible();
+  assert.equal(await body.evaluate(element=>element.isConnected),true,'Clean closure keeps the open review reachable');
+  await document.getByRole('button',{name:/^Hide preview:/}).click();
+  await expect(item).toHaveCount(0);await body.dispose();
+  if(action==='question.supersede')assert.equal((await reviewAction('question.cancel',{
+   sessionId:ready.sessionId,id:closed.result.id,expectedRevision:closed.result.revision,
+  })).accepted,true);
+ }
  assert.deepEqual(errors,[]);
  console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
 }finally{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}await browser?.close();fixture.kill()}

@@ -407,6 +407,12 @@ the originating browser tab's session storage, keyed by host/chat/question ID
 and `contentRevision`; storage failure is visible. They are not sent until
 explicitly answered.
 
+An open question review remains mounted across status and delivery updates until
+the person closes it. Answer, cancel and supersede reject before changing the
+record if any client has declared that question's preview dirty. The editor and
+answer draft remain reachable; finishing/cancelling the edit permits a new
+explicit attempt. These guards never discard the edit or replay the answer.
+
 An inline view binds either a message publication or
 `questionId` plus `questionContentRevision` from the question's immutable
 `contentRevision`, never both. This is not the record's status `revision`, which

@@ -4,8 +4,9 @@ import {Markdown} from './markdown';
 import {ArtifactPreview,CompactArtifactCard} from './inline-artifacts';
 import './questions.css';
 
-function ReviewArtifact({reference,question,state,dispatch}){
+function ReviewArtifact({reference,question,state,dispatch,onExpandedChange}){
  const [expanded,setExpanded]=useState(false),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
+ const expand=value=>{setExpanded(value);onExpandedChange(value)};
  const controls=useRef(null),trigger=useRef(null),pending=useRef(false),alive=useRef(true),id=useId();
  const sameCanvas=!!(state.canvas?.open&&state.canvas.id===reference.id);
  const inCanvas=!!(sameCanvas&&state.canvas.selectedVersion===reference.version);
@@ -20,7 +21,7 @@ function ReviewArtifact({reference,question,state,dispatch}){
   try{
    const result=await dispatch('canvas.select',{sessionId:reference.sessionId,id:reference.id,version:reference.version});
    if(!result?.accepted)throw Error(result?.error||'The current view was kept.');
-   if(alive.current)setExpanded(false);
+   if(alive.current)expand(false);
   }catch(error){if(alive.current)setNotice(error.message)}
   finally{pending.current=false;if(alive.current)setBusy(false)}
  }
@@ -34,19 +35,24 @@ function ReviewArtifact({reference,question,state,dispatch}){
     const result=await dispatch('canvas.close',{});
     if(!result?.accepted)throw Error(result?.error||'Finish the Canvas edit before previewing here.');
    }
-   if(alive.current)setExpanded(true);
+   if(alive.current)expand(true);
   }catch(error){if(alive.current)setNotice(error.message)}
   finally{pending.current=false;if(alive.current)setBusy(false)}
  }
- return <div onKeyDown={async event=>{if(event.key==='Escape'&&expanded&&!pending.current){event.preventDefault();if(await controls.current?.close())trigger.current?.focus({preventScroll:true})}}><CompactArtifactCard title={reference.title} kind={reference.kind} version={reference.version} expanded={expanded}
+ async function escape(event){
+  if(event.key!=='Escape'||!expanded||pending.current)return;
+  event.preventDefault();
+  if(await controls.current?.close())trigger.current?.focus({preventScroll:true});
+ }
+ return <div onKeyDown={escape}><CompactArtifactCard title={reference.title} kind={reference.kind} version={reference.version} expanded={expanded}
   busy={busy} onPreview={toggle} onOpen={open} previewId={id} notice={notice||(inCanvas?`Shown in Canvas · exact v${reference.version}`:'')}>
   {expanded&&<ArtifactPreview item={{row:reference,version:reference.version}} state={state} dispatch={dispatch}
    questionBinding={{questionId:question.id,questionContentRevision:question.contentRevision||1}} fullView={open}
-   compactHeading controlsRef={controls} onClosed={()=>setExpanded(false)}/>}
+   compactHeading controlsRef={controls} onClosed={()=>expand(false)}/>}
  </CompactArtifactCard></div>;
 }
 
-function QuestionCard({question,sessionId,state,dispatch}){
+function QuestionCard({question,sessionId,state,dispatch,onPreviewChange}){
  const q=question,draftKey=JSON.stringify(['amplifier.questionDraft.v1',state.client?.hostInstanceId||globalThis.location?.origin||'local',sessionId,q.id,q.contentRevision||1]);
  const [text,setText]=useState(()=>{try{return q.status==='pending'?(sessionStorage.getItem(draftKey)||'').slice(0,8000):''}catch{return ''}});
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[draftWarning,setDraftWarning]=useState('');
@@ -69,7 +75,12 @@ function QuestionCard({question,sessionId,state,dispatch}){
   if(request.current?.key!==key)request.current={key,id:crypto.randomUUID()};
   pending.current=true;setBusy(true);setError('');
   try{const result=await dispatch('question.answer',args,{id:request.current.id});if(!result?.accepted)throw Error(result?.error||'The answer could not be confirmed.')}
-  catch(error){setError(error.message||'The answer could not be confirmed. Your choice is kept.')}
+  catch(error){
+   // A confirmed dirty-view rejection recorded no answer. A later explicit
+   // click after finishing the edit is a new attempt, not a lost-reply replay.
+   if(error.code==='canvas_view_dirty')request.current=null;
+   setError(error.message||'The answer could not be confirmed. Your choice is kept.');
+  }
   finally{pending.current=false;setBusy(false)}
  }
  async function skip(){
@@ -82,7 +93,8 @@ function QuestionCard({question,sessionId,state,dispatch}){
   <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
   <Markdown text={q.prompt} className="a-question-prompt" userContent fileContext={fileContext}/>
   <Markdown text={q.dependency} className="a-caption a-question-dependency" userContent fileContext={fileContext}/>
-  {!!q.artifacts?.length&&<div className="a-question-artifacts" aria-label="Documents for this decision">{q.artifacts.map(ref=><ReviewArtifact key={`${ref.id}:${ref.version}`} reference={ref} question={q} state={state} dispatch={dispatch}/>)}</div>}
+  {!!q.artifacts?.length&&<div className="a-question-artifacts" aria-label="Documents for this decision">{q.artifacts.map(ref=><ReviewArtifact key={`${ref.id}:${ref.version}`} reference={ref} question={q} state={state} dispatch={dispatch}
+   onExpandedChange={expanded=>onPreviewChange(q.id,`${ref.id}:${ref.version}`,expanded)}/>)}</div>}
   {q.status==='pending'?<form onSubmit={event=>submit(event)} aria-label={`Answer: ${label}`}>
    <fieldset disabled={busy}><legend className="a-sr-only">{label}</legend>
     {q.options.map((choice,index)=><div key={choice.id}>
@@ -115,9 +127,17 @@ export function QuestionNotice({session,paneRef}){
 }
 
 export function Questions({session,state={},dispatch,history=false}){
+ const [previews,setPreviews]=useState({});
+ const onPreviewChange=(questionId,reference,expanded)=>setPreviews(current=>({
+  ...current,[questionId]:{...current[questionId],[reference]:expanded},
+ }));
  const active=activeQuestions(session);
- const questions=history?(session?.questions||[]).filter(q=>!active.includes(q)):active;
+ // Preserve a mounted review through answer/delivery/status updates. A late
+ // renderer dirty report still has its editor; closing the review lets the
+ // completed card leave the active surface. Status is not content identity.
+ const questions=(session?.questions||[]).filter(q=>(history?!active.includes(q):active.includes(q))
+  ||Object.values(previews[q.id]||{}).some(Boolean));
  if(!questions.length)return null;
- const cards=questions.map(q=><QuestionCard key={`${q.id}:${q.revision}`} question={q} sessionId={session.id} state={state} dispatch={dispatch}/>);
+ const cards=questions.map(q=><QuestionCard key={`${q.id}:${q.contentRevision||1}`} question={q} sessionId={session.id} state={state} dispatch={dispatch} onPreviewChange={onPreviewChange}/>);
  return history?<details className="a-question-history"><summary>Answers and closed questions ({questions.length})</summary><div className="a-questions">{cards}</div></details>:<section tabIndex={-1} className="a-questions" data-part="questions" aria-label="Questions for you">{cards}</section>;
 }

@@ -104,6 +104,12 @@ class Questions:
             # Retain every active/uncertain question and bounded recent history.
             visible = {r["id"] for r in records[-10:]}
             visible.update(r["id"] for r in records if r["status"] == "pending" or (r.get("delivery") or {}).get("status") in {"sending", "unknown", "rejected"})
+            # An older closed question can still host a mounted review. Do not
+            # evict its editor merely because newer questions filled history.
+            visible.update(binding['questionId']
+                           for client in self.app.clients.records.values()
+                           for binding in client.get('canvasViews', {}).get('inline', {}).values()
+                           if binding.get('sessionId') == session['id'] and binding.get('questionId'))
             session["questions"] = [r for r in records if r["id"] in visible]
 
     def read(self, action, args):
@@ -197,6 +203,9 @@ class Questions:
         record = self.store.get(session["id"], args["id"])
         if record["revision"] != args["expectedRevision"] or record["status"] != "pending":
             raise AppError("This question changed or is already closed. Read it before continuing; the answer was not sent.", 409)
+        # The action lock orders this check with renderer dirty declarations.
+        # Refuse before changing the question, admitting an answer or replacing it.
+        app.canvas_views.guard_transition(action, args)
         replacement = None
         if action == "question.supersede":
             replacement = self._new(args, origin, client_id)
