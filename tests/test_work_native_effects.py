@@ -115,6 +115,13 @@ async def test_native_early_tool_reaches_real_host_precondition(app, tmp_path, m
 async def test_programmatic_inner_pin_uses_real_service_not_synthetic_policy(app, fault):
     from amplifier_module_tool_exec import ProgrammaticTool
     adapter, child, required, worker = await joined(app)
+    pin_dispatches = []
+    actual_host = worker.bridge
+    async def observed_host(operation, arguments):
+        if operation == 'dispatch' and arguments.get('action') == 'session.pin':
+            pin_dispatches.append(copy.deepcopy(arguments))
+        return await actual_host(operation, arguments)
+    worker.bridge = observed_host
     if fault not in {'uncovered', 'same_batch_read'}:
         await adapter.fill(required)
     c = adapter.coordinator
@@ -140,7 +147,11 @@ async def test_programmatic_inner_pin_uses_real_service_not_synthetic_policy(app
     await execute()
     if fault in {'none','reused_parent'}:
         assert 'nested-real-pin' in retained_bytes(app) and child['id'] in app._state['pinnedSessionIds']
+        assert len(pin_dispatches) == 1
         if fault == 'reused_parent':
             after=retained_bytes(app);await execute();assert retained_bytes(app)==after
+            # The second parent must not reach host dispatch at all. Merely
+            # deduplicating the identical command at the host would fail this.
+            assert len(pin_dispatches) == 1
     else:
         assert 'nested-real-pin' not in retained_bytes(app) and retained_bytes(app)==before
