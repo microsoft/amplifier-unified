@@ -367,9 +367,15 @@ async def test_saved_work_placement_rechecks_owner_after_resource_read(app, tmp_
         elif change == 'source':
             session['runtimeSessionId'] = 'different-native-owner'
         elif change == 'owner':
+            from amplifier_web.cold_display import raw
             original_session = app._session
+            # dict(ColdRecord) materializes virtual keys. The mutation under
+            # test is replacement, not an explicit read of the old owner.
+            replacement = ColdRecord(copy.deepcopy(raw(session)), app.db)
+            assert not dict.__contains__(replacement, 'execution')
+            assert not dict.__contains__(session, 'execution')
             monkeypatch.setattr(app, '_session', lambda sid=None, **kwargs:
-                ColdRecord(dict(session), app.db) if sid == session['id'] else original_session(sid, **kwargs))
+                replacement if sid == session['id'] else original_session(sid, **kwargs))
         else:
             windows.invalidate({session['id']})
         release.set()

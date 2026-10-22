@@ -79,8 +79,35 @@ try{
  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
  await expect(group).toHaveCount(1);
  await control({op:'interim-saved-view'});
+ const reloadNavigation=[];
+ const observeNavigation=request=>{
+  const url=new URL(request.url());
+  if(url.pathname==='/api/conversation/navigation'&&reloadNavigation.length<20)
+   reloadNavigation.push({sessionId:url.searchParams.get('sessionId'),messageId:url.searchParams.get('messageId')});
+ };
+ page.on('request',observeNavigation);
  await page.reload();await showFixtureConversation(page);
+ await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
+ const readingEvidence=await page.evaluate(({sid,generation})=>{
+  const state=window.amplifier.getState(),pane=document.querySelector('.a-messages'),selection=document.getSelection();
+  const messages=state.sessions.find(row=>row.id===sid)?.messages||[];
+  let saved;try{saved=JSON.parse(sessionStorage.getItem('amplifier.chat-reading.v1')||'{}')[sid]}catch{}
+  return {messageFocus:state.view.messageFocus||null,readingAnchor:saved?.messageId||null,
+   distance:pane.scrollHeight-pane.scrollTop-pane.clientHeight,focused:pane.contains(document.activeElement),
+   selected:!!(selection&&!selection.isCollapsed&&pane.contains(selection.anchorNode)),
+   responses:messages.filter(row=>row.generationId===generation&&row.response?.interim).map(row=>
+    ({id:row.id,status:row.response.status,generationId:row.response.generationId,finalMessageIds:row.response.finalMessageIds}))};
+ },{sid:started.alpha,generation:detailGeneration});
+ console.log('INTERIM-RELOAD-BOUNDARY',JSON.stringify({readingEvidence,reloadNavigation}));
+ assert.equal(readingEvidence.messageFocus,null,'Removed fixture messages cannot remain reveal targets');
+ // Reconnect restores reading position independently of completion. Explicitly
+ // return to the latest rendered frame, without changing the reading guard.
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await expect(page.getByText('Invalid request: This message is no longer available. Refresh the chat navigator.',{exact:true})).toHaveCount(0);
  await expect(header).toBeVisible();
+ page.off('request',observeNavigation);
  if(await header.getAttribute('aria-expanded')==='false')await header.click();
  const expectedOrder=detailProgress.flatMap((message,index)=>[
   message.id,`tool:${started.alpha}:${detailGeneration}-call-${index+1}`,`${detailGeneration}-model-${index+1}`]);
@@ -179,5 +206,9 @@ try{
  console.log('PASS: off/on/rejected save, final-only, expand/copy/reveal, export equality, reload/Everything, two-client isolation, active/error, focus/scroll deferral, media once/in order, mobile, zero model sends.');
 }catch(error){
  console.error('Browser errors:',debugErrors,'Visible:',await debugPage?.locator('body').innerText().catch(()=>'<page unavailable>'));
+ if(process.env.EVIDENCE_DIR&&debugPage){
+  try{await mkdir(process.env.EVIDENCE_DIR,{recursive:true});await debugPage.screenshot({path:process.env.EVIDENCE_DIR+'/interim-failure.png',fullPage:true})}
+  catch(captureError){console.error('Failure screenshot unavailable:',captureError.name)}
+ }
  console.error('Fixture:',log);throw error;
 }finally{await otherBrowser?.close();await browser.close();fixture.kill('SIGTERM');}

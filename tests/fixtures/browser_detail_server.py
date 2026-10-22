@@ -146,6 +146,15 @@ async def main():
                 for sid,patch in args.get('sessions',{}).items(): service._session(sid).update(patch)
             elif op=='interim-start':
                 row=service._session(aid);now=time.time()-10
+                removed = {message['id'] for message in row['messages']}
+                # This fixture replaces the conversation, unlike a real next
+                # turn. Retire only reveal requests for those removed messages.
+                # Otherwise reconnect replays the earlier test's stale reveal.
+                for client_id, client in service.clients.records.items():
+                    focus = client.get('view', {}).get('messageFocus') or {}
+                    if focus.get('sessionId') == aid and focus.get('messageId') in removed:
+                        client['view'].pop('messageFocus', None)
+                        service.clients.dirty.add(client_id)
                 row.update(status='working',messages=[],execution={'nodes':[],'turns':[]},generations=[],workers=[])
                 generation=row['fixtureGeneration']=f'interim-{time.time_ns()}'
                 detailed = args.get('details') is True
