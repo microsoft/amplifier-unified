@@ -22,6 +22,65 @@ def choices(app, revision=0, **patch):
     return {'sessionId': app._session()['id'], 'expectedRevision': revision, **patch}
 
 
+def retired_configuration(app, monkeypatch):
+    """Retire real durable bodies, not a hot dict with hydration mocked."""
+    from amplifier_web.cold_display import ColdRecord
+    row = app._new_session({'bundle': 'anchors', 'title': 'Retired configuration'})
+    row.update(messages=[{'id': f'saved-{n}', 'role': 'user' if n % 2 else 'assistant',
+                          'text': f'Exact retained {n} ' + 'x' * 1000} for n in range(80)],
+               configuration={'plan': {'context': 'retained-' + 'x' * 20000}},
+               execution={'nodes': [{'id': f'tool-{n}', 'kind': 'tool', 'output': 'x' * 1000}
+                                    for n in range(80)], 'turns': []},
+               selection={'instance': 'one', 'model': 'chosen', 'effort': 'high'})
+    app.state['sessions'].append(row)
+    app.state.setdefault('runtimeControl', {})[row['id']] = {
+        'configuration.inspect': {'plan': 'x' * 20000}}
+    app._publish()
+    monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+    assert row['id'] in app.cold_display.retire(force=True)
+    assert isinstance(row, ColdRecord)
+    assert {'messages', 'execution', 'configuration'} <= set(dict.get(row, '_coldFields'))
+    assert not {'messages', 'execution', 'configuration'} & set(dict.keys(row))
+    return row
+
+
+@pytest.mark.parametrize('operation', ['direct-save', 'public-configure', 'preview'])
+async def test_retired_save_and_preview_never_load_cold_bodies(app, monkeypatch, operation):
+    from amplifier_web import cold_display, draft_defaults
+    from amplifier_web.next_message_configuration import save
+    from amplifier_web.bundle_actions import preview_saved
+    row = retired_configuration(app, monkeypatch)
+    refs = deepcopy(dict.get(row, '_coldFields'))
+    control = app.state['runtimeControl'][row['id']]
+    control_refs = deepcopy(dict.get(control, '_coldFields'))
+    request = {'sessionId': row['id'], 'expectedRevision': 0, 'bundle': 'work'}
+    async def resolve(*args, **kwargs):
+        assert args[1:3] == (row['workspace'], 'work')
+        assert kwargs['replacement']['selection'] == row['selection']
+        return {'bundle': 'work', 'fingerprint': 'saved-plan', 'modelCompatible': True}
+    with monkeypatch.context() as guard:
+        guard.setattr(cold_display, 'load', lambda *a: pytest.fail('Cold display body hydration'))
+        guard.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('Canonical hydration')))
+        guard.setattr(app, 'refresh_configuration', AsyncMock(side_effect=AssertionError('Configuration hydration')))
+        guard.setattr(app.management, 'ensure_runtime', AsyncMock(side_effect=AssertionError('Worker startup')))
+        guard.setattr(draft_defaults, 'resolve_defaults', resolve)
+        if operation == 'direct-save':
+            async with app.lock:
+                result = save(app, request)
+            assert result['revision'] == 1
+        elif operation == 'public-configure':
+            receipt = await app.dispatch('conversation.configure', request, include_state=False,
+                                         command_id='retired-save')
+            assert receipt['result']['revision'] == 1
+        else:
+            await preview_saved(app.management, request)
+            assert row['bundlePreview']['baseline'] == 'saved'
+        assert dict.get(row, '_coldFields') == refs
+        assert dict.get(control, '_coldFields') == control_refs
+        assert not {'messages', 'execution', 'configuration'} & set(dict.keys(row))
+        assert app.runtime is None
+
+
 async def test_saved_choices_do_not_hydrate_prepare_or_mount(app, monkeypatch):
     monkeypatch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('canonical hydration')))
     monkeypatch.setattr(app, 'refresh_configuration', AsyncMock(side_effect=AssertionError('runtime refresh')))
