@@ -2571,7 +2571,10 @@
             "Reload, keyboard-reorder and remove only a quote, preserving exact commentary and attachment",
             "Hold an addition, move the caret and insertion mode, then verify the new instance at its captured target",
             "Change commentary while a receipt is held; verify journal ownership and reject the late addition",
-            "Inspect narrow compact layout, send once, copy the exact saved message and repeat a plain cycle"
+            "Inspect narrow compact layout, send once, copy the exact saved message and repeat a plain cycle",
+            "Collect rendered formatted passages with nearby controls; reject transformed source and stale source digests",
+            "Keep quote source/move/remove hit targets and readable excerpts while scrolling, enlarging text and expanding long quotes",
+            "Preserve a newer selection and separate chat draft across a delayed quote receipt"
           ],
           "expectedResults": [
             "Immutable blocks retain exact Unicode, whitespace, source spans and independent identity without replacing earlier content.",
@@ -2596,13 +2599,14 @@
             },
             {
               "path": "scripts/multi_quote_checks.py",
-              "relation": "Separate fixed focused source/installed qualification with both meaningful commentary mutants"
+              "relation": "Separate fixed focused source/installed qualification with commentary, selection-mapping and hidden-header mutants"
             }
           ],
           "limits": [
             "Registration is not a passing result; current raw run evidence must be inspected.",
             "No physical device, real OS IME, live provider or screen-reader claim.",
-            "Lost Send acknowledgement and late quote across chat switch remain narrower host/model checks, not this browser journey."
+            "Lost Send acknowledgement remains a narrower host/model check, not this browser journey.",
+            "Private optional reference-comparison inputs are never part of the public fixture or CI evidence."
           ]
         }
       ],

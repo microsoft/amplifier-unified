@@ -56,6 +56,35 @@ async def main(home, port):
                                       'draft': client.get('view', {}).get('draft'),
                                       'document': copy.deepcopy(client.get('view', {}).get('draftDocument'))})
     app.router.add_get('/fixture/quote-draft', draft_observation)
+    async def comparison_sources(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        rows = await request.json()
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 3:
+            raise web.HTTPBadRequest()
+        identities = []
+        async with service.lock:
+            for row in rows:
+                if row.get('role') not in ('user', 'assistant') or not isinstance(row.get('text'), str) or len(row['text']) > 12000:
+                    raise web.HTTPBadRequest()
+            for row in rows:
+                service._message(session, row['role'], row['text'])
+                identities.append(session['messages'][-1]['id'])
+            service._publish()
+        return web.json_response({'ids': identities})
+    app.router.add_post('/fixture/quote-comparison', comparison_sources)
+    async def change_quote_source(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        args = await request.json()
+        async with service.lock:
+            row = next((row for row in session['messages'] if row['id'] == args.get('id')), None)
+            if row is None or not isinstance(args.get('text'), str) or len(args['text']) > 12000:
+                raise web.HTTPBadRequest()
+            row['text'] = args['text']
+            service._publish()
+        return web.json_response({'changed': True})
+    app.router.add_post('/fixture/quote-source-change', change_quote_source)
     admissions = []
     dispatch = service.dispatch
 

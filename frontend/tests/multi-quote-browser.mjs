@@ -1,6 +1,6 @@
 // Real DOM + real app actions, synthetic runtime; no provider or user history.
 import {spawn} from 'node:child_process';
-import {mkdirSync,writeFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
@@ -53,8 +53,15 @@ async function visibleCardControls(stage,card){
  });
  await page.evaluate(()=>new Promise(requestAnimationFrame));
  const actual=await card.evaluate(card=>{
-  const editor=card.closest('[role=textbox]'),viewport=editor.getBoundingClientRect(),body=card.querySelector('pre').getBoundingClientRect();
-  return {visibleExcerpt:body.bottom>viewport.top&&body.top<viewport.bottom,
+  const editor=card.closest('[role=textbox]'),viewport=editor.getBoundingClientRect(),pre=card.querySelector('pre'),body=pre.getBoundingClientRect(),header=card.querySelector('.a-composer-quote-head').getBoundingClientRect();
+  let readable=false;
+  for(let i=0;i<Math.min(pre.firstChild?.length||0,1000);i++){
+   if(/\s/.test(pre.firstChild.textContent[i]))continue;
+   const range=document.createRange();range.setStart(pre.firstChild,i);range.setEnd(pre.firstChild,i+1);
+   const rect=range.getBoundingClientRect();
+   if(rect.top>=Math.max(header.bottom,viewport.top)&&rect.bottom<=viewport.bottom&&pre.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))){readable=true;break;}
+  }
+  return {visibleExcerpt:body.bottom>viewport.top&&body.top<viewport.bottom,readable,
    controls:[...card.querySelectorAll('.a-composer-quote-head button')].map(button=>{
     const rect=button.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
     return {label:button.getAttribute('aria-label'),inside:rect.top>=viewport.top-1&&rect.bottom<=viewport.bottom+1,hit:button.contains(hit),hitTag:hit?.outerHTML.slice(0,400),disabled:button.disabled};
@@ -63,6 +70,7 @@ async function visibleCardControls(stage,card){
  checkpoints.push({stage,controls:actual});
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
  assert.ok(actual.visibleExcerpt,stage+': excerpt is visible');
+ assert.ok(actual.readable,stage+': excerpt has readable text outside the sticky header');
  assert.equal(actual.controls.length,4,stage+': source and three quote controls exist');
  assert.ok(actual.controls.every(row=>row.inside&&row.hit),stage+': visible quote has reachable source/move/remove controls');
 }
@@ -117,7 +125,7 @@ async function expectCompact(stage){
  const geometry=await surface.evaluate(node=>{
   const rect=el=>{const {x,y,width,height}=el.getBoundingClientRect();return {x,y,width,height};};
   const editor=node.querySelector('[role=textbox]'),writing=node.querySelector('.a-compose-writing');
-  return {surface:rect(node),editor:rect(editor),writing:rect(writing),
+  return {surface:rect(node),editor:rect(editor),writing:rect(writing),viewportHeight:innerHeight,
    quoteCount:writing.querySelectorAll('[data-quote-instance]').length,
    overflow:node.scrollWidth>node.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
    theme:document.querySelector('#amp-one').dataset.themeScheme,
@@ -127,7 +135,7 @@ async function expectCompact(stage){
  if(proof)writeFileSync(join(proof,'compact-quote-geometry.json'),JSON.stringify(compactGeometry,null,2));
  assert.ok(geometry.quoteCount>=2,'Real immutable quotes belong inside the compact writing wrapper');
  assert.ok(geometry.editor.width>=geometry.surface.width-40,'Quotes use the full compact writing width');
- assert.ok(geometry.editor.height<=181,'Long quote drafts retain bounded editor height');
+ assert.ok(geometry.editor.height<=Math.min(400,geometry.viewportHeight*.45)+1,'Long quote drafts retain a viewport-bounded editor height');
  assert.equal(geometry.overflow,false,'Compact quote surface must not overflow');
  assert.equal(geometry.pageOverflow,false,'Compact quote page must not overflow');
  assert.ok(geometry.primary.width>=44&&geometry.primary.height>=44,'Primary action retains its touch target');
@@ -302,8 +310,14 @@ try{
    if(proof)await page.locator('.a-composer').screenshot({path:join(proof,`quotes-${width}-${colorScheme}.png`)});
   }
  }
+ const enlargedStyle=await page.addStyleTag({content:'#amp-one{--a-text-lg:24px;--a-text-sm:20px} #amp-one .a-composer-quote small{font-size:1rem}'});
+ await visibleCardControls('320px enlarged text',quotes.nth(1));
+ await expectCompact('320px enlarged text');
+ if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'quotes-320-enlarged.png')});
+ await enlargedStyle.evaluate(node=>node.remove());
  await quotes.nth(1).getByRole('button',{name:/Show all/}).tap();
  await expect(quotes.nth(1).getByRole('button',{name:'Collapse quote'})).toBeVisible();
+ await visibleCardControls('320px expanded long quote',quotes.nth(1));
  const submitted=await documentValue();await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>document.querySelectorAll('.a-message [data-sent-quote]').length===3);
  await expect(quotes).toHaveCount(0);
@@ -338,34 +352,126 @@ try{
  await observeCards('direct rendered selection');
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
  const c=page.locator('.a-message').filter({hasText:'Quote fixture source C'}).first();
- const selectContents=async(selector,first=true)=>{
+ const selectContents=async(selector)=>{
   const node=c.locator('.a-detail-text '+selector);
   await node.scrollIntoViewIfNeeded();
-  await node.evaluate((node,first)=>{
+  await node.evaluate(node=>{
    const range=document.createRange();range.selectNodeContents(node);
-   if(!first){range.setStart(node.lastChild,0);range.setEnd(node.lastChild,node.lastChild.childNodes.length);}
    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'));
-  },first);
+  });
  };
  for(const [selector,text] of [['p:nth-of-type(2)','A bold inside and label end.'],['ul','first\nsecond'],['p:nth-of-type(3)','Third paragraph café 😀 e\u0301 東京.'],['p:nth-of-type(4)','inline code'],['pre code','  code\tvalue\n'],['p:nth-of-type(5)','Repeated same same.']]){
   await selectContents(selector);
   const quick=page.getByRole('button',{name:'Quote selection',exact:true});await expect(quick).toBeVisible();
-  const before=await editor.textContent();
   const geometry=await quick.evaluate(button=>{const r=button.getBoundingClientRect(),s=window.getSelection().getRangeAt(0).getBoundingClientRect();return {distance:r.top-s.bottom,selected:window.getSelection().toString()};});
   assert.ok(geometry.distance>=0&&geometry.distance<56,'Quote selection is next to the selected passage');
   await quick.click();await expect(quotes).toHaveCount(1);
   const collected=references(await documentValue())[0];
   assert.equal(collected.quote.excerpt,text,'rendered selection keeps exact independently expected text');
   assert.ok(collected.quote.spans.length>=1);await visibleCardControls('rendered '+selector,quotes.first());
+  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'rendered-'+selector.replace(/\W+/g,'-')+'.png')});
   await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
  }
+ // Second occurrence, across formatting, with Unicode nearby: no text search
+ // may accidentally quote the earlier identical phrase.
+ const sourceC=(await observe()).sessions.flatMap(s=>s.messages).find(m=>m.text.startsWith('Quote fixture source C')).text;
+ const repeated=c.locator('.a-detail-text p:nth-of-type(5)');await repeated.scrollIntoViewIfNeeded();
+ await repeated.evaluate(node=>{
+  const text=node.querySelector('strong').firstChild.firstChild,after=node.lastChild.firstChild;
+  const range=document.createRange();range.setStart(text,0);range.setEnd(after,after.length);
+  const selected=window.getSelection();selected.removeAllRanges();selected.addRange(range);document.dispatchEvent(new Event('selectionchange'));
+ });
+ const repeatedButton=page.getByRole('button',{name:'Quote selection',exact:true});
+ await repeatedButton.focus();await page.keyboard.press('Enter');await expect(quotes).toHaveCount(1);
+ const repeatQuote=references(await documentValue())[0].quote,repeatAt=sourceC.lastIndexOf('same');
+ assert.equal(repeatQuote.excerpt,'same.');
+ assert.deepEqual(repeatQuote.spans,[{start:[...sourceC.slice(0,repeatAt)].length,end:[...sourceC.slice(0,repeatAt+4)].length},{start:[...sourceC.slice(0,repeatAt+6)].length,end:[...sourceC.slice(0,repeatAt+7)].length}]);
+ await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();
+ // A delayed A receipt must not dismiss a newer B selection in the same source.
+ let selectionRelease,selectionStarted;
+ const selectionHeld=new Promise(resolve=>selectionRelease=resolve),selectionWaiting=new Promise(resolve=>selectionStarted=resolve);
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();selectionStarted();await selectionHeld;await route.fulfill({response});}else await route.continue();});
+ await selectContents('p:nth-of-type(2)');await page.getByRole('button',{name:'Quote selection',exact:true}).click();await selectionWaiting;
+ await selectContents('p:nth-of-type(3)');selectionRelease();await expect(quotes).toHaveCount(1);await page.unroute('**/api/actions');
+ await expect(page.getByRole('button',{name:'Quote selection',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();await expect(quotes).toHaveCount(2);
+ assert.deepEqual(references(await documentValue()).map(row=>row.quote.excerpt),['A bold inside and label end.','Third paragraph café 😀 e\u0301 東京.']);
+ await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();
+ // Keep keyboard activation, but do not leave the action over unrelated text
+ // after scrolling the selected source away.
+ await selectContents('p:nth-of-type(2)');await page.getByRole('button',{name:'Quote selection',exact:true}).focus();
+ await page.locator('.a-messages').evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'));});
+ await expect(page.locator('.a-quote-selection')).toHaveCount(0);
  // A transformed entity cannot silently turn into decoded or broader source.
  await selectContents('p:last-child');
  await expect(page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true})).toBeVisible();
  await expect(quotes).toHaveCount(0);
  await page.keyboard.press('Escape');await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ // Source revision changes before snapshot admission reject the captured digest.
+ await selectContents('p:nth-of-type(2)');
+ await page.route('**/api/actions',async route=>{
+  if(route.request().postDataJSON()?.action==='message.reply'){
+   await context.request.post(url+'/fixture/quote-source-change',{data:{id:await c.getAttribute('data-message-id'),text:sourceC+'\nRevised source.'}});
+  }
+  await route.continue();
+ });
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();
+ await page.getByText('The exact source changed. Select the passage again.',{exact:true}).first().waitFor();
+ await expect(quotes).toHaveCount(0);await page.unroute('**/api/actions');await page.keyboard.press('Escape');
+ // A held reply belongs to its captured chat, never a new chat's private draft.
+ const originalSession=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ await editor.fill('Retain original draft');
+ let chatRelease,chatStarted;
+ const chatHeld=new Promise(resolve=>chatRelease=resolve),chatWaiting=new Promise(resolve=>chatStarted=resolve);
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();chatStarted();await chatHeld;await route.fulfill({response});}else await route.continue();});
+ await b.getByRole('button',{name:'Reply to message',exact:true}).click();await chatWaiting;
+ await page.evaluate(()=>window.amplifier.dispatch('session.create',{title:'Separate synthetic quote draft'}));
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).not.toBe(originalSession);
+ await editor.fill('Separate draft');chatRelease();await page.unroute('**/api/actions');
+ await page.getByText('The conversation changed. The quote was not added.',{exact:true}).first().waitFor();
+ await expect(editor).toHaveText('Separate draft');await expect(quotes).toHaveCount(0);
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
+ await expect(editor).toHaveText('Retain original draft');await expect(quotes).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
  assert.deepEqual(errors,[]);
+ if(process.env.AMPLIFIER_QUOTE_REFERENCE&&proof){
+  // Optional private design comparison. The supplied HTML is data in an opaque
+  // script-only sandbox, never product source or a privileged page.
+  const referencePage=await context.newPage();
+  await referencePage.route('**/*',route=>route.abort());
+  await referencePage.setContent('<iframe id="reference" sandbox="allow-scripts" style="border:0;width:100%;height:1200px"></iframe>');
+  await referencePage.locator('iframe').evaluate((node,html)=>node.srcdoc=html,readFileSync(process.env.AMPLIFIER_QUOTE_REFERENCE,'utf8'));
+  const reference=referencePage.frameLocator('#reference');
+  await reference.getByRole('button',{name:'Add three-quote example',exact:true}).click();
+  const specimen=await reference.locator('#editor').evaluate(()=>({sources:sources(),blocks:draft().blocks}));
+  const seeded=await context.request.post(url+'/fixture/quote-comparison',{data:specimen.sources.map(source=>({role:source.role,text:source.text}))});
+  assert.equal(seeded.status(),200);const ids=(await seeded.json()).ids;
+  await editor.fill('');
+  await page.getByRole('combobox',{name:'Quote insertion'}).selectOption('append').catch(()=>{});
+  for(const block of specimen.blocks){
+   if(block.type==='text'){
+    if(block.value){await editor.focus();await editor.press('ControlOrMeta+End');await page.keyboard.insertText(block.value);}
+   }else{
+    const index=specimen.sources.findIndex(source=>source.id===block.source.id),article=page.locator('[data-message-id="'+ids[index]+'"]');
+    if(block.kind==='whole')await article.getByRole('button',{name:'Reply to message',exact:true}).click();
+    else{
+     await article.getByRole('button',{name:'Choose passage',exact:true}).click();
+     const area=page.getByRole('textbox',{name:'Message source for quotation'});
+     await area.evaluate((node,block)=>{node.focus();node.setSelectionRange(block.from,block.to);},block);await area.press('Shift');
+     await page.getByRole('button',{name:'Add selected passage',exact:true}).click();await page.locator('.a-quote-picker').waitFor({state:'hidden'});
+    }
+   }
+  }
+  assert.deepEqual(references(await documentValue()).map(row=>row.quote.excerpt),specimen.blocks.filter(row=>row.type==='quote').map(row=>row.excerpt));
+  for(const width of [1280,390,320]){
+   await referencePage.setViewportSize({width,height:1200});await page.setViewportSize({width,height:900});
+   await editor.evaluate(node=>node.scrollTop=0);
+   await reference.locator('.composer-panel').screenshot({path:join(proof,`reference-${width}.png`)});
+   await page.locator('.a-composer').screenshot({path:join(proof,`actual-matching-${width}.png`)});
+  }
+  writeFileSync(join(proof,'comparison-specimen.json'),JSON.stringify({specimen,actual:await documentValue(),scope:'Matching source/excerpts and commentary; prototype-only lab and simulation controls excluded from acceptance'},null,2));
+  await referencePage.close();
+ }
  if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll},null,2));
  console.log('PASS exact Unicode/multiline passages + whole message, interleaved commentary, attachment, reload, keyboard reorder, removal, captured delayed target, narrow rendering, sent projection and adjacent cycle.');
 }catch(error){

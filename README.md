@@ -13,11 +13,15 @@ longer than 10,000 characters becomes a **Pasted text** attachment.
 
 Reply adds a saved quotation inside the composer without sending or moving your
 reading position. Add several messages, or select text and choose **Quote
-selection**. **Choose passage** provides an exact, read-only source selection
-for multiline text, code, lists or formatting that cannot be mapped directly.
+selection** beside the selected text. Formatted passages, simple lists, links
+and literal code retain exact source spans. **Choose passage** provides an exact,
+read-only source selection for transformed text (such as entities), complex
+blocks or formatting that cannot be mapped directly.
 Write before, between and after quotes. Quote controls move or remove only that
 quote; commentary and attachments stay. Long quotes expand to show their full
 text. Quotes are immutable historical references, not new instructions.
+Quote drafts have a larger viewport-bounded writing area; source and move/remove
+controls remain reachable while scrolling within a quote.
 
 This first increment quotes supported saved messages in the current chat only.
 It rejects oversized or ambiguous selections instead of silently expanding or

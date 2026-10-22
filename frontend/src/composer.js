@@ -7,7 +7,7 @@ export function composerExpanded({draft='',attachments=[],quote=null}={}){
 export function resizeComposer(element){
  if(!element)return;
  element.style.minHeight='44px';
- element.style.maxHeight='180px';
+ element.style.maxHeight=element.querySelector?.('[data-quote-instance]')?'min(400px, 45dvh)':'180px';
  element.style.height='auto';
  // Rich text blocks size naturally; only textareas need scrollHeight sizing.
  if(element.hasAttribute?.('contenteditable')){element.style.overflowY='auto';return;}
