@@ -33,10 +33,11 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await expect(composer).toBeEditable();await composer.fill('Keep the ordinary inspection draft');
  const initial=await inspect();
- // Public breadcrumb -> Workspace work. No API preopened panel or surface.
+ // Public breadcrumb -> Details -> Workspace work. No API preopened panel or surface.
  await page.locator('[data-part="header"] .a-work-crumb:not(.a-work-home-crumb)').click();
  const workspaceView=page.getByRole('group',{name:'Workspace view',exact:true});
  await expect(workspaceView).toBeVisible();
+ await workspaceView.getByRole('button',{name:'Details',exact:true}).click();
  await page.locator('.a-workspace-work-entry > summary').click();
  const picker=page.getByRole('combobox',{name:'Review from chat',exact:true});
  await expect(picker).toHaveValue(initial.selected);

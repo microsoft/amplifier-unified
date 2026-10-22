@@ -35,7 +35,7 @@ try{
  await overview.getByRole('button',{name:'Workspace work',exact:true}).click();await expect(page.getByRole('dialog',{name:'Workspace work',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();assert.equal((await state()).selectedSessionId,aChat);await expect(composer).toHaveDraft('Private draft stays with the active project');
  await action('canvas.visibility',{open:false});
- const browse=workspace=>action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace.id,workWorkspaceTab:'chats',navExpanded:false}});
+ const browse=workspace=>action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace.id,workWorkspaceTab:'details',navExpanded:false}});
  const body=page.locator('.a-work-browser'),entry=body.locator('.a-workspace-work-entry');
  await browse(b);await expect(body.getByRole('heading',{level:1,name:b.name,exact:true})).toBeVisible();
  const before=calls.length;await entry.locator(':scope > summary').click();const inspection=page.getByRole('region',{name:'Inspect workspace work'});

@@ -111,7 +111,7 @@ work:
 
 `discovery` continues to expose all open owned/contributing items with bounded
 paging and incomplete historical coverage. `required` derives only from the actual
-transport principal/generation and **delivered** input IDs intersected with host
+transport principal/generation and the complete **delivered** input-ID set in host
 observations, following their exact canonical creation/input associations. Queued,
 unknown, merely accepted-but-not-delivered or terminal input cannot stand in for it.
 
@@ -126,6 +126,11 @@ For mixed host-observed delivered input, retain every input ID, identify support
 IDs and each unsupported cause (`untyped_followup` for an ordinary untyped queued
 follow-up), and set `complete:false`, `status:unavailable`, `version:null`.
 Never drop the unsupported subset and qualify the remaining association alone.
+The transport projection must equal that host-observed set, not merely be its
+subset. A shortened projection is unavailable with `input_projection_incomplete`
+and the missing input IDs. More than sixteen host-observed inputs is explicitly
+`input_coverage_overflow`, with delivered/projected counts, no qualified version
+and no implied complete last-N window. These observations authorize no effect.
 
 The fingerprint binds the actual root/generation/input association, current Work
 record and promise revisions, source identities/digests, owner/link/Stop revisions,

@@ -23,7 +23,7 @@ try{
   fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+logs))});
   fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const data=JSON.parse(line);if(data.port){clearTimeout(timer);resolve(data.port)}}catch{}});
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});
  page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.setDefaultTimeout(15000);page.on('pageerror',error=>report.errors.push(error.message));
  const state=()=>page.evaluate(()=>window.amplifier.getState());
@@ -169,8 +169,10 @@ try{
  await expect(landing.getByRole('region',{name:'Workspace files'})).toBeVisible();
  await landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Details',exact:true}).click();
  await expect(landing.getByRole('button',{name:'Rename workspace',exact:true})).toBeVisible();
- await landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Chats',exact:true}).click();await settled();
  await expect(landing.locator('.a-workspace-work-entry')).toBeVisible();
+ await expect(landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Work',exact:true})).toBeVisible();
+ await landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Chats',exact:true}).click();await settled();
+ await expect(landing.locator('.a-workspace-work-entry')).toHaveCount(0);
  await choose('Focus');await expect(focusRow()).toHaveCount(1);
  await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();
  const workspaceChat=await focusRow().getAttribute('data-session-id');
@@ -179,7 +181,7 @@ try{
  await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button').last().click();await settled();
  await expect(landing).toHaveAttribute('data-view','focus');await expect(focusRow()).toHaveAttribute('data-session-id',workspaceChat);
  await page.screenshot({path:join(output,'workspace-focus.png')});
- report.checks.push('All workspaces keeps search, archive, folder browsing and workspace action menus; workspace landing keeps Chats/Files/Details/Workspace work; Focus cursors and layouts survive leaving and returning');
+ report.checks.push('All workspaces keeps search, archive, folder browsing and workspace action menus; workspace landing keeps Chats/Work/Files/Details with Workspace work inspection in Details; Focus cursors and layouts survive leaving and returning');
 
  await choose('Brief');await pickUpAgain().click();await checkIdle('workspace');
  await landing.locator('.a-landing-chat .a-nav-chat-select').first().click();

@@ -417,6 +417,51 @@ async def test_mixed_delivered_inputs_cannot_hide_unsupported_lineage(app):
     assert app.runtime.inputs == inputs_before
 
 
+@pytest.mark.parametrize('projection', ['initial-only', 'last-eight', 'overflow'])
+async def test_shortened_delivered_input_projection_is_explicitly_incomplete(app, projection):
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'projection')
+    created, child = await assert_available_commission(app, owner, item, 'projection-commission')
+    delivered = [created['initialInputId']]
+    for index in range(16 if projection == 'overflow' else 8):
+        identity = f'projection-followup-{index}'
+        queued = await agent_action(app, owner, 'coordination.send', {
+            'sessionId': child['id'], 'text': 'Ordinary untyped follow-up.', 'mode': 'queue'}, identity)
+        assert queued['delivery'] == 'queued'
+        await app.on_runtime_event('runtime.generation', {
+            'sessionId': child['id'], 'rootSessionId': child['id'],
+            'generation_id': child['collaborationGeneration']['id'], 'event': 'generation.finished',
+            'input_ids': delivered, 'disposition': 'manager_turn_finished', 'active_job_ids': []})
+        await app.on_runtime_event('runtime.status', {'sessionId': child['id'], 'status': 'idle'})
+        await settled(app, identity, 'accepted')
+        delivered.append(identity)
+    assert [row[1] for row in app.runtime.inputs] == delivered
+    await generation(app, child, 'complete-delivered-set', delivered)
+    before = retained_bytes(app)
+    supplied = delivered[:1] if projection == 'initial-only' else delivered[-8:]
+    result = (await current_work(app, child, inputs=supplied))['required']
+    assert result['status'] == 'unavailable' and result['version'] is None
+    assert result['effectAuthorized'] is False
+    if projection == 'overflow':
+        assert result['inputIds'] == [] and result['inputCount'] == len(delivered) == 17
+        assert result['coverage']['reason'] == 'input_coverage_overflow'
+        assert result['coverage']['deliveredInputCount'] == 17
+        assert result['coverage']['projectedInputCount'] == 8
+        assert result['coverage']['complete'] is False
+        assert retained_bytes(app) == before
+        return
+    assert set(result['inputIds']) == set(delivered)
+    assert result['coverage']['reason'] == 'input_projection_incomplete'
+    assert result['coverage']['missingInputIds'] == sorted(set(delivered) - set(supplied))
+    assert result['coverage']['complete'] is False
+    assert retained_bytes(app) == before
+    complete = (await current_work(app, child))['required']
+    assert complete['status'] == 'unavailable' and complete['version'] is None
+    assert set(complete['inputIds']) == set(delivered)
+    assert complete['coverage']['supportedInputIds'] == [created['initialInputId']]
+    assert {row['inputId'] for row in complete['coverage']['unsupportedInputs']} == set(delivered[1:])
+
+
 async def test_large_promise_read_is_exact_paged_unicode_and_stale_read_refuses(app):
     owner = app.state['sessions'][0]
     constraints = ['Current condition ' + str(i) + ': ' + '\u03bb' * 900 for i in range(30)]

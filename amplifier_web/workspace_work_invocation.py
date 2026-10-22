@@ -300,10 +300,17 @@ class WorkInvocation:
             if (not requested or not requested <= delivered
                     or any(not isinstance(i, str) or not 1 <= len(i) <= 200 for i in requested)):
                 self.work.error('Invocation inputs were not observed delivered.')
-            if len(requested) > 16:
-                header['inputCount'] = len(requested)
+            if len(delivered) > 16:
+                header['inputCount'] = len(delivered)
+                coverage.update(reason='input_coverage_overflow',
+                                deliveredInputCount=len(delivered), projectedInputCount=len(requested))
                 self.work.error('Invocation input coverage exceeds the bounded projection.')
-            header['inputIds'] = sorted(requested)
+            header['inputIds'] = sorted(delivered)
+            if requested != delivered:
+                coverage.update(reason='input_projection_incomplete',
+                                missingInputIds=sorted(delivered - requested),
+                                deliveredInputCount=len(delivered), projectedInputCount=len(requested))
+                self.work.error('Invocation input projection omits host-observed delivered inputs.')
             workspace = self.work.workspace({'sessionId': sid}, 'agent', sid)
             items, facts = {}, []
             for input_id in header['inputIds']:
