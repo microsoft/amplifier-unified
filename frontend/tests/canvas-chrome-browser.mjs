@@ -421,27 +421,43 @@ try{
  await check('held Delete preserves newer Home while an owned close restores focus',async()=>{
   await page.setViewportSize({width:1500,height:850});await action('view.update',{patch:{canvasWidth:720,canvasOverviewWidth:720}});
   const closingId=ids[18],closingTab=()=>strip.getByRole('tab',{name:titles[18],exact:true}),successor=strip.getByRole('tab',{name:titles[29],exact:true});
-  await closingTab().click();await expect(closingTab()).toHaveAttribute('aria-selected','true');await expect(closingTab()).toBeFocused();
+  const observed=promise=>promise.then(value=>({value}),error=>({error}));
+  const received=async promise=>{const result=await promise;if(result.error)throw result.error;return result.value};
+  const selectByClick=async()=>{
+   const clientId=(await state()).client.id;
+   const selected=observed(page.waitForResponse(response=>{
+    const request=response.request();if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions'||request.headers()['x-amplifier-client']!==clientId)return false;
+    const command=request.postDataJSON();return command.action==='canvas.select'&&command.args.id===closingId;
+   },{timeout:8000}));
+   await closingTab().click();
+   const response=await received(selected);await acceptedCanvasReceipt(observedReceipts.get(response.request()),response.request().postDataJSON().id);
+   await expect(closingTab()).toHaveAttribute('aria-selected','true');await expect(closingTab()).toBeFocused();
+   // Actual rendered pending state, not an immediately-true selection assertion.
+   await expect(dialog.getByRole('button',{name:'Close tab '+titles[18],exact:true,includeHidden:true})).toBeEnabled();
+  };
+  await selectByClick();
   const start=await state(),events=[];
   await page.evaluate(()=>{
    const events=[],record=event=>events.push({type:event.type,key:event.key||null,id:event.target.dataset?.artifactId||event.target.getAttribute?.('aria-label')||event.target.tagName});
    document.addEventListener('focusin',record);document.addEventListener('keydown',record,true);
    window.canvasCloseObservation={events,stop(){document.removeEventListener('focusin',record);document.removeEventListener('keydown',record,true)}};
   });
-  let release,entered,heldRequest;
-  const gate=new Promise(resolve=>release=resolve),held=new Promise(resolve=>entered=resolve);
+  let release,heldRequest;
+  const gate=new Promise(resolve=>release=resolve);
   const matches=request=>{
    if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions'||request.headers()['x-amplifier-client']!==start.client.id)return false;
    const command=request.postDataJSON();return command.action==='canvas.tabClose'&&command.args.id===closingId;
   };
-  const intercept=async route=>{if(!matches(route.request()))return route.continue();heldRequest=route.request();entered();await gate;await route.continue()};
+  const intercept=async route=>{if(!matches(route.request()))return route.continue();heldRequest=route.request();await gate;await route.continue()};
   await page.route('**/api/actions',intercept);
-  const response=page.waitForResponse(value=>matches(value.request()),{timeout:8000});
+  const held=observed(page.waitForRequest(matches,{timeout:8000}));
+  const response=observed(page.waitForResponse(value=>matches(value.request()),{timeout:8000}));
   try{
-   await page.keyboard.press('Delete');await held;
+   await page.keyboard.press('Delete');const request=await received(held);
+   await expect.poll(()=>heldRequest===request).toBe(true);
    assert.equal(observedReceipts.has(heldRequest),false,'Held close has no acceptance yet');
    await page.keyboard.press('Home');await expect(overviewTab).toBeFocused();
-   release();const receiptResponse=await response,command=receiptResponse.request().postDataJSON();
+   release();const receiptResponse=await received(response),command=receiptResponse.request().postDataJSON();
    assert.equal(receiptResponse.request(),heldRequest);
    await acceptedCanvasReceipt(observedReceipts.get(heldRequest),command.id);
    await counts(11);await expect(closingTab()).toHaveCount(0);await expect(successor).toHaveAttribute('aria-selected','true');
@@ -457,10 +473,10 @@ try{
   // Reopen the saved item, then prove the same close without newer input still
   // recovers to the selected surviving tab. No explicit focus() is used.
   await action('canvas.select',{id:closingId});await counts(12);
-  await closingTab().click();await expect(closingTab()).toHaveAttribute('aria-selected','true');await expect(closingTab()).toBeFocused();
-  const ownResponse=page.waitForResponse(value=>matches(value.request()),{timeout:8000});
+  await selectByClick();
+  const ownResponse=observed(page.waitForResponse(value=>matches(value.request()),{timeout:8000}));
   await page.keyboard.press('Delete');
-  const own=await ownResponse,command=own.request().postDataJSON();
+  const own=await received(ownResponse),command=own.request().postDataJSON();
   await acceptedCanvasReceipt(observedReceipts.get(own.request()),command.id);
   await counts(11);await expect(successor).toBeFocused();
   report.removeFocus.checks.push({phase:'owned-close',commandId:command.id,accepted:true,focused:ids[29]});
