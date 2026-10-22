@@ -3,6 +3,10 @@ name: Extended browser checks
 on:
   workflow_dispatch:
     inputs:
+      peer_messages:
+        description: Fixed peer groups, formatting negative control and installed-wheel browser proof
+        type: boolean
+        default: false
       destination_history:
         description: Run fixed Back/Forward units, build and five navigation browser scenarios
         type: boolean
@@ -36,7 +40,7 @@ permissions:
   contents: read
 jobs:
   browser:
-    if: ${{ !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -146,7 +150,7 @@ jobs:
             output/selected-context/
           if-no-files-found: warn
   mcp-boundary:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -298,7 +302,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Reject mixed selections
-        if: ${{ inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
+        if: ${{ inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
         run: exit 1
       - name: Record fixed coverage before setup
         run: python scripts/compact_composer_checks.py --initialize
@@ -346,7 +350,7 @@ jobs:
           path: output/compact-composer/
           if-no-files-found: error
   destination-history:
-    if: ${{ !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}
+    if: ${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -562,4 +566,41 @@ jobs:
           path: |
             output/destination-history/
             output/browser-checks/
+          if-no-files-found: error
+  peer-messages:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.peer_messages }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Reject incompatible peer selections
+        if: ${{ inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
+        run: exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Freeze fixed peer qualification before dependency setup
+        run: python scripts/peer_message_qualification.py --initialize
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev --group artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run fixed source and installed peer proof
+        run: uv run --no-sync python scripts/peer_message_qualification.py
+      - name: Retain exact peer results including failures and unrun checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: peer-messages-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/peer-messages/
           if-no-files-found: error
