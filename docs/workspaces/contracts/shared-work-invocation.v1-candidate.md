@@ -220,6 +220,19 @@ no model-provided list of Work IDs or successful-read assertions. Root/child/gen
 checks come from the actual worker envelope. This is a host fact for the continuity
 adapter, not a public execution grant or a standalone safety check.
 
+The private worker bridge `work.effect.check` accepts exactly `toolName`,
+`toolInput` and the actual executing `toolCallId`. The authenticated transport
+supplies `_workOrigin`; a public/model witness is not accepted. It returns
+`applicable`, `allowed`, `reason`, `requiredVersion` and `effectAuthorized:false`.
+`allowed` means only that the current Work precondition is satisfied, or the
+operation is an explicit exact-read/safe-reporting case. It does not replace
+ordinary permission, Stop, budget or effect-owner admission, and is not a lease
+that survives another await. Unknown commissioned lineage is not an exemption.
+The runtime final-invoke wrapper and each shared-action mutation owner must
+consume this contract at their actual boundary; the endpoint alone does not
+establish production enforcement. Tests of its trusted-transport fixture are
+service checks, not native origin or effect-execution proof.
+
 The continuity adapter must independently establish all of the following at the
 actual runtime boundary:
 

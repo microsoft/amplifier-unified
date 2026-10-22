@@ -4647,7 +4647,7 @@ class AppService:
         # Remove only known fields: arbitrary extras must still be validated.
         transport = args
         args = {key: value for key, value in args.items()
-                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients'}}
+                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients', '_workOrigin'}}
         if '_inputClients' not in transport:
             return await self._app_bridge(operation, args, session_id)
         # The worker stamps this from accepted inputs, replacing any tool args.
@@ -4660,6 +4660,12 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'work.effect.check':
+            from .workspace_work_effects import check
+            # Private worker transport only. This synchronous read is a Work
+            # precondition, not a reusable permission or delayed-effect grant.
+            async with self.lock:
+                return check(self.work_invocation, session_id, args)
         if operation == 'work.invocation.revalidate':
             if set(args) != {'version'} or not isinstance(args['version'], str) or len(args['version']) > 64:
                 raise AppError('Revalidation requires only the observed invocation version.')
