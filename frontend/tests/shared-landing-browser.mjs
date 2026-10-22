@@ -34,9 +34,23 @@ try{
  const choose=mode=>landing.getByRole('group',{name:'Work view',exact:true}).getByRole('button',{name:mode,exact:true}).click();
  const settled=()=>expect.poll(async()=>Object.keys((await shell()).navigationResourcePending||{}).length).toBe(0);
  const openSidebar=async()=>{if(!await sidebar.isVisible())await page.locator('#navigation-toggle').click()};
- const home=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Home',exact:true}).click();await expect(landing).toHaveAttribute('data-landing','home');await settled()};
- const allChats=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Search chats',exact:true}).click();await expect(landing.getByRole('heading',{level:1})).toHaveText('All chats');await settled()};
- const allWorkspaces=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Browse',exact:true}).click();await sidebar.getByRole('button',{name:'All workspaces',exact:true}).click();await expect(landing).toHaveAttribute('data-landing','workspaces');await settled()};
+ const destinationCommands=new Set();
+ const acceptedDestination=async(surface,click)=>{
+  // Each helper waits for its click before another destination helper begins.
+  // Visible rows can be optimistic or retained while this command is queued.
+  const requested=page.waitForRequest(request=>{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return false;
+   const command=request.postDataJSON();return command?.action==='view.update'&&command.args?.patch?.workSurface===surface;
+  });
+  await click();const request=await requested,command=request.postDataJSON();
+  assert.equal(typeof command.id,'string');assert.ok(command.id);assert.ok(!destinationCommands.has(command.id));destinationCommands.add(command.id);
+  const response=await request.response();assert.ok(response);assert.equal(response.request(),request);
+  const receipt=await response.json();assert.equal(receipt.accepted,true);
+  await expect.poll(async()=>{const current=await state();return current.client.hostInstanceId===receipt.hostInstanceId&&current.revision>=receipt.stateRevision}).toBe(true);
+ };
+ const home=async()=>{await openSidebar();await acceptedDestination('home',()=>sidebar.getByRole('button',{name:'Home',exact:true}).click());await expect(landing).toHaveAttribute('data-landing','home');await settled()};
+ const allChats=async()=>{await openSidebar();await acceptedDestination('chats',()=>sidebar.getByRole('button',{name:'Search chats',exact:true}).click());await expect(landing.getByRole('heading',{level:1})).toHaveText('All chats');await settled()};
+ const allWorkspaces=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Browse',exact:true}).click();await acceptedDestination('workspaces',()=>sidebar.getByRole('button',{name:'All workspaces',exact:true}).click());await expect(landing).toHaveAttribute('data-landing','workspaces');await settled()};
  const focusRow=()=>landing.locator('.a-landing-chat[data-session-id]');
  const pickUpAgain=()=>landing.getByRole('group',{name:'Filter work'}).getByRole('button',{name:/^Pick up again/});
  const checkIdle=async(section,filter='')=>{
