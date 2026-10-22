@@ -370,6 +370,19 @@ test('reported cleanup states never certify teardown or an empty resource invent
  }
 });
 
+test('fresh human acceptance without counterevidence remains current, not independently verified',async()=>{
+ const row=item('work:one',{revision:4,humanDecision:'accepted',humanDecisionCurrent:true,latestOutcome:'passed',
+  attentionReasons:['unverified_report']});
+ const raw={...detail(row).item,humanDecisionSequence:4};
+ delete raw.counterevidenceSequence; // Canonical producer omits this until adverse evidence exists.
+ const root=await mount(async action=>accepted(action==='workspace.work.list'?page([row]):detail(row,{item:raw})));
+ await inspect(root);
+ const facts=root.root.findByProps({className:'a-shared-facts'}),labels=facts.findAllByType('dt'),values=facts.findAllByType('dd');
+ assert.equal(text(values[labels.findIndex(node=>text(node)==='Human decision')]),'accepted');
+ assert.doesNotMatch(text(root.toJSON()),/no longer current|later counterevidence retained/i);
+ assert.match(text(root.toJSON()),/not verified|unverified/i);
+});
+
 test('human acceptance with later counterevidence stays historical and unverified',async()=>{
  const row=item('work:one',{revision:5,humanDecision:'accepted',humanDecisionCurrent:false,latestOutcome:'failed',
   attentionReasons:['failed','counterevidence_after_decision']});
