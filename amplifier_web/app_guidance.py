@@ -1,6 +1,7 @@
 """Host-owned UI tool and ephemeral guidance, shared by root and worker sessions."""
 import asyncio
 import copy
+import weakref
 import json
 import re
 
@@ -132,6 +133,22 @@ async def install_app_access(coordinator, bridge):
     # applicability and permissions; absent producer wiring is not a grant.
     coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)
     coordinator.register_capability('web.work_effect_origin', delivery.execution_origin)
+    issued_tools = {}
+    def inspect_tool(name, mounted):
+        """Observe only our current wrapper; never follow arbitrary attributes."""
+        if (coordinator.get('tools') or {}).get(name) is not mounted:
+            raise ValueError('The mounted tool changed during inspection.')
+        issued = issued_tools.get(id(mounted))
+        if issued is None:
+            return mounted
+        reference, original, issued_name = issued
+        if (reference() is not mounted or mounted.original is not original
+                or name != issued_name or mounted.mounted_name != issued_name
+                or mounted._work_delivery_guard is not delivery
+                or mounted._work_check is not coordinator.get_capability('web.work_effect_check')):
+            raise ValueError('The mounted Work wrapper cannot be verified.')
+        return original
+    coordinator.register_capability('web.work_inspect_tool', inspect_tool)
     def guard_tools(incoming=None):
         check = coordinator.get_capability('web.work_effect_check')
         if not callable(check):
@@ -179,8 +196,12 @@ async def install_app_access(coordinator, bridge):
             if getattr(tool, '_work_delivery_guard', None) is delivery:
                 tool.refresh_work_check(check)
                 return tool
-            return (WorkCheckedTool(tool, name)
-                    if name != 'app_control' and getattr(tool, '_work_check', None) is not check else tool)
+            if name == 'app_control' or getattr(tool, '_work_check', None) is check:
+                return tool
+            wrapper = WorkCheckedTool(tool, name)
+            identity = id(wrapper)
+            issued_tools[identity] = (weakref.ref(wrapper, lambda _: issued_tools.pop(identity, None)), tool, name)
+            return wrapper
         if incoming:
             return wrapped(*incoming)
         tools = coordinator.get('tools') or {}
