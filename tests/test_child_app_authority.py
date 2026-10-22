@@ -38,7 +38,7 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
     parent.coordinator.register_capability('session.working_dir', str(tmp_path))
     worker = Worker()
     worker.session = parent
-    worker.runtime = SimpleNamespace(generation={'id': 'root-generation'})
+    worker.runtime = SimpleNamespace(generation={'id': 'root-generation', 'input_ids': ['original-input']})
     worker.context_inputs = ['original-input']
     worker.context_bindings = {'original-input': {'clientId': 'original-client', 'targets': []}}
     worker.bridge = AsyncMock(return_value={'accepted': True})
