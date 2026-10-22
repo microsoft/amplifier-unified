@@ -19,6 +19,15 @@ progress; work and calls must be idle for activation. A fresh process must prove
 its installation before component checks continue. Rollback cancels continuation
 and retains the existing rule that automatic installation is disabled.
 
+Native child/job activity is bound to the runtime process that reported its
+lifecycle. After that exact process exits, unfinished owned rows become
+interrupted, including persistent children that were idle. An early closed
+event or a Stop request alone is insufficient. This releases obsolete update
+blockers without claiming success, replaying work, discarding saved reports,
+or settling independent peer chats, replacement processes or unbound rows.
+`tests/test_runtime_worker_exit.py` exercises the real process-exit boundary,
+ordinary update readiness and coordination observations, including those fences.
+
 The application status box summarizes included and other component availability,
 missing installations, unresolved checks and waiting phases. Detailed source
 inventory remains below the box. Frontend and agent callers share updates.check,
