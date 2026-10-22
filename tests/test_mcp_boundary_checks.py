@@ -266,11 +266,11 @@ def test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job():
     assert inputs['mcp_boundary']['type'] == 'boolean' and inputs['mcp_boundary']['default'] == 'false'
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     normal = workflow['jobs']['browser']
-    assert normal['if'] == '${{ !inputs.mcp_boundary }}' and normal['timeout-minutes'] == '30'
+    assert normal['if'] == '${{ !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}' and normal['timeout-minutes'] == '30'
     normal_runs = '\n'.join(step.get('run', '') for step in normal['steps'])
     assert '--budget-seconds 1500' in normal_runs and 'mcp_boundary_checks' not in normal_runs
     job = workflow['jobs']['mcp-boundary']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}"
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     assert job['timeout-minutes'] == '30' and job['runs-on'] == 'ubuntu-latest'
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}

@@ -84,6 +84,14 @@ async def main(home):
         installed_identity = {'verified': True, 'wheelSha256': expected['wheelSha256'],
             'fileCount': len(expected['files']), 'prefix': str(prefix),
             'server': str(package / 'server.py'), 'static': expected['static']}
+    import amplifier_web
+    package_root = Path(amplifier_web.__file__).resolve().parent
+    expected_package_root = os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT')
+    installed_package_verified = bool(expected_package_root) and package_root == Path(expected_package_root).resolve()
+    if expected_package_root:
+        assert installed_package_verified, 'Fixture imported source instead of the installed wheel'
+    static_identity = {str(p.relative_to(package_root / 'static')): hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in (package_root / 'static').rglob('*') if p.is_file()} if expected_package_root else None
 
     workspace = home / "workspace"
     workspace.mkdir(exist_ok=True)
@@ -131,6 +139,7 @@ async def main(home):
     async def inspect(request):
         return web.json_response({"installedIdentity": installed_identity,
             "foundationCachePresent": (home / "app/foundation").exists(),
+            "installedPackageVerified": installed_package_verified, "staticSha256": static_identity,
             "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
             "registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),

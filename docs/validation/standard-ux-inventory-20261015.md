@@ -995,3 +995,36 @@ remote cleanup boundaries, concurrent scheduler passes, restart and the exact
 initial-allocation cancellation gap. Unknown or advanced owners remain held. This
 is controlled-backend and rendered-client evidence, not live runner deployment.
 No new broad test lane or publication gate is added.
+
+## Compact composer and peer preview integration (October 22)
+
+The additive `compact-composer` and `peer-preview` browser scenarios run in the
+automatic extended source smoke plan. The existing `composer-options` owner
+remains in Public readiness without duplication. Together they cover the
+ordinary writing/options controls and grouped incoming-message source preview;
+the existing composer primary-action and peer-attribution journeys retain their
+separate assertions. The frozen original inventory and 65-scenario hash remain
+unchanged. The delta ledger records the specific paths, expected results and
+synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
+qualify installed wheels and negative controls; they do not replace these
+automatic ordinary-path owners.
+
+## Shared Work additive ownership (October 22)
+
+`delta.shared-work` records the existing `shared-work` extended-browser journey,
+with `AMPLIFIER_TEST_COLD_TASK=1`, rather than adding a duplicate scenario.
+It covers retained source/corrections and evidence, cold saved tasks, independent
+clients, currentness, guarded Work Back/Forward, drafts and dirty Canvas/Settings
+at desktop and narrow widths. Native/nested effect checks have separate additive
+module selectors in the existing `native` integration owner; the browser's
+synthetic runtime is not native execution proof. See
+[integration ownership](integration-coverage.md#shared-work-native-and-nested-effect-ownership-october-22).
+
+The delta's source identity is the prior
+`6ac9611ddd85205e2781fe2e17f3bc950feee030` checkpoint, whose retained evidence keeps
+its original exact-input reuse limits. It is not an uncommitted integration
+identity or a new pass. Qualification of the new integration and registration
+increment is pending; tests for these changes are **UNRUN** until owned isolated
+execution. Installed-wheel qualification remains separate from automatic source
+smoke. The frozen inventory, existing Navigation/Automation/Composer/Peer/Pins
+and reaction owners, Fast checks and publication policy are unchanged.

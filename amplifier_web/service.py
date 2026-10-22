@@ -108,7 +108,10 @@ ACTION_DEFINITIONS = {
         "id": string(100), "version": {"type": "integer", "minimum": 1},
         "sourceSessionId": string(200), "messageId": string(200),
         "expectedRevision": {"type": "integer", "minimum": 1}},
-        ["id", "version", "sourceSessionId", "messageId", "expectedRevision"])}, ["id"])),
+        ["id", "version", "sourceSessionId", "messageId", "expectedRevision"]),
+        "peerPreview": schema({"proof": string(4096), "sourceSessionId": string(200)}, ["proof", "sourceSessionId"])}, ["id"])),
+    "peer.preview": ("Inspect a receipt-bound source in a read-only Canvas preview without selecting or starting it.", schema({
+        "proof": string(4096), "sourceSessionId": string(200)}, ["proof", "sourceSessionId"])),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count and lifetime", schema({"patch": {
         "type": "object", "properties": {
@@ -741,7 +744,9 @@ class AppService:
         from .test_queue import TestQueue
         self.test_queue = TestQueue(self)
         from .peer_attribution import PeerAttribution
-        self.peer_attribution = PeerAttribution(self.db)
+        from .peer_preview import PeerPreview
+        self.peer_preview = PeerPreview(self)
+        self.peer_attribution = PeerAttribution(self.db, self.peer_preview.describe)
         self.projections.resolver = self.peer_attribution.resolve
         from .schedules import Schedules
         self.schedules = Schedules(self)
@@ -1833,11 +1838,11 @@ class AppService:
                     scope = native_project(exact)
             try:
                 target = self.directory.resolve(args[target_key], scope,
-                                                include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
+                                                include_hidden_workspaces=action == 'session.select' and not {'chatReference', 'peerPreview'} & args.keys())
                 if target is None and not passive_task:
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
-                                                    include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
+                                                    include_hidden_workspaces=action == 'session.select' and not {'chatReference', 'peerPreview'} & args.keys())
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             if scope and target is None:
@@ -1910,7 +1915,7 @@ class AppService:
                 or args.get('clientId', client_id) != client_id
                 or self.clients.record().get('kind') != 'web'):
             raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
-        if action == 'session.select' and 'chatReference' in args and (
+        if action == 'session.select' and {'chatReference', 'peerPreview'} & args.keys() and (
                 origin != 'ui' or client_id is None or self.clients.record().get('kind') != 'web'):
             raise AppError('A chat reference opens only from its originating browser.', 403)
         if action == "approval.respond" and args["id"].startswith("capability:"):
@@ -1921,7 +1926,14 @@ class AppService:
                 raise AppError('Task reads require a registered calling conversation.', 403)
             from .owned_history import require
             require(self, caller_session_id, args['sessionId'])
-        if resolved_target is not None and not passive_task and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
+        if action == 'peer.preview':
+            async with self.lock:
+                return self.peer_preview.open(args, origin)
+        if action == 'session.select' and 'peerPreview' in args:
+            if 'chatReference' in args:
+                raise AppError('Choose one source-chat reference.', 400)
+            self.peer_preview.select(args, origin)
+        if resolved_target is not None and not passive_task and action != 'session.titlePreview' and not (action == 'session.select' and {'chatReference', 'peerPreview'} & args.keys()):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -2438,6 +2450,11 @@ class AppService:
                 raise AppError(str(exc), 409) from None
         pending = []
         async with self.lock:
+            if action == 'session.select' and 'peerPreview' in args:
+                self.peer_preview.select(args, origin)
+                self.canvas_views.guard_transition(action, args)
+                if resolved_target is not None:
+                    self._admit_session(resolved_target)
             if chat_reference_proof is not None:
                 try:
                     self.outputs.chat_references.guard(args, origin, chat_reference_proof)
@@ -2961,7 +2978,21 @@ class AppService:
                     from .message_interactions import reconcile_native_reveal
                     reconcile_native_reveal(session, reveal_message)
                 from .message_interactions import command
-                diagnostic_result = command(self, action, args, origin=origin)
+                try:
+                    diagnostic_result = command(self, action, args, origin=origin)
+                except AppError as exc:
+                    # This synchronous reaction boundary rejects before changing
+                    # annotations. Retain that exact evidence for a lost reply;
+                    # absence of a receipt still never means rejection.
+                    if action == 'message.reaction' and command_id and 400 <= exc.status < 500:
+                        rejected = {'accepted': False, 'status': exc.status, 'error': str(exc),
+                                    'effects': [], 'result': {'sessionId': args['sessionId'],
+                                    'messageId': args['messageId'], 'reactionActor': 'assistant' if origin == 'agent' else 'user',
+                                    'sent': False}}
+                        self.db.execute('INSERT INTO commands VALUES (?,?,?)',
+                                        (command_id, fingerprint, json.dumps(rejected)))
+                        self.db.commit()
+                    raise
             elif action == 'message.copy':
                 source = self._session(args['sessionId'])
                 message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
@@ -4730,6 +4761,14 @@ class AppService:
             return self.observations.authorize_admission(session_id, args)
         if operation == 'memory.context':
             return await self.recall.personalization.context(session_id, expected=args.get('expected'))
+        if operation == 'message.reactions.context':
+            from .message_interactions import reaction_context
+            # A previous publication failure leaves progress dirty. Do not
+            # describe an unsaved in-memory annotation as committed context.
+            async with self.lock:
+                if getattr(self, '_progress_dirty', False):
+                    self._commit_pending_progress()
+                return reaction_context(self._session(session_id, hydrate=False))
         if operation == "questions.admit":
             async with self.lock:
                 self._session(session_id)

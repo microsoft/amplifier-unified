@@ -119,9 +119,11 @@ async def install_app_access(coordinator, bridge):
     from .output_image_delivery import OutputImageDelivery
     from .memory_delivery import MemoryDelivery, POLICY as MEMORY_POLICY
     from .coordination_delivery import CoordinationDelivery
+    from .reaction_delivery import ReactionDelivery
     # Keep selected visual evidence after general workspace observations.
     delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(
-        SurfaceDelivery(bridge), bridge, origin_scope=coordinator.get_capability('web.work_origin_scope')),
+        ReactionDelivery(SurfaceDelivery(bridge), bridge), bridge,
+        origin_scope=coordinator.get_capability('web.work_origin_scope')),
         bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
     # Observation only. The service's effect policy must independently decide

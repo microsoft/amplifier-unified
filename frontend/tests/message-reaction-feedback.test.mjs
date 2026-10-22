@@ -12,8 +12,10 @@ test('exact accepted reaction overlays detached row; a newer canonical removal w
  const render=()=>React.createElement(MessageInteractions,{message,sessionId,dispatch:()=>new Promise(resolve=>release=resolve)});
  try{
   await act(async()=>root=create(render()));await act(async()=>root.root.findByProps({'aria-label':'React to message'}).props.onClick(pointer));
-  await act(async()=>{request=root.root.findByProps({'aria-label':'Heart'}).props.onClick()});
-  await act(async()=>{release({accepted:true,result:{sessionId:'one',messageId:'old',reactions:['❤️'],annotationRevision:2}});await request});
+  await act(async()=>{request=root.root.findByProps({'aria-label':'Heart'}).props.onClick(pointer)});
+  assert.equal(root.root.findAllByProps({'aria-label':'Remove Heart reaction'}).length,1,'Local feedback must render while the server response is deliberately held');
+  assert.notEqual(root.root.findByProps({'aria-label':'Remove Heart reaction'}).props.disabled,true,'Pending feedback must remain reversible');
+  await act(async()=>{release({accepted:true,result:{sessionId:'one',messageId:'old',reactionActor:'user',reactions:['❤️'],annotationRevision:2}});await request});
   assert.equal(root.root.findByProps({'aria-label':'Remove Heart reaction'}).props['aria-pressed'],'true');
   assert.deepEqual(message,{id:'old',text:'Canonical unchanged'});
   message={...message,reactions:[],annotationRevision:1};await act(async()=>root.update(render()));assert.equal(root.root.findAllByProps({'aria-label':'Remove Heart reaction'}).length,1,'Stale annotation read cannot undo newer accepted receipt');
@@ -24,8 +26,8 @@ test('a held reaction cannot decorate another chat reusing the same message ID',
  let root,release,request,sessionId='one';const message={id:'same',text:'Original'};
  const render=()=>React.createElement(MessageInteractions,{message,sessionId,dispatch:()=>new Promise(resolve=>release=resolve)});
  try{
-  await act(async()=>root=create(render()));await act(async()=>root.root.findByProps({'aria-label':'React to message'}).props.onClick(pointer));await act(async()=>{request=root.root.findByProps({'aria-label':'Heart'}).props.onClick()});
-  sessionId='two';await act(async()=>root.update(render()));await act(async()=>{release({accepted:true,result:{sessionId:'one',messageId:'same',reactions:['❤️'],annotationRevision:2}});await request});
+  await act(async()=>root=create(render()));await act(async()=>root.root.findByProps({'aria-label':'React to message'}).props.onClick(pointer));await act(async()=>{request=root.root.findByProps({'aria-label':'Heart'}).props.onClick(pointer)});
+  sessionId='two';await act(async()=>root.update(render()));await act(async()=>{release({accepted:true,result:{sessionId:'one',messageId:'same',reactionActor:'user',reactions:['❤️'],annotationRevision:2}});await request});
   assert.equal(root.root.findAllByProps({'aria-label':'Remove Heart reaction'}).length,0);assert.deepEqual(message,{id:'same',text:'Original'});
  }finally{await act(async()=>root?.unmount())}
 });

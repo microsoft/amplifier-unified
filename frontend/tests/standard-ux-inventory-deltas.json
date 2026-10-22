@@ -2165,6 +2165,271 @@
         }
       ],
       "qualification": "docs/UPDATES.md"
+    },
+    {
+      "id": "delta.pin-rapid-reorder",
+      "sourceCommit": "b806bbc37eec1b9152be7472b73cfe3bde835c89",
+      "reason": "Consecutive pin gestures and saved-display recovery gain an additive browser owner; preserve the frozen inventory and original 65-scenario plan hash.",
+      "workflowsAdded": [
+        {
+          "id": "navigation.pin-rapid-reorder",
+          "family": "navigation",
+          "title": "Reorder different sidebar pins while an earlier move settles",
+          "scope": "standard-path",
+          "entryPath": ["Sidebar", "Pinned"],
+          "prerequisites": [
+            "Production bundled client with synthetic mixed session and workspace pins",
+            "Two fixture clients and controlled receipt/projection delivery; no live pins or model calls"
+          ],
+          "steps": [
+            "Move two different pins before the first response and authoritative readback",
+            "Repeat an adjacent sequence and compare both clients and reload",
+            "Hold a second drag across the first move's success or unknown result",
+            "Recover a saved-display error through Refresh pinned list without replay",
+            "Use keyboard reordering and the narrow drag target"
+          ],
+          "expectedResults": [
+            "Both admitted intents remain in the preview and execute once in order after exact predecessor settlement.",
+            "The complete canonical vector preserves hidden and cross-workspace IDs; final display, second client and reload agree.",
+            "A matching successful commit preserves the held gesture; rejection or unknown outcome cancels later unsent gestures.",
+            "One bounded read can recover cold display completion without reconnect, duplicate mutation or model startup.",
+            "Externally stale pages block new moves; keyboard and narrow controls remain usable."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "delayed-receipt", "delayed-projection", "unknown-outcome", "second-client", "reload"],
+          "existingTests": [
+            {
+              "path": "frontend/tests/pin-rapid-reorder-browser.mjs",
+              "relation": "Registered additive owner pin-rapid-reorder; evidence in output/browser-checks/pin-rapid-reorder"
+            },
+            {
+              "path": "frontend/tests/pin-order-settlement.test.mjs",
+              "relation": "Complete hidden-ID vector, scope, queue capacity, stale read, rejection and supersession boundaries"
+            },
+            {
+              "path": "tests/test_pinned_navigation.py",
+              "relation": "Canonical mixed identities, idempotence, revision conflict and safe authoritative read"
+            }
+          ],
+          "limits": [
+            "Synthetic source-host checks, not installed/native/live-user acceptance.",
+            "Historical old-race negative-control proof is retained separately; registration alone is not a current pass."
+          ]
+        }
+      ],
+      "qualification": "docs/navigation.md"
+    },
+    {
+      "id": "delta.compact-composer",
+      "sourceCommit": "f1c10e55961bbba30acd9c9c08154f3f3592d3fb",
+      "reason": "Keep ordinary compact writing and configuration paths in automatic source smoke coverage; preserve the frozen checklist.",
+      "workflowsAdded": [
+        {
+          "id": "composer.compact-options",
+          "family": "composer",
+          "title": "Write, attach and configure a chat from the compact composer",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Composer",
+            "Model and reasoning settings"
+          ],
+          "prerequisites": [
+            "Synthetic host/runtime with built client; no account, live provider or real audio"
+          ],
+          "steps": [
+            "Inspect idle and expanded input at desktop and phone widths across detail/theme choices",
+            "Write multiline text, paste quotes and attach/remove files without sending",
+            "Open model/reasoning/bundle options; close with keyboard and retain focus/draft",
+            "Reload with a retained draft and verify long-input actions stay reachable"
+          ],
+          "expectedResults": [
+            "Idle field remains compact with usable touch targets and no horizontal overflow.",
+            "IME composition and Shift+Enter do not send; private input stays out of ordinary readback.",
+            "Options remain usable without losing unsent text or attachments."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "detail-levels",
+            "reload",
+            "zoom-equivalent"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/compact-composer-browser.mjs",
+              "relation": "Automatic compact-composer owner; bounded geometry, input, privacy and retained draft assertions"
+            },
+            {
+              "path": "frontend/tests/composer-options-browser.mjs",
+              "relation": "Existing automatic Public readiness composer-options owner; choices, invalid controls and keyboard/focus continuity"
+            },
+            {
+              "path": "scripts/compact_composer_checks.py",
+              "relation": "Separate fixed manual source/installed-wheel and adjacent regression qualification"
+            }
+          ],
+          "limits": [
+            "Synthetic source smoke; no live provider, physical keyboard or native audio claim.",
+            "Separate immutable quote-node behavior remains independently owned."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.peer-preview",
+      "sourceCommit": "e0155b968c38b5bd8940e827d9e0d07bcb6991b1",
+      "reason": "Give grouped incoming peer messages and read-only source preview an automatic ordinary-path smoke owner.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.peer-preview",
+          "family": "conversation",
+          "title": "Read grouped peer messages and inspect their source without leaving a draft",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Messages from another chat",
+            "Preview source chat"
+          ],
+          "prerequisites": [
+            "Synthetic peer messages with canonical delivery receipts; no live history or model calls"
+          ],
+          "steps": [
+            "Expand grouped peers, inspect formatted content and copy exact original Markdown",
+            "Preview source chat, load earlier pages and refresh without reordering or losing place",
+            "Return to the original chat with unsent text and attachment retained",
+            "Attempt preview during dirty Canvas/Settings transitions; cancel and preserve the current owner",
+            "Repeat at narrow widths and verify no runtime starts or page reload"
+          ],
+          "expectedResults": [
+            "Grouping preserves exact content and reliable sender attribution.",
+            "Preview is bounded and read-only; source rows retain formatting and ordering.",
+            "Drafts, selected chat, dirty editors and renderer leases remain intact."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "dirty-settings",
+            "dirty-canvas"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/peer-preview-browser.mjs",
+              "relation": "Automatic peer-preview owner for grouped formatting, paging, copy, draft and dirty-owner continuity"
+            },
+            {
+              "path": "tests/test_peer_preview.py",
+              "relation": "Canonical source authorization, exact delivery receipts and bounded pagination"
+            },
+            {
+              "path": "scripts/peer_message_qualification.py",
+              "relation": "Separate fixed manual negative-formatting and installed-wheel qualification"
+            }
+          ],
+          "limits": [
+            "Synthetic source smoke; no live-history scale or provider-latency claim."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.shared-work",
+      "sourceCommit": "6ac9611ddd85205e2781fe2e17f3bc950feee030",
+      "reason": "Register the existing Shared Work browser journey and native/nested owners additively. sourceCommit identifies the prior qualified checkpoint, not the current uncommitted integration; preserve the frozen inventory and every existing owner.",
+      "workflowsAdded": [
+        {
+          "id": "workspace.shared-work",
+          "family": "workspace",
+          "title": "Inspect retained promises, corrections and evidence without restarting work",
+          "scope": "standard-path",
+          "entryPath": [
+            "Workspace",
+            "Work"
+          ],
+          "prerequisites": [
+            "Production bundled client and real AppService with synthetic persisted Work, saved tasks and separate client drafts",
+            "Cold-task variant enabled; controlled runtime and no live provider or private history",
+            "Native/nested checks separately require actual Core/loop-live, the native OpenAI adapter and tool-exec JavaScript runtime"
+          ],
+          "steps": [
+            "Reopen persisted Work and load a cold saved task through its visible control",
+            "Inspect exact original source, corrections, current criteria and separately attributed evidence",
+            "Observe a changed promise or candidate from another client without overwriting an unfinished edit",
+            "Use Work and Back/Forward while retaining composer text, attachments and dirty Canvas or Settings",
+            "Repeat Work inspection on desktop and narrow clients, including emulated touch"
+          ],
+          "expectedResults": [
+            "Reads retain original wording and responsibility without starting a worker or replaying an effect.",
+            "Old evidence remains tied to its original promise and candidate; unknown, failed and not-run states are not success.",
+            "Publication reports, independent checks and human decisions remain distinct observations, not permission or shipment.",
+            "Unsent drafts and dirty editors survive guarded navigation; clients retain their own view state.",
+            "Controlled native and nested-tool checks reject missing or stale coverage, Stop and reused origins before effects; a Work check never grants ordinary tool authority."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "emulated-touch",
+            "cold-reopen",
+            "multiple-clients",
+            "dirty-canvas",
+            "dirty-settings",
+            "changed-currentness"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/shared-work-browser.mjs",
+              "relation": "Existing single shared-work owner in Extended browser checks with AMPLIFIER_TEST_COLD_TASK=1; source-browser coverage, not automatic installed-wheel proof"
+            },
+            {
+              "path": "tests/fixtures/shared_work_scenario.py",
+              "relation": "Synthetic persisted Work and cold saved-task fixture for the real host journey"
+            },
+            {
+              "path": "frontend/tests/shared-work.test.mjs",
+              "relation": "Automatically discovered frontend Work rendering and interaction regressions"
+            },
+            {
+              "path": "frontend/tests/workspace-work.test.mjs",
+              "relation": "Automatically discovered frontend Work state, revisions and guarded interaction regressions"
+            },
+            {
+              "path": "tests/test_workspace_work.py",
+              "relation": "Ordinary Full Python owner for source retention, Work revisions and evidence attribution"
+            },
+            {
+              "path": "tests/test_work_invocation.py",
+              "relation": "Ordinary Full Python owner for real host commissioning, required sources and currentness with synthetic transport"
+            },
+            {
+              "path": "tests/test_work_effects.py",
+              "relation": "Ordinary Full Python owner for host preconditions with explicitly synthetic authenticated-worker facts; not native acceptance"
+            },
+            {
+              "path": "tests/test_work_origin.py",
+              "relation": "Additive module selector in the existing native owner for exact worker-origin, native callbacks and nested dispatch"
+            },
+            {
+              "path": "tests/test_work_native_effects.py",
+              "relation": "Additive module selector in the existing native owner for controlled native/JavaScript calls through real host effects, including refusal before deduplication"
+            }
+          ],
+          "limits": [
+            "The prior 6ac9611ddd85205e2781fe2e17f3bc950feee030 checkpoint retains its original evidence and exact-input reuse limits; it does not attest the current integration.",
+            "Qualification of the new integration and this registration increment is pending. Tests for these registration changes are UNRUN until owned isolated execution.",
+            "Browser fixtures use synthetic runtime state; installed-wheel proof requires a separately prepared exact candidate outside source.",
+            "Controlled native transport and real nested JavaScript are not paid-provider, generic streaming, unmeasured steering or tool-internal-await qualification.",
+            "Registration adds no workflow, duplicate browser journey, broader publication gate, permission or whole-feature acceptance."
+          ]
+        }
+      ],
+      "evidenceContext": "Historical checkpoint identity only; no new execution is claimed by this additive registration.",
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
     }
   ]
 }
