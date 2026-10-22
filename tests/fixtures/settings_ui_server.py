@@ -10,6 +10,11 @@ from amplifier_web.bundles import BundleManager
 from amplifier_web.updates import group_sources
 from amplifier_web.smart_tools import SmartToolsManager
 import yaml
+if os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT'):
+ import amplifier_web
+ actual_package = Path(amplifier_web.__file__).resolve().parent
+ assert actual_package == Path(os.environ['AMPLIFIER_TEST_PACKAGE_ROOT']).resolve(), 'Fixture must import the exact installed package'
+ print(json.dumps({'installedPackageVerified':True,'packageRoot':str(actual_package)}),flush=True)
 PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':10}},'context':{'module':'context-simple','config':{'max_tokens':1000}}},'providers':[{'module':'provider-openai','id':'openai','config':{'default_model':'fixture-model'}}],'tools':[{'module':'tool-filesystem','config':{'read_only':False,'max_bytes':2000}}],'hooks':[{'module':'hooks-logging','config':{'enabled':True}}]}
 class Runtime:
  def __init__(self):self.plan=copy.deepcopy(PLAN)

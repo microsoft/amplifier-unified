@@ -2,7 +2,7 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import './composer-test-helpers.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -55,6 +55,8 @@ try{
  await options.click();await page.setViewportSize({width:1280,height:900});await expect(menu).toBeVisible();await expect(options).toHaveCount(1);
  await expect(options).toContainText('chosen-model');await expect(menu.locator('#chat-model')).toHaveValue('chosen-model');
  await page.setViewportSize({width:320,height:700});await expect(menu).toBeVisible();await expect(menu.locator('#chat-model')).toHaveValue('chosen-model');
+ const touchTargets=await menu.locator('button,select,input[type=range]').evaluateAll(nodes=>nodes.filter(el=>el.getClientRects().length).map(el=>({name:el.getAttribute('aria-label')||el.id||el.textContent,width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height})));
+ for(const target of touchTargets)assert.ok(target.width>=44&&target.height>=44,`Phone control is too small: ${JSON.stringify(target)}`);
  await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
  await options.click();await page.screenshot({path:output+'/readiness107-options-mobile.png'});await closeMenu();
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
@@ -99,6 +101,31 @@ try{
  await expect(composer).toBeVisible();
  await expect(composer).toHaveDraft('Keep this draft while managing connections');
  assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1,'Opening and closing settings must not send again');
+ // Model controls, Chat actions and navigation More are different layers.
+ // Exercise ordinary clicks/Escape under reduced motion without losing a draft.
+ await page.emulateMedia({reducedMotion:'reduce'});
+ const chat=page.getByRole('button',{name:'Chat',exact:true}),chatActions=page.getByRole('group',{name:'Chat',exact:true});
+ await options.click();await expect(menu.locator('#chat-provider')).toBeFocused();
+ await chat.click();await expect(menu).toHaveCount(0);await expect(chatActions).toBeVisible();
+ assert.ok(await chatActions.evaluate(el=>el.contains(document.activeElement)));
+ await page.keyboard.press('Escape');await expect(chatActions).toBeHidden();await expect(chat).toBeFocused();
+ await options.click();await expect(menu.locator('#chat-provider')).toBeFocused();
+ await expect(menu.locator('#chat-effort')).toHaveAttribute('aria-valuetext','high');
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ const drawer=page.getByRole('dialog',{name:'Workspaces and chats',exact:true});
+ await expect(drawer).toBeVisible();await expect(menu).toHaveCount(0);
+ assert.equal(await page.locator('.a-conversation').evaluate(el=>el.inert),true);
+ assert.equal(await drawer.locator('.a-nav-rail').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
+ const more=drawer.locator('.a-navigation-more').first();
+ await more.focus();await more.click();await expect(page.locator('.a-navigation-flyout')).toBeVisible();
+ await page.keyboard.press('Escape');await expect(page.locator('.a-navigation-flyout')).toBeHidden();await expect(drawer).toBeVisible();
+ await page.keyboard.press('Escape');await expect(drawer).toBeHidden();
+ await expect(composer).toHaveDraft('Keep this draft while managing connections');
+ await options.click();await expect(menu.locator('#chat-provider')).toBeFocused();
+ const optionsGeometry=await options.boundingBox();assert.ok(optionsGeometry.width>=44&&optionsGeometry.height>=44);
+ await page.keyboard.press('Escape');await expect(options).toBeFocused();
+ assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1);
+ await writeFile(output+'/layering.json',JSON.stringify({width:320,reducedMotion:true,optionsGeometry,modelAndEffortRetained:true,chatAndMoreDismissedIndependently:true,draftRetained:true,noExtraSubmission:true},null,2));
  for(const scheme of ['light','dark']){await page.evaluate(scheme=>window.amplifier.dispatch('view.update',{patch:{scheme}}),scheme);await expect(options).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:`${output}/readiness107-composer-${scheme}.png`});}
  assert.deepEqual(errors,[]);console.log('PASS: one compact model/options menu; real model/bundle/effort selection, preserved draft and reload, viewport resize, exact first submission, light/dark 320px.');
 }finally{await browser?.close();fixture.kill()}

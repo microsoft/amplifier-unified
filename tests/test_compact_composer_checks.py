@@ -13,15 +13,19 @@ import compact_composer_checks as checks
 def test_fixed_source_and_installed_selections(tmp_path):
     source = checks.plan(tmp_path)
     assert [r['id'] for r in source['scenarios']] == [
-        'composer-units', 'compact-composer', 'composer-options', 'composer-primary-action',
-        'composer-readiness', 'message-delivery', 'draft-switch']
+        'composer-units', 'navigation-reaction-units', 'compact-composer', 'composer-options',
+        'composer-primary-action', 'composer-readiness', 'message-delivery', 'draft-switch',
+        'destination-history', 'message-interactions', 'mobile-navigation', 'shell-components']
     installed = checks.plan(tmp_path, installed=True)
     assert [r['id'] for r in installed['scenarios']] == [
-        'compact-composer', 'composer-options', 'composer-primary-action', 'message-delivery']
+        'compact-composer', 'composer-options', 'composer-primary-action', 'message-delivery',
+        'message-interactions', 'mobile-navigation']
     assert all(r['command'][0] == 'node' for r in source['scenarios'])
     assert source['scenarios'][0]['command'][-2:] == [
         'tests/chat-controls.test.mjs', 'tests/bundle-controls.test.mjs']
     assert all('AMPLIFIER_TEST_ARTIFACTS' in r['env'] for r in installed['scenarios'])
+    assert all(r['env']['AMPLIFIER_TEST_OUTPUT'] == r['env']['AMPLIFIER_PROOF_DIR']
+               for r in source['scenarios'])
 
 
 def test_manifest_binds_every_static_byte(tmp_path):

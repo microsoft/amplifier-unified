@@ -20,8 +20,13 @@ from release_qualification import core_wheel
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'output/compact-composer'
 BROWSERS = ('compact-composer', 'composer-options', 'composer-primary-action',
-            'composer-readiness', 'message-delivery', 'draft-switch')
-INSTALLED = ('compact-composer', 'composer-options', 'composer-primary-action', 'message-delivery')
+            'composer-readiness', 'message-delivery', 'draft-switch',
+            'destination-history', 'message-interactions', 'mobile-navigation', 'shell-components')
+# Destination history imports a source-side oracle; shell-components builds an
+# example package. Keep those source-only rather than copying app sources into
+# the installed harness. Mobile/reaction journeys have test-only dependencies.
+INSTALLED = ('compact-composer', 'composer-options', 'composer-primary-action',
+             'message-delivery', 'message-interactions', 'mobile-navigation')
 
 
 def sha(path):
@@ -37,11 +42,16 @@ def plan(output, installed=False):
     rows = [] if installed else [{'id': 'composer-units', 'command': ['node', '--test',
         'tests/composer.test.mjs', 'tests/composer-ownership.test.mjs',
         'tests/markdown-composer.test.mjs', 'tests/message-delivery.test.mjs',
-        'tests/chat-controls.test.mjs', 'tests/bundle-controls.test.mjs']}]
+        'tests/chat-controls.test.mjs', 'tests/bundle-controls.test.mjs']},
+        {'id': 'navigation-reaction-units', 'command': ['node', '--test',
+         'tests/destination-history.test.mjs', 'tests/destination-history-ui.test.mjs',
+         'tests/conversation-navigation.test.mjs', 'tests/message-reactions.test.mjs',
+         'tests/message-reaction-feedback.test.mjs']}]
     rows += [{'id': name, 'command': ['node', f'tests/{name}-browser.mjs']} for name in names]
     for row in rows:
         folder = str(output / row['id'])
         row['env'] = {'AMPLIFIER_TEST_ARTIFACTS': folder,
+                      'AMPLIFIER_TEST_OUTPUT': folder, 'AMPLIFIER_PROOF_DIR': folder,
                       'AMPLIFIER_SCREENSHOT_DIR': folder}
     return {'schemaVersion': 1, 'scenarios': rows}
 
@@ -120,6 +130,17 @@ def installed(source):
         row['env'].update(AMPLIFIER_TEST_PACKAGE_ROOT=str(actual), AMPLIFIER_TEST_PYTHON=str(python), PYTHONPATH='')
     result = run_scenarios(harness, selected, OUTPUT / 'installed', budget=600, provenance=source)
     if result == 0:
+        for name in ('message-interactions', 'mobile-navigation'):
+            lines = (OUTPUT / 'installed' / f'{name}.log').read_text().splitlines()
+            identities = []
+            for line in lines:
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(value, dict) and value.get('installedPackageVerified'):
+                    identities.append(value)
+            assert any(row.get('packageRoot') == str(actual) for row in identities), f'{name}: installed fixture origin proof missing'
         proof = json.loads((OUTPUT / 'installed/compact-composer/compact-composer.json').read_text())
         served = proof.get('installedServedAssets')
         assert isinstance(served, dict) and served, 'Installed served-asset proof did not execute'

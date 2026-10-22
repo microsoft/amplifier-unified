@@ -45,7 +45,7 @@
 #amp-one.a-chat-shell.a-approachable-shell .a-compact-composer.drag-over{outline:none;background:transparent}
 #amp-one .a-compact-composer.drag-over .a-compose-surface{outline:2px dashed var(--a-accent);background:var(--a-tint)}
 #amp-one .a-composer-options-panel{overflow-y:auto;overscroll-behavior:contain}
-#amp-one .a-composer-options-panel :is(button,select){min-height:44px}
+#amp-one .a-composer-options-panel :is(button,select,input[type=range]){min-height:44px;min-width:44px}
 #amp-one .a-composer-options-panel .a-embedded-bundle{margin-top:12px}
 #amp-one .a-composer-options-panel :focus-visible{outline:2px solid var(--a-accent);outline-offset:2px}
 @container conversation (max-width:360px){
