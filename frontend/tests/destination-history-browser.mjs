@@ -292,6 +292,10 @@ try{
  await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
  await back.click();await expect.poll(async()=>(await state()).view.workSurface).toBe('workspace');
  assert.equal((await state()).view.workWorkspaceTab,'files');
+ // The workspace paints optimistically; capture the trail only after this
+ // exact accepted Back visit has committed, not while its receipt is pending.
+ const workspaceVisitKey=workspaceVisit.entries[workspaceVisit.cursor].key;
+ await expect.poll(async()=>{const trail=await saved();return trail.entries[trail.cursor]?.key}).toBe(workspaceVisitKey);
  // Reload retains the exact trail but does not navigate or append on bootstrap.
  const preReload=await saved();await page.reload();await expect(menu).toBeEnabled();
  await expect.poll(saved).toEqual(preReload);
