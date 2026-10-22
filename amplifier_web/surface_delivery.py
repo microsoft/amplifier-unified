@@ -179,17 +179,45 @@ class SurfaceProvider:
     def __init__(self, original, delivery):
         self.original, self.delivery = original, delivery
         self.prepared = []
+        self.refused = []
+        self.refusal_overflow = False
 
-    async def _prepare(self, request, commit=False):
-        cached = next((value for source, value in self.prepared if source is request), None)
-        if cached is None:
+    async def _prepare(self, request, commit=False, *, explicit_budget=False):
+        entry = next((row for row in self.prepared if row[0] is request), None)
+        refused = any(source is request for source in self.refused) or (entry is None and self.refusal_overflow)
+        if refused and not explicit_budget:
+            raise ValueError("The request was refused before transport; a new explicit budget/refit is required.")
+        if entry is None:
             cached = await self.delivery.prepare(request, self.original)
-            self.prepared = (self.prepared + [(request, cached)])[-4:]
-        if commit:
-            if hasattr(self.delivery, "revalidate"):
+            if refused and hasattr(self.delivery, "revalidate"):
+                # Stabilize revoked visual/context warnings BEFORE the new
+                # measurement. Never replace fitted bytes during transport.
                 cached = await self.delivery.revalidate(cached)
+            boundary = hasattr(self.delivery, "finalize_work")
+            entry = (request, cached, cached.model_dump_json() if boundary else None,
+                     self.delivery.work_request(cached) if boundary else None)
+            self.prepared = (self.prepared + [entry])[-4:]
+            self.refused = [source for source in self.refused if source is not request]
+        _, cached, fitted, binding = entry
+        if commit:
+            try:
+                if hasattr(self.delivery, "revalidate"):
+                    cached = await self.delivery.revalidate(cached)
+                if fitted is not None:
+                    cached = await self.delivery.finalize_work(cached, fitted=fitted, binding=binding)
+            except Exception:
+                # Only the pretransport checks are covered. A sent/unknown
+                # provider request never enters this refit path.
+                self.prepared = [row for row in self.prepared if row[0] is not request]
+                if hasattr(self.delivery, "discard_work"):
+                    self.delivery.discard_work(binding)
+                self.refused.append(request)
+                if len(self.refused) > 16:
+                    self.refused.pop(0)
+                    self.refusal_overflow = True
+                raise
             self.delivery.commit(cached)
-            self.prepared = [(source, value) for source, value in self.prepared if source is not request]
+            self.prepared = [row for row in self.prepared if row[0] is not request]
         return cached
 
     def __getattr__(self, name):
@@ -197,17 +225,46 @@ class SurfaceProvider:
         if name == 'stream' and callable(method):
             async def stream(request, **kwargs):
                 request = await self._prepare(request, commit=True)
-                iterator = method(request, **kwargs)
+                from .coordination_delivery import WORK_ATTEMPT
+                attempt = self.delivery.begin_work(request, streaming=True) if hasattr(self.delivery, 'begin_work') else None
+                async def within_attempt(operation):
+                    # __anext__ and aclose may run in different consumer tasks.
+                    # Never carry a ContextVar token across an outward yield.
+                    token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+                    try:
+                        return await operation()
+                    finally:
+                        WORK_ATTEMPT.reset(token)
+                iterator = None
                 try:
-                    async for event in iterator:
+                    token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+                    try:
+                        iterator = aiter(method(request, **kwargs))
+                    finally:
+                        WORK_ATTEMPT.reset(token)
+                    while True:
+                        try:
+                            event = await within_attempt(iterator.__anext__)
+                        except StopAsyncIteration:
+                            break
                         yield event
+                    if attempt:
+                        self.delivery.finish_work(attempt, streaming=True)
+                except BaseException:
+                    if attempt:
+                        self.delivery.finish_work(attempt, failed=True)
+                    raise
                 finally:
-                    if callable(getattr(iterator, "aclose", None)):
-                        await iterator.aclose()
+                    try:
+                        if callable(getattr(iterator, "aclose", None)):
+                            await within_attempt(iterator.aclose)
+                    finally:
+                        if attempt:
+                            self.delivery.close_work_stream(attempt)
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, **kwargs):
-                request = await self._prepare(request)
+                request = await self._prepare(request, explicit_budget=True)
                 result = method(request, **kwargs)
                 return await result if inspect.isawaitable(result) else result
             return budget
@@ -215,4 +272,17 @@ class SurfaceProvider:
 
     async def complete(self, request, **kwargs):
         request = await self._prepare(request, commit=True)
-        return await self.original.complete(request, **kwargs)
+        from .coordination_delivery import WORK_ATTEMPT
+        attempt = self.delivery.begin_work(request) if hasattr(self.delivery, 'begin_work') else None
+        token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+        try:
+            response = await self.original.complete(request, **kwargs)
+            if hasattr(self.delivery, 'finish_work'):
+                self.delivery.finish_work(attempt, response)
+            return response
+        except BaseException:
+            if attempt:
+                self.delivery.finish_work(attempt, failed=True)
+            raise
+        finally:
+            WORK_ATTEMPT.reset(token)

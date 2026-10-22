@@ -242,8 +242,8 @@ def view_patch(patch):
         value = patch['workHomePages']
         if not isinstance(value, dict) or any(key not in ('attention', 'unread', 'working', 'idle') or type(index) is not int or not 0 <= index <= 1_000_000 for key, index in value.items()):
             raise ValueError('Choose valid work page indexes.')
-    if 'workWorkspaceTab' in patch and patch['workWorkspaceTab'] not in ('chats', 'files', 'details'):
-        raise ValueError('Choose chats, files or details.')
+    if 'workWorkspaceTab' in patch and patch['workWorkspaceTab'] not in ('chats', 'work', 'files', 'details'):
+        raise ValueError('Choose chats, work, files or details.')
     if 'workWorkspaceId' in patch and patch['workWorkspaceId'] is not None and (not isinstance(patch['workWorkspaceId'], str) or not 1 <= len(patch['workWorkspaceId']) <= 100):
         raise ValueError('Choose a registered workspace.')
 

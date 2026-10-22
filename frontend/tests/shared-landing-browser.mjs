@@ -13,7 +13,8 @@ await mkdir(output,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python'),
  ['-u',join(root,'tests/fixtures/chat_library_server.py')],
  {env:{...process.env,AMPLIFIER_NAVIGATION_PROOF:'1'},stdio:['ignore','pipe','pipe']});
-let logs='',browser,page,failure;
+let logs='',browser,isolatedBrowser,page,failure;
+const launchOptions={headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})};
 fixture.stderr.on('data',chunk=>{logs=(logs+chunk).slice(-12000)});
 const report={checks:[],errors:[],liveProvider:false};
 try{
@@ -23,7 +24,7 @@ try{
   fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+logs))});
   fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const data=JSON.parse(line);if(data.port){clearTimeout(timer);resolve(data.port)}}catch{}});
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch(launchOptions);
  page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.setDefaultTimeout(15000);page.on('pageerror',error=>report.errors.push(error.message));
  const state=()=>page.evaluate(()=>window.amplifier.getState());
@@ -169,8 +170,10 @@ try{
  await expect(landing.getByRole('region',{name:'Workspace files'})).toBeVisible();
  await landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Details',exact:true}).click();
  await expect(landing.getByRole('button',{name:'Rename workspace',exact:true})).toBeVisible();
- await landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Chats',exact:true}).click();await settled();
  await expect(landing.locator('.a-workspace-work-entry')).toBeVisible();
+ await expect(landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Work',exact:true})).toBeVisible();
+ await landing.getByRole('group',{name:'Workspace view'}).getByRole('button',{name:'Chats',exact:true}).click();await settled();
+ await expect(landing.locator('.a-workspace-work-entry')).toHaveCount(0);
  await choose('Focus');await expect(focusRow()).toHaveCount(1);
  await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();
  const workspaceChat=await focusRow().getAttribute('data-session-id');
@@ -179,7 +182,7 @@ try{
  await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button').last().click();await settled();
  await expect(landing).toHaveAttribute('data-view','focus');await expect(focusRow()).toHaveAttribute('data-session-id',workspaceChat);
  await page.screenshot({path:join(output,'workspace-focus.png')});
- report.checks.push('All workspaces keeps search, archive, folder browsing and workspace action menus; workspace landing keeps Chats/Files/Details/Workspace work; Focus cursors and layouts survive leaving and returning');
+ report.checks.push('All workspaces keeps search, archive, folder browsing and workspace action menus; workspace landing keeps Chats/Work/Files/Details with Workspace work inspection in Details; Focus cursors and layouts survive leaving and returning');
 
  await choose('Brief');await pickUpAgain().click();await checkIdle('workspace');
  await landing.locator('.a-landing-chat .a-nav-chat-select').first().click();
@@ -224,9 +227,14 @@ try{
  await page.screenshot({path:join(output,'phone-home-forced-colors.png')});
  await page.emulateMedia({forcedColors:'none'});await page.setViewportSize({width:1440,height:1000});
  await allChats();await choose('Studio');await page.reload();await expect(landing).toHaveAttribute('data-landing','chats');await expect(landing).toHaveAttribute('data-view','studio');
- const fresh=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ // Single-process Chromium needs another process for another isolated context.
+ // Ordinary runs retain the normal separate-context behavior.
+ isolatedBrowser=process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?await chromium.launch(launchOptions):undefined;
+ const fresh=await (isolatedBrowser||browser).newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  await fresh.goto(`http://127.0.0.1:${port}`);await expect(fresh.locator('.a-adaptive-home:visible')).toHaveAttribute('data-landing','home');await fresh.close();
- const linked=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ await isolatedBrowser?.close();isolatedBrowser=undefined;
+ isolatedBrowser=process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?await chromium.launch(launchOptions):undefined;
+ const linked=await (isolatedBrowser||browser).newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  await linked.goto(`http://127.0.0.1:${port}/?chat=${encodeURIComponent(initial.initialSession)}`);await expect(linked.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();assert.equal(await linked.evaluate(()=>window.amplifier.getState().selectedSessionId),initial.initialSession);await linked.close();
  const after=await info();assert.deepEqual(after.runtimeStarts,initial.runtimeStarts);assert.deepEqual(after.runtimeSends,initial.runtimeSends);
  report.checks.push('320px, tablet, phone and enlarged text fit; a delayed mobile drawer open cannot overtake destination selection; keyboard Home and forced colors work; fresh windows start Home, refresh restores the destination and direct chat links open the chat; browsing starts no runtimes or model calls');
@@ -234,7 +242,7 @@ try{
  report.build=JSON.parse(await readFile(join(root,'amplifier_web/static/build.json'),'utf8'));report.passed=true;
 }catch(error){failure=error;report.passed=false;report.failure=error.stack;report.fixtureLog=logs;report.diagnostics=await page?.evaluate(async()=>(await fetch('/api/diagnostics/performance')).json()).catch(()=>null);await page?.screenshot({path:join(output,'failure.png')}).catch(()=>{});report.text=await page?.locator('body').innerText().catch(()=>null)}
 finally{
- await browser?.close();
+ try{await isolatedBrowser?.close()}finally{await browser?.close()}
  if(fixture.exitCode===null&&fixture.signalCode===null){
   const exited=once(fixture,'exit');fixture.kill('SIGTERM');let timer;
   try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture cleanup timeout')),10000)})]);report.fixtureClosed=true}

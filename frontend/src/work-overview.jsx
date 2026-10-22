@@ -38,7 +38,7 @@ export function ChatOverview({state,act,changeDraft,onSectionChange=changeDraft,
   {workspace&&<CanvasOverviewSection {...section} id="workspace" title="Workspace" icon={Folder} summary={workspace.name}>
    {workspaceRow?<WorkspaceRow row={workspaceRow} state={state} act={act} now={now} open={workspaceOpen} browse={workspaceBrowse} landing/>:<button type="button" className="a-link" onClick={workspaceOpen}>{workspace.name}</button>}
    {chats.length>0&&<div className="a-overview-chats" aria-label="Recent chats in this workspace">{chats.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now} showLocation={false} overview/>)}</div>}
-   <div className="a-overview-actions"><button className="a-link" type="button" onClick={workspaceOpen}>View workspace chats</button><button className="a-link" type="button" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'coordination'}})}>Workspace work</button></div>
+   <div className="a-overview-actions"><button className="a-link" type="button" onClick={workspaceOpen}>View workspace chats</button><button className="a-link" type="button" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'coordination'}})}>Chat coordination review</button></div>
   </CanvasOverviewSection>}
   <CanvasOverviewSection {...section} id="activity" title="Activity" icon={Activity} summary={sessionStatus(session).label}><p>{sessionStatus(session).label}</p><button className="a-link" type="button" onClick={()=>act('view.update',{patch:{panel:'session-details'}})}>Chat info</button></CanvasOverviewSection>
  </div>;

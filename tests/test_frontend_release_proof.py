@@ -311,3 +311,49 @@ def test_workflows_keep_full_fallback_and_fresh_package_runtime():
         assert 'frontend-proof' not in json.dumps(release['jobs'][lane])
     receipt = next(s for s in frontend if s.get('name') == 'Record frontend qualification for this candidate')
     assert 'if' not in receipt and 'verify' in receipt['run'] and '--candidate' in receipt['run']
+
+
+def test_workflow_retains_successful_build_before_committed_asset_failure():
+    workflow = yaml.load((ROOT / '.github/workflows/work-workflows.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['permissions'] == {'contents': 'read'}
+    job = workflow['jobs']['integration']
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '30'
+    steps = job['steps']
+    source = next(step for step in steps if step.get('id') == 'build-source')
+    assert steps[0] == {'uses': 'actions/checkout@v4'} and steps[1] == source
+    assert source['run'].splitlines() == [
+        'echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"',
+        'echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"',
+    ]
+    build = next(step for step in steps if step.get('id') == 'frontend-build')
+    assert build == {'name': 'Build frontend', 'id': 'frontend-build',
+                     'run': 'npm run build --prefix frontend'}
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    assert len(uploads) == 2
+    retained, proof = uploads
+    create = next(step for step in steps if step.get('name') == 'Retain frontend build output')
+    assert create == {
+        'name': 'Retain frontend build output',
+        'if': "${{ !cancelled() && steps.frontend-build.outcome == 'success' }}",
+        'run': 'python scripts/frontend_build_artifact.py create --destination "$RUNNER_TEMP/frontend-build-output"',
+    }
+    assert retained == {
+        'name': 'Upload frontend build output',
+        'if': "${{ !cancelled() && steps.frontend-build.outcome == 'success' }}",
+        'uses': 'actions/upload-artifact@v4',
+        'with': {
+            'name': 'frontend-build-output-${{ github.run_attempt }}',
+            'path': '${{ runner.temp }}/frontend-build-output/',
+            'if-no-files-found': 'error', 'retention-days': '7',
+        },
+    }
+    verify = next(step for step in steps if step.get('name') == 'Verify committed frontend assets')
+    assert verify == {'name': 'Verify committed frontend assets',
+                      'run': 'git diff --exit-code -- amplifier_web/static'}
+    # Retention runs before the comparison; its failure cannot be turned into
+    # qualification or prevent saving an already successful build after the fact.
+    assert steps.index(build) < steps.index(create) < steps.index(retained) < steps.index(verify) < steps.index(proof)
+    assert proof == {'name': 'Upload frontend proof', 'uses': 'actions/upload-artifact@v4',
+                     'with': {'name': 'frontend-proof-${{ github.run_attempt }}',
+                              'path': '${{ runner.temp }}/frontend-proof.json',
+                              'if-no-files-found': 'error', 'retention-days': '7'}}

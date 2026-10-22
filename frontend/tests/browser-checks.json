@@ -109,6 +109,7 @@
     {"id": "capacity", "command": ["node", "tests/capacity-browser.mjs"]},
     {"id": "request-cancellation", "command": ["node", "tests/request-cancellation-browser.mjs"]},
     {"id": "coordination", "command": ["node", "tests/coordination-browser.mjs"]},
+    {"id": "shared-work", "command": ["node", "tests/shared-work-browser.mjs"], "env": {"AMPLIFIER_TEST_COLD_TASK": "1", "AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/shared-work"}},
     {"id": "connectors", "command": ["node", "tests/connectors-browser.mjs"]},
     {"id": "test-environments", "command": ["node", "tests/test-environments-browser.mjs"], "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python", "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/test-environments"}},
     {"id": "assignment-adoption", "command": ["node", "tests/assignment-adoption-browser.mjs"]},

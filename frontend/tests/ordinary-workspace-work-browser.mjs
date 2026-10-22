@@ -22,7 +22,7 @@ try{
    const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}
   }catch{}});
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});
  page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[],actions=[];
  page.on('pageerror',error=>errors.push(error.message));
@@ -33,10 +33,11 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await expect(composer).toBeEditable();await composer.fill('Keep the ordinary inspection draft');
  const initial=await inspect();
- // Public breadcrumb -> Workspace work. No API preopened panel or surface.
+ // Public breadcrumb -> Details -> Workspace work. No API preopened panel or surface.
  await page.locator('[data-part="header"] .a-work-crumb:not(.a-work-home-crumb)').click();
  const workspaceView=page.getByRole('group',{name:'Workspace view',exact:true});
  await expect(workspaceView).toBeVisible();
+ await workspaceView.getByRole('button',{name:'Details',exact:true}).click();
  await page.locator('.a-workspace-work-entry > summary').click();
  const picker=page.getByRole('combobox',{name:'Review from chat',exact:true});
  await expect(picker).toHaveValue(initial.selected);
@@ -220,9 +221,9 @@ try{
 
  // A listed chat is rebound after discovery. Actual service context changes;
  // the public picker must reject it before showing stale/wrong workspace work.
- await workspaceView.getByRole('button',{name:'Chats',exact:true}).click();
+ await workspaceView.getByRole('button',{name:'Details',exact:true}).click();
  failNext=true;await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
- await expect(related.getByRole('alert')).toContainText('Workspace work could not be read. Refresh to try again.');
+ await expect(related.getByRole('alert')).toHaveText('Fixture scope read unavailable');
  await expect(related.locator('.a-assignment')).toHaveCount(0);
  await expect(related).not.toHaveAttribute('inert');
  await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
@@ -241,7 +242,7 @@ try{
  assert.deepEqual((await inspect()).runtimeCalls,[...initial.runtimeCalls,'stop']);
  assert.deepEqual(errors,[]);
  await page.screenshot({path:output+'/ordinary-workspace-work.png'});
- const receipt={passed:true,route:'Chat breadcrumb → workspace → Workspace work; workspace Details → Managed resources',checks:[
+ const receipt={passed:true,route:'Chat breadcrumb → workspace Details → Workspace work; workspace Details → Managed resources',checks:[
   'file declaration preserves project bytes and execution placement','saved acknowledgment expanded editor and focus survive scope refresh',
   'held scope response cannot overwrite another inspected owner or private draft','bounded 4000-character excerpt and full original retained',
   'explicit assignment identity owner and revision','limits use exact observed authority/revision and show partial unknown usage',

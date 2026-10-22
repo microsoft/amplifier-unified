@@ -146,7 +146,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "comment": string(4000), "expectedRequestHash": string(64)}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat shows the selected conversation. Use session.select with an explicit id to open a particular chat. workWorkspaceTab=chats/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat shows the selected conversation. Use session.select with an explicit id to open a particular chat. workWorkspaceTab=chats/work/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.reorder": ("Save complete provider preference order atomically; expectedIds must match the current order",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["ids","expectedIds"])),
     "bundles.reorder": ("Save composition order of enabled app capabilities; excludes standalone aliases",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)}},["ids","expectedIds"])),
@@ -345,6 +345,8 @@ from .assignments import definitions as assignment_definitions
 ACTION_DEFINITIONS.update(assignment_definitions(schema, string))
 from .workspace_awareness import definitions as workspace_awareness_definitions
 ACTION_DEFINITIONS.update(workspace_awareness_definitions(schema, string))
+from .workspace_work import definitions as workspace_work_definitions
+ACTION_DEFINITIONS.update(workspace_work_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
     ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
         "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
@@ -432,7 +434,8 @@ for _access, _actions in {
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
-        "diagnostics.records", "task.get", "capacity.read", "modelCapacity.read", "question.list", "question.read",
+        "diagnostics.records", "task.get", "task.history", "task.detail", "task.receipt",
+        "capacity.read", "modelCapacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
@@ -455,6 +458,7 @@ for _access, _actions in {
         *test_capacity_definitions(schema, string),
         *test_runner_definitions(schema, string),
         *assignment_definitions(schema, string),
+        *workspace_work_definitions(schema, string),
         *handoff_definitions(schema, string),
     },
 }.items():
@@ -738,6 +742,10 @@ class AppService:
         self.access_mode = AccessMode(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
+        from .workspace_work import WorkspaceWork
+        self.workspace_work = WorkspaceWork(self)
+        from .workspace_work_invocation import WorkInvocation
+        self.work_invocation = WorkInvocation(self)
         from .test_queue import TestQueue
         self.test_queue = TestQueue(self)
         from .peer_attribution import PeerAttribution
@@ -1038,6 +1046,10 @@ class AppService:
         # Private client acknowledgements and SQLite overlays become current
         # only after commit. A failed transaction retains all retry scopes.
         try:
+            staged_work_inputs = []
+            if getattr(self, 'workspace_work', None):
+                from .workspace_work_coverage import stage_saved_inputs
+                staged_work_inputs = stage_saved_inputs(self.workspace_work, admitted_index, admitted_ids, deleted_ids)
             with self.performance_diagnostics.measure('state.serialize', synchronous=True):
                 normalize_state(normalized, self.db, undo=normalization_undo)
                 saved = persist(self.data_dir, self._state, pending_views,
@@ -1061,6 +1073,9 @@ class AppService:
                                 deleted=(admitted_ids - pending_references.keys()) | deleted_ids)
             self.directory.finish_migration()
             self.db.commit()
+            if getattr(self, 'workspace_work', None):
+                from .workspace_work_coverage import acknowledge_saved_inputs
+                acknowledge_saved_inputs(self.workspace_work, staged_work_inputs)
         except BaseException:
             self.db.rollback()
             for record, key, value in reversed(normalization_undo):
@@ -1654,6 +1669,9 @@ class AppService:
     def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
+        if getattr(self, 'workspace_work', None):
+            from .workspace_work_coverage import observe
+            observe(self.workspace_work, session, message)
         from .chat_navigation import touch, touch_independent_activity
         # Only ordinary send has prepared a trusted UI admission. Other inputs,
         # including UI host actions, must retain their own raw progress truth.
@@ -1792,6 +1810,12 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
+        # Four exact passive task actions (including their public alias) use
+        # directory metadata plus canonical control-state only. Keep the normal
+        # validators and caller guards; never refresh history/admit an overlay.
+        passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
+            action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
+            {'task.get', 'task.history', 'task.detail', 'task.receipt'})
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
@@ -1826,7 +1850,7 @@ class AppService:
             try:
                 target = self.directory.resolve(args[target_key], scope,
                                                 include_hidden_workspaces=action == 'session.select' and not {'chatReference', 'peerPreview'} & args.keys())
-                if target is None:
+                if target is None and not passive_task:
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
                                                     include_hidden_workspaces=action == 'session.select' and not {'chatReference', 'peerPreview'} & args.keys())
@@ -1896,6 +1920,8 @@ class AppService:
             raise AppError(exc.message) from exc
         except ValueError as exc:
             raise AppError(str(exc)) from None
+        from .workspace_work_effects import guard as work_effect_guard
+        work_effect_guard(self, action, args, origin, caller_session_id)
         if action == 'canvas.openGif' and (origin != 'ui' or client_id is None
                 or args.get('clientId', client_id) != client_id
                 or self.clients.record().get('kind') != 'web'):
@@ -1906,6 +1932,11 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
+        if passive_task and origin not in {'ui', 'user'}:
+            if not caller_session_id:
+                raise AppError('Task reads require a registered calling conversation.', 403)
+            from .owned_history import require
+            require(self, caller_session_id, args['sessionId'])
         if action == 'peer.preview':
             async with self.lock:
                 return self.peer_preview.open(args, origin)
@@ -1913,7 +1944,7 @@ class AppService:
             if 'chatReference' in args:
                 raise AppError('Choose one source-chat reference.', 400)
             self.peer_preview.select(args, origin)
-        if resolved_target is not None and action != 'session.titlePreview' and not (action == 'session.select' and {'chatReference', 'peerPreview'} & args.keys()):
+        if resolved_target is not None and not passive_task and action != 'session.titlePreview' and not (action == 'session.select' and {'chatReference', 'peerPreview'} & args.keys()):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -1954,6 +1985,8 @@ class AppService:
                 admission_check=admission_check, expected_revision=expected_revision)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
+        if action.startswith("workspace.work."):
+            return await self.workspace_work.dispatch(action, args, origin, command_id, caller_session_id)
         if action == 'configuration.patchPlacement.bind' and command_id:
             from .patch_placement import retained_receipt
             async with self.lock:
@@ -2531,6 +2564,7 @@ class AppService:
                         from .chat_permissions import PENDING_DETAIL
                         raise AppError(PENDING_DETAIL, 409)
             if action == 'session.pin':
+                work_effect_guard(self, action, args, origin, caller_session_id, final=True)
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
             if action in {'workspace.pin', 'workspace.pinOrder', 'navigation.pinOrder'}:
@@ -4727,7 +4761,16 @@ class AppService:
         # Remove only known fields: arbitrary extras must still be validated.
         transport = args
         args = {key: value for key, value in args.items()
-                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients'}}
+                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
+                               '_workOrigin', '_workDispatchGuarded'}}
+        from .workspace_work_effects import APP_EFFECT, app_request
+        token = APP_EFFECT.set(app_request(operation, args, session_id))
+        try:
+            return await self._client_app_bridge(operation, args, session_id, transport)
+        finally:
+            APP_EFFECT.reset(token)
+
+    async def _client_app_bridge(self, operation, args, session_id, transport):
         if '_inputClients' not in transport:
             return await self._app_bridge(operation, args, session_id)
         # The worker stamps this from accepted inputs, replacing any tool args.
@@ -4740,6 +4783,18 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'work.effect.check':
+            from .workspace_work_effects import check
+            # Private worker transport only. This synchronous read is a Work
+            # precondition, not a reusable permission or delayed-effect grant.
+            async with self.lock:
+                return check(self.work_invocation, session_id, args)
+        if operation == 'work.invocation.revalidate':
+            if set(args) != {'version'} or not isinstance(args['version'], str) or len(args['version']) > 64:
+                raise AppError('Revalidation requires only the observed invocation version.')
+            required, _ = self.work_invocation.required(session_id)
+            return {'current': required['status'] == 'available' and required['version'] == args['version'],
+                    'required': required, 'effectAuthorized': False}
         if operation == 'configuration.effect.admit':
             from .configuration_recovery import authorize
             async with self.lock:
@@ -4755,7 +4810,8 @@ class AppService:
                 "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
                 "detail": "No retained collaboration reference; discover current coordination.context."})
             return {**reference, 'awareness': packet(self, session_id, principal=PRINCIPAL.get()),
-                    'assignment': self.assignments.summary(self._session(session_id, hydrate=False))}
+                    'assignment': self.assignments.summary(self._session(session_id, hydrate=False)),
+                    'work': self.work_invocation.current(session_id)}
         def visual_origin(explicit=None):
             if input_origin is None:
                 return
@@ -4876,6 +4932,15 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'] in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
+                    args['action'] == 'runtime.control' and isinstance(action_args.get('operation'), str) and action_args['operation'] in
+                    {'task.get', 'task.history', 'task.detail', 'task.receipt'}):
+                # Caller ownership was checked above. Avoid the later
+                # _session(nativeProject), pending-progress flush and full
+                # agent snapshot, which would turn this into an active read.
+                return await self.dispatch(args['action'], action_args, origin='agent',
+                    command_id=args.get('id'), expected_revision=args.get('expectedRevision'),
+                    include_state=False, caller_session_id=session_id)
             if args['action'].startswith('worktree.'):
                 # The canonical worktree owner checks commissioned-manager scope.
                 action_args.setdefault('sessionId', session_id)
@@ -4944,6 +5009,9 @@ class AppService:
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
+            compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
+            compact_domain_receipt = compact_domain_receipt or compact_task_receipt
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -5008,6 +5076,11 @@ class AppService:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
                 result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt))
+            if compact_task_receipt:
+                # Task dispatch already published its canonical cache or
+                # reported publication unavailable with the committed receipt.
+                # Unrelated progress publication must not lose that receipt.
+                return result
             await self._flush_pending_progress()
             if compact_domain_receipt:
                 # The exact domain receipt already carries admission, correlation

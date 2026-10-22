@@ -9,6 +9,8 @@ import {destinationCommand} from '../src/destination-history.js';
 import {chromium,expect} from '@playwright/test';
 const out=process.env.AMPLIFIER_TEST_OUTPUT;
 if(!out)throw Error('Set AMPLIFIER_TEST_OUTPUT to an owned evidence directory.');
+const launch={headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{}),
+ ...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})};
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls','--navigation-history'],{stdio:['ignore','pipe','inherit']});
 let browser,page,scenarioFailure,settingsDiagnostic;
 // Observation only: no dispatch replacement, state mutation, retry or changed assertion.
@@ -142,7 +144,10 @@ function observeSettingsClose(page){
 }
 const pendingGates=new Set();
 async function wideTouchHome(browser,url,sessionId){
- const context=await browser.newContext({viewport:{width:1024,height:900},hasTouch:true,
+ const isolated=process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?await chromium.launch(launch):null;
+ let context;
+ try{
+ context=await (isolated||browser).newContext({viewport:{width:1024,height:900},hasTouch:true,
   extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  try{
@@ -178,6 +183,7 @@ async function wideTouchHome(browser,url,sessionId){
    oldSelectorRejected:true,restoredVisible:true,keyboardHome:true,tapHome:true,
    allWorkspacesLabel:true,pageErrors:errors},null,2));
  }finally{await context.close()}
+ }finally{await isolated?.close()}
 }
 function gate(){
  let resolve;const wait=new Promise(done=>{resolve=done});
@@ -210,7 +216,7 @@ function stopFixture(){
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('error',error=>{clearTimeout(timer);reject(error)});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(out,{recursive:true});
- browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
+ browser=await chromium.launch(launch);
  const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
  let delayedFrames=null;

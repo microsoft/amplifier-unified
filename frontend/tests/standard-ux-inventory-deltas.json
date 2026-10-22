@@ -263,8 +263,8 @@
           "title": "Archive with truthful progress, guarded navigation, and Undo",
           "scope": "standard-path",
           "entryPath": [
-            "Chat → Archive",
-            "Row Details → Archive"
+            "Chat \u2192 Archive",
+            "Row Details \u2192 Archive"
           ],
           "prerequisites": [
             "Synthetic isolated archive fixture; no real user files or runtime execution"
@@ -284,7 +284,7 @@
             "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
             "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
             "Undo is available after archive confirmation even while the following navigation is stalled.",
-            "A newer navigation intention, including A→B→A, prevents the old archive from redirecting.",
+            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
             "Archiving a different row or invoking the raw public action does not navigate the current view.",
             "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
             "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
@@ -1563,7 +1563,7 @@
           "entryPath": [
             "Settings",
             "Testing & resources",
-            "This machine’s test resources"
+            "This machine\u2019s test resources"
           ],
           "prerequisites": [
             "Isolated synthetic machine authority; no production machine policy or runner effects"
@@ -2240,7 +2240,10 @@
           "family": "decisions",
           "title": "Review and dismiss an obsolete configuration request without restarting work",
           "scope": "standard-path",
-          "entryPath": ["Chat", "Previous permission requests"],
+          "entryPath": [
+            "Chat",
+            "Previous permission requests"
+          ],
           "prerequisites": [
             "Authenticated production service and bundled client with synthetic saved old and current requests",
             "Two clients, cold host records and a runtime that records any attempted startup or input; no live grants or provider calls"
@@ -2259,7 +2262,16 @@
             "Late scope or expiry changes cannot be silently approved; a failed decision refreshes display without replay.",
             "Both clients, reload and the adjacent cycle agree; private drafts remain intact and narrow controls are reachable."
           ],
-          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "late-decision", "changed-scope", "expired-request", "second-client", "reload"],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "late-decision",
+            "changed-scope",
+            "expired-request",
+            "second-client",
+            "reload"
+          ],
           "existingTests": [
             {
               "path": "frontend/tests/approval-lifecycle-browser.mjs",
@@ -2292,7 +2304,10 @@
           "family": "conversation",
           "title": "Choose the next message's configuration before starting a dormant chat worker",
           "scope": "standard-path",
-          "entryPath": ["Conversation", "Model and reasoning settings / Conversation bundle / Chat options"],
+          "entryPath": [
+            "Conversation",
+            "Model and reasoning settings / Conversation bundle / Chat options"
+          ],
           "prerequisites": [
             "Built production client and isolated production-service fixture with saved history, cached catalogs and a saved artifact",
             "Conversation runtime calls forbidden; controlled slow/failing catalog resolution and two fixture clients"
@@ -2311,7 +2326,16 @@
             "Desktop and narrow keyboard controls remain usable after discovery failure.",
             "Passive controls cause zero conversation-worker starts, prewarms, model calls or input starts."
           ],
-          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-keyboard", "absent-worker", "held-catalog", "failed-catalog", "second-client", "reload"],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-keyboard",
+            "absent-worker",
+            "held-catalog",
+            "failed-catalog",
+            "second-client",
+            "reload"
+          ],
           "existingTests": [
             {
               "path": "frontend/tests/dormant-controls-browser.mjs",
@@ -2643,6 +2667,100 @@
         }
       ],
       "qualification": "docs/canvas.md"
+    },
+    {
+      "id": "delta.shared-work",
+      "sourceCommit": "6ac9611ddd85205e2781fe2e17f3bc950feee030",
+      "reason": "Register the existing Shared Work browser journey and native/nested owners additively. sourceCommit identifies the prior qualified checkpoint, not the current uncommitted integration; preserve the frozen inventory and every existing owner.",
+      "workflowsAdded": [
+        {
+          "id": "workspace.shared-work",
+          "family": "workspace",
+          "title": "Inspect retained promises, corrections and evidence without restarting work",
+          "scope": "standard-path",
+          "entryPath": [
+            "Workspace",
+            "Work"
+          ],
+          "prerequisites": [
+            "Production bundled client and real AppService with synthetic persisted Work, saved tasks and separate client drafts",
+            "Cold-task variant enabled; controlled runtime and no live provider or private history",
+            "Native/nested checks separately require actual Core/loop-live, the native OpenAI adapter and tool-exec JavaScript runtime"
+          ],
+          "steps": [
+            "Reopen persisted Work and load a cold saved task through its visible control",
+            "Inspect exact original source, corrections, current criteria and separately attributed evidence",
+            "Observe a changed promise or candidate from another client without overwriting an unfinished edit",
+            "Use Work and Back/Forward while retaining composer text, attachments and dirty Canvas or Settings",
+            "Repeat Work inspection on desktop and narrow clients, including emulated touch"
+          ],
+          "expectedResults": [
+            "Reads retain original wording and responsibility without starting a worker or replaying an effect.",
+            "Old evidence remains tied to its original promise and candidate; unknown, failed and not-run states are not success.",
+            "Publication reports, independent checks and human decisions remain distinct observations, not permission or shipment.",
+            "Unsent drafts and dirty editors survive guarded navigation; clients retain their own view state.",
+            "Controlled native and nested-tool checks reject missing or stale coverage, Stop and reused origins before effects; a Work check never grants ordinary tool authority."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "emulated-touch",
+            "cold-reopen",
+            "multiple-clients",
+            "dirty-canvas",
+            "dirty-settings",
+            "changed-currentness"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/shared-work-browser.mjs",
+              "relation": "Existing single shared-work owner in Extended browser checks with AMPLIFIER_TEST_COLD_TASK=1; source-browser coverage, not automatic installed-wheel proof"
+            },
+            {
+              "path": "tests/fixtures/shared_work_scenario.py",
+              "relation": "Synthetic persisted Work and cold saved-task fixture for the real host journey"
+            },
+            {
+              "path": "frontend/tests/shared-work.test.mjs",
+              "relation": "Automatically discovered frontend Work rendering and interaction regressions"
+            },
+            {
+              "path": "frontend/tests/workspace-work.test.mjs",
+              "relation": "Automatically discovered frontend Work state, revisions and guarded interaction regressions"
+            },
+            {
+              "path": "tests/test_workspace_work.py",
+              "relation": "Ordinary Full Python owner for source retention, Work revisions and evidence attribution"
+            },
+            {
+              "path": "tests/test_work_invocation.py",
+              "relation": "Ordinary Full Python owner for real host commissioning, required sources and currentness with synthetic transport"
+            },
+            {
+              "path": "tests/test_work_effects.py",
+              "relation": "Ordinary Full Python owner for host preconditions with explicitly synthetic authenticated-worker facts; not native acceptance"
+            },
+            {
+              "path": "tests/test_work_origin.py",
+              "relation": "Additive module selector in the existing native owner for exact worker-origin, native callbacks and nested dispatch"
+            },
+            {
+              "path": "tests/test_work_native_effects.py",
+              "relation": "Additive module selector in the existing native owner for controlled native/JavaScript calls through real host effects, including refusal before deduplication"
+            }
+          ],
+          "limits": [
+            "The prior 6ac9611ddd85205e2781fe2e17f3bc950feee030 checkpoint retains its original evidence and exact-input reuse limits; it does not attest the current integration.",
+            "Qualification of the new integration and this registration increment is pending. Tests for these registration changes are UNRUN until owned isolated execution.",
+            "Browser fixtures use synthetic runtime state; installed-wheel proof requires a separately prepared exact candidate outside source.",
+            "Controlled native transport and real nested JavaScript are not paid-provider, generic streaming, unmeasured steering or tool-internal-await qualification.",
+            "Registration adds no workflow, duplicate browser journey, broader publication gate, permission or whole-feature acceptance."
+          ]
+        }
+      ],
+      "evidenceContext": "Historical checkpoint identity only; no new execution is claimed by this additive registration.",
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
     }
   ]
 }

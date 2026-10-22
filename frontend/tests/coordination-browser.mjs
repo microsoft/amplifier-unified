@@ -354,7 +354,7 @@ try{
  // Either panel can be restored. Re-observe rendered and public view state
  // within one bound if a delayed view update replaces the navigation target.
  // Only navigate from visible Work & automation; never normalize task/input state.
- const coordinationDialog=page.getByRole('dialog',{name:'Workspace work',exact:true});
+ const coordinationDialog=page.getByRole('dialog',{name:'Chat coordination review',exact:true});
  const detailsDialog=page.getByRole('dialog',{name:'Work & automation',exact:true});
  const reloadObservations=[];let reopenClicks=0;
  await expect(async()=>{

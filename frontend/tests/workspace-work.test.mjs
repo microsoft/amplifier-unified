@@ -37,7 +37,7 @@ test('conversation header leaves workspace work in the workspace and canvas surf
 test('canvas overview has one workspace work action without requiring existing workers',async()=>{
  const calls=[],state={view:{draft:'private draft'},selectedSessionId:'own',selectedWorkspaceId:'w',workspaces:[{id:'w',name:'Project',path:'/workspace'}],sessions:[session]};let root;
  await act(async()=>{root=create(React.createElement(ChatOverview,{state,act:async(...args)=>calls.push(args),changeDraft:()=>{throw Error('Draft must remain unchanged')}}))});
- await click(root,'Workspace work');assert.deepEqual(calls,[['view.update',{patch:{panel:'coordination'}}]]);
+ await click(root,'Chat coordination review');assert.deepEqual(calls,[['view.update',{patch:{panel:'coordination'}}]]);
  assert.equal(state.view.draft,'private draft');assert.equal(state.selectedSessionId,'own');await act(async()=>root.unmount());
 });
 
@@ -45,7 +45,7 @@ test('workspace disclosure stays passive until opened and scopes inspection with
  const calls=[],workspace={id:'other-workspace',path:'/other'},other={target:{sessionId:'other'},title:'Other project chat',kind:'conversation',status:'idle'};
  const dispatch=async(action,args)=>{calls.push([action,args]);if(action==='coordination.list')return accepted({items:[other],nextOffset:null});if(action==='coordination.context')return accepted({workspace:'/other',requests:[]});throw Error('Unexpected action '+action)};let root;
  await act(async()=>{root=create(React.createElement(WorkspaceWork,{workspace,session,dispatch}))});
- assert.deepEqual(calls,[]);await toggle(root,'Workspace work');
+ assert.deepEqual(calls,[]);await toggle(root,'Chat coordination review');
  assert.deepEqual(calls,[['coordination.list',{workspace:'/other',offset:0,limit:20,includeWorkers:false}]]);
  assert.equal(root.root.findByProps({id:'workspace-work-chat'}).props.value,'');
  await select(root,'workspace-work-chat','other');

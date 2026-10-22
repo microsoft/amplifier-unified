@@ -15,7 +15,9 @@ on:
           - patch-placement-recovery
           - patch-placement-native
           - managed-removal-recovery
+          - shared-work-continuity
           - remote-test-origins
+          - shared-work-native
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -54,6 +56,8 @@ jobs:
               'patch-placement-recovery': ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py'],
               'patch-placement-native': ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py'],
               'managed-removal-recovery': ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py'],
+              'shared-work-continuity': ['tests/test_task_continuity.py', 'tests/test_coordination_delivery.py', 'tests/test_work_invocation.py', 'tests/test_schedules.py', 'tests/test_collaboration_input.py', 'tests/test_coordination_revisions.py', 'tests/test_release_qualification.py', 'tests/test_voice_visual.py', 'tests/test_surface_context.py', 'tests/test_output_image_pairs.py', 'tests/test_memory_personalization.py', 'tests/test_capacity.py'],
+              'shared-work-native': ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -112,6 +116,30 @@ jobs:
       - name: Select the prepared native-controls interpreter
         if: ${{ env.CHECK_SUITE == 'patch-placement-native' }}
         run: echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
+      - name: Prepare pinned native receipt dependencies
+        if: ${{ env.CHECK_SUITE == 'shared-work-native' }}
+        run: |
+          uv pip install --python .venv/bin/python \
+            'amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' \
+            'amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd' \
+            'openai==3.29.0' 'websockets==15.0.1' 'hatchling==1.27.0' 'amplifier-core==2.0.2'
+          uv run --no-sync python - <<'PY'
+          import hashlib, importlib.metadata as m, json, subprocess
+          from pathlib import Path
+          from amplifier_module_provider_openai.native import NativeSendAdmission, NativeOutboundEnvelope
+          from amplifier_module_loop_live.scope import LIVE_OWNER, NATIVE_REQUEST
+          import amplifier_module_provider_openai.native as native
+          expected = '304a78c2036c6dfe0bf60017844ffec3a0e8b556ad67e3fac20db4b613d276b1'
+          assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest() == expected
+          names = ['amplifier-core', 'amplifier-module-provider-openai', 'amplifier-module-loop-live',
+                   'amplifier-module-loop-streaming', 'amplifier-module-tool-exec', 'openai', 'websockets']
+          record = {name: {'version': m.version(name),
+                          'source': json.loads(m.distribution(name).read_text('direct_url.json') or 'null')}
+                    for name in names}
+          record['loopCheckout'] = subprocess.check_output(['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'], text=True).strip()
+          record['providerNativeSha256'] = expected
+          Path('output/python-checks/native-readiness.json').write_text(json.dumps(record, indent=2))
+          PY
       - name: Run the complete Python suite
         if: ${{ env.CHECK_SUITE == 'full' }}
         run: |
@@ -126,6 +154,115 @@ jobs:
           test "${#targets[@]}" -gt 0
           set -o pipefail
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml "${targets[@]}" 2>&1 | tee output/python-checks/pytest.log
+      - name: Verify installed native receipt boundary outside checkout
+        if: ${{ env.CHECK_SUITE == 'shared-work-native' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv build --wheel --no-build-isolation --python .venv/bin/python --out-dir output/python-checks/wheel .
+          uv pip freeze --python .venv/bin/python > output/python-checks/native-freeze.txt
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('output/python-checks/native-freeze.txt')
+          rows = [r for r in p.read_text().splitlines() if not r.startswith(('-e ', '#', 'amplifier-unified'))]
+          Path('output/python-checks/installed-requirements.txt').write_text('\n'.join(rows) + '\n')
+          PY
+          uv venv --python 3.13 "$RUNNER_TEMP/native-receipt-installed"
+          # Install the complete already-resolved snapshot, not a new graph
+          # combining pinned VCS commits with moving transitive URLs.
+          uv pip install --python "$RUNNER_TEMP/native-receipt-installed/bin/python" --no-deps -r output/python-checks/installed-requirements.txt
+          uv pip install --python "$RUNNER_TEMP/native-receipt-installed/bin/python" --no-deps output/python-checks/wheel/*.whl
+          uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"
+          mkdir "$RUNNER_TEMP/native-receipt-tests"
+          cp tests/*.py "$RUNNER_TEMP/native-receipt-tests/"
+          unset PYTHONPATH
+          cd "$RUNNER_TEMP/native-receipt-tests"
+          "$RUNNER_TEMP/native-receipt-installed/bin/python" - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          import amplifier_web.native_provider as native
+          source = Path(os.environ['GITHUB_WORKSPACE'])
+          actual = Path(native.__file__)
+          assert not actual.is_relative_to(source)
+          digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+          assert digest(actual) == digest(source / 'amplifier_web/native_provider.py')
+          for name in ('coordination_delivery', 'app_guidance', 'runtime_worker', 'execution_events', 'surface_delivery'):
+              import importlib
+              module = Path(importlib.import_module('amplifier_web.' + name).__file__)
+              assert not module.is_relative_to(source)
+              assert digest(module) == digest(source / ('amplifier_web/' + name + '.py'))
+          (source / 'output/python-checks/installed-native.json').write_text(json.dumps(
+              {'installed': str(actual), 'sha256': digest(actual), 'outsideCheckout': True}))
+          PY
+          "$RUNNER_TEMP/native-receipt-installed/bin/python" -m pytest -v --tb=short --asyncio-mode=auto --import-mode=importlib \
+            test_native_provider.py test_coordination_delivery.py test_work_origin.py test_capacity.py \
+            --junitxml="$GITHUB_WORKSPACE/output/python-checks/installed-junit.xml" \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/python-checks/installed-pytest.log"
+          python - <<'PY'
+          import os, xml.etree.ElementTree as E
+          from pathlib import Path
+          root = Path(os.environ['GITHUB_WORKSPACE']) / 'output/python-checks'
+          for name in ('junit.xml', 'installed-junit.xml'):
+              cases = E.parse(root / name).findall('.//testcase')
+              assert cases and all(not any(c.find(k) is not None for k in ('failure', 'error', 'skipped')) for c in cases)
+          PY
+          "$RUNNER_TEMP/native-receipt-installed/bin/python" - <<'PY'
+          import hashlib, json, os, shutil, subprocess, sys, xml.etree.ElementTree as E
+          from pathlib import Path
+          import amplifier_web.native_provider as native
+          output = Path(os.environ['GITHUB_WORKSPACE']) / 'output/python-checks'
+          negative = Path(os.environ['RUNNER_TEMP']) / 'native-receipt-negative'
+          shutil.copytree(Path(native.__file__).parent, negative / 'amplifier_web')
+          target = negative / 'amplifier_web/native_provider.py'
+          corrected = 'if self.state.get("outcome") in {"submitting", "sent", "running", "pending"}:'
+          old = 'if self.state.get("outcome") in {"submitting", "running", "pending"}:'
+          text = target.read_text()
+          assert text.count(corrected) == 1
+          target.write_text(text.replace(corrected, old, 1))
+          env = {**os.environ, 'PYTHONPATH': str(negative)}
+          probe = subprocess.check_output([sys.executable, '-c',
+              'import amplifier_web.native_provider as n; print(n.__file__)'], env=env, text=True).strip()
+          assert Path(probe) == target
+          with (output / 'negative-control.log').open('w') as log:
+              result = subprocess.run([sys.executable, '-m', 'pytest', '-v', '--tb=short',
+                  '--asyncio-mode=auto', '--import-mode=importlib',
+                  'test_native_provider.py::test_restart_after_send_before_response_is_unknown_and_blocks_transport',
+                  '--junitxml=' + str(output / 'negative-control.xml')], env=env, stdout=log, stderr=subprocess.STDOUT)
+          cases = E.parse(output / 'negative-control.xml').findall('.//testcase')
+          assert result.returncode == 1 and len(cases) == 1
+          failure = cases[0].find('failure')
+          assert failure is not None and "'sent' == 'unknown'" in (failure.text or '')
+          assert cases[0].find('error') is None and cases[0].find('skipped') is None
+          (output / 'negative-control.json').write_text(json.dumps({
+              'mutation': 'Restore only the old missing-sent top-level restart set',
+              'expectedFailure': True, 'returncode': result.returncode,
+              'mutatedSha256': hashlib.sha256(target.read_bytes()).hexdigest()}))
+          # Independent counterfactual: disable only exact current input-scope
+          # equality in a second installed copy. A plausible stale origin must
+          # make the real current-input test fail, not merely fail to import.
+          origin_negative = Path(os.environ['RUNNER_TEMP']) / 'work-origin-negative'
+          shutil.copytree(Path(native.__file__).parent, origin_negative / 'amplifier_web')
+          target = origin_negative / 'amplifier_web/coordination_delivery.py'
+          text = target.read_text()
+          guard = 'and self._scope() == origin.scope_json'
+          assert text.count(guard) == 1
+          target.write_text(text.replace(guard, 'and True', 1))
+          env = {**os.environ, 'PYTHONPATH': str(origin_negative)}
+          with (output / 'origin-negative.log').open('w') as log:
+              result = subprocess.run([sys.executable, '-m', 'pytest', '-v', '--tb=short',
+                  '--asyncio-mode=auto', '--import-mode=importlib',
+                  'test_coordination_delivery.py::test_effect_origin_joins_actual_admission_and_full_input_scope[new_input]',
+                  '--junitxml=' + str(output / 'origin-negative.xml')], env=env, stdout=log, stderr=subprocess.STDOUT)
+          cases = E.parse(output / 'origin-negative.xml').findall('.//testcase')
+          assert result.returncode == 1 and len(cases) == 1
+          failure = cases[0].find('failure')
+          assert failure is not None and 'AssertionError' in (failure.text or '')
+          assert cases[0].find('error') is None and cases[0].find('skipped') is None
+          (output / 'origin-negative.json').write_text(json.dumps({
+              'mutation': 'Disable only origin current input-scope equality',
+              'expectedFailure': True, 'returncode': result.returncode,
+              'mutatedSha256': hashlib.sha256(target.read_bytes()).hexdigest()}))
+          PY
       - name: Retain complete and partial Python results
         if: always()
         uses: actions/upload-artifact@v4
