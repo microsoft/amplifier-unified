@@ -16,6 +16,7 @@ on:
           - patch-placement-native
           - managed-removal-recovery
           - shared-work-continuity
+          - manager-exception-boundary
           - remote-test-origins
           - shared-work-native
       core_wheels:
@@ -58,6 +59,7 @@ jobs:
               'managed-removal-recovery': ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py'],
               'shared-work-continuity': ['tests/test_task_continuity.py', 'tests/test_coordination_delivery.py', 'tests/test_work_invocation.py', 'tests/test_schedules.py', 'tests/test_collaboration_input.py', 'tests/test_coordination_revisions.py', 'tests/test_release_qualification.py', 'tests/test_voice_visual.py', 'tests/test_surface_context.py', 'tests/test_output_image_pairs.py', 'tests/test_memory_personalization.py', 'tests/test_capacity.py'],
               'shared-work-native': ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py'],
+              'manager-exception-boundary': ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -84,7 +86,13 @@ jobs:
       - name: Resolve the declared live-runtime source
         id: runtime-dependency
         run: |
-          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, tomllib
+          p = tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb"))
+          revision = ("76073827ba6742ae026a12b524f596120cd2b314" if os.environ["CHECK_SUITE"] == "manager-exception-boundary"
+                      else p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])
+          print("revision=" + revision)
+          PY
       - uses: actions/checkout@v4
         with:
           repository: microsoft/amplifier-module-loop-live
@@ -146,6 +154,22 @@ jobs:
           mkdir -p output/python-checks
           set -o pipefail
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml 2>&1 | tee output/python-checks/pytest.log
+      - name: Record manager-boundary source and import identity
+        if: ${{ env.CHECK_SUITE == 'manager-exception-boundary' }}
+        run: |
+          uv run --no-sync python - <<'PY' > output/python-checks/boundary-imports.json
+          import hashlib, importlib, importlib.metadata as md, json, subprocess, sys
+          from pathlib import Path
+          result = {"python": sys.version, "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "loopRevision": subprocess.check_output(["git", "-C", ".ci/loop-live", "rev-parse", "HEAD"], text=True).strip(), "modules": {}}
+          for name in ("amplifier_web.runtime_worker", "amplifier_web.runtime", "amplifier_web.session_health",
+                       "amplifier_module_loop_live.orchestrator", "amplifier_module_loop_live.failures",
+                       "amplifier_module_loop_streaming", "amplifier_module_context_simple"):
+              module = importlib.import_module(name)
+              path = Path(module.__file__)
+              result["modules"][name] = {"file": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+          print(json.dumps(result, indent=2))
+          PY
       - name: Run the selected repair suite
         if: ${{ env.CHECK_SUITE != 'full' }}
         shell: bash
@@ -153,6 +177,21 @@ jobs:
           mapfile -t targets < output/python-checks/targets.txt
           test "${#targets[@]}" -gt 0
           set -o pipefail
+          if [ "$CHECK_SUITE" = manager-exception-boundary ]; then
+            git fetch --no-tags --depth=1 origin 8a326ee890e43fa30b59ca8f4654d1ca598c0af2
+            mkdir -p output/python-checks/original
+            git archive 8a326ee890e43fa30b59ca8f4654d1ca598c0af2 | tar -x -C output/python-checks/original
+            set +e
+            (cd output/python-checks/original && "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest \
+              -c /dev/null -o asyncio_mode=auto --import-mode=importlib -v --tb=short \
+              "$GITHUB_WORKSPACE/tests/test_manager_exception_boundary.py::test_real_post_provider_manager_exception_reaches_public_inspection") \
+              2>&1 | tee output/python-checks/original-red.log
+            red=${PIPESTATUS[0]}
+            set -e
+            test "$red" -eq 1
+            grep -q 'chain = failure.get' output/python-checks/original-red.log || grep -q 'assert any' output/python-checks/original-red.log
+            grep -q '/original/amplifier_web/runtime_worker.py' output/python-checks/original-red.log
+          fi
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml "${targets[@]}" 2>&1 | tee output/python-checks/pytest.log
       - name: Verify installed native receipt boundary outside checkout
         if: ${{ env.CHECK_SUITE == 'shared-work-native' }}
@@ -262,6 +301,26 @@ jobs:
               'mutation': 'Disable only origin current input-scope equality',
               'expectedFailure': True, 'returncode': result.returncode,
               'mutatedSha256': hashlib.sha256(target.read_bytes()).hexdigest()}))
+          PY
+      - name: Build the exact manager-boundary candidate wheel
+        if: ${{ env.CHECK_SUITE == 'manager-exception-boundary' }}
+        run: |
+          uv build --wheel --out-dir output/python-checks/dist
+          sha256sum output/python-checks/dist/*.whl > output/python-checks/wheel-sha256.txt
+          uv pip install --python .venv/bin/python --no-deps --target output/python-checks/wheel-install output/python-checks/dist/*.whl
+          cd output/python-checks
+          PYTHONPATH="$PWD/wheel-install" "$GITHUB_WORKSPACE/.venv/bin/python" - <<'PY' > wheel-imports.json
+          import hashlib, importlib, json
+          from pathlib import Path
+          root = (Path.cwd() / "wheel-install").resolve()
+          result = {}
+          for name in ("amplifier_web.runtime_worker", "amplifier_web.runtime", "amplifier_web.session_health",
+                       "amplifier_web.support_diagnostics", "amplifier_web.service"):
+              module = importlib.import_module(name)
+              path = Path(module.__file__).resolve()
+              assert path.is_relative_to(root), (name, path)
+              result[name] = {"file": str(path.relative_to(root)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+          print(json.dumps(result, indent=2))
           PY
       - name: Retain complete and partial Python results
         if: always()

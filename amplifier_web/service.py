@@ -4458,6 +4458,12 @@ class AppService:
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
+                if 'terminalFailure' in payload:
+                    from .session_health import terminal_exception_failure
+                    enriched = terminal_exception_failure(session, payload['terminalFailure'])
+                    if enriched is None:
+                        return
+                    session['failure'] = enriched
                 settle_stream(session)
                 session["status"] = "error"
                 finish_execution(session,"error")
@@ -4644,6 +4650,18 @@ class AppService:
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             collaboration_changed = self.collaboration.observe(session, kind, payload)
+            if (kind == 'runtime.generation' and root_generation
+                    and payload.get('event') == 'generation.failed'
+                    and session.get('status') not in {'stopped', 'stopping'}):
+                from .session_health import current_terminal_failure
+                if current_terminal_failure(session):
+                    # A confirmed failed root stays failed when its worker
+                    # closes. Closure cannot erase the bound cause or make a
+                    # later diagnostic supplement look like a user Stop.
+                    failure = session['failure']
+                    session.update(status='error', errorType=failure.get('errorType'),
+                                   errorAt=failure['recordedAt'],
+                                   error=failure['summary'] + ' ' + failure['guidance'])
             from .conversation_steering import observe as observe_steering
             observe_steering(self, session, kind, payload)
             if progress:

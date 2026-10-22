@@ -68,6 +68,7 @@ class Worker:
         self.context_bindings = {}
         self.context_inputs = []
         self.root_generation_outcome = None
+        self.failed_generation = None
         if __package__:
             from .response_completion import ResponseBlocks
         else:
@@ -345,6 +346,7 @@ class Worker:
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
         if root_generation and event.get('type') == 'generation.started':
             self.root_generation_outcome = None
+            self.failed_generation = None
             self.response_blocks.reset()
             self.terminal_response_refs = None
         if root_generation and event.get('type') == 'assistant.message':
@@ -355,6 +357,9 @@ class Worker:
                 'generation.failed': 'error',
                 'generation.detached': 'interrupted',
             }[event['type']]
+            self.failed_generation = (
+                {key: event.get(key) for key in ('generation_id', 'input_ids', 'error_type', 'error_category', 'error_stage')}
+                if event['type'] == 'generation.failed' else None)
         if self.controls:
             from amplifier_web.scheduled_input import finish as finish_scheduled_input
             finish_scheduled_input(self.controls, event)
@@ -712,6 +717,7 @@ class Worker:
             from amplifier_web.loaded_provenance import capture_mount
             self.provenance_mount = capture_mount(self.session)
             await self.ownership.register()
+            self.capture_manager_failures()
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
             self.parked_history_stamp = self.history_stamp()
@@ -934,6 +940,57 @@ class Worker:
         if self.parked or self.shared_handle is None:
             raise RuntimeError("The session is parked and has no active shared writer.")
         return self.activation_gate.bind(self.activation)
+
+    def capture_manager_failures(self):
+        """Observe the real loop exception before Core converts it to text.
+
+        Do not change the loop's catch, classification, cancellation or return.
+        A later generic execution exit still owns shutdown as before.
+        """
+        from functools import wraps
+        loop = self.session.coordinator.get("orchestrator")
+        original = getattr(loop, "execute", None)
+        if not callable(original) or getattr(original, "_web_failure_capture", False):
+            return
+        @wraps(original)
+        async def execute(*args, **kwargs):
+            epoch = self.stop_revision
+            try:
+                return await original(*args, **kwargs)
+            except Exception as error:
+                try:
+                    from amplifier_web.support_diagnostics import exception_chain, terminal_exception_capture
+                    terminal = self.failed_generation or {}
+                    # Only the exact known loop wrapper with its original cause
+                    # is supported. Never parse flattened exception messages.
+                    if (type(error).__module__ == 'amplifier_module_loop_live.failures'
+                            and type(error).__name__ == 'ManagerTurnError'
+                            and isinstance(getattr(error, 'failure', None), dict)
+                            and all(error.failure.get(key) == terminal.get(key) for key in
+                                    ('error_type', 'error_category', 'error_stage'))
+                            and terminal.get('error_category') == 'unknown'
+                            and terminal.get('error_stage') == 'manager_turn'
+                            and error.__cause__ is not None and self.stop_revision == epoch
+                            and not self.runtime.stop_requested
+                            and not self.remounting and not self.ownership.yielding):
+                        capture = terminal_exception_capture({
+                            'generationId': terminal.get('generation_id'), 'inputIds': terminal.get('input_ids'),
+                            'errorType': terminal.get('error_type'), 'exceptionChain': exception_chain(error)})
+                        if capture:
+                            publish({'type': 'runtime.error', 'error': 'The manager turn failed. Work was not replayed.',
+                                     'terminalFailure': capture})
+                except Exception:
+                    # Observation is optional: closed transport or unsupported
+                    # metadata must not replace the original loop exception.
+                    pass
+                raise
+        execute._web_failure_capture = True
+        try:
+            loop.execute = execute
+        except (AttributeError, TypeError):
+            # Unsupported immutable plugins keep their original execution.
+            # Absence of this optional observation is not a diagnosed cause.
+            return
 
     def executed(self, task):
         if self.remounting or self.ownership.yielding:

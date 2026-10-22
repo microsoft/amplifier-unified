@@ -127,6 +127,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
     kind = event.get("type", "")
     base = {"sessionId": session_id}
+    if kind == 'runtime.error' and 'terminalFailure' in event:
+        from .support_diagnostics import terminal_exception_capture
+        capture = terminal_exception_capture(event['terminalFailure'])
+        return ('runtime.error', {**base, 'terminalFailure': capture,
+                'error': 'The manager turn failed. Work was not replayed.'}) if capture else None
     if kind == 'runtime.bridge':
         from .support_diagnostics import event_detail
         return kind, {**base, **event_detail(event)}
@@ -789,6 +794,15 @@ class RuntimeManager:
                     await row['emit']('runtime.ownership', {'sessionId': sid,
                         **{key: data[key] for key in ('status', 'source', 'detail') if key in data}})
                 elif data.get("type") == "runtime.error":
+                    if 'terminalFailure' in data:
+                        # This is supplemental metadata, not a new failure or
+                        # startup exception. Invalid/unsupported captures cannot
+                        # be downgraded into an uncorrelated generic exit.
+                        normalized = normalize_event(data, sid)
+                        if (self.workers.get(sid) is row and not row['closing']
+                                and row['ready'].done() and normalized):
+                            await row['emit'](*normalized)
+                        continue
                     from .session_health import failure_details
                     failure = _worker_error(data)
                     diagnostic = None
