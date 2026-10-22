@@ -48,6 +48,12 @@ maintenance releases:
    guidance is included (or why none is needed). Use the existing release-notes
    tests, Fast release checks and package validation; no extra broad gate.
 
+Keep the JSON schema wrapper and one complete release object per line, with
+literal UTF-8 text and compact separators inside each object. Preserve that format
+when adding an entry; expanding every nested field onto separate lines needlessly
+consumes the bounded history budget. Formatting changes must preserve all parsed
+values, including notice IDs, wording, aliases and release order.
+
 The same data supplies installed/offline history and GitHub release text.
 The validator already requires the current entry and a nonempty changes list,
 and rejects invalid, duplicate or future versions; it cannot judge whether the
