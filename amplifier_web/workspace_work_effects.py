@@ -43,7 +43,7 @@ SAFE_ACTIONS = frozenset({
     'recall.status', 'recall.search', 'recall.read',
     'permissions.get', 'runtime.dependencies', 'canvas.versions.inspect',
     'history.list', 'history.shared.list', 'history.shared.view',
-    'assignment.read', 'assignment.tasks.list', 'assignment.tasks.read',
+    'assignment.brief', 'assignment.read', 'assignment.tasks.list', 'assignment.tasks.read',
     'assignment.tasks.wait', 'workspace.environments.removal.read',
     'workspace.environments.removal.list',
 })
