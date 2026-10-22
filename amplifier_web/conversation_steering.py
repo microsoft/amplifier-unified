@@ -43,11 +43,17 @@ def record(service, session, input_id, disposition, reason=None, *, preserve_pen
     else:
         steering.pop('reason', None)
     delivery = 'accepted' if disposition in {'queued', 'applied', 'next_turn'} else 'failed' if disposition == 'held' else 'unknown'
+    if delivery == 'accepted':
+        # Early runtime evidence may precede the awaited acknowledgement. Retire
+        # these exact draft IDs in the same publication as positive steering.
+        service.clients.consume_attachments(session, message.get('attachments', []))
     message['delivery'] = {'status': delivery}
     row = service.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
     if row:
         receipt = json.loads(row[0])
         receipt.update(delivery=delivery, steering=copy.deepcopy(steering))
+        if delivery == 'accepted':
+            receipt.setdefault('_deliveryStateRevision', service._state['revision'] + 1)
         service.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), input_id))
 
 

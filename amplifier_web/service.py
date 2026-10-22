@@ -3800,7 +3800,14 @@ class AppService:
                     task.add_done_callback(self.smart_tool_tasks.discard)
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
-        if action == 'conversation.send' and not result.get('steering'):result['delivery']='accepted'
+        if action == 'conversation.send':
+            if not result.get('steering'):
+                result['delivery'] = 'accepted'
+            if result.get('delivery') == 'accepted':
+                saved = self.db.execute('SELECT receipt FROM commands WHERE id=?', (result['inputId'],)).fetchone()
+                # Capture before returning to the HTTP task. Its later resumption
+                # may follow a publication that this client never subscribed to.
+                result['_deliveryStateRevision'] = (json.loads(saved[0]).get('_deliveryStateRevision') if saved else None) or self._state['revision']
         if action == 'question.answer':result['result'] = self.questions.read('question.read', args)
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
@@ -4039,6 +4046,12 @@ class AppService:
                 if message.get('navigationPost'):
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
         if row:
+            if status == 'accepted' and message_bound:
+                # Acceptance/consumption and this receipt commit in the next
+                # synchronous owned publication under the service lock. Keep
+                # that exact observation for a lost-response replay, including
+                # early acceptance while the send RPC is still outstanding.
+                receipt.setdefault('_deliveryStateRevision', self._state['revision'] + 1)
             if status == 'accepted' and receipt.get('code') == 'worker_startup_failed':
                 receipt['accepted'] = True
                 for key in ('error', 'status', 'code', 'receipt'):

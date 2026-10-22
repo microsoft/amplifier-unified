@@ -380,7 +380,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         # Reads and validated no-ops can be complete without a state publication.
         # Consume this marker in both transports; clients never author it.
         state_independent = result.get('_stateIndependent') is True
-        result = {key: value for key, value in result.items() if key != '_stateIndependent'}
+        delivery_revision = result.get('_deliveryStateRevision')
+        result = {key: value for key, value in result.items() if key not in {'_stateIndependent', '_deliveryStateRevision'}}
         if compact:
             # Some delegated action families return their own snapshot. Keep
             # their receipt/effects, but use the same stream synchronization.
@@ -389,6 +390,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             # /api/shell. They must not wait for an unrelated app-state frame.
             if not state_independent and (not payload['action'].startswith('shell.') or payload['action'] == 'shell.command'):
                 result['stateRevision'] = result.get('revision', service._state['revision'])
+                if delivery_revision is not None:
+                    result['stateRevision'] = delivery_revision
             result['hostInstanceId'] = service.instance_id
         if request.get('companion_device'):
             from .device_pairing import companion_receipt
