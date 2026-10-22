@@ -90,6 +90,7 @@
     {"id": "draft-reload", "command": ["node", "tests/draft-reload-browser.mjs"]},
     {"id": "live-history", "command": ["node", "tests/live-history-browser.mjs"]},
     {"id": "conversation-navigation", "command": ["node", "tests/conversation-navigation-browser.mjs"]},
+    {"id": "destination-history", "command": ["node", "tests/destination-history-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/destination-history"}},
     {"id": "live-clients", "command": ["node", "tests/live-clients-browser.mjs"]},
     {"id": "ownership", "command": ["node", "tests/ownership-browser.mjs"]},
     {"id": "canvas-dirty", "command": ["node", "tests/canvas-dirty-browser.mjs"]},

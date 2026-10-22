@@ -95,3 +95,27 @@ test('support timings retain correlation and exclude query strings and bodies',a
   assert.ok(!JSON.stringify(row).includes('private'));
  }finally{globalThis.fetch=original}
 });
+
+test('history authentication changes invalidate once and ignore older in-flight responses',async()=>{
+ const api=await import('../src/api.js?history-auth-test'),original=globalThis.fetch;
+ const changes=[],stop=api.onAuthenticationChange(scope=>changes.push(scope));
+ const response=scope=>new Response(JSON.stringify({accepted:true,state:{client:{kind:'web'}}}),{headers:{'X-Amplifier-History-Scope':scope}});
+ let release;
+ try{
+  globalThis.fetch=async()=>response('scope-a');
+  assert.equal((await api.request('/api/actions')).state.client.historyScope,'scope-a');
+  assert.equal(changes.length,0);
+  globalThis.fetch=()=>new Promise(resolve=>{release=resolve});
+  const old=api.request('/api/actions');
+  globalThis.fetch=async()=>response('scope-b');
+  assert.equal((await api.request('/api/actions')).state.client.historyScope,'scope-b');
+  assert.deepEqual(changes,['scope-b']);
+  release(response('scope-a'));
+  assert.equal((await old).state.client.historyScope,undefined);
+  await api.request('/api/actions');assert.equal(changes.length,1);
+  globalThis.fetch=async()=>new Response('{"error":"Authentication required."}',{status:401});
+  await assert.rejects(api.request('/api/state'),error=>error.status===401);
+  await assert.rejects(api.request('/api/state'),error=>error.status===401);
+  assert.deepEqual(changes,['scope-b',null]);
+ }finally{stop();globalThis.fetch=original}
+});
