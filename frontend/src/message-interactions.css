@@ -23,9 +23,9 @@
 #amp-one .a-assistant-reaction{display:inline-flex;align-items:center;gap:.35rem;border:1px solid var(--a-line);background:var(--a-soft);border-radius:1rem;padding:.2rem .55rem}
 #amp-one .a-assistant-reaction small{font-size:.75rem}
 #amp-one .a-composer-quote{border:1px solid var(--a-line);border-left:3px solid var(--a-accent);border-radius:0 .5rem .5rem 0;background:var(--a-surface);padding:.35rem .65rem .5rem;margin:.5rem 0;min-width:0;max-width:100%;white-space:normal;font-size:var(--a-text-sm,13px);line-height:1.5}
-#amp-one .a-composer-quote-head{display:flex;align-items:center;gap:.3rem;position:sticky;top:0;z-index:1;background:var(--a-surface);min-height:36px}
+#amp-one .a-composer-quote-head{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem;position:sticky;top:0;z-index:1;background:var(--a-surface);min-height:36px}
 #amp-one .a-composer-quote-head>button:first-child{margin-right:auto;min-width:0;font-weight:600;overflow-wrap:anywhere;text-align:left}
-#amp-one .a-composer-quote-tools{display:flex;gap:2px;flex:none}
+#amp-one .a-composer-quote-tools{display:flex;gap:2px;flex:none;margin-left:auto}
 #amp-one .a-composer-quote-head button{min-width:36px;min-height:36px;padding:4px;border:0;border-radius:.3rem;background:transparent;color:var(--a-ink);font:inherit;cursor:pointer}
 #amp-one .a-composer-quote-head button:hover:not(:disabled){background:var(--a-soft)}
 #amp-one .a-composer-quote-head button:disabled{opacity:.4;cursor:default}

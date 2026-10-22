@@ -128,6 +128,7 @@ def main():
     build, _ = run('production-build', ['npm', 'run', 'build', '--prefix', 'frontend'])
     browser_env = {**os.environ, 'AMPLIFIER_TEST_PYTHON': sys.executable,
                    'AMPLIFIER_PROOF_DIR': str(output / 'source-browser')}
+    ordinary_env = {key: value for key, value in browser_env.items() if key != 'AMPLIFIER_QUOTE_REFERENCE'}
     if build == 0:
         browser_code, _ = run('source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'], env=browser_env)
         if browser_code == 0:
@@ -144,7 +145,7 @@ def main():
                 negative_proof = output / 'negative-quote-alignment'
                 if negative_build == 0:
                     code, _ = run('negative-quote-alignment', ['node', 'frontend/tests/multi-quote-browser.mjs'],
-                                  env={**browser_env, 'AMPLIFIER_PROOF_DIR': str(negative_proof)}, expected=1)
+                                  env={**ordinary_env, 'AMPLIFIER_PROOF_DIR': str(negative_proof)}, expected=1)
                     named = 'first quote scrolled: visible quote has reachable source/move/remove controls'
                     failure_path = negative_proof / 'failure.json'
                     failure = json.loads(failure_path.read_text()) if failure_path.is_file() else {}
@@ -169,7 +170,7 @@ def main():
             try:
                 model.write_text(model_original.decode().replace(before, 'TextSelection.atStart(view.state.doc)'))
                 negative_build, _ = run('negative-interleaving-build', ['npm', 'run', 'build', '--prefix', 'frontend'])
-                negative_env = {**browser_env, 'AMPLIFIER_PROOF_DIR': str(output / 'negative-interleaving')}
+                negative_env = {**ordinary_env, 'AMPLIFIER_PROOF_DIR': str(output / 'negative-interleaving')}
                 if negative_build == 0:
                     code, text = run('negative-interleaving', ['node', 'frontend/tests/multi-quote-browser.mjs'],
                                      env=negative_env, expected=1)
@@ -185,7 +186,7 @@ def main():
             build, _ = run('restored-production-build', ['npm', 'run', 'build', '--prefix', 'frontend'])
             if build == 0:
                 run('restored-source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'],
-                    env={**browser_env, 'AMPLIFIER_PROOF_DIR': str(output / 'restored-source-browser')})
+                    env={**ordinary_env, 'AMPLIFIER_PROOF_DIR': str(output / 'restored-source-browser')})
         else:
             results.append({'name': 'negative-quote-alignment', 'passed': False,
                             'status': 'not-run', 'reason': 'Source browser baseline failed'})
@@ -207,7 +208,7 @@ def main():
         if managed:
             run('automatic-source-smoke', [sys.executable, 'scripts/multi_quote_checks.py',
                 '--output', str(output / 'automatic-source-smoke')],
-                env={**os.environ, 'AMPLIFIER_MULTI_QUOTE_SCENARIOS': str(selected),
+                env={**ordinary_env, 'AMPLIFIER_MULTI_QUOTE_SCENARIOS': str(selected),
                      'AMPLIFIER_MULTI_QUOTE_SOURCE_MANIFEST': str(output / 'source.json')})
         else:
             run('automatic-source-smoke', [sys.executable, 'scripts/browser_check_runner.py',

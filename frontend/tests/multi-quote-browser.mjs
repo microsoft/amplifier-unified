@@ -507,17 +507,23 @@ try{
   await referencePage.routeWebSocket('**/*',socket=>socket.close());
   stage('sandbox document');
   await referencePage.setContent(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src about: 'self'; base-uri 'none'; form-action 'none'"><iframe id="reference" sandbox="allow-scripts" style="border:0;width:100%;height:1200px"></iframe>`);
-  await referencePage.locator('iframe').evaluate((node,html)=>node.srcdoc=html,readFileSync(process.env.AMPLIFIER_QUOTE_REFERENCE,'utf8'));
+  await referencePage.locator('iframe').evaluate((node,html)=>{
+   // Keep the supplied content/style/script unchanged; install the isolation
+   // policy before its first script as well as on the embedding document.
+   const policy=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">`;
+   if(!html.includes('<head>'))throw Error('Reference requires a head for its sandbox policy');
+   node.srcdoc=html.replace('<head>','<head>'+policy);
+  },readFileSync(process.env.AMPLIFIER_QUOTE_REFERENCE,'utf8'));
   const reference=referencePage.frameLocator('#reference');
   stage('reference sample');
   await reference.getByRole('button',{name:'Add three-quote example',exact:true}).click();
   stage('sandbox connection guard');
-  const sandboxCheck=await reference.locator('#editor').evaluate(async()=>{
+  await reference.locator('#editor').evaluate((socketUrl)=>{
    window.referenceViolations=[];
    document.addEventListener('securitypolicyviolation',event=>window.referenceViolations.push(event.violatedDirective));
-   try{const socket=new WebSocket('ws://127.0.0.1:1/blocked-reference-check');socket.onerror=()=>{};}
+   try{const socket=new WebSocket(socketUrl);socket.onerror=()=>{};}
    catch(error){window.referenceSocketError=error.message;}
-  });
+  },url.replace('http:','ws:')+'/blocked-reference-check');
   await expect.poll(()=>reference.locator('#editor').evaluate(()=>window.referenceViolations)).toContain('connect-src');
   writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify(await reference.locator('#editor').evaluate(()=>({violations:window.referenceViolations,error:window.referenceSocketError})),null,2));
   stage('sample sources');
@@ -527,6 +533,7 @@ try{
   await editor.fill('');
   await page.locator('.a-file-input').setInputFiles({name:'outline.txt',mimeType:'text/plain',buffer:Buffer.from('Synthetic comparison attachment')});
   await page.getByRole('button',{name:'Remove outline.txt',exact:true}).waitFor();
+  let comparedQuotes=0;
   for(const block of specimen.blocks){
    stage('insert '+block.type);
    if(block.type==='text'){
@@ -540,6 +547,7 @@ try{
      await area.evaluate((node,block)=>{node.focus();node.setSelectionRange(block.from,block.to);},block);await area.press('Shift');
      await page.getByRole('button',{name:'Add selected passage',exact:true}).click();await page.locator('.a-quote-picker').waitFor({state:'hidden'});
     }
+    await expect(editor.locator('[data-quote-instance]')).toHaveCount(++comparedQuotes);
    }
   }
   assert.deepEqual(references(await documentValue()).map(row=>row.quote.excerpt),specimen.blocks.filter(row=>row.type==='quote').map(row=>row.excerpt));
