@@ -330,3 +330,98 @@ async def test_accepted_attachments_settle_before_rpc_return(tmp_path, private, 
         assert attachments.file_path(tmp_path, sent['id'])[0].read_bytes() == PNG
     finally:
         await asyncio.wait_for(restored.close(), 5)
+
+
+async def test_unnamed_upload_identity_follows_only_its_exact_creation(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        app.clients.attach('upload-owner')
+        with app.clients.bind('upload-owner'):
+            await app.dispatch('session.draft', {'workspace': str(tmp_path)})
+            identity = app.clients.attachment_draft_id()
+            args = {'sessionId': None, 'expectedDraftId': identity, 'name': 'first.png',
+                    'base64': base64.b64encode(PNG).decode()}
+            await app.dispatch('attachment.add', args)
+            original = list(app.clients.attachments(None))
+            created = await app.dispatch('session.create', {'fromDraft': True, 'workspace': str(tmp_path)})
+            owner = app._session(created['sessionId'])
+            await app.dispatch('session.create', {'title': 'Unrelated chat', 'workspace': str(tmp_path)})
+            other = app._session()
+            await app.dispatch('attachment.add', {**args, 'name': 'late.png'})
+            assert app.state['selectedSessionId'] == other['id']
+            assert len(app.clients.attachments(owner)) == 2
+            assert app.clients.attachments(owner)[0] == original[0]
+            assert app.clients.attachments(other) == []
+            assert app.clients.attachments(None) == []
+    finally:
+        await asyncio.wait_for(app.close(), 5)
+
+
+async def test_replaced_unnamed_location_rejects_late_upload_without_losing_new_draft(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        app.clients.attach('upload-owner')
+        app.clients.attach('independent')
+        with app.clients.bind('upload-owner'):
+            await app.dispatch('session.draft', {'workspace': str(tmp_path)})
+            identity = app.clients.attachment_draft_id()
+            await app.dispatch('session.draft', {'location': {'kind': 'managed'}})
+            await app.dispatch('view.update', {'patch': {'draft': 'Keep newer text'}})
+            args = {'sessionId': None, 'expectedDraftId': identity, 'name': 'late.png',
+                    'base64': base64.b64encode(PNG).decode()}
+            with pytest.raises(AppError, match='original new-chat draft changed'):
+                await app.dispatch('attachment.add', args)
+            assert app.clients.attachments(None) == []
+            assert app.state['view']['draft'] == 'Keep newer text'
+        with app.clients.bind('independent'):
+            with pytest.raises(AppError, match='original new-chat draft changed'):
+                await app.dispatch('attachment.add', args)
+            assert app.clients.attachments(None) == []
+        assert not (tmp_path / 'attachments').exists()
+    finally:
+        await asyncio.wait_for(app.close(), 5)
+
+
+async def test_slow_creation_cannot_bind_a_newer_unnamed_draft(tmp_path, monkeypatch):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    started, release = asyncio.Event(), asyncio.Event()
+    pending = None
+    original_thread = app.worktrees.finish_thread
+
+    async def hold_creation(function, *args):
+        if function.__name__ == '_create_workspace_folder':
+            started.set()
+            await asyncio.wait_for(release.wait(), 5)
+        return await original_thread(function, *args)
+
+    monkeypatch.setattr(app.worktrees, 'finish_thread', hold_creation)
+    try:
+        app.clients.attach('upload-owner')
+        with app.clients.bind('upload-owner'):
+            await app.dispatch('session.draft', {'workspace': str(tmp_path)})
+            identity = app.clients.attachment_draft_id()
+            pending = asyncio.create_task(app.dispatch('session.create', {
+                'workspace': str(tmp_path), 'fromDraft': True, 'expectedDraftId': identity,
+            }))
+            await asyncio.wait_for(started.wait(), 3)
+            await app.dispatch('session.draft', {'location': {'kind': 'managed'}})
+            newer_id = app.clients.attachment_draft_id()
+            await app.dispatch('view.update', {'patch': {'draft': 'Keep newer draft'}})
+            await app.dispatch('attachment.add', {
+                'sessionId': None, 'expectedDraftId': newer_id, 'name': 'newer.png',
+                'base64': base64.b64encode(PNG).decode(),
+            })
+            newer = list(app.clients.attachments(None))
+            release.set()
+            with pytest.raises(AppError, match='original new-chat draft changed'):
+                await asyncio.wait_for(pending, 5)
+            assert app.state['selectedSessionId'] is None
+            assert app.state['view']['draft'] == 'Keep newer draft'
+            assert app.clients.attachments(None) == newer
+            assert app.clients.attachment_target(None, newer_id) is None
+            assert not app.state['sessions']
+    finally:
+        release.set()
+        if pending is not None:
+            await asyncio.wait_for(asyncio.gather(pending, return_exceptions=True), 5)
+        await asyncio.wait_for(app.close(), 5)

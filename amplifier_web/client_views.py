@@ -12,6 +12,7 @@ from contextvars import ContextVar
 import json
 import re
 import time
+import uuid
 
 
 LOCAL_KEYS = frozenset({"view", "selectedSessionId", "selectedWorkspaceId", "canvas", "canvasTabs", "deviceCommands"})
@@ -270,6 +271,42 @@ class ClientViews:
             return session.setdefault("draftAttachments", [])
         return record.setdefault("attachments", {}).setdefault(session["id"] if session else "", [])
 
+    def attachment_draft_id(self):
+        """Identity for the private unnamed draft, not the selected chat."""
+        record = self.record()
+        if record is None:
+            return None
+        setup = record.get('view', {}).get('newSessionDraft') or {}
+        location = [setup.get('workspace', ''), setup.get('location')]
+        if not record.get('attachmentDraftId') or record.get('attachmentDraftLocation') != location:
+            record['attachmentDraftId'] = uuid.uuid4().hex
+            record['attachmentDraftLocation'] = location
+            self.dirty.add(self.current.get())
+        return record['attachmentDraftId']
+
+    def bind_attachment_draft(self, session_id):
+        record = self.record()
+        identity = self.attachment_draft_id()
+        bindings = record.setdefault('attachmentDraftBindings', {})
+        bindings[identity] = session_id
+        record['attachmentDraftBindings'] = dict(list(bindings.items())[-16:])
+        record['attachmentDraftId'] = uuid.uuid4().hex
+        self.dirty.add(self.current.get())
+
+    def attachment_target(self, target, expected_draft_id):
+        if expected_draft_id is None:
+            return target  # Public explicit-chat API retains its existing contract.
+        from .service import AppError
+        record = self.record()
+        if record is None or target is not None:
+            raise AppError('This upload is not bound to an unnamed draft.', 409)
+        binding = record.get('attachmentDraftBindings', {}).get(expected_draft_id)
+        if binding is not None:
+            return binding
+        if expected_draft_id != self.attachment_draft_id():
+            raise AppError('The original new-chat draft changed. Choose the remaining files again in the intended chat.', 409)
+        return None
+
     def consume_attachments(self, session, attachments):
         """Settle exact uploaded IDs with positive delivery, not the later RPC."""
         consumed = {row['id'] for row in attachments}
@@ -306,6 +343,7 @@ class ClientViews:
             snapshot['client']['build'] = self.service.installed_build.project()
         snapshot["computerVisual"] = self.service.computer_visual.project(self.current.get())
         snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
+        snapshot["attachmentDraftId"] = self.attachment_draft_id()
         from .cold_display import detached
         snapshot["sessions"] = [detached(row) for row in snapshot.get("sessions", [])]
         for session in snapshot["sessions"]:

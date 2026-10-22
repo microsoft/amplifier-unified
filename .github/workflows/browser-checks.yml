@@ -3,6 +3,10 @@ name: Extended browser checks
 on:
   workflow_dispatch:
     inputs:
+      attachment_experience:
+        description: Fixed attachment modal/drop and consumption checks, source and installed wheel
+        type: boolean
+        default: false
       peer_messages:
         description: Fixed peer groups, formatting negative control and installed-wheel browser proof
         type: boolean
@@ -48,7 +52,7 @@ permissions:
   contents: read
 jobs:
   browser:
-    if: ${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -166,6 +170,138 @@ jobs:
             output/selected-context/
             output/multi-quote/
           if-no-files-found: warn
+  attachment-experience:
+    if: ${{ inputs.attachment_experience }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Reject mixed selections
+        if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.attachment_consumption || inputs.mcp_boundary || inputs.destination_history || inputs.settings_close_diagnostic || inputs.app004_qualification }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Fixed attachment coverage and source identity
+        run: |
+          mkdir -p output/attachment-experience
+          git rev-parse HEAD > output/attachment-experience/source.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows = json.loads(Path('frontend/tests/browser-checks.json').read_text())['scenarios']
+          wanted = ('attachment-experience', 'attachment-consumption')
+          selected = []
+          for name in wanted:
+              matches = [row for row in rows if row['id'] == name]
+              assert len(matches) == 1
+              assert matches[0]['command'] == ['node', f'tests/{name}-browser.mjs']
+              selected.append(matches[0])
+          Path('output/attachment-experience/plan.json').write_text(json.dumps({'schemaVersion': 1, 'scenarios': selected}))
+          intersections = ('pin-retention', 'pin-rapid-reorder', 'conversation-navigation', 'compact-composer', 'peer-preview')
+          selected_intersections = []
+          for name in intersections:
+              matches = [row for row in rows if row['id'] == name]
+              assert len(matches) == 1
+              assert matches[0]['command'] == ['node', f'tests/{name}-browser.mjs']
+              selected_intersections.append(matches[0])
+          Path('output/attachment-experience/intersections-plan.json').write_text(json.dumps({'schemaVersion': 1, 'scenarios': selected_intersections}))
+          PY
+          uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/plan.json --output output/browser-checks --initialize
+          uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/intersections-plan.json --output output/attachment-experience/intersections --initialize
+      - run: npm run build --prefix frontend
+      - name: Verify canonical attachment assets
+        run: git diff --exit-code -- amplifier_web/static
+      - name: Attachment host ownership and consumption
+        id: host
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest -q tests/test_attachments.py -k 'unnamed or accepted_attachments' --junitxml=output/attachment-experience/host.xml 2>&1 | tee output/attachment-experience/host.log
+          uv run --no-sync pytest -q tests/test_new_chat.py tests/test_message_delivery.py tests/test_live_clients.py tests/test_browser_check_runner.py tests/test_release_qualification.py tests/test_pinned_navigation.py --junitxml=output/attachment-experience/adjacent.xml 2>&1 | tee output/attachment-experience/adjacent.log
+      - name: Attachment geometry and intake units
+        id: units
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test frontend/tests/attachment-view.test.mjs frontend/tests/connection-notice.test.mjs 2>&1 | tee output/attachment-experience/units.tap
+          (cd frontend && node --test tests/pin-order-settlement.test.mjs tests/work-shell.test.mjs tests/composer.test.mjs tests/peer-groups.test.mjs tests/peer-preview-pages.test.mjs) 2>&1 | tee output/attachment-experience/intersections.tap
+      - name: Source browser checks with owned cleanup
+        id: source-browser
+        continue-on-error: true
+        run: uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/plan.json --output output/browser-checks --budget-seconds 600
+      - name: Pin and navigation integration owners with owned cleanup
+        id: intersections
+        continue-on-error: true
+        run: uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/intersections-plan.json --output output/attachment-experience/intersections --budget-seconds 600
+      - name: Build and install exact noneditable wheel
+        id: wheel
+        run: |
+          uv build --wheel --out-dir output/attachment-experience/wheels
+          uv pip install --python .venv/bin/python --no-deps --reinstall output/attachment-experience/wheels/*.whl
+          mkdir -p "$RUNNER_TEMP/attachment-fixtures/tests/fixtures"
+          cp tests/fixtures/attachment_consumption_ui_server.py tests/fixtures/settings_ui_server.py "$RUNNER_TEMP/attachment-fixtures/tests/fixtures/"
+          .venv/bin/python -I - <<'PY'
+          import amplifier_web, hashlib, json, zipfile
+          from pathlib import Path
+          installed = Path(amplifier_web.__file__).parent
+          assert '.venv' in installed.parts and 'site-packages' in installed.parts, installed
+          source = Path('amplifier_web')
+          wheel, = Path('output/attachment-experience/wheels').glob('*.whl')
+          with zipfile.ZipFile(wheel) as archive:
+              files = [p for p in (source / 'static').rglob('*') if p.is_file()]
+              files += [source / 'client_views.py', source / 'service.py']
+              for file in files:
+                  relative = file.relative_to(source)
+                  assert file.read_bytes() == archive.read('amplifier_web/' + relative.as_posix()) == (installed / relative).read_bytes(), relative
+          Path('output/attachment-experience/installed.json').write_text(json.dumps({
+              'package': str(installed), 'wheelSha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              'verifiedFiles': len(files), 'buildSha256': hashlib.sha256((installed/'static/build.json').read_bytes()).hexdigest()}))
+          PY
+          python - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          shutil.copytree('output/browser-checks', 'output/attachment-experience/source-browser')
+          plan = json.loads(Path('output/attachment-experience/plan.json').read_text())
+          for row in plan['scenarios']:
+              row['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/attachment-experience/installed/' + row['id']
+          Path('output/attachment-experience/installed-plan.json').write_text(json.dumps(plan))
+          PY
+      - name: Installed browser checks with owned cleanup
+        id: installed-browser
+        continue-on-error: true
+        env:
+          AMPLIFIER_TEST_FIXTURE_ROOT: ${{ runner.temp }}/attachment-fixtures/tests/fixtures
+          AMPLIFIER_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+          AMPLIFIER_SHELL_NODE_MODULES: ${{ github.workspace }}/frontend/node_modules
+          PYTHONPATH: ''
+        run: .venv/bin/python scripts/browser_check_runner.py --plan output/attachment-experience/installed-plan.json --output output/attachment-experience/installed-runner --budget-seconds 600
+      - name: Preserve every affected failure
+        if: ${{ always() && (steps.host.outcome != 'success' || steps.units.outcome != 'success' || steps.source-browser.outcome != 'success' || steps.intersections.outcome != 'success' || steps.wheel.outcome != 'success' || steps.installed-browser.outcome != 'success') }}
+        run: exit 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: attachment-experience-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            output/attachment-experience/
+            output/browser-checks/
+            amplifier_web/static/
+          include-hidden-files: true
+          if-no-files-found: error
   mcp-boundary:
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
@@ -181,7 +317,7 @@ jobs:
           echo 'MCP boundary and APP004 qualification are separate selections; neither proof was run.'
           exit 1
       - name: Reject mixed MCP and attachment selection
-        if: ${{ inputs.attachment_consumption || inputs.multi_quote }}
+        if: ${{ inputs.attachment_consumption || inputs.multi_quote || inputs.attachment_experience }}
         run: exit 1
       - name: Record the fixed proof before setup
         run: |
@@ -320,7 +456,7 @@ jobs:
           persist-credentials: false
       - name: Reject mixed selections and bind exact source
         env:
-          MIXED: ${{ inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.destination_history || inputs.settings_close_diagnostic }}
+          MIXED: ${{ inputs.attachment_experience || inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.destination_history || inputs.settings_close_diagnostic }}
         run: |
           test "$MIXED" != true
           python scripts/canvas_qualification.py initialize
@@ -361,7 +497,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Reject mixed selections
-        if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
+        if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
         run: exit 1
       - name: Record fixed coverage before setup
         run: python scripts/compact_composer_checks.py --initialize
@@ -417,7 +553,7 @@ jobs:
         if: ${{ inputs.settings_close_diagnostic && !inputs.destination_history }}
         run: exit 1
       - name: Reject mixed navigation selections
-        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote }}
+        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience }}
         run: exit 1
       - uses: actions/checkout@v4
         with:
@@ -632,7 +768,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Reject incompatible peer selections
-        if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
+        if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
         run: exit 1
       - uses: actions/checkout@v4
         with:

@@ -56,6 +56,7 @@ import {MobileChatTitle,useNarrowScreen} from './responsive-navigation';
 import {NewChatSetup,newChatSetup} from './new-chat';
 import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,readAttachment} from './chat-controls';
+import {useChatFileDrop} from './chat-file-drop.js';
 import {ComposerOptions} from './composer-options';
 import {CoordinationPanel,selectWorkspaceChat} from './coordination';
 import {AttentionBadge,ActivityPanel,useReadCompletion} from './attention';
@@ -118,7 +119,7 @@ function App(){
  const [destinationTrail,setDestinationTrail]=useState(null),destinationHistory=useRef(null);
  if(!destinationHistory.current)destinationHistory.current=createDestinationHistory({changed:setDestinationTrail});
  useEffect(()=>onAuthenticationChange(scope=>{destinationHistory.current.invalidate(scope);setBootAttempt(value=>value+1)}),[]);
- const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
+ const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false);
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
@@ -553,17 +554,24 @@ function App(){
   const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const patch={draft:value,draftDocument:documentValue},token=pendingView.current.add(patch,sessionId),payload={patch,sessionId};const journalEntry=draftJournal.stage(sessionId,value,documentValue);draftJournalEntries.current.set(payload,journalEntry);setDraftStorageError(!journalEntry.persisted);stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)
  }
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace&&typeof workspace==='object'?workspace:workspace?{workspace}:{})}
- async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||newChatSetup(pendingView.current.apply(latest.current))),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
+ function creationSetup(){return {...newChatSetup(pendingView.current.apply(latest.current)),expectedDraftId:latest.current?.attachmentDraftId}}
+ async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||creationSetup()),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
   const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
   if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
   return created;
  }).finally(()=>{creatingSession.current=null});return creatingSession.current}
  function addFiles(files){
   if(!files?.length||executionUnavailable||historyPending)return;
-  const target=latest.current?.selectedSessionId??null,selected=Array.from(files);
+  const target=latest.current?.selectedSessionId??null,selected=Array.from(files),expectedDraftId=target===null?latest.current?.attachmentDraftId:undefined;
+  const admittedClient=latest.current?.client?.id,admittedHost=latest.current?.client?.hostInstanceId;
+  if(target===null&&!expectedDraftId){setError('The new-chat draft is not ready. Try attaching again after it loads.');return;}
   uploadCount.current++;setUploading(true);setError('');
   const run=async()=>{let index=0;try{
-   for(;index<selected.length;index++){const file=selected[index];await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file),...(file.attachmentSource?{source:file.attachmentSource}:{})})}
+   for(;index<selected.length;index++){
+    const file=selected[index],base64=await readAttachment(file);
+    if(admittedClient!==latest.current?.client?.id||admittedHost!==latest.current?.client?.hostInstanceId)throw Error('The connection changed before this file was uploaded. Choose the remaining files again in the intended chat.');
+    await dispatch('attachment.add',{sessionId:target,...(expectedDraftId?{expectedDraftId}:{}),name:file.name,base64,...(file.attachmentSource?{source:file.attachmentSource}:{})});
+   }
   }catch(error){
    // Keep uncertain transport outcomes in the existing recovery flow. For a
    // known file failure, explain which selection stopped this upload batch.
@@ -572,6 +580,7 @@ function App(){
   }finally{uploadCount.current--;setUploading(uploadCount.current>0)}};
   uploadQueue.current=uploadQueue.current.then(run,run);
  }
+ const chatDrop=useChatFileDrop({ownerKey:JSON.stringify([session?.id??null,state?.attachmentDraftId,state?.selectedWorkspaceId]),enabled:!!state&&workSurface(state)==='chat'&&!executionUnavailable&&!historyPending&&!referencingDraft,onFiles:addFiles,onError:setError});
  async function deliver(entry){
   if(deliveries.current.has(entry.id))return;
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
@@ -597,7 +606,7 @@ function App(){
   const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending')return;
   if(previous.document&&text!==undefined){setError('Retry this quoted message unchanged, or discard it and compose a correction.');return;}
   if(previous.status==='unknown'&&text!==undefined)return;
-  const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}:previous.creation;
+  const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:creationSetup()}:previous.creation;
   const currentGeneration=latest.current?.sessions?.find(row=>row.id===previous.sessionId)?.collaborationGeneration;
   const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,...(text!==undefined?{text}:{})}:{}),status:'sending',error:''});
   if(text!==undefined)act('view.update',{patch:{messageEdit:null}});
@@ -615,7 +624,7 @@ function App(){
   if(detail.focused)detail.latest(false);
   chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:creationSetup()}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
    const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
    // The outbox already owns this exact submitted text. A slow/ lost draft
@@ -714,7 +723,7 @@ function App(){
   <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style><style>{canvasExperienceCss}</style><style>{compactComposerCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 
-  <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>
+  <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation} fileDropHandlers={browsing?undefined:chatDrop.handlers}/>
   <AppReloadNotice/>
   {!panel&&<ArchiveNotice value={archiveValue}/>}
   {chatLink?.status==='failed'&&<div className="a-alert" role="alert" data-chat-link-failure><span>Couldn’t open chat: {actionErrorMessage(chatLink.error)}</span><button type="button" onClick={()=>chatLinkReceiver.current.retry()}>Retry opening chat</button><button type="button" aria-label="Dismiss chat link" onClick={()=>chatLinkReceiver.current.dismiss()}><X/></button></div>}
@@ -722,7 +731,7 @@ function App(){
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} act={act}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
-  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation"><WorkSurface shell={shell} state={state} act={act}/>
+  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act}/>
    <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-message-body"><Markdown text={session.streaming}/></div></article>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} dispatch={dispatch}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
    {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
@@ -730,14 +739,14 @@ function App(){
    {!!session?.approvals?.filter(a=>a.status==='pending'||!a.status).length&&<section className="a-card a-approvals" data-part="approvals"><div className="a-card-header"><h2>Needs your attention</h2></div>{session.approvals.filter(a=>a.status==='pending'||!a.status).map(a=><ApprovalCard key={a.id} approval={a} sessionId={session.id} act={act}/>)}</section>}
    {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
-   <form className={`a-composer a-compact-composer ${dragOver?'drag-over':''}`} data-part="composer" data-action="conversation.send" onSubmit={send} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();if(!executionUnavailable)setDragOver(true)}}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget))setDragOver(false)}} onDrop={e=>{if(e.dataTransfer.files.length){e.preventDefault();setDragOver(false);addFiles([...e.dataTransfer.files])}}}>
+   <form className="a-composer a-compact-composer" data-part="composer" data-action="conversation.send" onSubmit={send}>
     {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>
     {!session&&<ComposerWorkspace state={state} act={act}/>}
     <div className="a-compose-surface" data-part="composer-surface" data-expanded={composerExpanded({draft,attachments:availableAttachments,quote:state.view?.messageReply||state.view?.draftDocument?.segments?.some(part=>part.type==='quote')})}>
     <div className="a-compose-writing">
-    <AttachmentStrip privateDraft items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}{dragOver&&<p className="a-upload-status">Drop files or images to attach</p>}
+    <AttachmentStrip privateDraft sessionId={session?.id??null} items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}
     <ReplyPreview quote={state.view?.messageReply} sessionId={session?.id} dispatch={dispatch}/>
     <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} quoteApi={quoteApi} value={draft} document={state.view?.draftDocument} onChange={editDraft} onSend={send} onReveal={async(quote,button)=>{
      const sid=session?.id,owner=quoteApi.current;
@@ -753,7 +762,7 @@ function App(){
      const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.text||''));
      const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
      return digest===quote.sourceDigest?'Original revealed. Saved quotation is unchanged.':'Source changed since quoting. The earlier snapshot is retained.';
-    }} onFiles={files=>{setDragOver(false);addFiles(files)}} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    }} onFiles={addFiles} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
     {quoteNotice&&<small role="status">{quoteNotice}</small>}
     {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
     </div>

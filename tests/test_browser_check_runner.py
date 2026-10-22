@@ -271,6 +271,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'access-mode': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/access-mode'},
         'adaptive-work': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/adaptive-work'},
         'attachment-consumption': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
+        'attachment-experience': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-experience'},
         'home-sidebar': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/home-sidebar'},
         'tool-details': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/tool-details'},
         'tool-previews': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/tool-previews'},
@@ -298,7 +299,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 114
+    assert len(original) == 65 and len(rows) == 115
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -514,6 +515,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     tool_previews = 'tests/tool-previews-browser.mjs'
     assert tool_previews in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', tool_previews] for row in plan['scenarios']) == 1
+    attachment_experience = 'tests/attachment-experience-browser.mjs'
+    assert attachment_experience in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', attachment_experience] for row in plan['scenarios']) == 1
     pin_reorder = 'tests/pin-rapid-reorder-browser.mjs'
     assert pin_reorder in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', pin_reorder] for row in plan['scenarios']) == 1
@@ -527,8 +531,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum('node tests/composer-options-browser.mjs' in line for _, line in commands) == 1
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, pin_reorder} - feature_additions) == 146
-    assert len(readiness_scripts | extended_scripts) == 157
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder} - feature_additions) == 146
+    assert len(readiness_scripts | extended_scripts) == 158
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
@@ -595,7 +599,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
@@ -649,7 +653,7 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     option = workflow['on']['workflow_dispatch']['inputs']['destination_history']
     assert option['type'] == 'boolean' and option['default'] == 'false'
     assert workflow['permissions'] == {'contents': 'read'}
-    assert workflow['jobs']['browser']['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert workflow['jobs']['browser']['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     focused = workflow['jobs']['destination-history']
     assert focused['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
@@ -677,6 +681,28 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     assert len(uploads) == 1 and uploads[0]['if'] == 'always()'
     assert 'output/destination-history/' in uploads[0]['with']['path']
     assert 'output/browser-checks/' in uploads[0]['with']['path']
+
+
+def test_attachment_experience_route_is_fixed_and_installs_the_exact_wheel():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    option = workflow['on']['workflow_dispatch']['inputs']['attachment_experience']
+    assert option == {'description': 'Fixed attachment modal/drop and consumption checks, source and installed wheel',
+                      'type': 'boolean', 'default': 'false'}
+    job = workflow['jobs']['attachment-experience']
+    assert job['if'] == '${{ inputs.attachment_experience }}'
+    assert job['timeout-minutes'] == '30'
+    runs = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert "wanted = ('attachment-experience', 'attachment-consumption')" in runs
+    assert "intersections = ('pin-retention', 'pin-rapid-reorder', 'conversation-navigation', 'compact-composer', 'peer-preview')" in runs
+    assert "assert len(matches) == 1" in runs
+    assert 'uv sync --locked --group dev' in runs
+    assert 'uv pip install --python .venv/bin/python --no-deps --reinstall output/attachment-experience/wheels/*.whl' in runs
+    assert "file.read_bytes() == archive.read(" in runs
+    assert 'secrets.' not in json.dumps(job)
+    assert all(step.get('if') == 'always()' for step in job['steps']
+               if step.get('uses') == 'actions/upload-artifact@v4')
+    assert "steps.installed-browser.outcome != 'success'" in json.dumps(job)
+    assert "steps.intersections.outcome != 'success'" in json.dumps(job)
 
 
 # Independent literal identities: do not construct the positive TAP fixture from

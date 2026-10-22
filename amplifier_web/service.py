@@ -102,7 +102,7 @@ ACTION_DEFINITIONS = {
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.draft": ("Open configurable new-chat setup without creating a conversation or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. The user must submit the first message to create this chat; an agent cannot finish this through raw session.create. For an authorized task in the caller's inherited workspace, use coordination.create instead. For an explicitly user-requested independent chat and opening brief in another existing folder, use session.handoff.start without a second confirmation; use session.handoff.propose for suggestions.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
-    "session.create": ("Create a conversation through the human UI or host-managed creation flow. Direct agent calls are refused, including after session.draft; coordination.create commissions a task in the caller's inherited workspace, not an independent chat in another folder. session.handoff.start creates and delivers an explicitly user-requested independent chat directly; session.handoff.propose reserves human review for suggestions; session.handoff.read inspects its durable outcome without replay. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Reviewed inheritance does not copy history, tasks or running work; select:false preserves the view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.create": ("Create a conversation through the human UI or host-managed creation flow. Direct agent calls are refused, including after session.draft; coordination.create commissions a task in the caller's inherited workspace, not an independent chat in another folder. session.handoff.start creates and delivers an explicitly user-requested independent chat directly; session.handoff.propose reserves human review for suggestions; session.handoff.read inspects its durable outcome without replay. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Reviewed inheritance does not copy history, tasks or running work; select:false preserves the view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool. expectedDraftId guards the originating private unnamed draft during fromDraft creation.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "expectedDraftId": {"type": "string", "pattern": "^[a-f0-9]{32}$"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.plans": ("Read current plan progress and recorded trajectory for up to 50 chats without selecting them. Include items for at most one chat to inspect its todo list.", schema({"ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":True,"items":string(200)},"includeItems":{"type":"boolean"}},["ids"])),
     "session.select": ("Select a conversation without preparing a runtime. A saved chatReference proof is UI-only and revalidated before the ordinary navigation guards.", schema({"id": string(100), "chatReference": schema({
         "id": string(100), "version": {"type": "integer", "minimum": 1},
@@ -135,7 +135,7 @@ ACTION_DEFINITIONS = {
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
     "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a message to the observed run. Explicit steering stays bound; allowNextTurn lets an ordinary message start the next turn only after that exact run completes normally.", schema({"sessionId":string(200),"text": string(100000), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "allowNextTurn":{"type":"boolean"}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
-    "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
+    "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply. expectedDraftId binds an upload admitted from an unnamed browser draft, including its exact creation handoff.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"expectedDraftId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
     "conversation.retry": ("Explicitly resend an unconfirmed latest message, preserving its input identity and attachments. Unknown delivery requires confirmUncertain after the user accepts that prior effects might repeat. Never call as a passive check.", schema({"sessionId": string(200), "inputId": string(200), "confirmUncertain": {"type": "boolean"}}, ["sessionId", "inputId"])),
@@ -2251,6 +2251,7 @@ class AppService:
         fingerprint = command_fingerprint(action, args, origin, client_id)
         prepared_workspace = None
         prepared_identity = None
+        prepared_draft_id = None
         from .managed_chats import is_managed, allocate, creation_identity
         managed_creation = action == 'session.create' and is_managed(args)
         if action == 'session.create' and not managed_creation and not (command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
@@ -2286,6 +2287,10 @@ class AppService:
                     raise AppError(str(exc), 409) from None
                 if args.get('select', True):
                     self.canvas_views.guard_transition(action, args)
+                    if client_id is not None and (args.get('fromDraft') or self.state.get('selectedSessionId') is None):
+                        prepared_draft_id = self.clients.attachment_draft_id()
+                        if args.get('expectedDraftId', prepared_draft_id) != prepared_draft_id:
+                            raise AppError('The original new-chat draft changed. Nothing was sent.', 409)
             # Opening/editing a draft never creates directories. First submit
             # creates only its explicit path, away from the event loop and lock.
             if managed_creation:
@@ -2832,6 +2837,8 @@ class AppService:
                 if 'workspaceId' in args:
                     self.state['view']['navExpanded'] = False
             elif action == "session.create":
+                if prepared_draft_id is not None and prepared_draft_id != self.clients.attachment_draft_id():
+                    raise AppError('The original new-chat draft changed. Nothing was sent.', 409)
                 if args.get('fromDraft') and not managed_creation and not args.get('workspace', '').strip():
                     raise AppError('Choose a workspace folder before starting this chat.')
                 from .session_creation import prepare, apply
@@ -2888,6 +2895,7 @@ class AppService:
                         self.clients.draft(session["id"], drafts.pop("", ""))
                         attachments = self.clients.record().setdefault('attachments', {})
                         attachments[session['id']] = attachments.pop('', [])
+                        self.clients.bind_attachment_draft(session['id'])
                     self.state['view'].pop('newSessionDraft', None)
             elif action == "session.select":
                 bundled = client_id is not None and self.clients.records.get(client_id, {}).get('kind') == 'web'
@@ -3143,6 +3151,7 @@ class AppService:
             elif action == "attachment.add":
                 from .attachments import save,MAX_FILES
                 target = args.get('sessionId', self.state.get('selectedSessionId'))
+                target = self.clients.attachment_target(target, args.get('expectedDraftId'))
                 session = self._session(target) if target is not None else None
                 draft=self.clients.attachments(session)
                 if len(draft)>=MAX_FILES:raise AppError('Attach up to 8 files per message.')
