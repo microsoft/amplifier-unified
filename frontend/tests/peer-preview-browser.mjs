@@ -9,18 +9,18 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const installed=process.env.AMPLIFIER_TEST_INSTALLED_STATIC==='1';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/peer_preview_ui_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser;const results=[];
+let browser,page;const results=[];
 try{
  const target=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture readiness timeout')),30000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}}})});
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-peer-preview'}});
  await context.grantPermissions(['clipboard-read','clipboard-write']);
- const page=await context.newPage(),errors=[],commands=[];page.on('pageerror',e=>errors.push(e.message));
+ page=await context.newPage();const errors=[],commands=[];page.on('pageerror',e=>errors.push(e.message));
  page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/actions'){try{commands.push(r.postDataJSON().action)}catch{}}});
  await page.goto(target);await showFixtureConversation(page,{navPinned:false});
  const facts=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();
  assert.equal(facts.installed,installed);
- const change=kind=>page.request.post(new URL('/api/fixture/change',target).href,{data:{kind},headers:{Origin:target}});
+ const change=async kind=>{const response=await page.request.post(new URL('/api/fixture/change',target).href,{data:{kind},headers:{Origin:target}});assert.equal(response.ok(),true,await response.text())};
  const article=id=>page.locator(`[data-message-id="${id}"]`),panel=()=>page.getByRole('region',{name:'Read-only source chat preview'}).or(page.getByRole('dialog',{name:'Read-only source chat preview'}));
  const run=page.locator('.a-peer-run'),summary=run.locator('.a-peer-run-summary');
  await expect(summary).toContainText('3 messages');await expect(summary).toHaveAttribute('aria-expanded','false');
@@ -77,6 +77,7 @@ try{
   await page.setViewportSize({width,height:900});await link.click();await expect(panel()).toBeVisible();
   await expect(panel()).toHaveAttribute('aria-modal','true');
   const geometry=await panel().evaluate(n=>({width:n.getBoundingClientRect().width,overflow:n.scrollWidth>n.clientWidth}));assert.equal(geometry.overflow,false);assert.ok(geometry.width<=width);
+  if(process.env.AMPLIFIER_PROOF_DIR){mkdirSync(process.env.AMPLIFIER_PROOF_DIR,{recursive:true});await page.screenshot({path:join(process.env.AMPLIFIER_PROOF_DIR,`peers-narrow-${width}.png`)});}
   await panel().getByRole('button',{name:'Close source preview'}).press('Escape');await expect(link).toBeFocused();
  }
  await page.setViewportSize({width:1280,height:1000});
@@ -103,4 +104,11 @@ try{
  results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
  if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-browser-result.json'),JSON.stringify(results,null,2));
  console.log(JSON.stringify(results));
+}catch(error){
+ if(page&&process.env.AMPLIFIER_PROOF_DIR){
+  mkdirSync(process.env.AMPLIFIER_PROOF_DIR,{recursive:true});
+  await page.screenshot({path:join(process.env.AMPLIFIER_PROOF_DIR,'failure.png')}).catch(()=>{});
+  writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'failure.json'),JSON.stringify({error:String(error),body:await page.locator('body').innerText().catch(()=>''),url:page.url()},null,2));
+ }
+ throw error;
 }finally{await browser?.close();fixture.kill();}

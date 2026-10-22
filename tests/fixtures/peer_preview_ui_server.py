@@ -68,7 +68,10 @@ async def main():
         recipient.update(historyLoaded=True, deferRuntimeUntilInteraction=True, draft='Unsent synthetic draft α')
         service.state['sessions'] = [a,b,recipient]
         service.state['selectedSessionId'] = recipient['id']
-        service.state['selectedWorkspaceId'] = recipient['workspaceId']
+        service.state['selectedWorkspaceId'] = next(
+            row['id'] for row in service.state['workspaces']
+            if row.get('path') == recipient['workspace']
+        )
         service.state['view'].update(navPinned=False, navExpanded=False, draft=recipient['draft'])
         service._message(recipient,'user','Keep all original formatting and preview without leaving this chat.')
         for source in (a,b):
