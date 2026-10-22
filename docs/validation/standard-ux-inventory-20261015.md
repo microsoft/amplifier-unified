@@ -1,5 +1,21 @@
 # Standard UX inventory and execution plan
 
+## Source preparation failure follow-up (October 22)
+
+**TEST-SOURCE-PRELAUNCH** extends the managed test-environment checklist: when
+source snapshot preparation returns `repository-source-changed`, show the failed
+check and explain that no environment or command started. Inspecting its exact
+retired owner must preserve the original failure without replay, cleanup, or a
+physical-absence claim. A new explicit check is distinct from repeating that ID.
+Changed owner, launch, backend or receipt evidence, pending preparation and
+uncertain effects remain held under normal recovery.
+
+`tests/test_prelaunch_source_failure.py` owns the deterministic helper and real
+dispatch/journal regressions in Full Python checks and the focused managed-removal
+lane. Existing `test-environments` browser checks retain unknown-command and
+ownership coverage. This adds backend failure-state coverage; it does not claim a
+new rendered-browser or physical-backend acceptance pass or alter frozen counts.
+
 ## Completion-hook response follow-up (October 18)
 
 **RESPONSE-833** covers two ordinary answers with an internal completion check
