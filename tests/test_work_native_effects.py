@@ -115,11 +115,18 @@ async def test_native_early_tool_reaches_real_host_precondition(app, tmp_path, m
 async def test_programmatic_inner_pin_uses_real_service_not_synthetic_policy(app, fault):
     from amplifier_module_tool_exec import ProgrammaticTool
     adapter, child, required, worker = await joined(app)
-    pin_dispatches = []
+    pin_dispatches, pin_results = [], []
     actual_host = worker.bridge
     async def observed_host(operation, arguments):
         if operation == 'dispatch' and arguments.get('action') == 'session.pin':
             pin_dispatches.append(copy.deepcopy(arguments))
+            try:
+                result = await actual_host(operation, arguments)
+            except Exception as exc:
+                pin_results.append({'denied': True, 'code': getattr(exc, 'code', None), 'reason': str(exc)})
+                raise
+            pin_results.append({'denied': False, 'result': result})
+            return result
         return await actual_host(operation, arguments)
     worker.bridge = observed_host
     if fault not in {'uncovered', 'same_batch_read'}:
@@ -150,8 +157,11 @@ async def test_programmatic_inner_pin_uses_real_service_not_synthetic_policy(app
         assert len(pin_dispatches) == 1
         if fault == 'reused_parent':
             after=retained_bytes(app);await execute();assert retained_bytes(app)==after
-            # The second parent must not reach host dispatch at all. Merely
-            # deduplicating the identical command at the host would fail this.
-            assert len(pin_dispatches) == 1
+            # A recovery-capable container can reach the host, but the reused
+            # origin must be refused before ordinary receipt deduplication.
+            assert len(pin_dispatches) == 2
+            assert pin_dispatches[-1]['_workOrigin']['complete'] is False
+            assert pin_results[-1]['denied'] is True
+            assert pin_results[-1]['code'] == 'work_coverage_unavailable'
     else:
         assert 'nested-real-pin' not in retained_bytes(app) and retained_bytes(app)==before
