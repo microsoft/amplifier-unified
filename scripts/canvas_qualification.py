@@ -95,6 +95,16 @@ def prepare_installed():
     (harness / 'frontend').mkdir(parents=True)
     shutil.copytree(ROOT / 'tests', harness / 'tests', ignore=shutil.ignore_patterns('__pycache__'))
     shutil.copytree(ROOT / 'frontend/tests', harness / 'frontend/tests')
+    # Main's held-frame history oracle imports this pure command encoder in
+    # Node. It is test support only: Chromium still loads the wheel's built UI.
+    helper = Path('frontend/src/destination-history.js')
+    (harness / helper).parent.mkdir(parents=True)
+    shutil.copy2(ROOT / helper, harness / helper)
+    assert sha(ROOT / helper) == sha(harness / helper)
+    write(OUT / 'installed-test-support.json', {
+        'files': {str(helper): sha(harness / helper)},
+        'purpose': 'Node-only held-frame oracle; not browser-served product code',
+    })
     shutil.copy2(ROOT / 'frontend/package.json', harness / 'frontend/package.json')
     (harness / 'frontend/node_modules').symlink_to(ROOT / 'frontend/node_modules', target_is_directory=True)
     (harness / '.venv').symlink_to(venv, target_is_directory=True)

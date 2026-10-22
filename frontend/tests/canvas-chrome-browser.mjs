@@ -433,7 +433,7 @@ try{
    const response=await received(selected);await acceptedCanvasReceipt(observedReceipts.get(response.request()),response.request().postDataJSON().id);
    await expect(closingTab()).toHaveAttribute('aria-selected','true');await expect(closingTab()).toBeFocused();
    // Actual rendered pending state, not an immediately-true selection assertion.
-   await expect(dialog.getByRole('button',{name:'Close tab '+titles[18],exact:true,includeHidden:true})).toBeEnabled();
+   await expect(page.getByRole('dialog',{name:'Open documents',exact:true,includeHidden:true}).getByRole('button',{name:'Close tab '+titles[18],exact:true,includeHidden:true})).toBeEnabled();
   };
   await selectByClick();
   const start=await state(),events=[];
