@@ -239,6 +239,7 @@ class RuntimeManager:
         self._retired = {}
         self._execution_state = None
         self._configuration_revision = lambda: 0
+        self._input_configuration = None
         self.home = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
@@ -250,6 +251,10 @@ class RuntimeManager:
     def bind_configuration_revision(self, read):
         """Capture host configuration provenance before asynchronous preparation."""
         self._configuration_revision = read
+
+    def bind_input_configuration(self, prepare):
+        """Host-only next-message validation; never invoked by reads or warmup."""
+        self._input_configuration = prepare
 
     def _check_execution(self, sid, session=None, *, allow_fenced=False):
         if self._execution_state is None:
@@ -373,6 +378,8 @@ class RuntimeManager:
         # Host callbacks only: no command argument can authorize a restart.
         if preserve_configuration and guard is None:
             raise ValueError('Placement-only startup requires the retained host operation guard.')
+        if session.get('bundleReplacement', {}).get('deferred') and guard is None:
+            raise RuntimeStartupError('Deferred bundle replacement requires its host admission guard.')
         if guard is not None: guard()
         if self._closed:
             raise RuntimeHostClosingError()
@@ -521,6 +528,8 @@ class RuntimeManager:
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
         self.workers[sid] = row
+        if session.get('bundleReplacement', {}).get('deferred'):
+            row['configuration_guard'] = guard
         row['generation_lease'] = lease
         row["reader"] = asyncio.create_task(self._read(sid, row))
         row["stderr_task"] = asyncio.create_task(self._drain_stderr(row))
@@ -605,9 +614,16 @@ class RuntimeManager:
         try:
             if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
                 raise RuntimeError("The calling runtime no longer owns this bridge.")
-            if not self.app_bridge:
-                raise RuntimeError("App controls are not connected")
-            result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
+            if data['operation'] == 'configuration.nextMessage.admit':
+                guard = row.get('configuration_guard')
+                if guard is None:
+                    raise RuntimeError('No deferred bundle application owns this worker.')
+                guard()
+                result = {'allowed': True}
+            else:
+                if not self.app_bridge:
+                    raise RuntimeError("App controls are not connected")
+                result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
             reply = {"op": "bridge.result", "id": data["id"], "result": result}
         except Exception as exc:
             reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
@@ -1021,8 +1037,8 @@ class RuntimeManager:
             await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit):
-        await self._start_for_input(session, emit)
-        return await self._request(session["id"], "send", text=text, input_id=input_id,
+        guard = await self._start_for_input(session, emit)
+        return await self._request(session["id"], "send", guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
@@ -1052,7 +1068,7 @@ class RuntimeManager:
         if reason:
             return {"accepted": False, "reason": reason}
         try:
-            await self._start_for_input(session, emit)
+            configuration_guard = await self._start_for_input(session, emit)
         except (RuntimeStartupError, SessionInUseError, asyncio.CancelledError) as exc:
             # Positive evidence from this attempt's pre-admission boundary.
             # This is never inferred from worker-row absence after restart.
@@ -1064,6 +1080,8 @@ class RuntimeManager:
             reason = guard()
             if reason:
                 return {"accepted": False, "reason": reason}
+            if configuration_guard:
+                configuration_guard()
             args = {"operation": "coordination.submit", "arguments": arguments}
             pending = await self._admit(session["id"], "control", args)
         return await self._reply(*pending, op="control", args=args)
@@ -1096,11 +1114,22 @@ class RuntimeManager:
 
     async def _start_for_input(self, session, emit):
         try:
+            guard = None
+            original = session
+            if self._input_configuration and session.get('nextMessageRevision'):
+                session, guard = await self._input_configuration(session)
             requested=session.get('pendingModelSelection')
-            await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit)
+            guarded = {'guard': guard} if guard else {}
+            await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit, **guarded)
             if requested:
-                await self.control(session['id'],'provider.select',requested)
+                await self.control(session['id'],'provider.select',requested, **guarded)
+            if guard:
+                guard()
+                await emit('runtime.nextMessageApplied', {'sessionId': session['id'],
+                    'revision': original['nextMessageRevision'], 'bundle': session.get('bundle'), 'selection': requested})
+            elif requested:
                 await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
+            return guard
         except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
             raise
         except Exception as exc:
@@ -1123,8 +1152,8 @@ class RuntimeManager:
         return await asyncio.to_thread(saved_delivery, session, input_id)
 
     async def retry(self, session, text, input_id, emit):
-        await self._start_for_input(session, emit)
-        return await self._request(session['id'], 'retry', text=text, input_id=input_id,
+        guard = await self._start_for_input(session, emit)
+        return await self._request(session['id'], 'retry', guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get('replyTo') for m in session.get('messages',[]) if m.get('inputId')==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get('attachments', []) for m in session.get('messages', []) if m.get('inputId') == input_id), []))

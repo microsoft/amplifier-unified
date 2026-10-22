@@ -73,6 +73,57 @@ async def test_pending_and_saved_explicit_selection_outrank_report(app):
     assert catalog(app)['effective'] == wanted
 
 
+@pytest.mark.parametrize('reset_model', [False, True])
+async def test_pending_bundle_default_is_not_replaced_by_mounted_report(app, monkeypatch, reset_model):
+    await browse(app.management, app._session())
+    await report(app, 'old-mounted')
+    if reset_model:
+        app._session()['selection'] = {'instance': 'fixture', 'model': 'old-pin'}
+    await app.dispatch('conversation.configure', {'sessionId': app._session()['id'],
+        'expectedRevision': 0, 'bundle': 'next-root', 'resetModel': reset_model})
+
+    async def defaults(*args, **kwargs):
+        assert args[2] == 'next-root' and kwargs['desired_bundle'] is True
+        return {'providers': [{'id': 'fixture'}],
+                'selection': {'instance': 'fixture', 'model': 'old-pin'} if reset_model else None,
+                'effective': {'instance': 'fixture', 'model': 'new-root-default'}, 'catalogs': {}}
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', defaults)
+    await browse(app.management, app._session(), refresh=True)
+    assert catalog(app)['effective']['model'] == 'new-root-default'
+    assert catalog(app)['nextMessageRevision'] == 1 and not catalog(app)['pinned']
+    await report(app, 'late-old-mounted')
+    assert catalog(app)['effective']['model'] == 'new-root-default'
+    assert app._session()['pendingBundleSelection']['bundle'] == 'next-root'
+    if reset_model:
+        assert app._session()['selection'] is None
+
+    # The exact application receipt ends the pending fence; a subsequent
+    # current report still refreshes defaults through Main's canonical owner.
+    await app.on_runtime_event('runtime.nextMessageApplied', {'sessionId': app._session()['id'],
+        'revision': 1, 'bundle': 'next-root', 'selection': None})
+    await report(app, 'new-mounted')
+    assert catalog(app)['effective']['model'] == 'new-mounted'
+    assert 'pendingBundleSelection' not in app._session()
+    assert app.runtime is None
+
+
+async def test_report_does_not_relabel_catalog_from_previous_chat_revision(app):
+    await browse(app.management, app._session())
+    before = deepcopy(catalog(app))
+    wanted = {'instance': 'fixture', 'model': 'next-input', 'effort': 'high'}
+    await app.dispatch('conversation.configure', {'sessionId': app._session()['id'],
+        'expectedRevision': 0, 'selection': wanted})
+    await report(app, 'old-mounted')
+    assert catalog(app) == before
+    assert catalog(app)['nextMessageRevision'] == 0
+    assert app._session()['nextMessageRevision'] == 1
+    await browse(app.management, app._session(), refresh=True)
+    assert catalog(app)['nextMessageRevision'] == 1
+    assert catalog(app)['effective'] == wanted
+    await report(app, 'later-mounted')
+    assert catalog(app)['effective'] == wanted
+
+
 @pytest.mark.parametrize('obsolete', ['revision', 'pending', 'busy'])
 async def test_old_or_reconciling_report_cannot_override_new_settings_catalog(app, obsolete):
     app.state['configurationRevision'] = 2

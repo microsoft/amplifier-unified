@@ -25,9 +25,13 @@ def definitions(schema, string):
         "allowFreeText": {"type": "boolean"},
         "required": {"type": "boolean"},
         "dependency": {**string(1000), "minLength": 1},
+        "artifacts": {"type": "array", "maxItems": 4, "items": schema({
+            "id": {**string(100), "pattern": r"^[-\w]+$"},
+            "version": {"type": "integer", "minimum": 1},
+        }, ["id", "version"])},
     }
     return {
-        "question.create": ("Ask a durable question in this conversation. required=true blocks only the named dependency, not independent work. This is never permission approval. Keep a stable command ID for retries.", schema({"sessionId": identity["sessionId"], **content}, ["sessionId", "prompt", "required", "dependency"])),
+        "question.create": ("Ask a durable question in this conversation. Use Markdown and artifacts:[{id,version}] from saved Canvas receipts when review material informs the answer; versions are exact, not Latest. required=true blocks only the named dependency. This never grants permission. Keep a stable command ID for retries.", schema({"sessionId": identity["sessionId"], **content}, ["sessionId", "prompt", "required", "dependency"])),
         "question.list": ("Read this conversation's saved questions without selecting it or starting work. Pending is not answered, regardless of elapsed time.", schema({"sessionId": identity["sessionId"], "status": {"enum": ["pending", "answered", "cancelled", "superseded"]}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, ["sessionId"])),
         "question.read": ("Read one exact question, its answer provenance and separate runtime delivery state.", schema(identity)),
         "question.answer": ("Record an explicit answer once for this question revision. Choose optionId or text. Agents must cite sourceMessageId from a user message or voice transcript in this conversation. Answering never grants permission. Duplicate answers never replay work.", schema({**identity, **revision, "optionId": string(100), "text": string(8000), "sourceMessageId": string(200)}, ["sessionId", "id", "expectedRevision"])),
@@ -100,6 +104,12 @@ class Questions:
             # Retain every active/uncertain question and bounded recent history.
             visible = {r["id"] for r in records[-10:]}
             visible.update(r["id"] for r in records if r["status"] == "pending" or (r.get("delivery") or {}).get("status") in {"sending", "unknown", "rejected"})
+            # An older closed question can still host a mounted review. Do not
+            # evict its editor merely because newer questions filled history.
+            visible.update(binding['questionId']
+                           for client in self.app.clients.records.values()
+                           for binding in client.get('canvasViews', {}).get('inline', {}).values()
+                           if binding.get('sessionId') == session['id'] and binding.get('questionId'))
             session["questions"] = [r for r in records if r["id"] in visible]
 
     def read(self, action, args):
@@ -126,9 +136,9 @@ class Questions:
 
     def _new(self, args, origin, client_id):
         from .service import AppError
-        prompt, dependency = args["prompt"].strip(), args["dependency"].strip()
+        prompt, dependency = args["prompt"], args["dependency"]
         options = copy.deepcopy(args.get("options", []))
-        if not prompt or not dependency:
+        if not prompt.strip() or not dependency.strip():
             raise AppError("Provide the question and the work depending on its answer.")
         if any(not row["id"].strip() or not row["label"].strip() for row in options) or len({row["id"] for row in options}) != len(options):
             raise AppError("Question options need unique nonempty IDs and labels.")
@@ -140,7 +150,45 @@ class Questions:
                 "status": "pending", "createdAt": now, "updatedAt": now, "prompt": prompt,
                 "options": options, "allowFreeText": allow_text, "required": args["required"],
                 "dependency": dependency, "createdBy": {"origin": origin, "clientId": client_id},
-                "answer": None, "delivery": None}
+                "artifacts": self._artifacts(args["sessionId"], args.get("artifacts", [])),
+                "contentRevision": 1, "answer": None, "delivery": None}
+
+    def _artifacts(self, session_id, references):
+        """Freeze bounded metadata, never copy a body or infer access from a URL."""
+        from .canvas_versions import definition
+        from .service import AppError
+        result, seen = [], set()
+        for ref in references:
+            key = (ref["id"], ref["version"])
+            if key in seen:
+                raise AppError("Use each exact question artifact only once.")
+            seen.add(key)
+            row = next((r for r in self.app.state.get("canvasArtifacts", [])
+                        if r["id"] == ref["id"] and r.get("sessionId") == session_id), None)
+            if row is None:
+                raise AppError("This question artifact is unavailable in the calling conversation.", 404)
+            saved = definition(row, ref["version"], self.app.db)
+            digest = saved.get("body", {}).get("$resource")
+            if not digest:
+                raise AppError("This question artifact has no retained saved body.", 409)
+            result.append({**ref, "title": saved["title"], "kind": saved["kind"],
+                           "sessionId": session_id, "bodyDigest": digest})
+        return result
+
+    def review_artifact(self, session_id, question_id, question_revision, artifact_id, version):
+        """Validate the immutable question binding on every preview resource read."""
+        from .service import AppError
+        record = self.store.get(session_id, question_id)
+        if record.get("contentRevision", 1) != question_revision:
+            raise AppError("This question revision does not match the saved review.", 409)
+        ref = next((r for r in record.get("artifacts", [])
+                    if r["id"] == artifact_id and r["version"] == version), None)
+        if ref is None:
+            raise AppError("This artifact version is not attached to the question.", 409)
+        current = self._artifacts(session_id, [{"id": artifact_id, "version": version}])[0]
+        if current != ref:
+            raise AppError("This question's saved artifact changed; no replacement was displayed.", 409)
+        return ref
 
     def dispatch(self, action, args, origin, client_id, pending):
         from .service import AppError
@@ -155,6 +203,9 @@ class Questions:
         record = self.store.get(session["id"], args["id"])
         if record["revision"] != args["expectedRevision"] or record["status"] != "pending":
             raise AppError("This question changed or is already closed. Read it before continuing; the answer was not sent.", 409)
+        # The action lock orders this check with renderer dirty declarations.
+        # Refuse before changing the question, admitting an answer or replacing it.
+        app.canvas_views.guard_transition(action, args)
         replacement = None
         if action == "question.supersede":
             replacement = self._new(args, origin, client_id)
@@ -169,8 +220,8 @@ class Questions:
             if has_option == has_text:
                 raise AppError("Choose one option or enter one free-text answer.")
             option = next((r for r in record["options"] if r["id"] == args.get("optionId")), None)
-            text = option["label"] if option else args.get("text", "").strip()
-            if (has_option and option is None) or (has_text and (not record["allowFreeText"] or not text)):
+            text = option["label"] if option else args.get("text", "")
+            if (has_option and option is None) or (has_text and (not record["allowFreeText"] or not text.strip())):
                 raise AppError("Use an offered option or an allowed nonempty free-text answer.")
             source = None
             if args.get("sourceMessageId"):
@@ -190,7 +241,8 @@ class Questions:
                 provenance.update(messageId=source["id"], text=source.get("text", ""), inputOrigin=source['inputOrigin'], voiceId=source.get("voiceId"), voiceItemId=source.get("voiceItemId"))
             input_id = "question:" + record["id"] + ":answer"
             record.update(status="answered", answer={"text": text, "optionId": option["id"] if option else None,
-                "questionRevision": record["revision"], "answeredAt": time.time(), "provenance": provenance},
+                "questionRevision": record["revision"], "answeredAt": time.time(), "provenance": provenance,
+                "artifacts": copy.deepcopy(record.get("artifacts", []))},
                 delivery={"status": "sending", "inputId": input_id, "updatedAt": time.time()})
             # IDs/revisions/provenance live in metadata; the conversation keeps
             # a readable user answer, using the same content delivered to runtime.

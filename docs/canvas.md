@@ -103,7 +103,10 @@ client displaying the chat, an originating publication turn, and a supported
 kind. PDF, browser, Settings, A2UI and app viewers remain Canvas-only.
 
 `canvas.select {id, version, presentation, messageId}` changes the presentation
-of existing saved content; inline requires its exact publication `messageId`.
+of existing saved content; inline requires its exact publication `messageId` or
+`questionId` plus immutable `questionContentRevision`, never both. Question
+references validate their retained session, version and body identity before any
+presentation changes. The same source binding fences late inline mounts.
 It never creates another artifact, revises content or starts conversation work.
 The choice belongs to this client and exact artifact version, survives reload,
 and does not change another client's choice. Old calls without `presentation`
@@ -451,6 +454,45 @@ separate pieces of evidence.
 
 ### Inline previews
 
+#### Review material in questions
+
+Use readable Markdown for question prompts, descriptions and answers. Attach up
+to four exact same-chat saved versions using
+`question.create {sessionId,prompt,required,dependency,artifacts:[{id,version}]}`.
+`question.supersede` accepts the same list for a new pending question. IDs and
+versions come from saved Canvas receipts, not arbitrary URLs or file paths.
+The host retains bounded title/kind/owner and content-addressed body identity
+without copying document bodies into the question. An answer retains this
+reference set and the question revision; opening a preview does not attest that
+the person read it, answer the question, grant permission or start work.
+
+Compact review cards expose **Preview here** and **Open in Canvas** separately.
+The shared presentation owner also handles question Preview/Open/Hide. A closed
+Canvas retains its renderer, so opening that version at a question is a transfer,
+not merely closing a panel. Stateful HTML/3D requires the same explicit Keep/Reset
+choice; reset never bypasses dirty edits. Bodies load only after explicit
+expansion. Supported HTML mockups use the same
+sandbox as Canvas, never parent-document HTML. Unsupported kinds and unavailable
+versions report their limits instead of substituting Latest. Saved question and
+answer source is preserved, including whitespace. Free-text drafts are kept in
+the originating browser tab's session storage, keyed by host/chat/question ID
+and `contentRevision`; storage failure is visible. They are not sent until
+explicitly answered.
+
+An open question review remains mounted across status and delivery updates until
+the person closes it. Answer, cancel and supersede reject before changing the
+record if any client has declared that question's preview dirty. The editor and
+answer draft remain reachable; finishing/cancelling the edit permits a new
+explicit attempt. These guards never discard the edit or replay the answer.
+
+An inline view binds either a message publication or
+`questionId` plus `questionContentRevision` from the question's immutable
+`contentRevision`, never both. This is not the record's status `revision`, which
+increments when answered or closed. The question binding is checked
+again on resource reads. Exact historical references remain inspectable after
+answering; new decisions use a new/superseding question rather than changing a
+past answer.
+
 Saved document and image publications also appear beside their originating chat
 message. The inline preview binds the publication's exact saved version; opening
 it in full view selects that same artifact/version in Canvas. A later revision
@@ -459,8 +501,10 @@ surfaces and external websites retain their existing Canvas link until their
 inline lifecycle is qualified.
 
 CanvasViews owns both presentations. `canvas.views.inline` requires the artifact,
-message, version and a client-local preview mount identity. It validates the
-publication and selected conversation before allocating a view. A repeated mount
+version, a message publication or exact question source, and a client-local
+preview mount identity. It validates the source and selected conversation before
+allocating a view. Bundled cards use `presentationRequest` to require the matching
+accepted presentation; a superseded choice cannot recreate an old preview. A repeated mount
 request reuses its view; a new mount receives a distinct view so a late unmount
 cannot close its replacement. All reads and commands retain the existing
 resource/revision/generation checks. `canvas.views.release` closes only that

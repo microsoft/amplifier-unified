@@ -12,7 +12,8 @@ def bind_runtime(service):
 def reported_selection(service, session):
     """Only a report prepared from current settings can update next-input defaults."""
     if (session.get('runtimeReportConfigurationRevision', 0) != service.state.get('configurationRevision', 0)
-            or session.get('configurationPending') or session.get('configurationBusy')):
+            or session.get('configurationPending') or session.get('configurationBusy')
+            or session.get('pendingBundleSelection')):
         return None
     return session.get('runtimeReport', {}).get('effective_selection')
 
@@ -34,7 +35,9 @@ def accept_report(service, session, payload):
         selected = session.get('pendingModelSelection') or session.get('selection')
         for key in ('configuration.catalog', 'configuration.providers'):
             catalog = service.state.get('runtimeControl', {}).get(session['id'], {}).get(key)
-            if catalog is not None and catalog.get('configurationRevision', 0) == service.state.get('configurationRevision', 0):
+            if (catalog is not None
+                    and catalog.get('configurationRevision', 0) == service.state.get('configurationRevision', 0)
+                    and catalog.get('nextMessageRevision', 0) == session.get('nextMessageRevision', 0)):
                 catalog['effective'] = copy.deepcopy(selected or effective)
 
 
@@ -57,32 +60,38 @@ async def browse(management, session, *, refresh=False):
     service = management.service
     sid = session['id']
     revision = service.state.get('configurationRevision', 0)
+    desired_revision = session.get('nextMessageRevision', 0)
+    pending_bundle = copy.deepcopy(session.get('pendingBundleSelection'))
     # The resolver only composes configuration and queries provider metadata.
     # It doesn't mount context, hooks, tools, load history, or acquire ownership.
     # Fresh workers publish connection identities with their effective selection.
     # Reuse those identities directly; browsing needs no separate per-chat probe.
     report=session.get('runtimeReport',{})
     previous=service.state.get('runtimeControl',{}).get(sid,{}).get('configuration.catalog',{})
-    same_revision=previous.get('configurationRevision',0)==revision
+    same_revision=(previous.get('configurationRevision',0)==revision
+                   and previous.get('nextMessageRevision',0)==desired_revision)
     current_catalog=same_revision and previous.get('phase')=='ready'
     # A prior result at the current revision owns its identities. Never stamp an
     # old runtime report with the revision of a newer configuration discovery.
-    choices=previous.get('providers',[]) if current_catalog else report.get('provider_choices',[]) if revision==0 and not previous else []
+    choices=previous.get('providers',[]) if current_catalog else report.get('provider_choices',[]) if revision==0 and not previous and not pending_bundle else []
     cached={row.get('sharedCatalogKey'):management.provider_catalog.peek(model_key(row.get('sharedCatalogKey')))
             for row in choices if row.get('sharedCatalogKey')}
     if same_revision and not refresh and not session.get('configurationPending') and choices and all((cached.get(row.get('sharedCatalogKey')) or {}).get('providerMetadata') for row in choices):
         result={'providers':copy.deepcopy(choices) if current_catalog else [{'id':row['id'],'sharedCatalogKey':row['sharedCatalogKey'],
                    'info':{'display_name':row.get('display_name'),'defaults':{'model':row.get('model'),'reasoning_effort':row.get('effort')}}}
                   for row in choices], 'effective':previous.get('effective',{}) if current_catalog else report.get('effective_selection',{}),
-                'catalogs':{key:{'phase':'ready','models':value.get('models',[]),'metadata':value['providerMetadata']}
+                'catalogs':{key:{'phase':'ready','models':value.get('models',[]),'metadata':value['providerMetadata'],
+                                'supported':value.get('modelsSupported',True)}
                             for key,value in cached.items()}}
     else:
-        result = await resolve_defaults(service.data_dir, session['workspace'], session.get('bundle'),
+        result = await resolve_defaults(service.data_dir, session['workspace'], pending_bundle['bundle'] if pending_bundle else session.get('bundle'),
         service.state['settings'].get('appBundle'), session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
-            catalog=True, refresh=refresh, global_only=session.get('location',{}).get('kind')=='managed')
+            catalog=True, refresh=refresh, desired_bundle=bool(pending_bundle),
+            global_only=session.get('location',{}).get('kind')=='managed')
     entries = result.pop('catalogs', {})
     async with service.lock:
-        if revision != service.state.get('configurationRevision', 0):
+        if (revision != service.state.get('configurationRevision', 0)
+                or desired_revision != service._session(sid, hydrate=False).get('nextMessageRevision', 0)):
             return
         for identity, entry in entries.items():
             if entry.get('phase') == 'ready':
@@ -91,9 +100,10 @@ async def browse(management, session, *, refresh=False):
                 if refresh or management.provider_catalog.peek(model_key(identity)) != value:
                     management.provider_catalog.put(model_key(identity), value)
         current = service._session(sid)
-        selection = current.get('selection') or result.get('selection')
+        selection = current.get('selection') if 'selection' in current else result.get('selection')
         result.update(effective=current.get('pendingModelSelection') or selection or reported_selection(service, current) or result.get('effective', {}),
-                      pinned=bool(selection), phase='ready', configurationRevision=revision)
+                      pinned=bool(selection), phase='ready', configurationRevision=revision,
+                      nextMessageRevision=desired_revision)
         control = service.state.setdefault('runtimeControl', {}).setdefault(sid, {})
         changed = control.get('configuration.catalog') != result
         control['configuration.catalog'] = result
@@ -117,6 +127,12 @@ async def select(management, session, requested):
         # Persist the explicit intent before touching any worker.
         current['selection'] = copy.deepcopy(selected)
         current['pendingModelSelection'] = copy.deepcopy(selected)
+        current['nextMessageRevision'] = current.get('nextMessageRevision', 0) + 1
+        current['nextMessageStatus'] = 'saved'
+        current.pop('nextMessageError', None)
+        current.pop('nextMessageFailure', None)
+        if current.get('pendingBundleSelection'):
+            current['pendingBundleSelection']['resetModel'] = False
         control = service.state.setdefault('runtimeControl', {}).setdefault(current['id'], {})
         for key in ('configuration.catalog', 'configuration.providers'):
             if key in control:
@@ -133,10 +149,10 @@ async def request_browse(management, session, *, refresh=False):
     requested=getattr(management,'conversation_catalog_demand',None)
     if requested is None:
         requested=management.conversation_catalog_demand={}
-    demand=(service.state.get('configurationRevision',0),refresh)
+    demand=(service.state.get('configurationRevision',0),refresh,session.get('nextMessageRevision',0))
     if sid in pending:
-        if requested.get(sid)!=(demand[0],False) or refresh:
-            requested[sid]=(demand[0],refresh or requested.get(sid,(None,False))[1])
+        if requested.get(sid)!=(demand[0],False,demand[2]) or refresh:
+            requested[sid]=(demand[0],refresh or requested.get(sid,(None,False))[1],demand[2])
         return
     requested[sid]=demand
     async def run():
@@ -152,7 +168,8 @@ async def request_browse(management, session, *, refresh=False):
                     if requested[sid]!=observed:
                         continue
                     async with service.lock:
-                        if observed[0]==service.state.get('configurationRevision',0):
+                        if (observed[0]==service.state.get('configurationRevision',0)
+                                and observed[2]==service._session(sid, hydrate=False).get('nextMessageRevision',0)):
                             control=service.state.setdefault('runtimeControl',{}).setdefault(sid,{})
                             control.setdefault('configuration.catalog',{}).update(phase='error',error='Could not load model settings. Your selection is preserved. Refresh models to retry.')
                             service._publish_changes(sessions={sid})

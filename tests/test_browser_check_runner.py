@@ -262,6 +262,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'pin-rapid-reorder': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-rapid-reorder'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
         'destination-history': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/destination-history'},
+        'dormant-controls': {'AMPLIFIER_DORMANT_EVIDENCE': '{root}/output/browser-checks/dormant-controls'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
         'mcp-clients': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-clients.png'},
         'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
@@ -300,7 +301,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 116
+    assert len(original) == 65 and len(rows) == 117
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -316,6 +317,21 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     assert ['node', 'tests/empty-host-browser.mjs', '--lost-create'] in commands
     assert all((ROOT / 'frontend' / command[2 if command[1] == '--test' else 1]).is_file()
                for command in commands)
+
+
+def test_dormant_controls_has_standard_ux_and_plan_owned_evidence():
+    deltas = json.loads((ROOT / 'frontend/tests/standard-ux-inventory-deltas.json').read_text())
+    delta = next(row for row in deltas['changes'] if row['id'] == 'delta.1035')
+    workflow, = delta['workflowsAdded']
+    owner = 'frontend/tests/dormant-controls-browser.mjs'
+    assert workflow['id'] == 'conversation.next-message-settings'
+    assert owner in {row['path'] for row in workflow['existingTests']}
+    # This is evidence ownership, not a claim that a browser run has passed.
+    source = (ROOT / owner).read_text()
+    assert "process.env.AMPLIFIER_DORMANT_EVIDENCE||" in source
+    assert "evidenceDir+'/browser-result.json'" in source
+    assert "evidenceDir+'/dormant-controls-narrow.png'" in source
+    assert "evidenceDir+'/dormant-controls-desktop.png'" in source
 
 
 def assert_readiness_python_coverage(workflow, *, targets, run_blocks_sha256):
@@ -525,6 +541,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     approval = 'tests/approval-lifecycle-browser.mjs'
     assert approval in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', approval] for row in plan['scenarios']) == 1
+    dormant = 'tests/dormant-controls-browser.mjs'
+    assert dormant in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', dormant] for row in plan['scenarios']) == 1
     # New source journeys are automatic; their manual lanes add installed and
     # negative-control proof without replacing any existing ordinary owner.
     feature_additions = {f'tests/{name}-browser.mjs' for name in
@@ -535,8 +554,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum('node tests/composer-options-browser.mjs' in line for _, line in commands) == 1
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval} - feature_additions) == 146
-    assert len(readiness_scripts | extended_scripts) == 159
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant} - feature_additions) == 146
+    assert len(readiness_scripts | extended_scripts) == 160
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

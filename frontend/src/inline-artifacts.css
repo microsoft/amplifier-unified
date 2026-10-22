@@ -61,3 +61,25 @@
 #amp-one .a-inline-document-frame>.a-inline-artifact-body{box-sizing:border-box;height:100%;max-height:none;min-height:0;border-top:0}
 #amp-one .a-inline-document-frame>.a-inline-artifact-placeholder{height:100%;min-height:0}
 #amp-one .a-inline-document-frame>.a-inline-artifact-notice{box-sizing:border-box;height:100%;overflow:auto}
+
+/* A compact saved-reference row; all presentation state stays with its caller. */
+#amp-one .a-compact-artifact{container-type:inline-size;border:1px solid var(--a-line);border-radius:8px;background:var(--a-surface);min-width:0;width:100%}
+#amp-one .a-compact-artifact-row{display:flex;align-items:center;flex-wrap:nowrap;gap:6px;padding:4px 6px;min-width:0}
+#amp-one .a-compact-artifact-row>svg{width:18px;height:18px;flex:none}
+#amp-one .a-compact-artifact-title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px;font-weight:600;padding:10px 0}
+#amp-one .a-compact-artifact-title:focus{white-space:normal;overflow:visible;overflow-wrap:anywhere}
+#amp-one .a-compact-artifact-version{flex:none;white-space:nowrap;font-size:12px;color:var(--a-muted)}
+#amp-one .a-compact-artifact-action{position:relative;flex:none}
+#amp-one .a-compact-artifact-action button{display:flex;align-items:center;justify-content:center;gap:6px;min-width:44px;height:44px;padding:8px;border:0;background:transparent;white-space:nowrap;font-size:12px;border-radius:6px}
+/* Override legacy message-card toggle spacing only inside compact review rows. */
+#amp-one .a-compact-artifact .a-compact-artifact-action button{box-sizing:border-box;margin:0}
+#amp-one .a-compact-artifact-action svg{width:18px;height:18px;flex:none}
+#amp-one .a-compact-artifact-action button:hover,#amp-one .a-compact-artifact-action button[aria-expanded=true]{background:var(--a-hover,rgba(100,120,160,.12))}
+#amp-one .a-compact-artifact button:focus-visible,#amp-one .a-compact-artifact-title:focus-visible{outline:2px solid var(--a-accent);outline-offset:2px}
+#amp-one .a-artifact-tooltip{display:none;position:absolute;right:0;top:100%;z-index:30;width:max-content;max-width:220px;white-space:normal;overflow-wrap:anywhere;padding:6px 9px;border:1px solid var(--a-line);border-radius:6px;color:var(--a-ink);background:var(--a-surface);font-size:12px}
+#amp-one .a-compact-artifact[data-tips=show] .a-compact-artifact-action:hover>.a-artifact-tooltip,#amp-one .a-compact-artifact[data-tips=show] .a-compact-artifact-action:focus-within>.a-artifact-tooltip{display:block}
+#amp-one .a-compact-artifact-notice{padding:4px 10px 8px;margin:0;font-size:12px;overflow-wrap:anywhere}
+#amp-one .a-compact-artifact .a-inline-artifact{border:0;border-top:1px solid var(--a-line);border-radius:0 0 8px 8px}
+@container(max-width:650px){#amp-one .a-compact-artifact-open button>span{display:none}#amp-one .a-compact-artifact-open button{width:44px}}
+@container(max-width:500px){#amp-one .a-compact-artifact-action button>span{display:none}#amp-one .a-compact-artifact-action button{width:44px}}
+@container(max-width:300px){#amp-one .a-compact-artifact-row{gap:4px;padding-inline:4px}}

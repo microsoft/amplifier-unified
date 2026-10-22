@@ -9,6 +9,7 @@
     "test": "node --test tests/*.test.mjs",
     "test:multi-quote-browser": "node tests/multi-quote-browser.mjs",
     "test:chat-demand-browser": "node tests/chat-demand-browser.mjs",
+    "test:dormant-controls-browser": "node tests/dormant-controls-browser.mjs",
     "test:interim-replies-browser": "node tests/interim-replies-browser.mjs",
     "test:feedback-followup-browser": "node tests/feedback-followup-browser.mjs",
     "test:publishing-browser": "node tests/publishing-browser.mjs",

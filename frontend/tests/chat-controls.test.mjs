@@ -4,13 +4,15 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {ModelControl,readAttachment}=await server.ssrLoadModule('/src/chat-controls.jsx');
+const {ModelControl,readAttachment,useNextMessageConfiguration}=await server.ssrLoadModule('/src/chat-controls.jsx');
+const {ComposerOptions}=await server.ssrLoadModule('/src/composer-options.jsx');
+const record=calls=>async(name,args)=>{calls.push({name,args});return {accepted:true,...(name==='conversation.configure'?{result:{revision:args.expectedRevision+1}}:{})}};
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 for(const commit of ['onPointerUp','onKeyUp','onBlur'])test('reasoning effort survives a background view refresh until '+commit,async()=>{
  const calls=[],session={id:'chat',status:'idle'},selection={instance:'one',model:'model',effort:'high'};
  let state={view:{composerModel:{open:true,sessionId:'chat',...selection}},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:0,providers:[{id:'one',info:{defaults:{model:'model'},config_fields:[{id:'reasoning_effort',choices:['low','medium','high']}] }}],effective:selection}}}},root;
- const render=()=>React.createElement(ModelControl,{state,session,act:async(name,args)=>calls.push({name,args}),working:false});
+ const render=()=>React.createElement(ModelControl,{state,session,act:record(calls),working:false});
  try{
   await renderAct(async()=>root=create(render()));
   const slider=()=>root.root.findByProps({id:'chat-effort'});
@@ -20,9 +22,9 @@ for(const commit of ['onPointerUp','onKeyUp','onBlur'])test('reasoning effort su
   await renderAct(async()=>root.update(render()));
   assert.equal(slider().props['aria-valuetext'],'medium');
   await renderAct(async()=>slider().props[commit]({currentTarget:{value:String(slider().props.value)}}));
-  assert.deepEqual(calls.filter(c=>c.args.operation==='provider.queueSelection').map(c=>c.args.args),[{...selection,effort:'medium'}]);
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args),[{sessionId:'chat',expectedRevision:0,selection:{...selection,effort:'medium'}}]);
   await renderAct(async()=>slider().props.onBlur({currentTarget:{value:'1'}}));
-  assert.equal(calls.filter(c=>c.args.operation==='provider.queueSelection').length,1);
+  assert.equal(calls.filter(c=>c.name==='conversation.configure').length,1);
  }finally{await renderAct(async()=>root?.unmount())}
 });
 test('attachment intake accepts 32 MiB and rejects oversized files before reading',async()=>{
@@ -63,7 +65,7 @@ test('a new workspace stays idle until its model controls are explicitly opened'
  await renderAct(async()=>root.unmount());
 });
 test('late catalogs preserve selector choices and shared provider actions',async()=>{
- const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}},session={id:'chat',status:'idle'};
+ const calls=[],act=record(calls),session={id:'chat',status:'idle'};
  let state={view:{composerModel:{open:true,sessionId:'chat',instance:'openai',model:'first'}},runtimeControl:{chat:{}}},root;
  const render=()=>React.createElement(ModelControl,{state,session,act,ensureSession:async()=>session,working:false});
  await renderAct(async()=>{root=create(render())});
@@ -72,7 +74,7 @@ test('late catalogs preserve selector choices and shared provider actions',async
  await renderAct(async()=>root.update(render()));
  const picker=()=>root.root.findAllByProps({id:'chat-model'}).find(n=>typeof n.type==='string');
  await renderAct(async()=>picker().props.onChange({target:{value:'second'}}));
- assert.deepEqual(calls.filter(c=>c.args.operation==='provider.queueSelection').map(c=>c.args.args),[{instance:'openai',model:'second'}]);
+ assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args),[{sessionId:'chat',expectedRevision:0,selection:{instance:'openai',model:'second'}}]);
  state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,modelCatalogs:{openai:{phase:'ready',models:[]}}}}};
  await renderAct(async()=>root.update(render()));
  assert.equal(picker().type,'select');
@@ -108,7 +110,7 @@ for(const isDraft of [false,true])test('authoritative empty refresh replaces cac
   assert.deepEqual(values(),['saved']);assert.equal(root.root.findByProps({id:'chat-model'}).props.value,'saved');
   entry={phase:'ready',modelsDeferred:true};await renderAct(async()=>root.update(render()));assert.deepEqual(values(),['saved']);
   entry={phase:'ready',models:['saved','fresh']};await renderAct(async()=>root.update(render()));assert.deepEqual(values(),['saved','fresh']);
-  assert.equal(calls.some(c=>c.args?.operation==='provider.queueSelection'),false);
+  assert.equal(calls.some(c=>c.name==='conversation.configure'),false);
   assert.equal(calls.some(c=>c.name==='view.update'&&c.args?.patch?.newSessionDraft),false);
  }finally{await renderAct(async()=>root?.unmount())}
 });
@@ -154,30 +156,30 @@ test('inherited choices are displayed without pinning and the popup opens before
 test('same-type connections stay separate and changing models never changes the connection',async()=>{
  const calls=[],providers=[{id:'opus',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'opus-model'}}},{id:'fable',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'fable-model'}}},{id:'openai',info:{id:'openai',display_name:'OpenAI',defaults:{model:'openai-model'}}}];
  const state={view:{composerModel:{open:true,sessionId:'chat',instance:'fable',model:'fable-model'}},runtimeControl:{chat:{'configuration.providers':{providers,effective:{instance:'fable',model:'fable-model'}},modelCatalogs:{fable:{phase:'ready',models:['fable-model','opus-model']},opus:{phase:'ready',models:['opus-only']}}}}};
- let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args}),working:false}))});
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:record(calls),working:false}))});
  const choices=root.root.findByProps({id:'chat-provider'}).findAllByType('option');
  assert.deepEqual(choices.map(n=>[n.props.value,n.children.join('')]),[['fable','Anthropic (fable)'],['opus','Anthropic (opus)'],['openai','OpenAI']]);
  assert.equal(root.root.findByProps({id:'chat-provider'}).props.value,'fable');
  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/Anthropic \(fable\)/);
  assert.equal(root.root.findByProps({id:'chat-model'}).findAllByType('option').some(n=>n.props.value==='opus-only'),false);
  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'opus-model'}}));
- assert.deepEqual(calls.find(c=>c.args.operation==='provider.queueSelection').args.args,{instance:'fable',model:'opus-model'});
+ assert.deepEqual(calls.find(c=>c.name==='conversation.configure').args,{sessionId:'chat',expectedRevision:0,selection:{instance:'fable',model:'opus-model'}});
  await renderAct(async()=>root.root.findByProps({id:'chat-provider'}).props.onChange({target:{value:'opus'}}));
- assert.deepEqual(calls.filter(c=>c.args.operation==='provider.queueSelection').at(-1).args.args,{instance:'opus',model:'opus-model'});
+ assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').at(-1).args,{sessionId:'chat',expectedRevision:1,selection:{instance:'opus',model:'opus-model'}});
  await renderAct(async()=>root.unmount());
 });
 
 test('deleted connection remains unavailable until an explicit replacement is selected',async()=>{
  const calls=[],wanted={instance:'removed',model:'saved-model',effort:'high'},providers=[{id:'remaining',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'different-model'}}}];
  const state={view:{composerModel:{open:true,sessionId:'chat'}},runtimeControl:{chat:{'configuration.providers':{providers,effective:wanted,selection:wanted,selectionIssue:'Choose a replacement.'}}}};
- let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args})}))});
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:record(calls)}))});
  assert.equal(root.root.findByProps({id:'chat-provider'}).props.value,'removed');
  assert.equal(root.root.findByProps({id:'chat-model'}).props.value,'saved-model');
  assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,true);
  assert.ok(root.root.findByProps({id:'chat-provider'}).findAllByType('option').some(n=>n.children.join('')==='removed (unavailable)'));
- assert.equal(calls.some(c=>c.args.operation==='provider.queueSelection'),false);
+ assert.equal(calls.some(c=>c.name==='conversation.configure'),false);
  await renderAct(async()=>root.root.findByProps({id:'chat-provider'}).props.onChange({target:{value:'remaining'}}));
- assert.deepEqual(calls.find(c=>c.args.operation==='provider.queueSelection').args.args,{...wanted,instance:'remaining'});
+ assert.deepEqual(calls.find(c=>c.name==='conversation.configure').args,{sessionId:'chat',expectedRevision:0,selection:{...wanted,instance:'remaining'}});
  assert.equal(calls.some(c=>c.name==='session.send'),false);
  await renderAct(async()=>root.unmount());
 });
@@ -187,7 +189,7 @@ test('catalog order does not select a connection when no effective connection is
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args})}))});
  assert.equal(root.root.findByProps({id:'chat-provider'}).props.value,'');
  assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,true);
- assert.equal(calls.some(c=>c.args.operation==='provider.queueSelection'),false);
+ assert.equal(calls.some(c=>c.name==='conversation.configure'),false);
  await renderAct(async()=>root.unmount());
 });
 
@@ -315,6 +317,182 @@ test('authoritative unsupported reasoning shows no invented slider or selection'
   await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}})));
   assert.equal(root.root.findAllByProps({id:'chat-effort'}).length,0);
   assert.match(JSON.stringify(root.toJSON()),/Reasoning effort is not configurable for this model/);
-  assert.equal(calls.some(row=>row.args?.operation==='provider.queueSelection'||row.name==='conversation.send'),false);
+  assert.equal(calls.some(row=>row.name==='conversation.configure'||row.name==='conversation.send'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+const savedModelState=()=>({
+ view:{composerModel:{open:true,sessionId:'chat',instance:'one',model:'first'}},
+ runtimeControl:{chat:{
+  'configuration.catalog':{configurationRevision:0,providers:[{id:'one',info:{defaults:{model:'first'},config_fields:[{id:'reasoning_effort',choices:['low','high']}]}}],effective:{instance:'one',model:'first'}},
+  modelCatalogs:{one:{phase:'ready',models:['first','second']}}
+ }}
+});
+test('one compact dialog bridges model, bundle and effort saves but not another client revision',async()=>{
+ const calls=[],state={...savedModelState(),registeredBundles:[{value:'anchors'},{value:'work'}]};
+ let session={id:'chat',bundle:'anchors',nextMessageRevision:0},actualRevision=0,root;
+ const act=async(name,args)=>{
+  calls.push({name,args});
+  if(name!=='conversation.configure')return {accepted:true};
+  if(args.expectedRevision!==actualRevision)return {accepted:false,error:'Next message settings changed. Review the current choices.'};
+  session={...session,nextMessageRevision:++actualRevision,...(args.selection?{pendingModelSelection:args.selection}:{}),...(args.bundle?{pendingBundleSelection:{bundle:args.bundle}}:{})};
+  return {accepted:true,result:{revision:actualRevision}};
+ };
+ const render=()=>React.createElement(ComposerOptions,{state,session,act});
+ try{
+  await renderAct(async()=>root=create(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'second'}}));
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({id:'composer-options-bundle'}).props.onChange({target:{value:'work'}}));
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onChange({currentTarget:{value:'1'}}));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onKeyUp());
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args.expectedRevision),[0,1,2]);
+  assert.equal(actualRevision,3);
+  actualRevision=4;session={...session,nextMessageRevision:4,pendingModelSelection:{instance:'one',model:'first',effort:'low'}};
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onChange({currentTarget:{value:'0'}}));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onKeyUp());
+  assert.equal(calls.at(-1).args.expectedRevision,3);
+  assert.equal(actualRevision,4);
+  assert.match(JSON.stringify(root.toJSON()),/Review the current choices/);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+for(const saving of ['model','bundle'])test('compact menu shares the pending guard during '+saving+' save',async()=>{
+ const state={...savedModelState(),registeredBundles:[{value:'anchors'},{value:'work'}]},session={id:'chat',bundle:'anchors'};
+ let root,release;
+ const act=async(name,args)=>name==='conversation.configure'?new Promise(resolve=>{release=()=>resolve({accepted:true,result:{revision:args.expectedRevision+1}})}):{accepted:true};
+ try{
+  await renderAct(async()=>root=create(React.createElement(ComposerOptions,{state,session,act})));
+  await renderAct(async()=>{root.root.findByProps({id:saving==='model'?'chat-model':'composer-options-bundle'}).props.onChange({target:{value:saving==='model'?'second':'work'}})});
+  for(const id of ['chat-provider','chat-model','chat-effort','composer-options-bundle'])assert.equal(root.root.findByProps({id}).props.disabled,true,id);
+  await renderAct(async()=>release());
+  for(const id of ['chat-provider','chat-model','chat-effort','composer-options-bundle'])assert.equal(root.root.findByProps({id}).props.disabled,false,id);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('starting without accepted input keeps saved choices usable without runtime mutation',async()=>{
+ const calls=[],state=savedModelState(),session={id:'chat',status:'starting',nextMessageRevision:3};
+ let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session,working:true,act:record(calls)})));
+  assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,false);
+  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'second'}}));
+  await renderAct(async()=>{
+   root.root.findByProps({id:'chat-effort'}).props.onChange({currentTarget:{value:'1'}});
+  });
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onKeyUp());
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args),[
+   {sessionId:'chat',expectedRevision:3,selection:{instance:'one',model:'second'}},
+   {sessionId:'chat',expectedRevision:4,selection:{instance:'one',model:'second',effort:'high'}}
+  ]);
+  assert.match(JSON.stringify(root.toJSON()),/Next message/);
+  assert.ok(!calls.some(c=>c.name==='conversation.send'||c.args?.operation==='provider.queueSelection'||c.name==='configuration.inspect'));
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+for(const guard of [
+ {collaborationGeneration:{id:'live',terminal:false}},
+ {messages:[{role:'user',delivery:{status:'sending'}}]},
+ {workers:[{status:'running'}]},
+ {configurationBusy:true},
+ {pendingConfiguration:{phase:'error'}},
+ {ownership:{status:'blocked'}},
+ {status:'working'}
+])test('Next message choices retain active-work/configuration/ownership guard '+JSON.stringify(guard),async()=>{
+ const calls=[],session={id:'chat',status:'starting',...guard};let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(ModelControl,{state:savedModelState(),session,working:true,act:record(calls)})));
+  for(const id of ['chat-provider','chat-model','chat-effort'])assert.equal(root.root.findByProps({id}).props.disabled,true);
+  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'second'}}));
+  assert.ok(!calls.some(c=>c.name==='conversation.configure'));
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('saving locks only the choice controls and rejected receipts remain visible',async()=>{
+ const calls=[];let root,release,session={id:'chat',nextMessageRevision:1};
+ const act=async(name,args)=>{calls.push({name,args});return name==='conversation.configure'?new Promise(resolve=>{release=resolve}):{accepted:true}};
+ const render=()=>React.createElement(ModelControl,{state:savedModelState(),session,act});
+ try{
+  await renderAct(async()=>root=create(render()));
+  await renderAct(async()=>{root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'second'}})});
+  assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,true);
+  assert.equal(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.disabled,false);
+  assert.match(JSON.stringify(root.toJSON()),/Saving Next message/);
+  await renderAct(async()=>release({accepted:false,error:'Next message settings changed.'}));
+  assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,false);
+  assert.match(JSON.stringify(root.toJSON()),/Next message settings changed/);
+  assert.equal(calls.filter(c=>c.name==='conversation.configure').length,1);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('pending model choice and failed application are not reported as mounted behavior',async()=>{
+ const session={id:'chat',pendingModelSelection:{instance:'one',model:'second'},nextMessageError:'Could not apply the saved model.'};let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(ModelControl,{state:savedModelState(),session,act:record([])})));
+  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/second/);
+  assert.match(JSON.stringify(root.toJSON()),/Saved; not applied yet/);
+  assert.match(JSON.stringify(root.toJSON()),/Could not apply the saved model/);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('receipt revisions bridge only own saves, never an unrelated later client update',async()=>{
+ const calls=[];let control,root,session={id:'chat',nextMessageRevision:4},reject=false;
+ function Harness(){control=useNextMessageConfiguration(session,async(name,args)=>{
+  calls.push({name,args});return reject?{accepted:false,error:'Settings changed'}:{accepted:true,result:{revision:args.expectedRevision+1}};
+ });return null}
+ try{
+  await renderAct(async()=>root=create(React.createElement(Harness)));
+  const original=control.configure;
+  await renderAct(async()=>original({selection:{instance:'one',model:'first'}}));
+  await renderAct(async()=>original({selection:{instance:'one',model:'second'}}));
+  assert.deepEqual(calls.map(c=>c.args.expectedRevision),[4,5]);
+  session={...session,nextMessageRevision:9};
+  await renderAct(async()=>root.update(React.createElement(Harness)));
+  reject=true;
+  await renderAct(async()=>assert.rejects(original({bundle:'work'}),/Settings changed/));
+  assert.equal(calls.at(-1).args.expectedRevision,6,'A stale action must not adopt the other client’s revision 9');
+  assert.equal(calls.length,3,'A conflict must not retry');
+  reject=false;
+  await renderAct(async()=>control.configure({bundle:'work'}));
+  assert.equal(calls.at(-1).args.expectedRevision,9,'A fresh user action captures the currently rendered revision');
+  session={id:'another',nextMessageRevision:0};
+  await renderAct(async()=>root.update(React.createElement(Harness)));
+  await renderAct(async()=>original({bundle:'anchors'}));
+  assert.equal(calls.length,4,'A stale action must not cross a conversation boundary');
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('a saved bundle default refreshes choices without presenting the old mounted model as next',async()=>{
+ const calls=[];let state=savedModelState(),session={id:'chat',bundle:'anchors',nextMessageRevision:0},root;
+ const render=()=>React.createElement(ModelControl,{state,session,act:record(calls)});
+ try{
+  await renderAct(async()=>root=create(render()));
+  assert.equal(calls.filter(c=>c.args?.operation==='configuration.catalog').length,0);
+  session={...session,nextMessageRevision:1,pendingBundleSelection:{bundle:'work',resetModel:true}};
+  await renderAct(async()=>root.update(render()));
+  assert.equal(calls.filter(c=>c.args?.operation==='configuration.catalog').length,1);
+  assert.equal(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,'Bundle default');
+  state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,'configuration.catalog':{...state.runtimeControl.chat['configuration.catalog'],nextMessageRevision:1,effective:{instance:'one',model:'second'}}}}};
+  await renderAct(async()=>root.update(render()));
+  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/second/);
+  assert.equal(calls.filter(c=>c.args?.operation==='configuration.catalog').length,1);
+  assert.equal(calls.some(c=>c.name==='conversation.configure'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('an edited model form does not attach a peer revision to its stale model during an effort change',async()=>{
+ const calls=[],state=savedModelState();let session={id:'chat',nextMessageRevision:0},actualRevision=0,root;
+ const act=async(name,args)=>{
+  calls.push({name,args});
+  if(name!=='conversation.configure')return {accepted:true};
+  if(args.expectedRevision!==actualRevision)return {accepted:false,error:'Next message settings changed. Review the current choices before saving again.'};
+  return {accepted:true,result:{revision:++actualRevision}};
+ };
+ const render=()=>React.createElement(ModelControl,{state,session,act});
+ try{
+  await renderAct(async()=>root=create(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'second'}}));
+  actualRevision=2;
+  session={...session,nextMessageRevision:2,pendingModelSelection:{instance:'one',model:'first',effort:'low'}};
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onChange({currentTarget:{value:'1'}}));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onKeyUp());
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args.expectedRevision),[0,1]);
+  assert.equal(actualRevision,2);
+  assert.match(JSON.stringify(root.toJSON()),/Review the current choices/);
  }finally{await renderAct(async()=>root?.unmount())}
 });

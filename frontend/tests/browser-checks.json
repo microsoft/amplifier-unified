@@ -40,6 +40,7 @@
     {"id": "feedback", "command": ["node", "tests/feedback-browser.mjs"]},
     {"id": "feedback-followup", "command": ["node", "tests/feedback-followup-browser.mjs"]},
     {"id": "composer-readiness", "command": ["node", "tests/composer-readiness-browser.mjs"]},
+    {"id": "dormant-controls", "command": ["node", "tests/dormant-controls-browser.mjs"], "env": {"AMPLIFIER_DORMANT_EVIDENCE": "{root}/output/browser-checks/dormant-controls"}},
     {"id": "composer-primary-action", "command": ["node", "tests/composer-primary-action-browser.mjs"]},
     {"id": "surface-context", "command": ["node", "tests/surface-context-browser.mjs"]},
     {"id": "desktop-readiness", "command": ["node", "tests/desktop-readiness-browser.mjs"]},

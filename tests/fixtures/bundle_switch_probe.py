@@ -7,6 +7,7 @@ existing home, credentials or user transcript are used.
 """
 from __future__ import annotations
 import asyncio
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,16 @@ async def main():
     settings = root/'shared/settings.yaml'; settings.parent.mkdir()
     # Exercise revision isolation using only the local modules defined below.
     # Ordinary defaults have their own installed-runtime acceptance coverage.
-    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
+    # A prepared development environment supplies the real hook locally. Older
+    # native lane environments still resolve its normal ordinary-root source.
+    modules = {}
+    for name, module in [('loop-live', 'amplifier_module_loop_live'),
+                         ('hook-context-intelligence', 'amplifier_module_hook_context_intelligence')]:
+        spec = importlib.util.find_spec(module)
+        if spec and spec.origin:
+            modules[name] = str(Path(spec.origin).parent)
+    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
+                                    'sources': {'modules': modules}}))
     provider = root/'provider/amplifier_module_provider_fixture'; provider.mkdir(parents=True)
     calls = root/'model-calls'
     provider.joinpath('__init__.py').write_text('''from pathlib import Path
@@ -81,7 +91,12 @@ async def mount(coordinator, config=None):
     from amplifier_web.management import Management
     from amplifier_web.host.storage import SessionStore
     from amplifier_web.bundle_actions import perform
-    runtime = RuntimeManager(command=[os.environ['UNIFIED_RUNTIME_PYTHON'], str(ROOT/'amplifier_web/runtime_worker.py')], startup_timeout=45)
+    worker_command = [os.environ['UNIFIED_RUNTIME_PYTHON'], str(ROOT/'amplifier_web/runtime_worker.py')]
+    runtime = RuntimeManager(command=worker_command, startup_timeout=45)
+    # Discovery also uses this fixture's already-prepared isolated interpreter.
+    # Keep the real probe/subprocess; do not fetch a second dependency graph.
+    original_command = RuntimeManager._command
+    RuntimeManager._command = lambda self, *a, **kw: list(self.command or worker_command)
     app = AppService(home, runtime=runtime, workspace=workspace)
     app.management = Management(app); runtime.app_bridge = app.app_bridge; runtime.home = home
     source = app._new_session({'bundle': bundles['first']}); app.state['sessions'].append(source)
@@ -90,12 +105,15 @@ async def mount(coordinator, config=None):
     store.save(sid, history, {'bundle_name': bundles['first']})
     states = home/'sessions'/sid; states.mkdir(parents=True, exist_ok=True)
     states.joinpath('control-state.json').write_text(json.dumps({'selection': {'instance':'fixture','model':'fixture','effort':'high'}, 'budget': {'contextTokens':1234567}}))
-    processes = []
+    processes, probes = [], []
     spawn = asyncio.create_subprocess_exec
     async def observed_spawn(*args, **kwargs):
-        assert all(process.returncode is not None for process in processes), 'Previous worker not reaped before replacement spawn'
+        probe = Path(args[-1]).name == 'draft_defaults_probe.py'
+        assert probe or Path(args[-1]).name == 'runtime_worker.py', args
+        if not probe:
+            assert all(process.returncode is not None for process in processes), 'Previous worker not reaped before replacement spawn'
         process = await spawn(*args, **kwargs)
-        processes.append(process)
+        (probes if probe else processes).append(process)
         return process
     asyncio.create_subprocess_exec = observed_spawn
     try:
@@ -103,8 +121,12 @@ async def mount(coordinator, config=None):
         await runtime.control(sid, 'history.snapshot', {})
         history = saved_history(store, sid)[0]
         first_pid = runtime.workers[sid]['process'].pid
+        mounts_before_preview = (root/'mounts.jsonl').read_bytes()
         await perform(app.management, 'bundle.preview', {'sessionId':sid, 'bundle':bundles['second']})
         assert runtime.workers[sid]['process'].pid == first_pid
+        assert len(processes) == 1 and len(probes) == 1
+        assert probes[0].returncode == 0
+        assert (root/'mounts.jsonl').read_bytes() == mounts_before_preview
         preview = source['bundlePreview']
         await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['second'],'previewId':preview['previewId']})
         second_pid = runtime.workers[sid]['process'].pid
@@ -143,15 +165,24 @@ async def mount(coordinator, config=None):
         assert list(by_pid.values())==['first','second','first','bad','first'], mounts
         await runtime.control(sid,'configuration.inspect',{})
         print(json.dumps({'reviewed_and_direct_switch':True,'fresh_worker_per_revision':True,
+            'preview_probe_without_worker_or_module_mount':True,
             'previous_worker_reaped_before_spawn':True,
             'same_name_cached_child':True,'history_preserved':True,'model_effort_preserved':True,
             'old_budget_reset':True,'failed_mount_diagnostic':'provider_mount_failed',
             'failed_mount_rolled_back':True,'restored_worker_usable':True,
             'model_calls':0,'replayed_work':False,'mounts':mounts}))
+    except BaseException:
+        # Synthetic fixture diagnostics only; retain the underlying setup failure
+        # instead of leaving the public startup/preview summary as the sole clue.
+        print(json.dumps({'fixtureFailure': {key: source.get(key) for key in
+            ('failure', 'error', 'bundleChange')},
+            'workerStderr': [line for row in runtime.workers.values() for line in row.get('stderr', [])]}), flush=True)
+        raise
     finally:
         await app.close()
         asyncio.create_subprocess_exec = spawn
-        assert all(process.returncode is not None for process in processes)
+        RuntimeManager._command = original_command
+        assert all(process.returncode is not None for process in processes + probes)
 
 
 if __name__ == '__main__':

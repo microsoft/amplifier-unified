@@ -95,7 +95,7 @@ ACTION_DEFINITIONS = {
     "canvas.openFile": ("Open a local file in Canvas for the selected chat and its unchanged workspace. Exact artifact references verify reported bytes in the recorded execution folder. Optional showConversation opens the named chat from that workspace's Files page atomically with a successful preview; stale pages and unavailable files do not navigate. Never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200),"showConversation":{"type":"boolean"},"referenceRequestId":string(200),"referenceResponseRevision":{"type":"integer","minimum":1},"expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
-    "canvas.select": ("Present an existing artifact in canvas (default), inline, or saved (compact card only), without creating content or replaying work. Inline requires exact version and publication messageId. Omit version for Latest in Canvas; exact versions are read-only. Preserves unrelated Canvas and drafts; dirty transitions refuse. Moving a mounted HTML/3D preview requires an explicit UI resetPreview choice, never an agent reset. Does not force full-frame focus. Supply clientId when needed.", schema({"id":string(100),"clientId":string(100),"sessionId":string(200),"version":{"type":"integer","minimum":1},"messageId":string(200),"presentation":{"enum":["canvas","inline","saved"],"default":"canvas"},"resetPreview":{"type":"boolean"}}, ["id"])),
+    "canvas.select": ("Present an existing artifact in canvas (default), inline, or saved (compact card only), without creating content or replaying work. A source-bound presentation requires an exact version and either publication messageId or questionId plus immutable questionContentRevision, never both. Inline requires one of these bindings. Omit version for Latest in Canvas; exact versions are read-only. Preserves unrelated Canvas and drafts; dirty transitions refuse. Moving a mounted HTML/3D preview requires an explicit UI resetPreview choice, never an agent reset. Does not force full-frame focus. Supply clientId when needed.", schema({"id":string(100),"clientId":string(100),"sessionId":string(200),"version":{"type":"integer","minimum":1},"messageId":string(200),"questionId":string(200),"questionContentRevision":{"type":"integer","minimum":1},"presentation":{"enum":["canvas","inline","saved"],"default":"canvas"},"resetPreview":{"type":"boolean"}}, ["id"])),
     "canvas.visibility": ("Show or hide this client's retained Canvas viewer without discarding edits. Bind sessionId and canvasId from the current state; optionally address an attached clientId.", schema({"open":{"type":"boolean"},"sessionId":{"type":["string","null"]},"canvasId":{"type":["string","null"]},"clientId":string(200)},["open","sessionId","canvasId"])),
     "canvas.reopen": ("Show this chat's canvas and saved artifacts", schema()),
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
@@ -399,6 +399,9 @@ from .configuration_recovery import definitions as configuration_recovery_defini
 ACTION_DEFINITIONS.update(configuration_recovery_definitions(schema, string))
 from .patch_placement import definitions as patch_placement_definitions
 ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
+from .next_message_configuration import definitions as next_message_definitions
+ACTION_DEFINITIONS.update(next_message_definitions(schema, string))
+ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationRevision'] = {'type': 'integer', 'minimum': 0}
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -406,7 +409,7 @@ from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 ACTION_POLICIES = {}
 for _access, _actions in {
     "caller_controlled": {
-        "conversation.send", "conversation.stop", "conversation.retry", "worker.spawn",
+        "conversation.send", "conversation.stop", "conversation.retry", "conversation.configure", "worker.spawn",
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
         *configuration_recovery_definitions(schema, string),
@@ -527,6 +530,8 @@ class AppService:
         self.runtime = runtime
         if runtime is not None and hasattr(runtime, "home"):
             runtime.home = self.data_dir
+        from .next_message_configuration import bind
+        bind(self, runtime)
         self.voice_service = None
         self.voice_visual = VoiceVisual(self)
         self.computer_visual = ComputerVisuals(self)
@@ -1723,6 +1728,8 @@ class AppService:
         self.runtime = runtime
         if runtime is not None and hasattr(runtime, "home"):
             runtime.home = self.data_dir
+        from .next_message_configuration import bind
+        bind(self, runtime)
         self.worktrees.bind_runtime()
         from .conversation_models import bind_runtime
         bind_runtime(self)
@@ -2234,7 +2241,9 @@ class AppService:
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
-        if action in {'question.answer', 'conversation.send', 'conversation.retry', 'conversation.delivery', 'worker.spawn', 'worker.message', 'worker.steer', 'worker.stop', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+        passive_configuration = action == 'bundle.preview' or (
+            action == 'runtime.control' and args.get('operation') in {'configuration.catalog', 'provider.queueSelection'})
+        if not passive_configuration and action in {'question.answer', 'conversation.send', 'conversation.retry', 'conversation.delivery', 'worker.spawn', 'worker.message', 'worker.steer', 'worker.stop', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
@@ -3163,8 +3172,14 @@ class AppService:
                 draft[:]=[row for row in draft if row['id']!=args['id']]
             elif action.startswith('question.'):
                 diagnostic_result = self.questions.dispatch(action, args, origin, client_id, pending)
+            elif action == 'conversation.configure':
+                from .next_message_configuration import save
+                diagnostic_result = save(self, args, configuration_authority)
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
+                if ('expectedConfigurationRevision' in args
+                        and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
+                    raise AppError('Next message settings changed. Review them before sending.', 409)
                 from .conversation_steering import target as steering_target
                 # A run ending before delivery must not turn this correction
                 # into new work under a policy that is awaiting replacement.
@@ -4465,6 +4480,7 @@ class AppService:
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
                 if root_generation and payload.get('event') == 'generation.started':
+                    session.pop('modelAdmission', None)
                     session.pop('diagnosticReceipt', None)
                     session.pop('turnErrorType', None)
                     session.pop('errorType', None)
@@ -4477,7 +4493,8 @@ class AppService:
                     fail_generation(session, payload.get('input_ids', []))
                     session['turnErrorType'] = payload.get('error_type')
                     from .session_health import generation_failure
-                    failure = generation_failure(payload)
+                    from .model_admission import failure as admission_failure
+                    failure = admission_failure(session, payload) or generation_failure(payload)
                     existing = session.get('failure')
                     safety_categories = {'content_filter', 'computer_capture_stop'}
                     explicit_change = (failure and failure.get('category') != 'unknown'
@@ -4577,6 +4594,9 @@ class AppService:
                     activity["lastEvent"] = {"tool": payload.get("tool"), "phase": payload.get("phase"), "at": event["at"]}
                 session.setdefault("runtimeEvents", []).append(event)
                 session["runtimeEvents"] = session["runtimeEvents"][-100:]
+            if kind == 'runtime.nextMessageApplied':
+                from .next_message_configuration import applied
+                applied(session, payload)
             if kind == 'runtime.modelSelectionApplied' and session.get('pendingModelSelection') == payload.get('selection'):
                 session.pop('pendingModelSelection', None)
             if (kind == 'approval.requested' or kind == 'runtime.error' or
@@ -4812,7 +4832,7 @@ class AppService:
                     return {**result, 'inputIds': args.get('_contextInputs', [])}
                 return self.surface_context.read(session_id, args, bindings)
         if operation == "capacity.admit":
-            from .capacity_wait import admit
+            from .model_admission import admit
             return await admit(self, session_id, args)
         if operation == 'capacity.abandoned':
             from .capacity import abandoned
