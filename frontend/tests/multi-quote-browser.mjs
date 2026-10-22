@@ -57,7 +57,7 @@ async function visibleCardControls(stage,card){
   return {visibleExcerpt:body.bottom>viewport.top&&body.top<viewport.bottom,
    controls:[...card.querySelectorAll('.a-composer-quote-head button')].map(button=>{
     const rect=button.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
-    return {label:button.getAttribute('aria-label'),inside:rect.top>=viewport.top-1&&rect.bottom<=viewport.bottom+1,hit:button.contains(hit),disabled:button.disabled};
+    return {label:button.getAttribute('aria-label'),inside:rect.top>=viewport.top-1&&rect.bottom<=viewport.bottom+1,hit:button.contains(hit),hitTag:hit?.outerHTML.slice(0,400),disabled:button.disabled};
    })};
  });
  checkpoints.push({stage,controls:actual});
@@ -277,6 +277,8 @@ try{
  const options=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
  await options.click();await page.getByRole('dialog',{name:'Chat options',exact:true}).waitFor();
  await page.keyboard.press('Escape');await expect(options).toBeFocused();
+ await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toHaveCount(0);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.composerModel?.open)).toBe(false);
  await expectLayout('compact options preserve interleaving',expected);
  await expectCompact('desktop retained quote draft');
  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'quotes-desktop.png')});
@@ -323,6 +325,7 @@ try{
  await page.reload();await expect(quotes).toHaveCount(0);
  // Native transcript selection, not just the source picker.
  await page.setViewportSize({width:1280,height:900});
+ await a.locator('.a-detail-text').scrollIntoViewIfNeeded();
  await a.locator('.a-detail-text').evaluate(node=>{
   const walker=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);let text;
   while((text=walker.nextNode())){const start=text.textContent.indexOf('second line');if(start<0)continue;

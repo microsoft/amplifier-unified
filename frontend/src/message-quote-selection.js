@@ -13,6 +13,7 @@ export function quoteSourceSpans(source,base,map){
     if(!Number.isInteger(start)||!Number.isInteger(end)){barrier();return node;}
     let at=start,value=node.value;
     if(node.type==='inlineCode'){
+     if(/[\r\n]/.test(value)){barrier();return node;}
      const raw=source.slice(start,end),ticks=/^`+/.exec(raw)?.[0].length||0;at+=ticks;
      if(source.slice(at,end-ticks).startsWith(' ')&&source.slice(at,end-ticks).endsWith(' ')&&value.trim())at++;
     }else if(node.type==='code'){
@@ -21,7 +22,7 @@ export function quoteSourceSpans(source,base,map){
      // react-markdown emits a final newline for code. It must exist in source.
      value+='\n';
     }
-    if(source.slice(at,at+value.length)!==value){barrier();return node;}
+    if(source.slice(at,node.type==='text'?end:at+value.length)!==value){barrier();return node;}
     const index=map.leaves.length,leaf={start:base+at,end:base+at+value.length,value};
     map.leaves.push(leaf);map.flow.push({leaf:index});
     const properties={'data-message-quote-leaf':index};
@@ -32,7 +33,7 @@ export function quoteSourceSpans(source,base,map){
      }
      return {type:'emphasis',data:{hName:'span',hProperties:properties},children:[node]};
     }
-    node.data={...node.data,hProperties:{...node.data?.hProperties,...properties}};return node;
+    node.data={...node.data,hProperties:{...properties,...node.data?.hProperties}};return node;
    }
    if(!wrappers.has(node.type)||node.type==='listItem'&&node.checked!==null&&node.checked!==undefined){barrier();return node;}
    let previous;

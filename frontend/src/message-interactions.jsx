@@ -53,17 +53,22 @@ export function MessageInteractions({message,sessionId,dispatch}){
  const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const owner=JSON.stringify([sessionId,message.id]),current=useRef(owner),controller=useRef(null),[,refresh]=useState(0);current.current=owner;
  const anchor=useRef(null),selectionTool=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
+ const selectedRef=useRef(null);selectedRef.current=selected;
  useEffect(()=>{
   if(typeof document==='undefined')return;
-  const update=()=>{
-   const selection=window.getSelection(),article=anchor.current?.closest('[data-message-id]');
-   if(selectionTool.current?.contains(document.activeElement))return;
+  const update=event=>{
+   let selection=window.getSelection();const article=anchor.current?.closest('[data-message-id]');
+   if(selectionTool.current?.contains(document.activeElement)&&selectedRef.current){
+    if(event?.type==='selectionchange')return;
+    const range=selectedRef.current.range;selection={isCollapsed:range.collapsed,rangeCount:1,getRangeAt:()=>range};
+   }
    if(!selection||selection.isCollapsed||selection.rangeCount!==1){setSelected(null);return;}
    const result=selectedQuote(article,selection);
    if(!result){setSelected(null);return;}
    const range=selection.getRangeAt(0),rect=range.getBoundingClientRect(),pane=article.closest('.a-messages')?.getBoundingClientRect();
    if(pane&&(rect.bottom<pane.top||rect.top>pane.bottom)){setSelected(null);return;}
-   setSelected({...result,range:range.cloneRange(),left:Math.max(8,Math.min(rect.left,window.innerWidth-224)),top:Math.max(8,Math.min(rect.bottom+8,window.innerHeight-56))});
+   const previous=selectedRef.current,same=previous&&previous.source===result.source&&previous.range.startContainer===range.startContainer&&previous.range.startOffset===range.startOffset&&previous.range.endContainer===range.endContainer&&previous.range.endOffset===range.endOffset;
+   setSelected({...result,token:same?previous.token:{},range:range.cloneRange(),left:Math.max(8,Math.min(rect.left,window.innerWidth-224)),top:Math.max(8,Math.min(rect.bottom+8,window.innerHeight-56))});
   };
   const dismiss=event=>{if(event.key==='Escape')setSelected(null);};
   document.addEventListener('selectionchange',update);document.addEventListener('keydown',dismiss);window.addEventListener('scroll',update,true);window.addEventListener('resize',update);
@@ -95,12 +100,13 @@ export function MessageInteractions({message,sessionId,dispatch}){
  const addPassage=(source,selection)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection},{quoteSource:source});};
  const choosePassage=async()=>{try{setError('');const text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner){setPicker(text);setSelected(null);}}catch(error){setError(error.message);}};
  const quoteSelected=async()=>{
+  const captured=selected;
   try{
-   if(selected.error)throw Error(selected.error+' Use Choose passage; nothing was added.');
-   const range=selected.range,article=anchor.current?.closest('[data-message-id]');
+   if(captured.error)throw Error(captured.error+' Use Choose passage; nothing was added.');
+   const range=captured.range,article=anchor.current?.closest('[data-message-id]');
    const fresh=selectedQuote(article,{isCollapsed:range.collapsed,rangeCount:1,getRangeAt:()=>range});
-   if(!fresh||fresh.error||fresh.source!==selected.source||JSON.stringify(fresh.spans)!==JSON.stringify(selected.spans))throw Error('The source or selection changed. Select the passage again.');
-   await addPassage(fresh.source,{spans:fresh.spans});setSelected(null);
+   if(!fresh||fresh.error||fresh.source!==captured.source||JSON.stringify(fresh.spans)!==JSON.stringify(captured.spans))throw Error('The source or selection changed. Select the passage again.');
+   await addPassage(fresh.source,{spans:fresh.spans});setSelected(current=>current?.token===captured.token?null:current);
   }catch(error){setError(error.message);}
  };
  return <><button ref={anchor} type="button" className="a-icon" aria-label="Reply to message" title="Quote whole message" data-action="message.reply" disabled={busy} onMouseDown={event=>{if(event.button===0)event.preventDefault();}} onClick={()=>action('message.reply',{})}><Reply/></button>
