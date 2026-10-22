@@ -190,10 +190,12 @@ try{
   await route.continue();
  });
  const crossA=expected[1],crossB=expected[2],crossFirst=expectedMove(expected,crossA,expected[0]),crossFinal=expectedMove(crossFirst,crossB,crossFirst[0]);
+ const crossAnnouncement=(await grip(page,crossA).getAttribute('aria-label')).slice('Reorder '.length)+' moved to position 1.';
  await pointerMove(crossA,expected[0]);await expect.poll(()=>crossing).toBe(true);
  await startDrag(crossB,crossFirst[0]);await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(1);
  releaseReceipt();releaseReceipt=null;
  await expect.poll(shellPins).toEqual({ids:crossFirst,items:crossFirst,pending:null});
+ await expect(pinned(page).locator('.a-sr-only[role=status]')).toHaveText(crossAnnouncement);
  await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(1);
  await page.mouse.up();expected=crossFinal;await settled(expected,crossB);await page.unroute('**/api/actions');
  assert.equal(commands.length,crossCount+2);checks.push({heldDifferentDragAcrossReceipt:true,order:expected});
