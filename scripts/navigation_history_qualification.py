@@ -169,7 +169,7 @@ def main():
             run("installed-auth", [sys.executable, "-m", "pytest", "--asyncio-mode=auto", "-q",
                 "tests/test_history_scope.py", "tests/test_auth.py",
                 "tests/test_automation_overview.py", "tests/test_schedules.py",
-                "tests/test_schedule_new_tasks.py", "tests/test_schedule_policy.py",
+                "tests/test_schedule_new_tasks.py", "tests/test_schedule_policy.py", "tests/test_runtime_worker_exit.py",
                 f"--junitxml={OUTPUT / 'installed-python.xml'}"], cwd=harness, env=env)
             cases = ET.parse(OUTPUT / "installed-python.xml").getroot().findall(".//testcase")
             assert cases and all(not any(case.find(tag) is not None for tag in ("skipped", "failure", "error")) for case in cases)

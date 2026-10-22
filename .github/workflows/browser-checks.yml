@@ -364,7 +364,7 @@ jobs:
             tests/test_history_scope.py tests/test_auth.py tests/test_client_navigation.py tests/test_approachable_shell.py \
             tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage \
             tests/test_automation_overview.py tests/test_schedules.py tests/test_schedule_new_tasks.py \
-            tests/test_schedule_policy.py 2>&1 | tee output/destination-history/python.log
+            tests/test_schedule_policy.py tests/test_runtime_worker_exit.py 2>&1 | tee output/destination-history/python.log
       - name: Focused frontend regressions
         if: ${{ !inputs.settings_close_diagnostic && !cancelled() && steps.node_dependencies.outcome == 'success' }}
         working-directory: frontend

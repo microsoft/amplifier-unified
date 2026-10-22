@@ -617,7 +617,7 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     assert '--budget-seconds 1200' in run
     for target in ('test_history_scope.py', 'test_auth.py', 'test_client_navigation.py',
                    'test_approachable_shell.py', 'test_automation_overview.py', 'test_schedules.py',
-                   'test_schedule_new_tasks.py', 'test_schedule_policy.py'):
+                   'test_schedule_new_tasks.py', 'test_schedule_policy.py', 'test_runtime_worker_exit.py'):
         assert f'tests/{target}' in run
     assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
     assert 'tests/test_release_qualification.py' not in run
