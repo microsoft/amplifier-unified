@@ -62,14 +62,18 @@ export function PeerPreviewCanvas({active,onClose,state,dispatch}){
   }catch(e){if(!controller.signal.aborted&&token===version.current){if([403,404].includes(e.status)){setUnavailable(true);setSnapshot(null)}setError(e.message)}}finally{if(token===version.current)setBusy(false)}
  }
  useEffect(()=>{setSnapshot(null);setUnavailable(false);setUnknown(false);load();return()=>{version.current++;read.current?.abort()}},[identity]);
- // Revalidate metadata when the host's catalog changes, never auto-follow bodies.
+ // Revalidate the exact currently displayed original's host-derived binding.
+ // A source can leave the visible navigation page; its recipient attribution
+ // still changes on revocation. Never poll or auto-follow transcript bodies.
  const catalogRevision=state.chatNavigation,workspaces=state.workspaces;
+ const currentPeer=state.sessions?.find(s=>s.id===active.sourceSessionId)?.messages?.find(m=>m.id===active.messageId)?.attribution?.peer;
+ const bindingRevision=JSON.stringify(currentPeer?[currentPeer.available,currentPeer.sourceId,currentPeer.title,currentPeer.archived,currentPeer.proof]:null);
  const failClosed=useCallback(e=>{version.current++;read.current?.abort();setUnavailable(true);setSnapshot(null);setError(e.message)},[]);
  useEffect(()=>{
   const controller=new AbortController();
   request('/api/peer/preview?'+new URLSearchParams({proof:latest.current.proof,metadata:'true'}),{signal:controller.signal}).then(result=>{if(!controller.signal.aborted)setMetadata(result.source)}).catch(e=>{if(!controller.signal.aborted){if([403,404].includes(e.status))failClosed(e);else setError('Source access could not be rechecked. Refresh before opening the chat.')}});
   return()=>controller.abort();
- },[catalogRevision,workspaces,failClosed]);
+ },[bindingRevision,catalogRevision,workspaces,failClosed]);
  async function engage(){if(opening||unknown||unavailable)return;setOpening(true);setError('');try{const receipt=await dispatch('session.select',{id:identity,peerPreview:{proof:latest.current.proof,sourceSessionId:active.sourceSessionId}},{id:crypto.randomUUID()});if(receipt?.accepted===true)onClose();else if(!receipt?.superseded)setError(receipt?.error||'The chat was not opened.')}catch(e){if(e.unconfirmed||!Number.isInteger(e.status))setUnknown(true);setError(e.message)}finally{setOpening(false)}}
  return <aside className="a-canvas-panel a-peer-preview-panel" data-part="canvas" data-mode="artifact" data-focused={false} ref={panel} role={layout.overlay?'dialog':'region'} aria-modal={layout.overlay||undefined} aria-label="Read-only source chat preview" onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();close()}}}>
   {!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}

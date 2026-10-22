@@ -1,5 +1,6 @@
 // Real bundled browser + host fixture. No real account/history/model access.
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdirSync,writeFileSync,readFileSync} from 'node:fs';
@@ -55,6 +56,12 @@ try{
  await original.getByRole('button',{name:'Copy peer message as Markdown'}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(facts.text);
  assert.equal(createHash('sha256').update(await page.evaluate(()=>navigator.clipboard.readText())).digest('hex'),facts.textSha256);
+ const receivedLong=article(facts.originals[2]);await receivedLong.locator('.a-peer-summary').click();
+ await receivedLong.getByRole('button',{name:'Show full text',exact:true}).click();
+ await expect(receivedLong.locator('h2').last()).toHaveText('Beyond compact boundary');
+ await receivedLong.getByRole('button',{name:'Copy peer message as Markdown'}).click();
+ await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(facts.long);
+ await receivedLong.locator('.a-peer-summary').click();
  const before=await page.evaluate(()=>{const s=window.amplifier.getState();window.peerDocument=crypto.randomUUID();return {id:s.selectedSessionId,draft:s.view.draft,document:window.peerDocument}});
  const link=original.getByRole('button',{name:'Preview source chat: Navigation design'});
  await link.click();await expect(panel()).toBeVisible();
@@ -68,11 +75,18 @@ try{
  await sourceLong.getByRole('button',{name:'Copy preview original as Markdown'}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(facts.long);
  await panel().getByRole('button',{name:'Load earlier messages',exact:true}).click();
  await formatted(panel().locator(`[data-preview-message-id="${facts.older}"] .a-markdown`));
- const longNode=await sourceLong.elementHandle();await change('source-arrive');
+ const longNode=await sourceLong.elementHandle();
+ const readAnchor=()=>panel().locator('.a-peer-preview-scroll').evaluate(pane=>{
+  const top=pane.getBoundingClientRect().top,node=[...pane.querySelectorAll('[data-preview-message-id]')].find(n=>n.getBoundingClientRect().bottom>top);
+  return {id:node.dataset.previewMessageId,offset:node.getBoundingClientRect().top-top};
+ });
+ await panel().locator('.a-peer-preview-scroll').evaluate(n=>n.scrollTop=700);
+ const anchor=await readAnchor();await change('source-arrive');
  await expect(panel().getByText('New captured note',{exact:true})).toHaveCount(0);
  await panel().getByRole('button',{name:'Refresh',exact:true}).click();
  await expect(panel().getByText('New captured note',{exact:true})).toBeVisible();
  assert.equal(await sourceLong.evaluate((node,old)=>node===old,longNode),true);
+ const afterAnchor=await readAnchor();assert.equal(afterAnchor.id,anchor.id);assert.ok(Math.abs(afterAnchor.offset-anchor.offset)<2);
  await expect(sourceLong.locator('h2').last()).toHaveText('Beyond compact boundary');
  // Confirm no reload/current draft mutation through preview and an adjacent close/reopen cycle.
  assert.deepEqual(await page.evaluate(()=>{const s=window.amplifier.getState();return {id:s.selectedSessionId,draft:s.view.draft,document:window.peerDocument}}),before);
@@ -85,7 +99,30 @@ try{
   if(process.env.AMPLIFIER_PROOF_DIR){mkdirSync(process.env.AMPLIFIER_PROOF_DIR,{recursive:true});await page.screenshot({path:join(process.env.AMPLIFIER_PROOF_DIR,`peers-narrow-${width}.png`)});}
   await panel().getByRole('button',{name:'Close source preview'}).press('Escape');await expect(link).toBeFocused();
  }
+ const longTitleLink=article(facts.originals[1]).getByRole('button',{name:/Preview source chat:/});
+ await longTitleLink.click();await expect(panel().locator('.a-canvas-head strong')).toContainText('Accessibility review');
+ await expect(panel().locator('[data-preview-message-id]')).toHaveCount(1);
+ await panel().getByRole('button',{name:'Copy preview original as Markdown'}).click();
+ await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(facts.crlf);
+ assert.ok(await panel().locator('.a-canvas-head').evaluate(n=>n.scrollWidth<=n.clientWidth));
+ await panel().getByRole('button',{name:'Close source preview'}).press('Shift+Tab');
+ assert.equal(await panel().evaluate(n=>n.contains(document.activeElement)),true);
+ await page.keyboard.press('Escape');await expect(longTitleLink).toBeFocused();
  await page.setViewportSize({width:1280,height:1000});
+ // Existing Settings cancellation must prevent the exact preview request.
+ await openSettingsPage(page,'notifications');
+ if(!await page.locator('#notify-topic').isVisible())await page.getByText(/^(Set up|Manage) phone notifications$/).click();
+ await page.locator('#notify-topic').fill('synthetic-unsaved-topic');
+ await page.evaluate(mid=>{
+  const s=window.amplifier.getState(),peer=s.sessions.find(x=>x.id===s.selectedSessionId).messages.find(m=>m.id===mid).attribution.peer;
+  window.peerGuardAttempt=window.amplifier.dispatch('peer.preview',{proof:peer.proof,sourceSessionId:s.selectedSessionId});
+ },facts.originals[0]);
+ const settingsGuard=page.getByRole('alertdialog',{name:'Unsaved settings changes'});
+ await expect(settingsGuard).toBeVisible();await settingsGuard.getByRole('button',{name:'Keep settings open'}).click();
+ assert.equal((await page.evaluate(()=>window.peerGuardAttempt)).accepted,false);
+ await expect(page.locator('#notify-topic')).toHaveValue('synthetic-unsaved-topic');
+ await expect(panel()).toHaveCount(0);
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();await settingsGuard.getByRole('button',{name:'Discard changes',exact:true}).click();
  // Exact existing Canvas dirty guard. The feature must not replace it.
  await page.evaluate(async()=>{await window.amplifier.dispatch('canvas.show',{kind:'html',content:'<input value="unfinished">'});const state=window.amplifier.getState(),v=state.canvasWorkspace.views.find(x=>x.viewId==='primary');await window.amplifier.dispatch('canvas.views.dirty',{viewId:v.viewId,resourceId:v.resourceId,resourceRevision:v.resourceRevision,generation:v.generation,dirty:true})});
  await link.click();await expect(panel()).toHaveCount(0);await expect(original.getByRole('alert')).toContainText('edit');
