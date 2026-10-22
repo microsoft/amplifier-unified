@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.24.0",
+      "title": "Review saved work beside questions and prepare the next message",
+      "changes": [
+        "Review exact saved artifact versions beside a question, with shared preview and Canvas controls. Answer drafts and unsaved edits stay protected, and moving interactive previews requires an explicit reset choice.",
+        "Save the model, reasoning effort and bundle for a dormant chat\u2019s next message without starting work. Later changes keep the current selection and runtime ownership checks.",
+        "See clearer reasons when a model request cannot be admitted, while retaining evidence for uncertain outcomes. Environment cleanup and queued checks keep their current status visible.",
+        "Recover the exact generated frontend assets when a successful CI build finds stale committed files, so owners can complete the release handoff without repeating the build."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.23.0",
       "title": "Collect exact quotes and work more clearly with images and Canvas",
       "changes": [
