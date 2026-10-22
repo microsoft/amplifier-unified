@@ -1,4 +1,4 @@
-import React,{useEffect,useId,useRef,useState} from 'react';
+import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
 import ReactMarkdown from 'react-markdown';
 import {Markdown} from './markdown';
 import {ArtifactPreview,CompactArtifactCard} from './inline-artifacts';
@@ -7,9 +7,11 @@ import './questions.css';
 function ReviewArtifact({reference,question,state,dispatch}){
  const [expanded,setExpanded]=useState(false),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const controls=useRef(null),trigger=useRef(null),pending=useRef(false),alive=useRef(true),id=useId();
- const inCanvas=!!(state.canvas?.open&&state.canvas.id===reference.id);
+ const sameCanvas=!!(state.canvas?.open&&state.canvas.id===reference.id);
+ const inCanvas=!!(sameCanvas&&
+  (state.canvas.selectedVersion??state.canvas.revision)===reference.version);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
- useEffect(()=>{if(inCanvas)setExpanded(false)},[inCanvas]);
+ useEffect(()=>{if(inCanvas&&expanded)controls.current?.close()},[inCanvas,expanded]);
  async function open(){
   if(pending.current)return;pending.current=true;setBusy(true);setNotice('');
   try{
@@ -25,7 +27,7 @@ function ReviewArtifact({reference,question,state,dispatch}){
   if(expanded){if(await controls.current?.close())trigger.current?.focus({preventScroll:true});return}
   pending.current=true;setBusy(true);setNotice('');
   try{
-   if(inCanvas){
+   if(sameCanvas){
     const result=await dispatch('canvas.close',{});
     if(!result?.accepted)throw Error(result?.error||'Finish the Canvas edit before previewing here.');
    }
@@ -33,10 +35,10 @@ function ReviewArtifact({reference,question,state,dispatch}){
   }catch(error){if(alive.current)setNotice(error.message)}
   finally{pending.current=false;if(alive.current)setBusy(false)}
  }
- return <CompactArtifactCard title={reference.title} kind={reference.kind} version={reference.version} expanded={expanded&&!inCanvas}
-  busy={busy} onPreview={toggle} onOpen={open} previewId={id} notice={notice}>
-  {expanded&&!inCanvas&&<ArtifactPreview item={{row:reference,version:reference.version}} state={state} dispatch={dispatch}
-   questionBinding={{questionId:question.id,questionRevision:question.contentRevision||1}} fullView={open}
+ return <CompactArtifactCard title={reference.title} kind={reference.kind} version={reference.version} expanded={expanded}
+  busy={busy} onPreview={toggle} onOpen={open} previewId={id} notice={notice||(inCanvas?`Shown in Canvas · exact v${reference.version}`:'')}>
+  {expanded&&<ArtifactPreview item={{row:reference,version:reference.version}} state={state} dispatch={dispatch}
+   questionBinding={{questionId:question.id,questionContentRevision:question.contentRevision||1}} fullView={open}
    compactHeading controlsRef={controls} onClosed={()=>setExpanded(false)}/>}
  </CompactArtifactCard>;
 }
@@ -46,7 +48,7 @@ function QuestionCard({question,sessionId,state,dispatch}){
  const [text,setText]=useState(()=>{try{return q.status==='pending'?(sessionStorage.getItem(draftKey)||'').slice(0,8000):''}catch{return ''}});
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[draftWarning,setDraftWarning]=useState('');
  const pending=useRef(false),request=useRef(null);
- const label=q.prompt.slice(0,200),fileContext={sessionId,act:dispatch};
+ const label=q.prompt.replace(/[#*_`]/g,'').slice(0,200),fileContext=useMemo(()=>({sessionId,act:dispatch}),[sessionId,dispatch]);
  const editText=value=>{
   setText(value);
   try{if(value)sessionStorage.setItem(draftKey,value);else sessionStorage.removeItem(draftKey);setDraftWarning('')}
@@ -80,11 +82,11 @@ function QuestionCard({question,sessionId,state,dispatch}){
   {!!q.artifacts?.length&&<div className="a-question-artifacts" aria-label="Documents for this decision">{q.artifacts.map(ref=><ReviewArtifact key={`${ref.id}:${ref.version}`} reference={ref} question={q} state={state} dispatch={dispatch}/>)}</div>}
   {q.status==='pending'?<form onSubmit={event=>submit(event)} aria-label={`Answer: ${label}`}>
    <fieldset disabled={busy}><legend className="a-sr-only">{label}</legend>
-    {q.options.map(choice=><div key={choice.id}>
-     <button type="button" className="a-question-option" data-action="question.answer" aria-describedby={choice.description?`${q.id}-${choice.id}-description`:undefined} onClick={event=>submit(event,choice.id)}>
+    {q.options.map((choice,index)=><div key={choice.id}>
+     <button type="button" className="a-question-option" data-action="question.answer" aria-describedby={choice.description?`${q.id}-choice-${index}-description`:undefined} onClick={event=>submit(event,choice.id)}>
       <strong><ReactMarkdown allowedElements={['strong','em','del','code','br']} unwrapDisallowed skipHtml>{choice.label}</ReactMarkdown></strong>
      </button>
-     {choice.description&&<div id={`${q.id}-${choice.id}-description`} className="a-question-option-description"><Markdown text={choice.description} userContent fileContext={fileContext}/></div>}
+     {choice.description&&<div id={`${q.id}-choice-${index}-description`} className="a-question-option-description"><Markdown text={choice.description} userContent fileContext={fileContext}/></div>}
     </div>)}
     {q.allowFreeText&&<label className="a-question-text">{q.options.length?'Or write your own answer':'Your answer'}<textarea aria-label={`Your answer: ${label}`} value={text} rows={2} maxLength={8000} onChange={event=>editText(event.target.value)}/></label>}
    </fieldset>

@@ -424,7 +424,7 @@ async def test_question_preview_is_bound_not_a_message_publication(tmp_path):
                 'id': saved['id'], 'expectedRevision': 1, 'content': '# Latest second version',
             })
             args = {'resourceId': saved['id'], 'version': 1, 'questionId': q['id'],
-                    'questionRevision': 1, 'previewId': 'question-review'}
+                    'questionContentRevision': 1, 'previewId': 'question-review'}
             preview = (await app.dispatch('canvas.views.inline', args))['result']
             assert app.canvas_views.canvas(preview['viewId'])['content'] == '# Exact first version'
             assert not app.runtime.sent
@@ -432,12 +432,16 @@ async def test_question_preview_is_bound_not_a_message_publication(tmp_path):
             with pytest.raises(AppError, match='question'):
                 await app.dispatch('canvas.views.inline', {**args, 'version': 2})
             with pytest.raises(AppError, match='question'):
-                await app.dispatch('canvas.views.inline', {**args, 'questionRevision': 2})
+                await app.dispatch('canvas.views.inline', {**args, 'questionContentRevision': 2})
             with pytest.raises(AppError):
                 await app.dispatch('canvas.views.inline', {**args, 'messageId': 'not-a-publication'})
             await app.dispatch('question.answer', {
                 'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Proceed',
             })
+            with pytest.raises(AppError, match='existing preview'):
+                await app.dispatch('canvas.views.inline', {**args, 'previewId': 'second-location'})
+            await app.dispatch('canvas.views.release', {key: preview[key] for key in (
+                'viewId', 'resourceId', 'resourceRevision', 'generation')})
             again = (await app.dispatch('canvas.views.inline', {**args, 'previewId': 'history-review'}))['result']
             assert app.canvas_views.canvas(again['viewId'])['content'] == '# Exact first version'
     finally:
@@ -457,5 +461,44 @@ async def test_invalid_question_review_reference_never_creates_question(tmp_path
             await create_question(app, app._session()['id'], artifacts=invalid)
         assert app.questions.store.all() == []
         assert app.runtime.sent == []
+    finally:
+        await app.close()
+
+
+async def test_question_review_foreign_owner_supersede_and_dirty_guard(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'html', 'title': 'Review', 'content': '<p>Exact v1</p>',
+        }))['result']
+        refs = [{'id': saved['id'], 'version': 1}]
+        q = await create_question(app, sid, artifacts=refs)
+        await app.dispatch('session.create', {})
+        other = app._session()['id']
+        with pytest.raises(AppError, match='calling conversation'):
+            await create_question(app, other, artifacts=refs)
+        replacement = (await app.dispatch('question.supersede', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1,
+            'prompt': '**Revised** question', 'required': True, 'dependency': 'Choose',
+            'artifacts': refs,
+        }))['result']
+        assert replacement['id'] != q['id']
+        assert replacement['artifacts'] == q['artifacts']
+        assert app.questions.store.get(sid, q['id'])['status'] == 'superseded'
+        app.clients.attach('review-browser')
+        with app.clients.bind('review-browser'):
+            await app.dispatch('session.select', {'id': sid})
+            preview = (await app.dispatch('canvas.views.inline', {
+                'resourceId': saved['id'], 'version': 1, 'questionId': replacement['id'],
+                'questionContentRevision': 1, 'previewId': 'dirty-review',
+            }))['result']
+            target = {key: preview[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+            await app.dispatch('canvas.views.dirty', {**target, 'dirty': True})
+            with pytest.raises(AppError, match='inline preview'):
+                await app.dispatch('canvas.select', {'id': saved['id'], 'version': 1})
+            assert app.canvas_views.canvas(preview['viewId'])['content'] == '<p>Exact v1</p>'
+            assert app.runtime.sent == []
     finally:
         await app.close()

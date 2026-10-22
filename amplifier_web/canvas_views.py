@@ -27,7 +27,7 @@ def definitions(schema, string):
     target = {'viewId': string(100), 'resourceId': IDENTITY,
               'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
     actions = {
-        'canvas.views.inline': ('Open an exact saved version published in a message OR attached to a question in the selected chat. Supply messageId or questionId with questionRevision, never both. Does not answer or start work.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'questionId': IDENTITY, 'questionRevision': {'type': 'integer', 'minimum': 1}, 'previewId': IDENTITY}, ['resourceId', 'version', 'previewId'])),
+        'canvas.views.inline': ('Open an exact saved version published in a message OR attached to a question in the selected chat. Supply messageId or questionId with questionContentRevision from the saved question contentRevision (not its status revision), never both. Does not answer or start work.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'questionId': IDENTITY, 'questionContentRevision': {'type': 'integer', 'minimum': 1}, 'previewId': IDENTITY}, ['resourceId', 'version', 'previewId'])),
         'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
         'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
         'canvas.views.reveal': ('Reveal the exact artifact file in the file manager on its named owning app host. It does not open the browser device file manager. Bind hostId and instanceId from fileReveal.', schema({**target,'hostId':string(200),'instanceId':string(100)}, [*target,'hostId','instanceId'])),
@@ -149,7 +149,7 @@ class CanvasViews:
                 fail('This preview belongs to another conversation.', 409)
             if current.get('questionId'):
                 self.service.questions.review_artifact(row['sessionId'], current['questionId'],
-                    current['questionRevision'], identity, current['selectedVersion'])
+                    current['questionContentRevision'], identity, current['selectedVersion'])
         from .canvas_versions import definition
         row = definition(row, current.get('selectedVersion'), self.service.db)
         preference = self.preference(view_id, row)
@@ -258,13 +258,13 @@ class CanvasViews:
                 or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
             fail('Open the conversation that contains this artifact first.', 409)
         if 'questionId' in args:
-            if 'messageId' in args or 'questionRevision' not in args:
+            if 'messageId' in args or 'questionContentRevision' not in args:
                 fail('Supply one question binding, not a message publication.', 409)
             self.service.questions.review_artifact(row['sessionId'], args['questionId'],
-                args['questionRevision'], row['id'], args['version'])
-            source = {key: args[key] for key in ('questionId', 'questionRevision')}
+                args['questionContentRevision'], row['id'], args['version'])
+            source = {key: args[key] for key in ('questionId', 'questionContentRevision')}
         else:
-            if 'messageId' not in args or 'questionRevision' in args:
+            if 'messageId' not in args or 'questionContentRevision' in args:
                 fail('Supply a message publication or an exact question binding.', 409)
             publications = row.get('publications') or [{'messageId': row.get('messageId'), 'version': latest(row)}]
             if {'messageId': args['messageId'], 'version': args['version']} not in publications:
@@ -282,6 +282,9 @@ class CanvasViews:
                    **source, 'sessionId': row['sessionId'], 'previewId': args['previewId']}
         identity = next((key for key, value in inline.items() if value == binding), None)
         if identity is None:
+            if any(value.get('resourceId') == row['id'] and
+                   ('questionId' in source or value.get('questionId')) for value in inline.values()):
+                fail('Close the existing preview of this artifact before opening it at the question.', 409)
             if len(inline) >= 8:
                 fail('Close a preview to open another here, or open this artifact in Canvas.', 409)
             identity = 'inline-' + str(uuid.uuid4())

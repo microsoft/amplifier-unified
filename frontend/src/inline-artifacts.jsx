@@ -35,7 +35,7 @@ export function ArtifactPreview({item,messageId,questionBinding,state={},dispatc
    if(active)setLoaded({view:owned,canvas});
   }).catch(error=>{if(active&&error.name!=='AbortError')setError(error.message)});
   return()=>{active=false;controller.abort();release()};
- },[near,closed,attempt,row.id,version,messageId,questionBinding?.questionId,questionBinding?.questionRevision]);
+ },[near,closed,attempt,row.id,version,messageId,questionBinding?.questionId,questionBinding?.questionContentRevision]);
  const view=loaded&&(state.canvasWorkspace?.views||[]).find(view=>view.viewId===loaded.view.viewId)||loaded?.view;
  const canvas=loaded&&{...loaded.canvas,...targetOf(view),view:view.view,renderReports:view.renderReports,document:view.document,interaction:view.interaction,events:view.events};
  const close=async()=>{
@@ -54,13 +54,18 @@ export function ArtifactPreview({item,messageId,questionBinding,state={},dispatc
 const Preview=ArtifactPreview;
 
 // Presentation only. The caller owns admission, dirty guards and view leases.
-export function CompactArtifactCard({title,kind,version,expanded,busy,onPreview,onOpen,previewId,notice,children}){
+export function CompactArtifactCard({title,kind,version,expanded,busy,onPreview,onOpen,previewId,notice,children,variant='review'}){
  const id=useId(),[tips,setTips]=useState(true);
  const label=expanded?'Hide preview':'Preview here';
+ // Preserve existing message-card controls; Q&A alone opts into the review row.
+ if(variant==='document')return <div className="a-document-output">
+  <button type="button" className="a-document-output-open" data-action="canvas.select" aria-label={`Open ${title} in canvas`} onClick={onOpen}><FileText/><span><strong>{title}</strong><small>Document · Version {version}</small></span><Maximize2/></button>
+  <button type="button" className="a-link a-document-preview-toggle" aria-expanded={false} onClick={onPreview}>Preview in chat</button>
+ </div>;
  return <section className="a-compact-artifact" aria-label={`${title}, ${kind}, version ${version}`} data-tips={tips?'show':'hide'} onKeyDown={event=>{if(event.key==='Escape')setTips(false)}} onPointerDown={()=>setTips(true)} onFocus={()=>setTips(true)}>
   <div className="a-compact-artifact-row">
    <FileText aria-hidden="true"/>
-   <span className="a-compact-artifact-title" tabIndex={0} aria-label={`${title}, ${kind}`} onPointerDown={event=>{if(event.pointerType==='touch')event.currentTarget.focus()}}>{title}<span className="a-artifact-tooltip" role="tooltip">{title} · {kind}</span></span>
+   <span className="a-compact-artifact-title" tabIndex={0} role="note" aria-label={`${title}, ${kind}`} onPointerDown={event=>{if(event.pointerType==='touch')event.currentTarget.focus()}} title={`${title} · ${kind}`}>{title}</span>
    <span className="a-compact-artifact-version" aria-label={`Exact version ${version}`}>v{version}</span>
    <span className="a-compact-artifact-action">
     <button type="button" className="a-document-preview-toggle" disabled={busy} aria-label={`${label}: ${title}, version ${version}`} aria-expanded={expanded} aria-controls={previewId} aria-describedby={`${id}-preview`} onClick={onPreview}><Eye aria-hidden="true"/><span>{label}</span></button>
@@ -128,14 +133,11 @@ function ImageGallery({entries,...props}){
 }
 
 function DocumentOutput({item,act,...props}){
- const [preview,setPreview]=useState(false),id=useId(),controls=useRef(null);
- const inCanvas=!!(props.state?.canvas?.open&&props.state.canvas.id===item.row.id);
- useEffect(()=>{if(inCanvas)setPreview(false)},[inCanvas]);
- const open=async()=>{const result=await act('canvas.select',{id:item.row.id,version:item.version});if(result?.accepted){setPreview(false);await act('view.update',{patch:{canvasFocused:false}})}};
- return <CompactArtifactCard title={titleOf(item)} kind={item.row.kind} version={item.version} expanded={preview} previewId={id}
-  onOpen={open} onPreview={async()=>{if(preview)return controls.current?.close();if(inCanvas){const result=await act('canvas.close',{});if(!result?.accepted)return}setPreview(true)}}>
-  {preview&&!inCanvas&&<Preview item={item} {...props} compactHeading controlsRef={controls} onClosed={()=>setPreview(false)}/>}
- </CompactArtifactCard>;
+ const [preview,setPreview]=useState(false);
+ const open=async()=>{const result=await act('canvas.select',{id:item.row.id,version:item.version});if(result?.accepted)await act('view.update',{patch:{canvasFocused:false}})};
+ if(preview)return <Preview item={item} {...props}/>;
+ return <CompactArtifactCard variant="document" title={titleOf(item)} kind={item.row.kind} version={item.version}
+  onOpen={open} onPreview={()=>setPreview(true)}/>;
 }
 
 export function ArtifactLinks({state,message,act,dispatch}){

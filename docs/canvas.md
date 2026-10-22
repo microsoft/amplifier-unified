@@ -407,7 +407,9 @@ the originating browser tab's session storage, keyed by host/chat/question
 revision; storage failure is visible. They are not sent until explicitly answered.
 
 An inline view binds either a message publication or
-`questionId` plus `questionRevision`, never both. The question binding is checked
+`questionId` plus `questionContentRevision` from the question's immutable
+`contentRevision`, never both. This is not the record's status `revision`, which
+increments when answered or closed. The question binding is checked
 again on resource reads. Exact historical references remain inspectable after
 answering; new decisions use a new/superseding question rather than changing a
 past answer.

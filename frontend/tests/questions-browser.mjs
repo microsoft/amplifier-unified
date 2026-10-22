@@ -168,6 +168,7 @@ try{
  await expect(q.locator('.a-question-prompt li')).toHaveCount(2);
  await expect(q.locator('.a-question-prompt pre code')).toHaveText('exact source\n');
  assert.equal(await q.locator('.a-question-prompt a[href^="javascript:"]').count(),0);
+ assert.equal(await page.evaluate(()=>window.bad),undefined);
  assert.equal(await page.evaluate(()=>document.body.dataset.untrusted),undefined);
  const answerDraft='**Proceed**.\n\nKeep the `source` visible.';
  await q.getByRole('textbox').fill(answerDraft);
@@ -194,6 +195,7 @@ try{
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
  await first.getByRole('button',{name:/^Open in Canvas:/}).click();
  await expect(first.locator('.a-inline-artifact')).toHaveCount(0);
+ await expect.poll(()=>page.evaluate(()=>({id:window.amplifier.getState().canvas.id,version:window.amplifier.getState().canvas.selectedVersion}))).toEqual({id:review.markdown.id,version:1});
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
  await first.getByRole('button',{name:/^Preview here:/}).click();
  await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
@@ -207,6 +209,7 @@ try{
  await expect(frame.locator('#value')).toHaveText('1');
  await expect(frame.locator('body')).toHaveAttribute('data-parent-blocked','yes');
  await expect(frame.locator('body')).toHaveAttribute('data-network-blocked','yes');
+ assert.equal((await check()).networkAttempts,0,'Sandbox must block a reachable fixture endpoint, not merely fail DNS');
  assert.equal(await page.evaluate(()=>document.body.dataset.untrusted),undefined);
  assert.equal((await check()).sent.length,3,'Review actions never send or answer');
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);

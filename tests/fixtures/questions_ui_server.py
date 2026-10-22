@@ -35,6 +35,7 @@ async def main(home):
         {'id': 'full', 'label': 'Full report', 'description': 'Findings, supporting evidence, and next steps.'}])
     optional = await ask('What title would you like?')
     skipped = await ask('Would you like a subtitle?')
+    network_attempts = []
 
     async def reviews(request):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
@@ -43,12 +44,13 @@ async def main(home):
             'kind': 'markdown', 'title': 'Peer presentation proposal with a deliberately long descriptive title',
             'content': '# Pinned document v1\n\n**Original** content.',
         }}, sid))['result']
+        probe_url = str(request.url.origin()) + '/fixture/network-probe'
         html = (await service.app_bridge('dispatch', {'action': 'canvas.show', 'args': {
             'kind': 'html', 'title': 'Interactive peer presentation mockup',
             'content': '<h1>HTML mockup v1</h1><button id="count">Try mockup</button><p id="value">0</p>'
                        '<script>document.querySelector("#count").onclick=()=>document.querySelector("#value").textContent="1";'
                        'try { parent.document.body.dataset.untrusted="yes"; } catch { document.body.dataset.parentBlocked="yes"; }'
-                       'fetch("https://example.invalid/blocked").catch(()=>document.body.dataset.networkBlocked="yes");</script>',
+                       f'fetch({json.dumps(probe_url)}).catch(()=>document.body.dataset.networkBlocked="yes");</script>',
         }}, sid))['result']
         q = await ask('# Choose the **peer presentation**\n\nKeep the sender visible.\nPreserve this line.\n\n'
                       '- Read the proposal\n- Try the mockup\n\n```text\nexact source\n```\n\n'
@@ -59,8 +61,13 @@ async def main(home):
         }}, sid)
         return web.json_response({'question': q, 'markdown': markdown, 'html': html})
 
+    async def network_probe(request):
+        network_attempts.append(True)
+        return web.Response(text='reachable', headers={'Access-Control-Allow-Origin': '*'})
+
     async def check(request):
         return web.json_response({'sent': runtime.sent, 'questions': service.questions.store.all(sid),
+                                 'networkAttempts': len(network_attempts),
                                  'sessionIds': [session['id'] for session in service.state['sessions']],
                                  'selectedSessionId': service.state['selectedSessionId']})
 
@@ -107,6 +114,7 @@ async def main(home):
     app.router.add_post('/fixture/voice', voice)
     app.router.add_post('/fixture/handoff', propose_handoff)
     app.router.add_post('/fixture/reviews', reviews)
+    app.router.add_get('/fixture/network-probe', network_probe)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)
