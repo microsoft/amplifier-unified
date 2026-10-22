@@ -724,11 +724,19 @@ async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(
     c.telemetry.admission_guard=admit
     pixel='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aJxkAAAAASUVORK5CYII='
     class Delivery:
-        async def prepare(self,request,provider):
+        async def prepare(self,request,provider,**kwargs):
             return request.model_copy(update={'messages':[*request.messages,Message(role='user',metadata={'ephemeral':True},content=[{'type':'image','source':{'type':'base64','media_type':'image/png','data':pixel}}])]})
         def commit(self,request):pass
     observed=c.telemetry.instrument_provider(c.session_id,native)
-    surface=SurfaceProvider(observed,Delivery())
+    from amplifier_web.coordination_delivery import CoordinationDelivery
+    # Production app installation adds this boundary even when the request has
+    # no Work tools/association. Retain the ordinary untasked native path while
+    # exercising the real admitted-call join, not a visual-only legacy fixture.
+    scope = {'rootSessionId': c.session_id, 'runtimeSessionId': c.session_id,
+             'generationId': 'generation-1', 'inputIds': ['ordinary-input'], 'inputCoverage': 'complete'}
+    delivery = CoordinationDelivery(Delivery(), AsyncMock(), origin_scope=lambda: copy.deepcopy(scope))
+    c.caps['web.surface_delivery'] = delivery
+    surface=SurfaceProvider(observed,delivery)
     selected.execution_adapter=lambda provider:surface
     def socket(response_id):
         return SimpleNamespace(state=State.OPEN,send=AsyncMock(),close=AsyncMock(),recv=AsyncMock(side_effect=[

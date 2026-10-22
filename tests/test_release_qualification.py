@@ -447,6 +447,8 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert installed['run'].index('uv pip check') < installed['run'].index(' -m pytest')
     assert "result.returncode == 1 and len(cases) == 1" in installed['run']
     assert 'negative-control.json' in installed['run']
+    assert 'origin-negative.json' in installed['run']
+    assert 'test_effect_origin_joins_actual_admission_and_full_input_scope[new_input]' in installed['run']
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [

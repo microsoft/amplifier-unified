@@ -236,6 +236,31 @@ jobs:
               'mutation': 'Restore only the old missing-sent top-level restart set',
               'expectedFailure': True, 'returncode': result.returncode,
               'mutatedSha256': hashlib.sha256(target.read_bytes()).hexdigest()}))
+          # Independent counterfactual: disable only exact current input-scope
+          # equality in a second installed copy. A plausible stale origin must
+          # make the real current-input test fail, not merely fail to import.
+          origin_negative = Path(os.environ['RUNNER_TEMP']) / 'work-origin-negative'
+          shutil.copytree(Path(native.__file__).parent, origin_negative / 'amplifier_web')
+          target = origin_negative / 'amplifier_web/coordination_delivery.py'
+          text = target.read_text()
+          guard = 'and self._scope() == origin.scope_json'
+          assert text.count(guard) == 1
+          target.write_text(text.replace(guard, 'and True', 1))
+          env = {**os.environ, 'PYTHONPATH': str(origin_negative)}
+          with (output / 'origin-negative.log').open('w') as log:
+              result = subprocess.run([sys.executable, '-m', 'pytest', '-v', '--tb=short',
+                  '--asyncio-mode=auto', '--import-mode=importlib',
+                  'test_coordination_delivery.py::test_effect_origin_joins_actual_admission_and_full_input_scope[new_input]',
+                  '--junitxml=' + str(output / 'origin-negative.xml')], env=env, stdout=log, stderr=subprocess.STDOUT)
+          cases = E.parse(output / 'origin-negative.xml').findall('.//testcase')
+          assert result.returncode == 1 and len(cases) == 1
+          failure = cases[0].find('failure')
+          assert failure is not None and 'AssertionError' in (failure.text or '')
+          assert cases[0].find('error') is None and cases[0].find('skipped') is None
+          (output / 'origin-negative.json').write_text(json.dumps({
+              'mutation': 'Disable only origin current input-scope equality',
+              'expectedFailure': True, 'returncode': result.returncode,
+              'mutatedSha256': hashlib.sha256(target.read_bytes()).hexdigest()}))
           PY
       - name: Retain complete and partial Python results
         if: always()
