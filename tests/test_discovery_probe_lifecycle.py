@@ -157,7 +157,7 @@ async def test_defaults_payload_environment_output_and_error_contract(monkeypatc
     assert result == {'bundle': 'synthetic', 'globalOnly': True, 'request': {
         'home': str(tmp_path), 'workspace': str(tmp_path), 'bundle': 'synthetic',
         'globalOnly': True, 'sessionId': 'exact', 'catalog': True, 'refresh': True,
-        'replacement': {'model': 'example'}}}
+        'replacement': {'model': 'example'}, 'desiredBundle': False}}
     monkeypatch.setattr('amplifier_web.runtime.RuntimeManager._command',
         lambda self, **kwargs: [sys.executable, '-c', 'print(\'{"error":"synthetic"}\')', 'unused'])
     with pytest.raises(ValueError, match='Draft default resolution failed'):
