@@ -233,6 +233,7 @@ try{
  assert.deepEqual(recoveredResult.operation,originalResult.operation);
  assert.equal((await facts()).callCounts.execute,beforeRecovery.callCounts.execute,'recovery and reads never repeat the check');
  assert.deepEqual((await facts()).requests,afterRecovery.requests,'reads do not rewrite operation history');
+ await panel.getByText('Cleanup recovered. The environment was removed; the check was not repeated.',{exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:output+'/queue-recovery-desktop.png'});
  await page.setViewportSize({width:390,height:844});
  await panel.getByText('Cleanup recovered. The environment was removed; the check was not repeated.',{exact:true}).scrollIntoViewIfNeeded();
