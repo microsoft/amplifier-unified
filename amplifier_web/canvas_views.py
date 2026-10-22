@@ -28,7 +28,7 @@ def definitions(schema, string):
     target = {'viewId': string(100), 'resourceId': IDENTITY,
               'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
     actions = {
-        'canvas.views.inline': ('Allocate a bounded renderer lease for an exact published version. This does not expand a card; use canvas.select with presentation:inline for that. presentationRequest fences a card mount against its current choice.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY, 'presentationRequest': {'type': 'boolean'}}, ['resourceId', 'version', 'messageId', 'previewId'])),
+        'canvas.views.inline': ('Allocate a bounded renderer lease for an exact saved version published in a message OR attached to a question. Supply messageId or questionId plus immutable questionContentRevision, never both. Does not expand a card or start work; use canvas.select presentation:inline. presentationRequest fences the current card choice.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'questionId': IDENTITY, 'questionContentRevision': {'type': 'integer', 'minimum': 1}, 'previewId': IDENTITY, 'presentationRequest': {'type': 'boolean'}}, ['resourceId', 'version', 'previewId'])),
         'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
         'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
         'canvas.views.reveal': ('Reveal the exact artifact file in the file manager on its named owning app host. It does not open the browser device file manager. Bind hostId and instanceId from fileReveal.', schema({**target,'hostId':string(200),'instanceId':string(100)}, [*target,'hostId','instanceId'])),
@@ -73,14 +73,16 @@ class CanvasViews:
         version = args.get('version') or latest(row)
         row = definition(row, version, self.service.db)
         destination = args.get('presentation', 'canvas')
-        message = args.get('messageId')
-        if destination == 'inline':
+        source = {}
+        if destination == 'inline' or any(key in args for key in ('messageId', 'questionId', 'questionContentRevision')):
             if 'version' not in args:
-                fail('Inline presentation needs an exact saved version.', 409)
-            self.validate_inline(row, version, message)
+                fail('A source-bound presentation needs an exact saved version.', 409)
+            source = self.source_binding(row, version, args)
+        if destination == 'inline' and row['kind'] not in INLINE_KINDS:
+            fail('This artifact opens in Canvas.', 409)
         if args.get('resetPreview') and origin != 'ui':
             fail('Only an explicit user control can reset an interactive preview.', 403)
-        self.choose(row, version, destination, message_id=message,
+        self.choose(row, version, destination, source=source,
                     reset=args.get('resetPreview', False), origin=origin)
         return {'id': row['id'], 'version': version, 'presentation': destination}
 
@@ -91,7 +93,30 @@ class CanvasViews:
         if {'messageId': message, 'version': version} not in row.get('publications', []):
             fail('This version was not published in that message.', 409)
 
-    def choose(self, row, version, destination, *, message_id=None, reset=False, origin='agent'):
+    def source_binding(self, row, version, args, *, legacy_publication=False):
+        """One exact publication or immutable question reference, never both."""
+        if 'questionId' in args:
+            if 'messageId' in args or 'questionContentRevision' not in args:
+                fail('Supply one question binding, not a message publication.', 409)
+            self.service.questions.review_artifact(row['sessionId'], args['questionId'],
+                args['questionContentRevision'], row['id'], version)
+            return {key: args[key] for key in ('questionId', 'questionContentRevision')}
+        if 'messageId' not in args or 'questionContentRevision' in args:
+            fail('Supply a message publication or an exact question binding.', 409)
+        publications = row.get('publications', [])
+        if legacy_publication and not publications:
+            from .canvas_versions import latest
+            publications = [{'messageId': row.get('messageId'), 'version': latest(row)}]
+        if {'messageId': args['messageId'], 'version': version} not in publications:
+            fail('This version was not published in that message.', 409)
+        return {'messageId': args['messageId']}
+
+    @staticmethod
+    def same_source(binding, source):
+        return all(binding.get(key) == source.get(key)
+                   for key in ('messageId', 'questionId', 'questionContentRevision'))
+
+    def choose(self, row, version, destination, *, message_id=None, source=None, reset=False, origin='agent'):
         """One client/exact-version choice; dirty or stateful refusals are atomic.
 
         Ordinary HTML has no state-transfer protocol. A deliberate UI reset is
@@ -105,12 +130,13 @@ class CanvasViews:
                 fail('Attach a client to preview this publication inline.', 409)
             return
         record = self.record()
+        source = source if source is not None else ({'messageId': message_id} if message_id else {})
         primary = client.get('canvas', {})
         same_primary = (primary.get('id') == row['id']
                         and (primary.get('selectedVersion') or primary.get('revision', 1)) == version)
         outgoing = [identity for identity, binding in record.get('inline', {}).items()
                     if binding['resourceId'] == row['id'] and binding['selectedVersion'] == version
-                    and (destination != 'inline' or binding['messageId'] != message_id)]
+                    and (destination != 'inline' or not self.same_source(binding, source))]
         if same_primary and destination != 'canvas' and (primary.get('open') or record.get('retained')):
             outgoing.append('primary')
         for identity in outgoing:
@@ -137,7 +163,7 @@ class CanvasViews:
             primary.pop('_presentationDisposed', None)
         record.setdefault('presentations', {})[f'{row["id"]}:{version}'] = {
             'id': row['id'], 'version': version, 'sessionId': row['sessionId'],
-            'presentation': destination, **({'messageId': message_id} if message_id else {})}
+            'presentation': destination, **source}
 
     def guard_transition(self, action, args):
         """Reject parent actions before they can discard a mounted dirty view.
@@ -164,6 +190,14 @@ class CanvasViews:
                     raise AppError('Finish or cancel the ' + label + ' edit before leaving it. '
                                    'Use viewer recovery only to discard that edit.', 409, code='canvas_view_dirty')
 
+        # Question state is shared. A close in any client (or by an agent) must
+        # not strand another client's question-bound editor after its card moves.
+        if action in {'question.answer', 'question.cancel', 'question.supersede'}:
+            for client in self.service.clients.records.values():
+                check(client, [identity for identity, binding in client.get('canvasViews', {}).get('inline', {}).items()
+                               if binding.get('sessionId') == args['sessionId']
+                               and binding.get('questionId') == args['id']])
+            return
         # Deleting shared history can unmount another client's whole canvas.
         if action == 'session.delete':
             for client in self.service.clients.records.values():
@@ -225,6 +259,9 @@ class CanvasViews:
             if (row.get('sessionId') != self.service.state.get('selectedSessionId')
                     or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
                 fail('This preview belongs to another conversation.', 409)
+            if current.get('questionId'):
+                self.service.questions.review_artifact(row['sessionId'], current['questionId'],
+                    current['questionContentRevision'], identity, current['selectedVersion'])
         from .canvas_versions import definition
         row = definition(row, current.get('selectedVersion'), self.service.db)
         preference = self.preference(view_id, row)
@@ -329,30 +366,32 @@ class CanvasViews:
         return {'views': views, 'presentations': presentations}
 
     def open_inline(self, args):
-        from .canvas_versions import definition, latest
+        from .canvas_versions import definition
         row = self.artifact(args['resourceId'])
         if (row.get('sessionId') != self.service.state.get('selectedSessionId')
                 or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
             fail('Open the conversation that contains this artifact first.', 409)
-        publications = row.get('publications') or [{'messageId': row.get('messageId'), 'version': latest(row)}]
-        if {'messageId': args['messageId'], 'version': args['version']} not in publications:
-            fail('This version was not published in that message.', 409)
         saved = definition(row, args['version'], self.service.db)
-        if saved['kind'] not in set(KINDS) - {'a2ui', 'browser'}:
+        source = self.source_binding(row, args['version'], args, legacy_publication=True)
+        if saved['kind'] not in INLINE_KINDS:
             fail('This artifact opens in Canvas.', 409)
         record = self.record()
         choice = self.presentation(row['id'], args['version'])
         if args.get('presentationRequest') and (not choice or choice['presentation'] != 'inline'
-                                               or choice.get('messageId') != args['messageId']):
+                                               or not self.same_source(choice, source)):
             fail('This inline presentation changed. Use the current artifact card.', 409)
         inline = record.setdefault('inline', {})
         for identity, binding in list(inline.items()):
             if binding.get('sessionId') != self.service.state.get('selectedSessionId'):
                 self.release_inline(identity)
         binding = {'resourceId': row['id'], 'selectedVersion': args['version'],
-                   'messageId': args['messageId'], 'sessionId': row['sessionId'], 'previewId': args['previewId']}
+                   **source, 'sessionId': row['sessionId'], 'previewId': args['previewId']}
         identity = next((key for key, value in inline.items() if value == binding), None)
         if identity is None:
+            if 'questionId' in source and any(value.get('resourceId') == row['id']
+                    and value.get('selectedVersion') == args['version'] and self.same_source(value, source)
+                    for value in inline.values()):
+                fail('Close the existing preview of this artifact before opening it at the question.', 409)
             if len(inline) >= 8:
                 fail('Close a preview to open another here, or open this artifact in Canvas.', 409)
             identity = 'inline-' + str(uuid.uuid4())
