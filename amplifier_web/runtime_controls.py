@@ -26,18 +26,19 @@ def credential_field(key, *, module=None):
             or module == "tool-team-pulse" and key == "key")
 
 
-def public_config(value, *, module=None):
+def public_config(value, *, module=None, metadata=False):
     if is_dataclass(value):
         value = asdict(value)
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
         return {str(key): REDACTED if credential_field(key, module=module)
-                else public_config(item, module=value.get("module") if key == "config" else None)
+                else public_config(item, module=value.get("module") if key == "config" else None,
+                                   metadata=metadata)
                 for key, item in value.items()
-                if not (value.get("field_type") == "secret" and key in {"default", "value"})}
+                if not (metadata and value.get("field_type") == "secret" and key in {"default", "value"})}
     if isinstance(value, (list, tuple)):
-        return [public_config(item) for item in value]
+        return [public_config(item, metadata=metadata) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
@@ -47,22 +48,37 @@ def identity(row):
     return row.get("instance_id") or row.get("id") or row.get("module")
 
 
+_MISSING_SETTING = object()
+
+
 def restore_redactions(value, old):
     if value == REDACTED:
-        if old is None:
+        if old is _MISSING_SETTING:
             raise ValueError("A redacted value cannot be used for a new setting")
         return copy.deepcopy(old)
     if isinstance(value, dict):
-        return {key:restore_redactions(item, old.get(key) if isinstance(old, dict) else None)
+        if ("module" in value or isinstance(old, dict) and "module" in old) and (
+                not isinstance(old, dict) or identity(value) != identity(old)
+                or value.get("module") != old.get("module")
+                or value.get("source") != old.get("source")):
+            old = _MISSING_SETTING
+        return {key:restore_redactions(item, old.get(key, _MISSING_SETTING)
+                                      if isinstance(old, dict) else _MISSING_SETTING)
                 for key,item in value.items()}
     if isinstance(value, list):
+        # Only module collections can reorder by identity. Arrays inside a
+        # matched configuration retain their structural positions.
+        if not any(isinstance(row, dict) and "module" in row
+                   for row in [*value, *(old if isinstance(old, list) else [])]):
+            return [restore_redactions(row, old[i] if isinstance(old, list) and i < len(old)
+                                       else _MISSING_SETTING) for i, row in enumerate(value)]
         def previous(row):
             matches = [item for item in old if isinstance(item, dict)
                        and identity(item) == identity(row)
                        and item.get("module") == row.get("module")
                        and item.get("source") == row.get("source")] if isinstance(old, list) and identity(row) else []
-            return matches[0] if len(matches) == 1 else None
-        return [restore_redactions(row, previous(row) if isinstance(row, dict) else None) for row in value]
+            return matches[0] if len(matches) == 1 else _MISSING_SETTING
+        return [restore_redactions(row, previous(row) if isinstance(row, dict) else _MISSING_SETTING) for row in value]
     return copy.deepcopy(value)
 
 
@@ -515,14 +531,14 @@ class RuntimeControls:
                     schema = await schema
                 from .provider_catalog import fingerprint
                 mounted=next((row for row in getattr(self.session,'config',{}).get('providers',[]) if (row.get('id') or row.get('instance_id') or row.get('module','').removeprefix('provider-'))==name),{})
-                catalog_key=fingerprint([self.catalog_revision,name,mounted or getattr(provider,'config',{}),public_config(info)])
+                catalog_key=fingerprint([self.catalog_revision,name,mounted or getattr(provider,'config',{}),public_config(info, metadata=True)])
                 shared={}
                 captured=self.coordinator.get_capability('web.provider_catalog')
                 if mounted and isinstance(captured,dict) and name in captured.get('keys',{}):
                     from .provider_catalog import configuration_key
                     current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
                     if current==captured['keys'][name]:shared['sharedCatalogKey']=current
-                rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info),"configSchema":public_config(schema),
+                rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info, metadata=True),"configSchema":public_config(schema, metadata=True),
                     "supports":{"models":callable(getattr(provider,"list_models",None)),
                                 "test":callable(getattr(provider,"list_models",None)),
                                 "login":callable(getattr(provider,"login",None))}})

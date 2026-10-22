@@ -100,7 +100,7 @@ def read_state(state, args, *, session_id=None, resolve=None, reference_key='$st
         return overview(state, session_id)
     if not isinstance(path,str) or (path and not path.startswith('/')):
         raise ValueError('path must be a JSON Pointer, for example /canvas or /sessions/0/messages.')
-    from .configuration_state import is_configuration, project as public_preview
+    from .configuration_state import is_configuration, is_provider_metadata, project as public_preview
     app_state = configuration_projection or session_id is not None or directory is not None
     value=state
     current_path=''
@@ -111,7 +111,7 @@ def read_state(state, args, *, session_id=None, resolve=None, reference_key='$st
                 value=resolve(value['$resource'])
             if app_state and is_configuration(current_path):
                 from .runtime_controls import public_config
-                value=public_config(value, module=module)
+                value=public_config(value, module=module, metadata=is_provider_metadata(current_path))
             token=token.replace('~1','/').replace('~0','~')
             if (app_state and token == '_coldFields'
                     and len(current_path.split('/')) == 3
@@ -126,7 +126,7 @@ def read_state(state, args, *, session_id=None, resolve=None, reference_key='$st
         value=resolve(value['$resource'])
     if app_state and is_configuration(path):
         from .runtime_controls import public_config
-        value=public_config(value, module=module)
+        value=public_config(value, module=module, metadata=is_provider_metadata(path))
     offset=args.get('offset',0);limit=args.get('limit',50)
     if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=16000:
         raise ValueError('Use a nonnegative integer offset and a limit between 1 and 16000.')

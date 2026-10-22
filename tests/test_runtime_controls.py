@@ -402,3 +402,45 @@ def test_redacted_restore_cannot_borrow_another_source_or_ambiguous_identity(cha
         edited['tools'][0][changed] = 'different'
     with pytest.raises(ValueError, match='redacted value cannot be used'):
         restore_redactions(edited, old)
+
+
+@pytest.mark.parametrize('changed', ['unchanged', 'module', 'source'])
+def test_dictionary_module_restore_requires_the_same_owner(changed):
+    import copy
+    old = {'session': {'context': {'module': 'context-fixture', 'source': 'original-source',
+                                  'config': {'api_key': 'SYNTHETIC_CONTEXT_KEY'}}}}
+    before = copy.deepcopy(old)
+    edited = public_config(old)
+    if changed == 'unchanged':
+        assert restore_redactions(edited, old) == old
+    else:
+        edited['session']['context'][changed] = 'different'
+        with pytest.raises(ValueError, match='redacted value cannot be used'):
+            restore_redactions(edited, old)
+    assert old == before
+
+
+def test_nested_configuration_arrays_and_null_round_trip_without_inventing_missing_values():
+    import copy
+    from amplifier_web.runtime_controls import REDACTED
+    old = {'tools': [{'module': 'tool-fixture', 'config': {
+        'headers': [{'authorization': 'SYNTHETIC_HEADER', 'label': 'first'},
+                    {'authorization': None, 'label': 'second'}],
+        'api_key': None, 'modes': ['one', 'two']}}]}
+    before = copy.deepcopy(old)
+    visible = public_config(old)
+    assert visible['tools'][0]['config']['api_key'] == REDACTED
+    assert restore_redactions(visible, old) == before == old
+    visible['tools'][0]['config']['new_secret'] = REDACTED
+    with pytest.raises(ValueError, match='redacted value cannot be used'):
+        restore_redactions(visible, old)
+
+
+def test_secret_metadata_omission_does_not_change_generic_tool_result_data():
+    from amplifier_core import ToolResult
+    payload = {'field_type': 'secret', 'default': 'user-authored example', 'value': 'user text'}
+    result = ToolResult(success=True, output=payload)
+    # This is the same serializer used by RuntimeControls.invoke for arbitrary results.
+    assert public_config(result)['output'] == payload
+    assert public_config({'fields': [payload]}, metadata=True) == {
+        'fields': [{'field_type': 'secret'}]}

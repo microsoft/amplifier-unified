@@ -21,6 +21,11 @@ def is_configuration(path):
             and parts[2:4] == ['catalog.inspect', 'agents'])
 
 
+def is_provider_metadata(path):
+    parts = _tokens(path)
+    return len(parts) >= 3 and parts[0] == 'runtimeControl' and parts[2] == 'configuration.providers'
+
+
 def project(value, path, *, reference_key='$statePath'):
     """Sanitize the selected preview only, without reading unrelated cold bodies."""
     from .agent_state import _pointer
@@ -28,7 +33,7 @@ def project(value, path, *, reference_key='$statePath'):
     from .runtime_controls import public_config
 
     if is_configuration(path):
-        return public_config(value)
+        return public_config(value, metadata=is_provider_metadata(path))
     parts = _tokens(path)
     if len(parts) == 1 and parts[0] in {'sessions', 'runtimeControl'}:
         if isinstance(value, list):
