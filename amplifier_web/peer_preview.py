@@ -56,7 +56,7 @@ class PeerPreview:
                    'messageId': original['id'], 'requestId': receipt['requestId'],
                    'binding': receipt['displayBinding'], 'targetId': target['id'],
                    'targetIdentity': self._identity(target),
-                   'parentFence': self.windows._fence(parent['id'])}
+                   'parentIdentity': self._identity(parent)}
         return {**self._descriptor(target), 'proof': self.windows.reader._token(payload),
                 'delivery': receipt.get('delivery', 'unknown')}
 
@@ -72,7 +72,7 @@ class PeerPreview:
                 or parent_id is not None and value['sourceSessionId'] != parent_id):
             raise AppError('Preview the source from its original conversation.', 403)
         parent = self.service._session(value['sourceSessionId'], hydrate=False)
-        if self.windows._fence(parent['id']) != value.get('parentFence'):
+        if self._identity(parent) != value.get('parentIdentity'):
             raise AppError('The original conversation changed. Reopen the source preview.', 403)
         row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (value['requestId'],)).fetchone()
         receipt = json.loads(row[0]) if row else {}
@@ -82,8 +82,9 @@ class PeerPreview:
                 or receipt.get('displayBinding') != value['binding']
                 or receipt.get('senderSessionId') != value['targetId']):
             raise AppError('This source message is no longer available.', 403)
-        # Reuse the attribution owner's exact-original checks. Do not hydrate a
-        # cold receiver merely to validate a preview link.
+        # Reuse exact-original checks, not the transcript page's broad cache
+        # fence: unrelated arrivals may invalidate pages without changing this
+        # receipt-bound original. Never hydrate a cold receiver for the link.
         originals = dict.get(parent, 'messages', ())
         original = next((m for m in originals if m.get('id') == value['messageId']), None)
         if original is None or not self.service.peer_attribution.resolve(parent, [original])[0].get('attribution', {}).get('peer'):

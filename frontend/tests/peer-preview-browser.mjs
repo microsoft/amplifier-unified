@@ -44,8 +44,13 @@ try{
  // Discriminator: deliberately flatten DOM text; semantic line-break assertion must fail.
  const flattened=await original.locator('pre code').textContent();assert.notEqual(flattened.replace(/\s+/g,' '),flattened);
  if(process.env.PEER_NEGATIVE_FLATTEN==='1'){
-  await original.locator('.a-markdown').evaluate(n=>{n.textContent=n.textContent.replace(/\s+/g,' ')});
-  await formatted(original.locator('.a-markdown'));throw Error('Negative control incorrectly passed');
+  await original.locator('.a-markdown').evaluate(n=>{
+   const walker=document.createTreeWalker(n,NodeFilter.SHOW_TEXT);let text;
+   while(text=walker.nextNode())text.nodeValue=text.nodeValue.replace(/\s+/g,' ');
+  });
+  let detected;try{await formatted(original.locator('.a-markdown'))}catch(e){detected=e}
+  assert.ok(detected,'Negative control incorrectly passed');
+  throw Error('PEER_NEGATIVE_CONTROL_CONFIRMED: '+detected.message);
  }
  await original.getByRole('button',{name:'Copy peer message as Markdown'}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(facts.text);

@@ -72,7 +72,7 @@ async def test_exact_transport_markdown_readonly_preview_and_page_boundary(app, 
     assert receiving == before
 
 
-@pytest.mark.parametrize('change', ['proof','origin','client','text','duplicate','receipt','target','workspace','deleted'])
+@pytest.mark.parametrize('change', ['proof','origin','client','text','duplicate','receipt','target','parent','workspace','deleted'])
 async def test_preview_fail_closed_without_retargeting(app, change):
     service, source, receiving, mid = app
     meta = descriptor(service, receiving, mid)
@@ -87,6 +87,7 @@ async def test_preview_fail_closed_without_retargeting(app, change):
         if change == 'duplicate': receiving['messages'].append(copy.deepcopy(receiving['messages'][0]))
         if change == 'receipt': service.db.execute("DELETE FROM commands WHERE id='peer-preview-input'")
         if change == 'target': source['createdAt'] += 10
+        if change == 'parent': receiving['createdAt'] += 10
         if change == 'workspace': source['workspace'] = '/unavailable-synthetic-workspace'
         if change == 'deleted': source['_deleting'] = True
         with pytest.raises((AppError, ValueError)):
@@ -110,6 +111,23 @@ async def test_dirty_canvas_and_exact_guarded_navigation(app):
         assert service.state['selectedSessionId'] == source['id']
         assert service.state['conversationOrganization']['archived'][source['id']] == saved
     assert service.clients.records['other-client']['selectedSessionId'] == receiving['id']
+
+
+async def test_preview_survives_page_invalidation_and_unrelated_arrivals(app):
+    service, source, receiving, mid = app
+    meta = descriptor(service, receiving, mid)
+    with service.clients.bind('preview-client'):
+        first = await service.peer_preview.read({'proof':meta['proof']})
+        later = service._message(source, 'assistant', '## New captured note\n\nManual refresh only.')
+        service._message(receiving, 'assistant', 'An independent reply does not revoke an original.')
+        service._publish()
+        second = await service.peer_preview.read({'proof':meta['proof']})
+        assert later['id'] not in {row['id'] for row in first['page']['items']}
+        assert later['id'] in {row['id'] for row in second['page']['items']}
+        assert service.peer_preview.open({'proof':meta['proof'], 'sourceSessionId':receiving['id']}, 'ui')['accepted']
+        receiving['messages'][0]['text'] = 'Original changed after refresh'
+        with pytest.raises(AppError):
+            await service.peer_preview.read({'proof':meta['proof']})
 
 
 async def test_rename_refresh_and_revocation_during_read(app, monkeypatch):
