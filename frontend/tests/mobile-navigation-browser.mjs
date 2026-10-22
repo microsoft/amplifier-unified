@@ -122,7 +122,7 @@ try{
  const frame=page.frameLocator('.a-canvas-html');await frame.getByRole('button',{name:'0',exact:true}).click();await frame.getByRole('textbox').fill('Keep my viewer state');
  const iframe=await page.locator('.a-canvas-html').elementHandle();
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='canvas.visibility')await new Promise(r=>setTimeout(r,1200));await route.continue()});
- for(const name of ['Close canvas','Open canvas','Close canvas','Open canvas']){
+ for(const name of ['Hide canvas','Open canvas','Hide canvas','Open canvas']){
   await page.getByRole('button',{name,exact:true}).click();
   const expected=name==='Open canvas';
   assert.equal(await page.locator('#workspace-canvas').isVisible(),expected);
@@ -137,7 +137,7 @@ try{
  await page.screenshot({path:`${out}/canvas.png`});
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.panes.conversation.interactive),false);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.controls.some(control=>control.label==='Message Amplifier')),false);
- await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
  assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
  const after=await readingPosition();
  assert.deepEqual(after,before,'Stable geometry retains both raw scrollTop and the visible message anchor');
@@ -158,14 +158,14 @@ try{
  let rejected=false;
  const reject=async route=>{if(!rejected&&route.request().postDataJSON()?.action==='canvas.visibility'){rejected=true;await new Promise(resolve=>setTimeout(resolve,300));await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Fixture visibility save failed'})})}else await route.continue()};
  await page.route('**/api/actions',reject);
- await page.getByRole('button',{name:'Close canvas',exact:true}).click();assert.equal(await page.locator('#workspace-canvas').isVisible(),false);
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();assert.equal(await page.locator('#workspace-canvas').isVisible(),false);
  await page.getByText('Fixture visibility save failed',{exact:true}).waitFor();assert.equal(await page.locator('#workspace-canvas').isVisible(),true);
  await page.getByRole('button',{name:'Dismiss error',exact:true}).click();await page.unroute('**/api/actions',reject);
  if(fixture){
   // Reproduce a delayed Work retry finishing while Canvas covers the chat.
   // The same message must stay at the same position even though the notice
   // disappears and raw scrollTop must decrease by its height plus the gap.
-  await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+  await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
   await workReady();
   const sessionId=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
   const work=async operation=>{const response=await page.request.post(base+'/api/fixture/work-reader',{data:{operation,sessionId}});assert.equal(response.ok(),true)};
@@ -178,7 +178,7 @@ try{
   const retryBefore=await readingPosition();
   await page.getByRole('button',{name:'Open canvas',exact:true}).click();
   await work('release');await workReady();
-  await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+  await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
   await expect.poll(async()=>Math.abs((await readingPosition()).offset-retryBefore.offset)).toBeLessThan(1);
   const retryAfter=await readingPosition();
   assert.equal(retryAfter.id,retryBefore.id);
