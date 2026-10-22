@@ -249,3 +249,17 @@ test('a delayed pre-save read cannot confirm an old coherent order',async t=>{
   assert.match(JSON.stringify(f.root.toJSON()),/Could not confirm the saved pin order/);assert.equal(f.calls.length,1);
  }finally{t.mock.timers.reset();await f.close()}
 });
+
+test('external unpin after a timeout retires the old saved-order recovery',async t=>{
+ const f=await fixture();let reads=0;
+ f.host.refreshResources=async()=>{reads++};
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  await f.key('session:b','ArrowUp');await act(async()=>t.mock.timers.tick(10001));
+  await f.update({pinnedItemIds:['session:a'],pinnedNavigation:{items:[item('session:a')],total:1,index:0,pages:1}});
+  await act(async()=>refreshButton(f).props.onClick());
+  assert.match(JSON.stringify(f.root.toJSON()),/Pins changed elsewhere/);
+  assert.equal(refreshButton(f),undefined);assert.equal(f.listeners.size,0);assert.equal(f.calls.length,1);assert.equal(reads,0);
+  assert.deepEqual(f.order(),['session:a']);
+ }finally{t.mock.timers.reset();await f.close()}
+});

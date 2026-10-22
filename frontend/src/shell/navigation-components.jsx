@@ -396,7 +396,7 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
     throw Error('The pinned list is updating. Move the item again when it is ready.');
    const previous=[...(current.pinnedItemIds||[])],expected=movePin(previous,id,visible[to]);
    await settle(()=>model.act('navigation.pinOrder',{ids:expected}),previous,expected,next);
-  }catch(err){if(err.name!=='AbortError'&&owner.current.alive&&owner.current.version===version)setError({message:err.message||'Could not reorder pins. Please try again.',read:err.pinOrderDisplay===true,expected:err.pinOrderExpected,visible:err.pinOrderVisible});throw err}
+  }catch(err){if(err.name!=='AbortError'&&owner.current.alive&&owner.current.version===version)setError({message:err.message||'Could not reorder pins. Please try again.',read:err.pinOrderDisplay===true,previous:err.pinOrderPrevious,expected:err.pinOrderExpected,visible:err.pinOrderVisible});throw err}
  };
  const refresh=async()=>{
   if(owner.current.read)return;
@@ -408,6 +408,9 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
    // In particular, joining a pre-save read cannot confirm the old coherent page.
    const select=snapshot=>{
     if(!current())throw new DOMException('Pinned read superseded','AbortError');
+    if(!pinOrderPending(snapshot)&&snapshot.pinnedItemIds?.join('\0')!==token.error.previous?.join('\0')
+     &&snapshot.pinnedItemIds?.join('\0')!==token.error.expected?.join('\0'))
+     throw Object.assign(Error('Pins changed elsewhere. The current order is shown.'),{superseded:true});
     return !pinOrderPending(snapshot)&&snapshot.pinnedItemIds?.join('\0')===token.error.expected?.join('\0')
      &&snapshot.pinnedNavigation?.items?.map(item=>item.id).join('\0')===token.error.visible?.join('\0')?snapshot:null;
    };
@@ -417,7 +420,7 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
     await Promise.race([waiting,Promise.resolve().then(()=>model.host.refreshResources()).then(()=>waiting)]);
    }
    if(current())setError(null);
-  }catch(err){if(err.name!=='AbortError'&&current())setError({...token.error,message:err.message||'Could not refresh the pinned list.',read:true})}
+  }catch(err){if(err.name!=='AbortError'&&current())setError({...token.error,message:err.message||'Could not refresh the pinned list.',read:!err.superseded})}
   finally{token.controller.abort();if(owner.current.read===token)owner.current.read=null;if(owner.current.alive&&owner.current.version===token.version){setReading(false);if(!current())setError(null)}}
  };
  const browse=async path=>{

@@ -34,7 +34,7 @@ export function usePinOrderSettlement(host){
    },{signal:controller.signal,timeoutMessage});
   }catch(error){
    if(error.message===timeoutMessage)error.pinOrderDisplay=true;
-   if(error.pinOrderDisplay){error.pinOrderExpected=[...expected];error.pinOrderVisible=[...visible]}
+   if(error.pinOrderDisplay){error.pinOrderPrevious=[...previous];error.pinOrderExpected=[...expected];error.pinOrderVisible=[...visible]}
    throw error;
   }finally{if(owner.current.wait===controller)owner.current.wait=null}
  };
