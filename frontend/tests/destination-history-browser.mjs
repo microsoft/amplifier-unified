@@ -319,7 +319,23 @@ try{
  });
  await page.evaluate(id=>{window.optimisticSelection=window.amplifier.dispatch('session.select',{id}).catch(error=>({error:error.message}))},b);
  await expect.poll(()=>optimisticHeld).toBe(true);
- await action('session.pin',{id:c,pinned:true});
+ // Publish the unrelated change through the authenticated host boundary. Do not
+ // make this history assertion depend on settlement of another UI dispatch while
+ // selection is deliberately held. Join its exact receipt to observed state.
+ const beforePin=await state(),pinCommandId=crypto.randomUUID();
+ const pinResponse=await page.request.post(url+'/api/actions',{headers:{
+  'X-Amplifier-Client':beforePin.client.id,'X-Amplifier-State-Transport':'delta-v1'},
+  data:{id:pinCommandId,action:'session.pin',args:{id:c,pinned:true}}});
+ assert.ok(pinResponse.ok());const pinReceipt=await pinResponse.json();
+ assert.equal(pinReceipt.accepted,true);assert.equal(pinReceipt.hostInstanceId,beforePin.client.hostInstanceId);
+ assert.ok(Number.isSafeInteger(pinReceipt.stateRevision)&&pinReceipt.stateRevision>beforePin.revision);
+ await expect.poll(async()=>{const s=await state();return s.client.id===beforePin.client.id&&
+  s.client.hostInstanceId===pinReceipt.hostInstanceId&&s.revision>=pinReceipt.stateRevision&&s.navigationPending===true;}).toBe(true);
+ await writeFile(path.join(out,'optimistic-publication-boundary.json'),JSON.stringify({
+  commandId:pinCommandId,action:'session.pin',clientId:beforePin.client.id,
+  hostInstanceId:pinReceipt.hostInstanceId,receiptRevision:pinReceipt.stateRevision,
+  observedRevision:(await state()).revision,selectionStillHeld:optimisticHeld,
+  before:beforeOptimistic,after:await saved()},null,2));
  assert.deepEqual(await saved(),beforeOptimistic,'Unrelated authoritative state must not record an optimistic selection');
  optimisticGate.release();await page.evaluate(()=>window.optimisticSelection);await page.unroute('**/api/actions');
  assert.deepEqual(await saved(),beforeOptimistic);
