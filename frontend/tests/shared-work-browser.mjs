@@ -106,7 +106,26 @@ try {
  assert.equal(manifest.pendingWarmups,0);
  const action=(name,args={})=>bounded(page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),actionTimeoutMs,'Primary '+name);
  const state=()=>bounded(page.evaluate(()=>window.amplifier.getState()),actionTimeoutMs,'Primary state read');
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);
+ await page.waitForFunction(()=>window.amplifier);
+ // Exact entry sequence retained from the combined owner's c2429b275.
+ // Home is a navigation surface, not an already-open composer.
+ const ownerCard=page.locator(`article[data-session-id="${manifest.ownerSessionId}"]`);
+ await expect(ownerCard).toBeVisible();
+ await expect(ownerCard.getByRole('heading',{name:'Synthetic Work owner',exact:true})).toBeVisible();
+ const entryBefore=calls.length;
+ await ownerCard.getByRole('button',{name:/Continue chat/}).click();
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(manifest.ownerSessionId);
+ await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const entrySelects=calls.slice(entryBefore).filter(row=>row.action==='session.select');
+ assert.equal(entrySelects.length,1);
+ assert.equal(entrySelects[0].args.id,manifest.ownerSessionId);
+ const entryObservation=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
+ assert.deepEqual(entryObservation.forbiddenRuntimeCalls,[]);
+ assert.deepEqual(entryObservation.runtimeCallbackCounts,{start:0,send:0,prewarm:0});
+ assert.equal(entryObservation.pendingWarmups,0);
+ observer.assertHealthy();
  // The selected draft belongs to a different chat; reading Work must not touch it.
  const created=await action('session.create',{workspace:manifest.workspace.path,title:'Draft owner'});
  const draftOwner=created.result.sessionId;
@@ -318,9 +337,29 @@ try {
    await page.setViewportSize({width,height:900});
    await load.scrollIntoViewIfNeeded();
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Cold task no overflow at '+width);
-   const box=await load.boundingBox();assert.ok(box.height>=44&&box.width>=44,'44px cold task Load target');
    await page.screenshot({path:path.join(output,`cold-task-${width}.png`)});
   }
+  // A narrow viewport is not a touch device. Exercise the real coarse-pointer
+  // stylesheet in a separately observed client rather than forcing its CSS.
+  const touch=await browser.newPage({hasTouch:true,viewport:{width:390,height:900},extraHTTPHeaders:headers});
+  observePage(touch,'touch');
+  await touch.goto(url);await touch.waitForFunction(()=>window.amplifier);
+  assert.equal(await touch.evaluate(()=>matchMedia('(pointer:coarse)').matches),true);
+  const touchAction=(name,args)=>bounded(touch.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),actionTimeoutMs,'Touch '+name);
+  await touchAction('session.select',{id:expected.sessionId});
+  await touchAction('view.update',{patch:{panel:'runtime',runtimeDraft:{tab:'direction'}}});
+  const touchSaved=touch.getByRole('region',{name:'Saved task',exact:true});
+  const touchLoad=touchSaved.getByRole('button',{name:'Load saved task',exact:true});
+  await touchLoad.tap();
+  await expect(touchSaved.getByText(expected.objective,{exact:true})).toBeVisible();
+  for(const width of [390,320]){
+   await touch.setViewportSize({width,height:900});await touchLoad.scrollIntoViewIfNeeded();
+   const box=await touchLoad.boundingBox();
+   assert.ok(box.height>=44&&box.width>=44,'44px coarse-pointer Load target at '+width);
+   assert.ok(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Touch task no overflow at '+width);
+   await touch.screenshot({path:path.join(output,`cold-task-touch-${width}.png`)});
+  }
+  await bounded(touch.close(),actionTimeoutMs,'Touch page close');
   await action('session.select',{id:draftOwner});
   await expect(saved.getByText(expected.objective,{exact:true})).toHaveCount(0);
   await load.click();
@@ -332,7 +371,8 @@ try {
   await expect(page.getByRole('button',{name:'Remove private-draft.txt',exact:true})).toBeVisible();
   coldTaskResult={status:'passed',taskId:expected.id,revision:expected.revision,
    responseBytes:Buffer.byteLength(JSON.stringify(body),'utf8'),ordinaryStateUnchanged:true,
-   missingDetailsVisible:true,completionDisabled:true,unavailableNotEmpty:true};
+   missingDetailsVisible:true,completionDisabled:true,unavailableNotEmpty:true,
+   touch:{coarsePointer:true,widths:[390,320],minimumLoadTarget:44}};
  }
  const observation=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(observation.forbiddenRuntimeCalls,[]);
@@ -341,7 +381,7 @@ try {
  assert.equal(observation.coldReopen,true);assert.deepEqual(observation.coldReadCalls,[]);
  if(coldTaskRequested){
   assert.deepEqual(observation.taskControlCalls,[]);
-  assert.deepEqual(observation.taskReadObservations.map(row=>row.status),['available','unavailable']);
+  assert.deepEqual(observation.taskReadObservations.map(row=>row.status),['available','available','unavailable']);
   assert.ok(observation.taskReadObservations.every(row=>row.accepted&&!row.broadStateReturned));
  }
  const runtime=await (await page.request.get(url+'/fixture',{timeout:actionTimeoutMs})).json();
@@ -357,7 +397,7 @@ try {
   dirtySettings:{keepRefusedNavigation:true,privateDraftPreserved:true,discardWithoutSave:true},
   decisionCurrentness:{freshAccepted:true,laterCounterevidenceHistorical:true},coldTask:coldTaskResult,
   acceptedItems:found.size,sourcePagesComplete:true,priorReturnRetained:true,currentUnknown:true,
-  widths:[1440,390,320],clients:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
+  widths:[1440,390,320],clients:coldTaskRequested?3:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
   runtimeCallbackCounts:observation.runtimeCallbackCounts,observationErrors:observer.errors,
   browserTimeouts:{actionTimeoutMs,navigationTimeoutMs},
   limits:['No live provider or private history','Synthetic runtime; installed identity requires explicit independently prepared wheel']};
