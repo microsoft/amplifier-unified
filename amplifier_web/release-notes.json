@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.22.0",
+      "title": "Preview source chats and keep the composer compact",
+      "changes": [
+        "Inspect the source of an incoming message from another chat in a read-only preview. Read earlier messages, refresh the snapshot or explicitly open the source chat while preserving your current draft and unsaved-work safeguards.",
+        "Group incoming peer messages with clear sender details and formatted content. Copy the original Markdown and keep older pages in order when refreshing or loading more messages.",
+        "Keep the chat composer compact until you need more room. Use the model control below the field for model, reasoning and bundle choices, with usable menus and writing controls on narrow screens.",
+        "Reorder pinned chats reliably during rapid changes, preserving the saved order, keyboard focus and mobile controls.",
+        "Add compact-composer and peer-preview journeys to the automatic smoke checklist, while keeping the existing composer-options coverage and separate installed-package checks."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.21.1",
       "title": "Faster catalogs, reliable reactions and safer configuration views",
       "changes": [

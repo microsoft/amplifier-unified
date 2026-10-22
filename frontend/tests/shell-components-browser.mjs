@@ -76,7 +76,7 @@ try{
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  assert.deepEqual(await page.evaluate(()=>({root:window.componentProof.root===document.getElementById('amp-one'),composer:window.componentProof.composer===document.querySelector('[aria-label="Message Amplifier"]'),viewer:window.componentProof.viewer===document.querySelector('.a-canvas-viewer iframe'),session:window.componentProof.session===window.amplifier.getState().selectedSessionId})),{root:true,composer:true,viewer:true,session:true});
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
- const output=root+'output/shell-components-proof/';await mkdir(output,{recursive:true});await page.screenshot({path:output+'contributions.png'});
+ const output=(process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/shell-components-proof')+'/';await mkdir(output,{recursive:true});await page.screenshot({path:output+'contributions.png'});
  const overflowGeometry=()=>controls.getByRole('button',{name:'Toggle compact spacing'}).evaluate(button=>{
   const header=document.querySelector('.a-work-header').getBoundingClientRect(),popup=button.closest('.a-slot-overflow-items').getBoundingClientRect(),target=button.getBoundingClientRect();
   const hit=document.elementFromPoint(target.x+target.width/2,target.y+target.height/2);
@@ -101,6 +101,13 @@ try{
  // This controlled content-height change exercises ResizeObserver without changing app state.
  const header=page.locator('.a-work-header'),oldMinHeight=await header.evaluate(el=>el.style.minHeight);
  await header.evaluate(el=>{el.style.minHeight='160px'});
+ await expect.poll(overflowGeometry).toEqual(usableOverflow);
+ // Reintroducing the old fixed offset must fail the same overlap boundary.
+ const popup=page.locator('.a-slot-overflow[data-open="true"] .a-slot-overflow-items');
+ const oldTop=await popup.evaluate(el=>el.style.top);
+ await popup.evaluate(el=>{el.style.top='60px'});
+ assert.equal((await overflowGeometry()).belowHeader,false);
+ await popup.evaluate((el,value)=>{el.style.top=value},oldTop);
  await expect.poll(overflowGeometry).toEqual(usableOverflow);
  await header.evaluate((el,value)=>{el.style.minHeight=value},oldMinHeight);
  await expect.poll(overflowGeometry).toEqual(usableOverflow);

@@ -276,6 +276,8 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'shared-landing': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-landing'},
         'focus-navigation': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/focus-navigation'},
         'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
+        'compact-composer': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/compact-composer'},
+        'peer-preview': {'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-preview'},
         'storage-cleanup-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/storage-cleanup-settings'},
     }
     added = [row for row in rows if row['id'] in additions]
@@ -293,7 +295,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 109
+    assert len(original) == 65 and len(rows) == 111
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -325,6 +327,24 @@ def assert_readiness_python_coverage(workflow, *, targets, run_blocks_sha256):
     # command written in an unrecognized shell form. Do not sort/deduplicate it.
     assert hashlib.sha256(json.dumps(runs).encode()).hexdigest() == run_blocks_sha256, 'Normal readiness commands changed'
     return files
+
+
+def test_compact_composer_and_peer_preview_keep_automatic_inventory_owners():
+    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+    ledger = json.loads((ROOT / 'frontend/tests/standard-ux-inventory-deltas.json').read_text())
+    owners = {
+        'delta.compact-composer': {'compact-composer'},
+        'delta.peer-preview': {'peer-preview'},
+    }
+    for identity, names in owners.items():
+        delta, = [row for row in ledger['changes'] if row['id'] == identity]
+        paths = {test['path'] for flow in delta['workflowsAdded'] for test in flow['existingTests']}
+        assert all(f'frontend/tests/{name}-browser.mjs' in paths for name in names)
+        for name in names:
+            row, = [row for row in plan['scenarios'] if row['id'] == name]
+            assert row['command'] == ['node', f'tests/{name}-browser.mjs']
+            assert 'AMPLIFIER_TEST_PACKAGE_ROOT' not in row.get('env', {})
+            assert any(f'/output/browser-checks/{name}' in value for value in row['env'].values())
 
 
 @pytest.mark.parametrize('change', ['diagnostic-noise', 'duplicate-step', 'duplicate-argument',
@@ -484,8 +504,18 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     pin_reorder = 'tests/pin-rapid-reorder-browser.mjs'
     assert pin_reorder in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', pin_reorder] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, pin_reorder}) == 146
-    assert len(readiness_scripts | extended_scripts) == 152
+    # New source journeys are automatic; their manual lanes add installed and
+    # negative-control proof without replacing any existing ordinary owner.
+    feature_additions = {f'tests/{name}-browser.mjs' for name in
+                         ('compact-composer', 'peer-preview')}
+    assert feature_additions <= extended_scripts - readiness_scripts
+    # Options already has an automatic installed-readiness owner.
+    assert 'tests/composer-options-browser.mjs' in readiness_scripts - extended_scripts
+    assert sum('node tests/composer-options-browser.mjs' in line for _, line in commands) == 1
+    assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
+               for name in feature_additions)
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, pin_reorder} - feature_additions) == 146
+    assert len(readiness_scripts | extended_scripts) == 154
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
@@ -552,7 +582,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert job['if'] == '${{ !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
@@ -606,9 +636,9 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     option = workflow['on']['workflow_dispatch']['inputs']['destination_history']
     assert option['type'] == 'boolean' and option['default'] == 'false'
     assert workflow['permissions'] == {'contents': 'read'}
-    assert workflow['jobs']['browser']['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert workflow['jobs']['browser']['if'] == '${{ !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     focused = workflow['jobs']['destination-history']
-    assert focused['if'] == '${{ inputs.destination_history || inputs.settings_close_diagnostic }}'
+    assert focused['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
     assert focused['runs-on'] == 'ubuntu-latest' and focused['timeout-minutes'] == '30'
     steps = focused['steps']
