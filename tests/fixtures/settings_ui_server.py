@@ -14,7 +14,9 @@ if os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT'):
  import amplifier_web
  actual_package = Path(amplifier_web.__file__).resolve().parent
  assert actual_package == Path(os.environ['AMPLIFIER_TEST_PACKAGE_ROOT']).resolve(), 'Fixture must import the exact installed package'
- print(json.dumps({'installedPackageVerified':True,'packageRoot':str(actual_package)}),flush=True)
+ # Mobile harnesses consume stdout for the URL; stderr is inherited into the
+ # scenario evidence log so successful origin checks cannot disappear.
+ print(json.dumps({'installedPackageVerified':True,'packageRoot':str(actual_package)}),file=sys.stderr,flush=True)
 PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':10}},'context':{'module':'context-simple','config':{'max_tokens':1000}}},'providers':[{'module':'provider-openai','id':'openai','config':{'default_model':'fixture-model'}}],'tools':[{'module':'tool-filesystem','config':{'read_only':False,'max_bytes':2000}}],'hooks':[{'module':'hooks-logging','config':{'enabled':True}}]}
 class Runtime:
  def __init__(self):self.plan=copy.deepcopy(PLAN)

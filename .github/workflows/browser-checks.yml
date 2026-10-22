@@ -334,6 +334,7 @@ jobs:
           tests/test_release_qualification.py::test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
           tests/test_browser_check_runner.py::test_attachment_focus_workflow_retains_failures_and_default_coverage
           tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage
+          tests/test_mcp_boundary_checks.py::test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job
           --junitxml=output/compact-composer/runner-contracts.xml
       - name: Qualify fixed source and installed composer journeys
         run: uv run --no-sync python scripts/compact_composer_checks.py
