@@ -82,6 +82,7 @@
     "test:new-chat-recovery-browser": "node tests/new-chat-recovery-browser.mjs",
     "test:composer-primary-action-browser": "node tests/composer-primary-action-browser.mjs",
     "test:composer-readiness-browser": "node tests/composer-readiness-browser.mjs",
+    "test:compact-composer-browser": "node tests/compact-composer-browser.mjs && node tests/composer-options-browser.mjs",
     "test:registry-browser": "node tests/registry-validation-browser.mjs",
     "test:themes-browser": "node tests/theme-definitions-browser.mjs",
     "test:window-chrome-browser": "node tests/window-chrome-browser.mjs",
