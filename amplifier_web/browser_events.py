@@ -2,6 +2,7 @@
 import asyncio
 import json
 from aiohttp import WSMsgType, web
+from .auth import with_history_scope
 
 
 async def _reject_commands(socket):
@@ -56,6 +57,7 @@ async def serve(request, service, streams):
         previous = None
         compact = request.query.get('transport') == 'delta-v1'
         while True:
+            snapshot = with_history_scope(request, snapshot)
             if 'shellClientId' in snapshot:
                 event, payload = 'shell', snapshot
             else:

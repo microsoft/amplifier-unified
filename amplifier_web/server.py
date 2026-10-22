@@ -10,7 +10,7 @@ from aiohttp import web
 
 from . import __version__
 from .attachments import MAX_REQUEST_BYTES
-from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
+from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret, with_history_scope
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
 from .runtime import RuntimeOperationPending
@@ -149,7 +149,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if session_id is not None and (not session_id or len(session_id) > 200):
             raise AppError("Choose a valid conversation ID.")
         await service._flush_pending_progress()
-        return web.json_response(service.browser_state(session_id=session_id))
+        return web.json_response(with_history_scope(request, service.browser_state(session_id=session_id)))
 
     async def state_detail(request):
         from .agent_state import read_state
