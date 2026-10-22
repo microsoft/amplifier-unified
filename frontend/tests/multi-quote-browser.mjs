@@ -454,7 +454,14 @@ try{
  await selectContents('p:last-child');
  await expect(page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true})).toBeVisible();
  await expect(quotes).toHaveCount(0);
- await page.keyboard.press('Escape');await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ await page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true}).click();
+ await expect(page.locator('.a-quote-picker [role=status]')).toContainText('This selection includes controls or unmapped text.');
+ await page.setViewportSize({width:320,height:844});
+ await expect(page.locator('.a-quote-picker [role=status]')).toBeVisible();
+ await expect(page.getByRole('textbox',{name:'Message source for quotation'})).toHaveValue(sourceC);
+ if(proof)await page.locator('.a-quote-picker').screenshot({path:join(proof,'fallback-320.png')});
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();await expect(quotes).toHaveCount(0);
+ await page.setViewportSize({width:1280,height:900});await expect(page.locator('.a-quote-selection')).toHaveCount(0);
  // Source revision changes before snapshot admission reject the captured digest.
  await selectContents('p:nth-of-type(2)');
  await page.route('**/api/actions',async route=>{

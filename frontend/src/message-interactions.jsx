@@ -24,12 +24,13 @@ export function QuotedDocument({document,sessionId,dispatch}){
   <Markdown key={index} text={part.text} userContent/>)}</div>;
 }
 
-function PassagePicker({text,onAdd,onClose}){
+function PassagePicker({text,reason,onAdd,onClose}){
  const dialog=useRef(null),area=useRef(null),[range,setRange]=useState([0,0]),[error,setError]=useState('');
  useEffect(()=>{const previous=document.activeElement;dialog.current.showModal();area.current.focus();return()=>{if(previous?.isConnected)previous.focus({preventScroll:true});};},[]);
  const select=()=>setRange([area.current.selectionStart,area.current.selectionEnd]);
  return <dialog ref={dialog} className="a-quote-picker" onCancel={onClose} onClick={event=>{if(event.target===dialog.current)onClose();}}>
   <h3>Choose exact source passage</h3><p>Select only the text to quote. Markdown source, whitespace and Unicode are kept exactly.</p>
+  {reason&&<p role="status">{reason} Select from the source below; nothing was added automatically.</p>}
   <textarea ref={area} readOnly aria-label="Message source for quotation" value={text} onSelect={select} onKeyUp={select}/>
   <small>{[...text.slice(...range)].length} characters selected</small>
   <div><button type="button" onClick={onClose}>Cancel</button><button type="button" disabled={range[0]===range[1]} onClick={async()=>{try{await onAdd(...range);onClose();}catch(error){setError(error.message);}}}>Add selected passage</button></div>{error&&<p role="alert">{error}</p>}
@@ -98,7 +99,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
   catch(e){if(current.current===owner)setError(e.message)}finally{if(current.current===owner)setBusy(false)}
  }
  const addPassage=(source,selection)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection},{quoteSource:source});};
- const choosePassage=async()=>{try{setError('');const text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner){setPicker(text);setSelected(null);}}catch(error){setError(error.message);}};
+ const choosePassage=async()=>{try{setError('');const reason=selected?.error||'',text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner){setPicker({text,reason});setSelected(null);}}catch(error){setError(error.message);}};
  const quoteSelected=async()=>{
   const captured=selected;
   try{
@@ -114,7 +115,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
  {selected&&createPortal(<div ref={selectionTool} className="a-quote-selection" style={{left:selected.left,top:selected.top}} onMouseDown={event=>event.preventDefault()}>
   <button type="button" disabled={busy} title={selected.error||'Add this exact passage without leaving your place'} onClick={selected.error?choosePassage:quoteSelected}>{selected.error?'Choose passage':'Quote selection'}</button>
  </div>,anchor.current?.closest('#amp-one')||document.body)}
- {picker!==null&&<PassagePicker text={picker} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker,{start:[...picker.slice(0,start)].length,end:[...picker.slice(0,end)].length})}/>}
+ {picker!==null&&<PassagePicker text={picker.text} reason={picker.reason} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker.text,{start:[...picker.text.slice(0,start)].length,end:[...picker.text.slice(0,end)].length})}/>}
  <div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
   <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={e=>{const pane=e.currentTarget.closest('.a-messages')?.getBoundingClientRect();setBelow(e.currentTarget.getBoundingClientRect().top-(pane?.top||0)<110);setOpen(!open)}}><Smile/></button>
   {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} data-action="message.reaction" onClick={e=>{reaction.set(emoji,!chosen.includes(emoji));setOpen(false);e.currentTarget.closest('.a-reaction-control')?.querySelector('button')?.focus({preventScroll:true})}}>{emoji}</button>)}</div>}
