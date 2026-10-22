@@ -200,6 +200,13 @@ checking or browsing settings. During an unpublished candidate only, a
 collection-only pass observes the effective selected bundle, include and module
 sources after configuration precedence, and binds them to the dependency
 batch's exact package identities.
+Host-selected app behaviors participate in that same observation: their winning
+module declaration is recorded even when it replaces a root's or late module
+choice. Installed and local host components remain local; explicit pins and
+conflicting selected refs remain protected. Selection-version 3 rechecks earlier
+no-op receipts that could have omitted these host-owned declarations. The
+maintained source-policy tests cover an actual host-selected Bundle through
+collection, checked Git refresh and preserved prior-generation evidence.
 
 Only an unambiguous moving branch for the same repository and subdirectory can
 replace an unknown-origin SHA. The candidate resolves that branch, aligns its

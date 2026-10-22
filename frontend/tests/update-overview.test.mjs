@@ -124,3 +124,16 @@ test('runner-only qualification is independent of chat idleness and keeps unknow
  assert.match(updateOverview({...base,pendingSmartTools:[runner,{previous:'ordinary-tool'}]}).title,/chat to finish/);
  assert.equal(updateOverview({...base,phase:'error',error:'Qualification failed'}).tone,'error');
 });
+
+test('a waiting runner does not conceal an installable app or component update',()=>{
+ const pendingSmartTools=[{runnerSource:{runnerKind:'managed-dtu-core'},runnerWaiting:'unknown'}];
+ for(const available of [{application:{status:'update'}},{items:[{kind:'bundle / module',status:'update'}]}]){
+  const result=updateOverview({phase:'available',pendingSmartTools,...available},{autoInstall:false});
+  assert.equal(result.title,'Updates available');
+  assert.equal(result.busy,false);assert.equal(result.waiting,false);
+  assert.equal(result.installable,true);assert.equal(result.blocked,false);
+ }
+ const hot=updateOverview({phase:'staged',pendingSmartTools,pendingRelease:'candidate',plan:{activation:'per-worker'}});
+ assert.equal(hot.title,'Finishing your update');assert.equal(hot.waiting,false);
+ assert.equal(updateOverview({phase:'app-staged',pendingSmartTools,pendingApp:{},sequence:{nextStage:'included'}}).waiting,true);
+});

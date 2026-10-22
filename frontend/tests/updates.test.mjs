@@ -511,6 +511,19 @@ test('runner-only wait keeps availability refresh usable without exposing unrela
  await renderAct(async()=>root.unmount());
 });
 
+test('runner wait leaves Update Amplifier actionable and retains its separate result',async()=>{
+ const runner={previous:'old',runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check',runnerWaiting:'unknown'};
+ const updates={phase:'available',application:{status:'update',current:'0.20.205',latest:'v0.20.207'},pendingSmartTools:[runner]};
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(updates),act:name=>calls.push(name)}))});
+ const install=root.root.findByProps({'data-action':'updates.install'});
+ assert.equal(install.props.disabled,false);
+ assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,false);
+ assert.equal(root.root.findAllByProps({'aria-label':'Smart Tool update results'}).length,1);
+ await renderAct(async()=>install.props.onClick());assert.deepEqual(calls,['updates.install']);
+ await renderAct(async()=>root.unmount());
+});
+
 
 test('prepared source mismatch explains preservation and exports only mismatch field names',()=>{
  const failure={id:'mismatch',attemptId:'candidate',phase:'ecosystem-validation',status:'failed',
