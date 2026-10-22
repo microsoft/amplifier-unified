@@ -8,6 +8,7 @@
         "Read delegated requests, replies and follow-ups in chronological order, with clearer sender labels and expandable operation details on desktop and phone.",
         "Keep saved Work details tied to their original turn when reopening older history or loading earlier pages. Exact operation details remain available after inactive history is released from memory.",
         "Keep a newer bundle catalog and its status when overlapping refreshes finish out of order, including when an older refresh fails.",
+        "Recognize the current protected file tools when checking patch placement and file access, while keeping execution permissions and stale-runtime checks intact.",
         "Align discovery, native-runtime, approval and catalog checks with the current app contracts, preserving their existing safety and recovery assertions."
       ],
       "notices": []
