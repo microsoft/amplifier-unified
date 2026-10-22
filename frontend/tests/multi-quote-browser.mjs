@@ -18,6 +18,31 @@ const commentary=doc=>doc.segments.filter(s=>s.type==='text').map(s=>s.text);
 const references=doc=>doc.segments.filter(s=>s.type==='quote');
 const observe=async()=>{const response=await context.request.get(url+'/fixture/message-source');assert.equal(response.status(),200);return response.json();};
 const checkpoints=[],compactGeometry=[];
+const cardObservations=[];
+async function observeCards(stage){
+ const rendered=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>{
+  const bounds=node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height};};
+  const viewport=editor.getBoundingClientRect();
+  const inspect=node=>{
+   const rect=node.getBoundingClientRect(),style=getComputedStyle(node);
+   return {tag:node.tagName,className:node.className,bounds:bounds(node),display:style.display,visibility:style.visibility,
+    opacity:style.opacity,position:style.position,insideEditor:rect.top>=viewport.top&&rect.bottom<=viewport.bottom,
+    intersectsEditor:rect.bottom>viewport.top&&rect.top<viewport.bottom};
+  };
+  return {editor:{...inspect(editor),scrollTop:editor.scrollTop,scrollHeight:editor.scrollHeight,clientHeight:editor.clientHeight},
+   active:document.activeElement?.getAttribute('aria-label'),cards:[...editor.querySelectorAll('[data-quote-instance]')].map(card=>({
+    ...inspect(card),instanceId:card.dataset.quoteInstance,contentEditable:card.contentEditable,
+    header:card.querySelector('.a-composer-quote-head')?inspect(card.querySelector('.a-composer-quote-head')):null,
+    buttons:[...card.querySelectorAll('button')].map(button=>({...inspect(button),label:button.getAttribute('aria-label')||button.textContent,disabled:button.disabled})),
+    excerpt:card.querySelector('pre')?.textContent,caption:card.querySelector('small')?.textContent,
+   })),assets:[...document.scripts].map(node=>node.src).filter(Boolean)};
+ });
+ cardObservations.push({stage,rendered,document:await documentValue(),canonical:await canonicalDraft()});
+ if(proof){
+  writeFileSync(join(proof,'card-observations.json'),JSON.stringify(cardObservations,null,2));
+  await page.locator('.a-composer').screenshot({path:join(proof,`cards-${cardObservations.length}.png`)});
+ }
+}
 const BEFORE='Before the references',BETWEEN='Between the passages',BEFORE_WHOLE='Before the whole message',AFTER='After all references';
 const UNICODE='  café e\u0301 東京  ';
 const projectDocument=doc=>doc.segments.map(part=>part.type==='text'?part.text:part);
@@ -114,6 +139,7 @@ try{
  assert.equal(firstQuote.quote.excerpt,first.text);assert.equal(firstQuote.quote.messageId,sourceA);
  assert.deepEqual(firstQuote.quote.spans,[{start:first.start,end:first.end}]);
  await expectLayout('first quote',[BEFORE,firstQuote,'']);
+ await observeCards('first quote after canonical autosave');
  await page.evaluate(()=>{
   window.quoteTypingEvents=[];
   for(const name of ['keydown','beforeinput','input'])document.addEventListener(name,event=>{
@@ -130,6 +156,7 @@ try{
  assert.equal(secondQuote.quote.excerpt,second.text);assert.equal(secondQuote.quote.messageId,sourceA);
  assert.deepEqual(secondQuote.quote.spans,[{start:second.start,end:second.end}]);
  await expectLayout('second quote',[BEFORE,firstQuote,BETWEEN,secondQuote,'']);
+ await observeCards('second quote after canonical autosave');
  await expectCompact('two immutable references');
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Before the whole message');
  await enteredCommentary('Before the whole message');
@@ -180,6 +207,7 @@ try{
  assert.equal(await page.evaluate(()=>typeof window.untrusted),'undefined');
  await page.reload();await expect(quotes).toHaveCount(3);assert.deepEqual(await documentValue(),doc);
  await expectLayout('reload',expected);
+ await observeCards('three quotes reconstructed after reload');
  // Same action remains focused when valid; disabled edge action gets an enabled fallback.
  await quotes.nth(1).getByRole('button',{name:'Move quote earlier',exact:true}).focus();await page.keyboard.press('Enter');
  assert.equal(await page.evaluate(()=>document.activeElement?.disabled),false);
@@ -278,6 +306,7 @@ try{
  });
  await a.getByRole('button',{name:'Quote selection',exact:true}).click();await expect(quotes).toHaveCount(1);
  assert.equal(references(await documentValue())[0].quote.excerpt,'second line');
+ await observeCards('direct rendered selection');
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
  assert.deepEqual(errors,[]);
