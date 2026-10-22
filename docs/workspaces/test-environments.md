@@ -225,6 +225,21 @@ All retained unknown owners count against capacity until exact cleanup or
 reconciliation confirms release. Environment reads support offset/limit paging;
 cleanup always names one exact resource and revision.
 
+Environment inspection also recovers a held compute reservation when the original
+native owner proves a stopped or absent environment **and** settled launch
+admission. Local reads rotate one extra ownership probe through the requested
+page; no background inventory or history scan is introduced. Registered targets
+perform the same proof under their own owner lock and release only their own
+machine reservation. Unknown launches, active preparation, changed ownership and
+unavailable backends retain capacity. Merely reporting `stopped` is insufficient.
+
+A separate `reservationRecovery` observation is saved before release. The original
+check, stop and cleanup receipts remain unchanged; freed CPU/memory does not mean
+the check passed, files were preserved, or storage ownership was retired. Reads
+never retry a test, stop a guest, or remove files. Retained older target controller
+generations keep their existing behavior; inspection does not replace them or
+redirect historical owners to a newer controller.
+
 
 ### Prepared execution contract
 
