@@ -27,6 +27,15 @@ const serializer=new MarkdownSerializer({...defaultMarkdownSerializer.nodes,
 },defaultMarkdownSerializer.marks);
 export const composerMarkdown=doc=>serializer.serialize(doc);
 export const parseComposer=text=>composerParser.parse(text||'');
+export function moveComposerBoundary(view,event){
+ if(view.composing||event.isComposing||event.keyCode===229||event.altKey||!(event.ctrlKey||event.metaKey)||!['Home','End'].includes(event.key))return false;
+ const edge=event.key==='Home'?TextSelection.atStart(view.state.doc):TextSelection.atEnd(view.state.doc);
+ view.dispatch(view.state.tr.setSelection(event.shiftKey?TextSelection.create(view.state.doc,view.state.selection.anchor,edge.head):edge).scrollIntoView());
+ // A browser selection can remain in a noneditable quote/control even when
+ // the editor owns focus. Explicit keyboard navigation must synchronize it.
+ view.focus();
+ return true;
+}
 export function composerDocument(doc,preserveCommentary=false){
  const segments=[];let quoted=false;
  doc.forEach(node=>{

@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {TextSelection,NodeSelection} from 'prosemirror-state';
 import {undo,redo} from 'prosemirror-history';
-import {composerState,composerDocument,composerMarkdown,insertQuote,changeQuote} from '../src/markdown-composer.js';
+import {composerState,composerDocument,composerMarkdown,insertQuote,changeQuote,moveComposerBoundary} from '../src/markdown-composer.js';
 const quote=id=>({id,sessionId:'synthetic',messageId:id,speaker:'Amplifier',origin:'assistant',role:'assistant',kind:'passage',sourceDigest:'a'.repeat(64),spans:[{start:1,end:30}],excerpt:'  café e\u0301 東京\n\n• one\n    code\tvalue\n',truncated:false});
 function editor(text){const view={state:composerState(text),composing:false};view.dispatch=tr=>view.state=view.state.apply(tr);return view;}
 const at=view=>({doc:view.state.doc,pos:view.state.selection.to});
@@ -76,4 +76,17 @@ test('plain drafts stay plain while the last removed quote retains exact comment
  assert.deepEqual(checkpoint.segments.map(part=>part.text),original);
  const restored=composerState(composerMarkdown(view.state.doc),checkpoint);
  assert.deepEqual(composerDocument(restored.doc,true),checkpoint);
+});
+test('document boundary navigation leaves quote islands for editable text, preserving shift and IME',()=>{
+ const view=editor('Before');let focused=0;view.focus=()=>focused++;
+ insertQuote(view,quote('first'),{doc:view.state.doc,pos:7});
+ assert.ok(moveComposerBoundary(view,{key:'End',ctrlKey:true}));
+ view.dispatch(view.state.tr.insertText('Between the passages'));
+ assert.deepEqual(texts(view),['Before','Between the passages']);
+ assert.equal(focused,1);
+ assert.ok(moveComposerBoundary(view,{key:'Home',metaKey:true,shiftKey:true}));
+ assert.equal(view.state.selection.from,1);assert.equal(view.state.selection.empty,false);
+ const selection=view.state.selection;
+ assert.equal(moveComposerBoundary(view,{key:'End',ctrlKey:true,isComposing:true}),false);
+ assert.equal(view.state.selection,selection);
 });

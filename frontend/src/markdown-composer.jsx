@@ -4,7 +4,7 @@ import {toggleMark} from 'prosemirror-commands';
 import {Link,Bold,Italic} from 'lucide-react';
 import 'prosemirror-view/style/prosemirror.css';
 import {EditorView} from 'prosemirror-view';
-import {composerState,composerMarkdown,composerDocument,insertQuote,composerNewline,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink} from './markdown-composer.js';
+import {composerState,composerMarkdown,composerDocument,insertQuote,composerNewline,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink,moveComposerBoundary} from './markdown-composer.js';
 import {quoteNodeView,refreshQuoteControls} from './composer-quote-view.js';
 import {clipboardPaste} from './clipboard-paste';
 import {resizeComposer} from './composer';
@@ -37,6 +37,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
    },
    handleKeyDown(view,event){
     if(!editable()||view.composing||event.isComposing||event.keyCode===229)return false;
+    if(moveComposerBoundary(view,event)){event.preventDefault();return true;}
     if(event.key==='Escape'&&!view.state.selection.empty){dismissed.current=view.state.selection.from+':'+view.state.selection.to;setSelection(null);setLinkOpen(false);return true;}
     if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'&&!view.state.selection.empty){event.preventDefault();openLink();return true;}
     if(event.key==='Enter'){

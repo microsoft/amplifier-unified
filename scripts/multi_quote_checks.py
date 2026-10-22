@@ -92,7 +92,31 @@ def main():
     browser_env = {**os.environ, 'AMPLIFIER_TEST_PYTHON': sys.executable,
                    'AMPLIFIER_PROOF_DIR': str(output / 'source-browser')}
     if build == 0:
-        run('source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'], env=browser_env)
+        browser_code, _ = run('source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'], env=browser_env)
+        if browser_code == 0:
+            # Mutate actual navigation, not expected data: End now moves to the
+            # beginning, placing attempted commentary before the first quote.
+            model_original = model.read_bytes()
+            before = "event.key==='Home'?TextSelection.atStart(view.state.doc):TextSelection.atEnd(view.state.doc)"
+            assert model_original.decode().count(before) == 1
+            try:
+                model.write_text(model_original.decode().replace(before, 'TextSelection.atStart(view.state.doc)'))
+                negative_build, _ = run('negative-interleaving-build', ['npm', 'run', 'build', '--prefix', 'frontend'])
+                negative_env = {**browser_env, 'AMPLIFIER_PROOF_DIR': str(output / 'negative-interleaving')}
+                if negative_build == 0:
+                    code, text = run('negative-interleaving', ['node', 'frontend/tests/multi-quote-browser.mjs'],
+                                     env=negative_env, expected=1)
+                    results[-1]['passed'] = code == 1 and 'between typed: exact commentary/quote DOM order' in text
+                    results[-1]['namedAssertion'] = 'between typed: exact commentary/quote DOM order'
+            finally:
+                model.write_bytes(model_original)
+            results.append({'name': 'interleaving-source-restoration', 'passed': model.read_bytes() == model_original,
+                            'sha256': sha(model_original)})
+            save()
+            build, _ = run('restored-production-build', ['npm', 'run', 'build', '--prefix', 'frontend'])
+            if build == 0:
+                run('restored-source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'],
+                    env={**browser_env, 'AMPLIFIER_PROOF_DIR': str(output / 'restored-source-browser')})
     if args.installed and build == 0:
         wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', *(['--offline'] if managed else []), '--out-dir', str(output / 'wheel')])
         if wheel_code == 0:

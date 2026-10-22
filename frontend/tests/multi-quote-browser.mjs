@@ -18,6 +18,9 @@ const commentary=doc=>doc.segments.filter(s=>s.type==='text').map(s=>s.text);
 const references=doc=>doc.segments.filter(s=>s.type==='quote');
 const observe=async()=>{const response=await context.request.get(url+'/fixture/message-source');assert.equal(response.status(),200);return response.json();};
 const checkpoints=[];
+const BEFORE='Before the references',BETWEEN='Between the passages',BEFORE_WHOLE='Before the whole message',AFTER='After all references';
+const UNICODE='  café e\u0301 東京  ';
+const projectDocument=doc=>doc.segments.map(part=>part.type==='text'?part.text:part);
 const canonicalDraft=async()=>{
  const id=await page.evaluate(()=>window.amplifier.getState().client.id);
  const response=await context.request.get(url+'/fixture/quote-draft?'+new URLSearchParams({clientId:id}));
@@ -34,13 +37,29 @@ async function enteredCommentary(text){
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
  assert.ok(observed.paragraphs.some(value=>value.includes(text)),`Typed commentary missing from DOM immediately: ${text}`);
  assert.ok(commentary(observed.document).some(value=>value.includes(text)),`Typed commentary missing from editor draft: ${text}`);
- await expect.poll(async()=>commentary((await canonicalDraft()).document)).toContain(text);
+ await expect.poll(async()=>commentary((await canonicalDraft()).document||{segments:[]})).toContain(text);
+}
+async function expectLayout(stage,expected){
+ const dom=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>[...editor.children].map(node=>node.hasAttribute('data-quote-instance')?
+  {instanceId:node.dataset.quoteInstance,excerpt:node.querySelector('pre').textContent}:node.textContent));
+ const document=await documentValue();
+ const expectedDom=expected.map(part=>typeof part==='string'?part:{instanceId:part.instanceId,excerpt:part.quote.excerpt});
+ checkpoints.push({stage,expected,dom,document});
+ if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
+ assert.deepEqual(dom,expectedDom,stage+': exact commentary/quote DOM order');
+ assert.deepEqual(projectDocument(document),expected,stage+': independently expected editor order');
+ await expect.poll(async()=>projectDocument((await canonicalDraft()).document||{segments:[]})).toEqual(expected);
+ const canonical=await canonicalDraft();
+ checkpoints.at(-1).canonical=canonical;
+ if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
 }
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
  const editor=page.getByRole('textbox',{name:'Message Amplifier'}),quotes=editor.locator('[data-quote-instance]');
- await editor.fill('Before the references');
+ await editor.fill(BEFORE);
+ await expect(editor).toHaveText(BEFORE);
+ await expect.poll(async()=>(await canonicalDraft()).draft).toBe(BEFORE);
  await page.locator('.a-file-input').setInputFiles({name:'synthetic.txt',mimeType:'text/plain',buffer:Buffer.from('Attachment kept')});
  await page.getByRole('button',{name:'Remove synthetic.txt',exact:true}).waitFor();
  const a=page.locator('.a-message').filter({hasText:'Quote fixture source A'}).first(),b=page.locator('.a-message').filter({hasText:'Quote fixture source B'}).first();
@@ -59,6 +78,10 @@ try{
   return {text:text.slice(start,end),start:[...text.slice(0,start)].length,end:[...text.slice(0,end)].length};
  }
  const first=await passage('  café','\n\n* first');await expect(quotes).toHaveCount(1);
+ const firstQuote=references(await documentValue())[0];
+ assert.equal(firstQuote.quote.excerpt,first.text);assert.equal(firstQuote.quote.messageId,sourceA);
+ assert.deepEqual(firstQuote.quote.spans,[{start:first.start,end:first.end}]);
+ await expectLayout('first quote',[BEFORE,firstQuote,'']);
  await page.evaluate(()=>{
   window.quoteTypingEvents=[];
   for(const name of ['keydown','beforeinput','input'])document.addEventListener(name,event=>{
@@ -69,9 +92,15 @@ try{
  // Actual keyboard text entry after a quote, not a patched saved document.
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Between the passages');
  await enteredCommentary('Between the passages');
+ await expectLayout('between typed',[BEFORE,firstQuote,BETWEEN]);
  const second=await passage('```py','\n\nlast passage');await expect(quotes).toHaveCount(2);
+ const secondQuote=references(await documentValue())[1];
+ assert.equal(secondQuote.quote.excerpt,second.text);assert.equal(secondQuote.quote.messageId,sourceA);
+ assert.deepEqual(secondQuote.quote.spans,[{start:second.start,end:second.end}]);
+ await expectLayout('second quote',[BEFORE,firstQuote,BETWEEN,secondQuote,'']);
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Before the whole message');
  await enteredCommentary('Before the whole message');
+ await expectLayout('before whole typed',[BEFORE,firstQuote,BETWEEN,secondQuote,BEFORE_WHOLE]);
  const wholeButton=b.getByRole('button',{name:'Reply to message',exact:true});
  await expect(b.locator('.a-detail-text')).toContainText('END OF EXACT LONG SOURCE');
  await wholeButton.scrollIntoViewIfNeeded();const beforeScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
@@ -81,6 +110,10 @@ try{
   for(const event of ['pointerdown','mousedown','focus','click'])button.addEventListener(event,()=>window.quoteScroll.push({event,...window.quoteGeometry()}),{capture:true,once:true});
  });
  await wholeButton.click();await expect(quotes).toHaveCount(3);
+ const wholeQuote=references(await documentValue())[2];
+ const originalWhole=(await observe()).sessions.flatMap(s=>s.messages).find(m=>m.id===sourceB).text;
+ assert.equal(wholeQuote.quote.excerpt,originalWhole);assert.equal(wholeQuote.quote.messageId,sourceB);
+ await expectLayout('whole quote',[BEFORE,firstQuote,BETWEEN,secondQuote,BEFORE_WHOLE,wholeQuote,'']);
  const afterScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
  const scrollEvents=await page.evaluate(()=>[...window.quoteScroll,{event:'after',...window.quoteGeometry()}]);
  if(proof)writeFileSync(join(proof,'collect-scroll.json'),JSON.stringify({beforeScroll,afterScroll,scrollEvents},null,2));
@@ -91,10 +124,16 @@ try{
  assert.ok(await page.evaluate(()=>document.activeElement===window.beforeQuoteFocus),'Collecting must not move focus');
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('After all references');
  await enteredCommentary('After all references');
+ let expected=[BEFORE,firstQuote,BETWEEN,secondQuote,BEFORE_WHOLE,wholeQuote,AFTER];
+ await expectLayout('after typed',expected);
+ await editor.pressSequentially(UNICODE);
+ await enteredCommentary(AFTER+UNICODE);
+ expected=[BEFORE,firstQuote,BETWEEN,secondQuote,BEFORE_WHOLE,wholeQuote,AFTER+UNICODE];
+ await expectLayout('Unicode whitespace typed',expected);
  assert.equal((await observe()).sends.length,0,'Collecting must not send');
  await editor.dispatchEvent('keydown',{key:'Enter',code:'Enter',isComposing:true,keyCode:229});
  assert.equal((await observe()).sends.length,0,'IME Enter must not send');
- let doc=await documentValue(),initial=references(doc),comments=commentary(doc);
+ let doc=await documentValue(),initial=[firstQuote,secondQuote,wholeQuote],comments=[BEFORE,BETWEEN,BEFORE_WHOLE,AFTER+UNICODE];
  assert.equal(initial[0].quote.excerpt,first.text);assert.equal(initial[1].quote.excerpt,second.text);
  assert.deepEqual(initial[0].quote.spans,[{start:first.start,end:first.end}]);assert.deepEqual(initial[1].quote.spans,[{start:second.start,end:second.end}]);
  assert.deepEqual(initial.map(q=>q.quote.messageId),[sourceA,sourceA,sourceB]);
@@ -106,12 +145,17 @@ try{
  await quotes.nth(2).getByRole('button',{name:'Collapse quote'}).click();
  assert.equal(await page.evaluate(()=>typeof window.untrusted),'undefined');
  await page.reload();await expect(quotes).toHaveCount(3);assert.deepEqual(await documentValue(),doc);
+ await expectLayout('reload',expected);
  // Same action remains focused when valid; disabled edge action gets an enabled fallback.
  await quotes.nth(1).getByRole('button',{name:'Move quote earlier',exact:true}).focus();await page.keyboard.press('Enter');
  assert.equal(await page.evaluate(()=>document.activeElement?.disabled),false);
  let moved=await documentValue();assert.deepEqual(references(moved).map(q=>q.instanceId),[initial[1].instanceId,initial[0].instanceId,initial[2].instanceId]);assert.deepEqual(commentary(moved),comments);
+ expected=[BEFORE,secondQuote,BETWEEN,firstQuote,BEFORE_WHOLE,wholeQuote,AFTER+UNICODE];
+ await expectLayout('reordered',expected);
  await quotes.nth(1).getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(2);
  doc=await documentValue();assert.deepEqual(commentary(doc),comments);assert.deepEqual(references(doc).map(q=>q.quote.excerpt),[second.text,initial[2].quote.excerpt]);
+ expected=[BEFORE,secondQuote,BETWEEN,BEFORE_WHOLE,wholeQuote,AFTER+UNICODE];
+ await expectLayout('removed only first quote',expected);
  await page.getByRole('button',{name:'Remove synthetic.txt',exact:true}).waitFor();
  // Held source receipt: moving the caret/mode alone must not retarget the insertion.
  let release,started;const held=new Promise(resolve=>release=resolve),waiting=new Promise(resolve=>started=resolve);
@@ -120,16 +164,25 @@ try{
  const adding=b.getByRole('button',{name:'Reply to message',exact:true}).click();await waiting;
  await page.getByRole('combobox',{name:'Quote insertion'}).selectOption('caret');await editor.click();await editor.press('ControlOrMeta+Home');
  release();await adding;await expect(quotes).toHaveCount(3);await page.unroute('**/api/actions');
- const delayed=await documentValue();assert.equal(delayed.segments.filter(s=>s.type==='quote').at(-1).quote.messageId,sourceB);assert.deepEqual(commentary(delayed).filter(Boolean),comments.filter(Boolean));
+ const delayed=await documentValue(),priorIds=new Set([secondQuote.instanceId,wholeQuote.instanceId]);
+ const added=references(delayed).filter(part=>!priorIds.has(part.instanceId));
+ assert.equal(added.length,1,'exactly one new quote instance');
+ const appendedQuote=added[0];assert.equal(appendedQuote.quote.messageId,sourceB);
+ assert.deepEqual(appendedQuote.quote,wholeQuote.quote);
+ expected=[BEFORE,secondQuote,BETWEEN,BEFORE_WHOLE,wholeQuote,AFTER+UNICODE,appendedQuote,''];
+ await expectLayout('held addition appended after all existing commentary',expected);
  // A changed draft rejects a late snapshot; a moved caret above did not.
  let changedRelease,changedStarted;
  const changedHeld=new Promise(r=>changedRelease=r),changedWaiting=new Promise(r=>changedStarted=r);
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();changedStarted();await changedHeld;await route.fulfill({response});}else await route.continue();});
  await b.getByRole('button',{name:'Reply to message',exact:true}).click();await changedWaiting;
  await editor.focus();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Newer commentary');
+ await enteredCommentary('Newer commentary');
+ expected=[BEFORE,secondQuote,BETWEEN,BEFORE_WHOLE,wholeQuote,AFTER+UNICODE,appendedQuote,'Newer commentary'];
+ await expectLayout('new text while source receipt held',expected);
  changedRelease();await page.getByText('The draft changed. Your text was kept; add the quote again.',{exact:true}).first().waitFor();
  await expect(quotes).toHaveCount(3);await page.unroute('**/api/actions');
- assert.ok(commentary(await documentValue()).join('').includes('Newer commentary'));
+ await expectLayout('late changed receipt rejected',expected);
  const sourceLink=quotes.first().getByRole('button',{name:'Go to original quoted message'});
  await sourceLink.focus();await page.keyboard.press('Enter');
  await page.getByRole('button',{name:'Return to reading position'}).click();
@@ -150,6 +203,9 @@ try{
  await expect.poll(async()=>(await observe()).sends.length).toBe(1);
  const observed=await observe(),sent=observed.sessions.flatMap(s=>s.messages).find(m=>m.replyTo?.version===2);
  assert.ok(sent);assert.deepEqual(sent.replyTo.segments,submitted.segments);
+ assert.deepEqual(projectDocument(submitted),expected,'submitted independently expected interleaving');
+ assert.deepEqual(projectDocument(sent.replyTo),expected,'saved sent independently expected interleaving');
+ for(const text of [BEFORE,BETWEEN,BEFORE_WHOLE,AFTER+UNICODE,'Newer commentary'])assert.ok(sent.text.includes(text),'saved readable message missing '+text);
  assert.equal(sent.attachments[0].name,'synthetic.txt');
  const sentArticle=page.locator('[data-message-id="'+sent.id+'"]');
  await expect(sentArticle.getByRole('button',{name:'Edit message',exact:true})).toBeDisabled();
@@ -174,7 +230,7 @@ try{
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
  assert.deepEqual(errors,[]);
- if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,submitted,sent,initialScroll:beforeScroll},null,2));
+ if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll},null,2));
  console.log('PASS exact Unicode/multiline passages + whole message, interleaved commentary, attachment, reload, keyboard reorder, removal, captured delayed target, narrow rendering, sent projection and adjacent cycle.');
 }catch(error){
  if(proof){writeFileSync(join(proof,'failure.json'),JSON.stringify({message:error.message,errors},null,2));await page.screenshot({path:join(proof,'failure.png')}).catch(()=>{});}

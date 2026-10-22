@@ -306,7 +306,7 @@ jobs:
         if: ${{ inputs.settings_close_diagnostic && !inputs.destination_history }}
         run: exit 1
       - name: Reject mixed navigation selections
-        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
+        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.multi_quote }}
         run: exit 1
       - uses: actions/checkout@v4
         with:
