@@ -264,9 +264,11 @@ class Assignments:
         if reason:
             reasons.append(reason)
         pending = [call for call in usage['receipts'] if call.get('phase') in LIVE | {'outcome_unknown'} and not call.get('endedAt')]
-        uncertain = any(call.get('phase') == 'outcome_unknown' for call in pending)
+        unknown = sum(call.get('phase') == 'outcome_unknown' for call in pending)
         if len(pending) >= limits['maxConcurrentCalls']:
-            (reasons if uncertain else renewable).append('The assignment concurrent model-call limit is reached.')
+            # Unknown calls keep their slots. Other, live calls can still free
+            # capacity unless the unknown reservations alone fill the ceiling.
+            (reasons if unknown >= limits['maxConcurrentCalls'] else renewable).append('The assignment concurrent model-call limit is reached.')
         for metric, maximum, reserve in [('grossTotalTokens', 'maxTotalTokens', 'reserveTokens'), ('costUsd', 'maxCostUsd', 'reserveCostUsd')]:
             limit = limits[maximum]
             if limit is None:
@@ -278,7 +280,7 @@ class Assignments:
             if recorded + held + limits[reserve] > limit:
                 # Only held in-flight allowances can renew. Recorded spend,
                 # an oversized next reservation and unknown outcomes cannot.
-                destination = renewable if pending and not uncertain and recorded + limits[reserve] <= limit else reasons
+                destination = renewable if pending and not unknown and recorded + limits[reserve] <= limit else reasons
                 destination.append('The assignment has insufficient unreserved ' + metric + ' capacity.')
         if usage['missingMembers'] and limits['unknownPolicy'] == 'pause':
             reasons.append('Assignment usage is unavailable for a retained member.')

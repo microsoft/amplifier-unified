@@ -1395,6 +1395,10 @@ A released receipt wakes waiters; each checks the current input, generation, Sto
 configuration, native owner and actual cumulative/assignment policy again. Unknown
 outcomes remain held and are never inferred complete to free a slot. Disconnect or
 cancellation removes waiting entries; admitted calls finish independently.
+When unknown and live calls share the concurrency ceiling, live completions can
+still release their own slots, so new calls wait without changing the unknown
+receipts. Unknown reservations alone at or above the ceiling remain a hard pause.
+Cumulative token/cost and unknown-usage policies still apply at every admission.
 
 Settings → Advanced → Performance & runtime → Model capacity applies across this
 host. The default permits 256 waiting calls with no time limit; the user can change
