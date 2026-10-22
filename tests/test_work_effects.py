@@ -275,6 +275,7 @@ async def test_real_delivery_worker_and_service_join_at_effect(app, fault, targe
     from amplifier_core.message_models import ToolCall
     from amplifier_web.runtime_worker import Worker
     from test_coordination_delivery import installed_work_adapter
+    owner = app.state['sessions'][0]
     adapter, child, required = await installed_work_adapter(app)
     c = adapter.coordinator
     c.cancellation.is_cancelled = False
@@ -311,7 +312,6 @@ async def test_real_delivery_worker_and_service_join_at_effect(app, fault, targe
     if fault == 'host_stop':
         await app.dispatch('conversation.stop', {'sessionId': child['id']}, command_id='joined-stop')
     elif fault == 'promise':
-        owner = app.state['sessions'][0]
         work = (await app.dispatch('workspace.work.context', {'sessionId': owner['id']}))['result']['items'][0]
         current = (await read(app, owner, work['id']))['item']
         await revise(app, owner, current, 'joined-promise',
