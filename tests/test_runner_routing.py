@@ -184,3 +184,57 @@ async def test_historical_request_without_frozen_resources_keeps_original_profil
     assert result['job']['status'] == 'passed'
     assert 'resourceRequest' not in result['job']
     assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']
+
+
+@pytest.mark.parametrize('phase', ['admitted', 'preparing'])
+async def test_prior_pass_start_counts_only_unadmitted_demand_against_retained_limit(app, queue, backend, monkeypatch, phase):
+    """A delayed start reply remains starting after the backend counts its owner."""
+    import threading
+    from test_coordination_generation import until
+    invoke, run = environments.invoke, queue.run
+    entered, release_native = threading.Event(), threading.Event()
+    release_second = asyncio.Event()
+    held_action = 'start' if phase == 'admitted' else 'prepare'
+
+    def held(config, home, row, action, args):
+        if action == held_action:
+            # The admitted case has really passed the host admission boundary
+            # and reached the fake native start. Preparation has not.
+            result = invoke(config, home, row, action, args) if phase == 'admitted' else None
+            entered.set()
+            assert release_native.wait(10)
+            return result if result is not None else invoke(config, home, row, action, args)
+        return invoke(config, home, row, action, args)
+
+    async def hold_second(identity, config):
+        if identity == queue.identity(app.state['sessions'][0]['id'], 'next'):
+            await release_second.wait()
+        else:
+            await run(identity, config)
+
+    def capacity(*args):
+        # Once first is held, there is one observed native owner. In the
+        # preparation case that owner is unrelated: first still needs a slot.
+        return {'available': True, 'limits': {'max_running': 0, 'max_instances': 2},
+                'counts': {'active': int(entered.is_set()), 'total': int(entered.is_set())}}
+
+    monkeypatch.setattr(environments, 'invoke', held)
+    monkeypatch.setattr(environments, 'capacity', capacity)
+    monkeypatch.setattr(queue, 'run', hold_second)
+    await submit(app, 'prior', independent=True)
+    try:
+        await queue.tick()
+        await until(entered.is_set)
+        prior = record(queue, app, 'prior')
+        owned = environments.get(app.data_dir, prior['senderSessionId'], prior['job']['resourceId'])
+        assert prior['job']['status'] == 'starting'
+        assert bool(owned.get('backendAdmitted')) == (phase == 'admitted')
+        await submit(app, 'next', independent=True)
+        await queue.tick()
+        scheduled = record(queue, app, 'next')['requestId'] in queue.tasks
+        assert scheduled == (phase == 'admitted')
+        assert record(queue, app, 'prior')['job']['resourceId'] == owned['id']
+    finally:
+        release_native.set()
+        release_second.set()
+        await asyncio.gather(*queue.tasks.values())

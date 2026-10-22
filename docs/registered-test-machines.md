@@ -24,6 +24,9 @@ are not subtracted again from observed available memory. Disk and load remain
 physical observations, not invented per-check storage estimates. The target's
 atomic admission remains authoritative, including races with other origins.
 Planned demand is transient and never rewrites observed capacity or saved limits.
+A prior pass's start may still await its reply after native admission. Its exact
+admitted owner is already represented by the backend retained total; only an
+unadmitted preparation adds another pending retained slot.
 
 A waiting request is bound only when it can be scheduled. Once bound, its exact
 controller and ownership route remain retained; an unknown or already admitted

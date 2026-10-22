@@ -7,8 +7,9 @@ from . import test_environment_profiles as profiles
 
 
 class RoutingPass:
-    def __init__(self, preparing=None):
+    def __init__(self, preparing=None, unadmitted=None):
         self.preparing = preparing or {}
+        self.unadmitted = self.preparing if unadmitted is None else unadmitted
         self.backends = {}
         self.machines = {}
         self.backend_observations = {}
@@ -69,7 +70,9 @@ class RoutingPass:
             return False
         retained = limits.get('max_instances', 0)
         total = counts.get('total', counts.get('active', 0) + counts.get('stopped_retained', 0))
-        if retained and total + pending + planned >= retained:
+        # Starting spans preparation and an already admitted native launch.
+        # Only the former still needs a retained slot beyond the backend total.
+        if retained and total + self.unadmitted.get(key, 0) + planned >= retained:
             return False
         # A later alias/project observation may already include our first
         # dispatch. Keep one baseline per authority so planned demand is not

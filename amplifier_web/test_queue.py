@@ -461,11 +461,24 @@ class TestQueue:
                 # The saved result survives a temporarily unavailable inbox.
                 pass
         from .test_runner_routing import RoutingPass
-        preparing = dict(self.app.db.execute("""SELECT json_extract(receipt,'$.job.backendKey'), COUNT(*) FROM commands
+        starting = self.app.db.execute("""SELECT id,json_extract(receipt,'$.job.backendKey'),
+            json_extract(receipt,'$.senderSessionId'),json_extract(receipt,'$.job.resourceId'),
+            coalesce(json_extract(receipt,'$.job.attempt'),0) FROM commands
             WHERE json_extract(receipt,'$.commandAction')=?
-            AND json_extract(receipt,'$.job.status')='starting'
-            GROUP BY json_extract(receipt,'$.job.backendKey')""", (ACTION,)).fetchall())
-        routing = RoutingPass(preparing)
+            AND json_extract(receipt,'$.job.status')='starting'""", (ACTION,)).fetchall()
+        with closing(environments.storage.connect(self.app.data_dir)) as db:
+            admitted = set(db.execute("""SELECT root,id,json_extract(body,'$.backendKey'),
+                json_extract(body,'$.commandId') FROM allocations WHERE status!='retired'
+                AND json_extract(body,'$.kind')=? AND json_extract(body,'$.backendAdmitted')=1""", (environments.KIND,)))
+        preparing, unadmitted = {}, {}
+        for identity, key, sid, resource, attempt in starting:
+            preparing[key] = preparing.get(key, 0) + 1
+            # A delayed start acknowledgment must not add a second retained
+            # slot for its already admitted owner. Missing/mismatched ownership
+            # remains conservative; final native admission still checks atomically.
+            if (sid, resource, key, identity + ':start:' + str(attempt)) not in admitted:
+                unadmitted[key] = unadmitted.get(key, 0) + 1
+        routing = RoutingPass(preparing, unadmitted)
         capacities = {}
         runner_observations = {}
         for receipt in self.active_page():
