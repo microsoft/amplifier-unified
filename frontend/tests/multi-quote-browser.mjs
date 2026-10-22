@@ -26,7 +26,7 @@ const canonicalDraft=async()=>{
  const response=await context.request.get(url+'/fixture/quote-draft?'+new URLSearchParams({clientId:id}));
  assert.equal(response.status(),200);return response.json();
 };
-async function enteredCommentary(text){
+async function enteredCommentary(text,{canonicalReady=true}={}){
  const observed=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>{
   const state=window.amplifier.getState(),selection=window.getSelection();
   return {paragraphs:[...editor.children].filter(node=>!node.hasAttribute('data-quote-instance')).map(node=>node.textContent),
@@ -37,9 +37,9 @@ async function enteredCommentary(text){
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
  assert.ok(observed.paragraphs.some(value=>value.includes(text)),`Typed commentary missing from DOM immediately: ${text}`);
  assert.ok(commentary(observed.document).some(value=>value.includes(text)),`Typed commentary missing from editor draft: ${text}`);
- await expect.poll(async()=>commentary((await canonicalDraft()).document||{segments:[]}).some(value=>value.includes(text))).toBe(true);
+ if(canonicalReady)await expect.poll(async()=>commentary((await canonicalDraft()).document||{segments:[]}).some(value=>value.includes(text))).toBe(true);
 }
-async function expectLayout(stage,expected){
+async function expectLayout(stage,expected,{canonicalReady=true}={}){
  const dom=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>[...editor.children].map(node=>node.hasAttribute('data-quote-instance')?
   {instanceId:node.dataset.quoteInstance,excerpt:node.querySelector('pre').textContent}:node.textContent));
  const document=await documentValue();
@@ -48,7 +48,17 @@ async function expectLayout(stage,expected){
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
  assert.deepEqual(dom,expectedDom,stage+': exact commentary/quote DOM order');
  assert.deepEqual(projectDocument(document),expected,stage+': independently expected editor order');
- await expect.poll(async()=>projectDocument((await canonicalDraft()).document||{segments:[]})).toEqual(expected);
+ if(canonicalReady)await expect.poll(async()=>projectDocument((await canonicalDraft()).document||{segments:[]})).toEqual(expected);
+ else{
+  // The deliberately held prior action blocks the existing ordered save
+  // queue. The journal must own these exact bytes until receipt settlement.
+  const pending=await page.evaluate(()=>{
+   const state=window.amplifier.getState();
+   return JSON.parse(sessionStorage.getItem('amplifier.pendingDrafts.v1')).rows.find(row=>row.sessionId===state.selectedSessionId);
+  });
+  assert.deepEqual(projectDocument(pending.document),expected,stage+': recovery journal owns the exact newer draft');
+  checkpoints.at(-1).pendingJournal=pending;
+ }
  const canonical=await canonicalDraft();
  checkpoints.at(-1).canonical=canonical;
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
@@ -178,9 +188,9 @@ try{
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();changedStarted();await changedHeld;await route.fulfill({response});}else await route.continue();});
  await b.getByRole('button',{name:'Reply to message',exact:true}).click();await changedWaiting;
  await editor.focus();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Newer commentary');
- await enteredCommentary('Newer commentary');
+ await enteredCommentary('Newer commentary',{canonicalReady:false});
  expected=[BEFORE,secondQuote,BETWEEN,BEFORE_WHOLE,wholeQuote,AFTER+UNICODE,appendedQuote,'Newer commentary'];
- await expectLayout('new text while source receipt held',expected);
+ await expectLayout('new text while source receipt held',expected,{canonicalReady:false});
  changedRelease();await page.getByText('The draft changed. Your text was kept; add the quote again.',{exact:true}).first().waitFor();
  await expect(quotes).toHaveCount(3);await page.unroute('**/api/actions');
  await expectLayout('late changed receipt rejected',expected);
