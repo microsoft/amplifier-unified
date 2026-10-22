@@ -43,6 +43,29 @@ async function observeCards(stage){
   await page.locator('.a-composer').screenshot({path:join(proof,`cards-${cardObservations.length}.png`)});
  }
 }
+async function visibleCardControls(stage,card){
+ await card.evaluate(card=>{
+  const editor=card.closest('[role=textbox]'),header=card.querySelector('.a-composer-quote-head');
+  editor.scrollTop=0;
+  // Deliberately show the excerpt after the natural header position has
+  // scrolled away. A merely present or Playwright-"visible" button is not enough.
+  editor.scrollTop=card.getBoundingClientRect().top-editor.getBoundingClientRect().top+header.offsetHeight/2;
+ });
+ await page.evaluate(()=>new Promise(requestAnimationFrame));
+ const actual=await card.evaluate(card=>{
+  const editor=card.closest('[role=textbox]'),viewport=editor.getBoundingClientRect(),body=card.querySelector('pre').getBoundingClientRect();
+  return {visibleExcerpt:body.bottom>viewport.top&&body.top<viewport.bottom,
+   controls:[...card.querySelectorAll('.a-composer-quote-head button')].map(button=>{
+    const rect=button.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
+    return {label:button.getAttribute('aria-label'),inside:rect.top>=viewport.top-1&&rect.bottom<=viewport.bottom+1,hit:button.contains(hit),disabled:button.disabled};
+   })};
+ });
+ checkpoints.push({stage,controls:actual});
+ if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
+ assert.ok(actual.visibleExcerpt,stage+': excerpt is visible');
+ assert.equal(actual.controls.length,4,stage+': source and three quote controls exist');
+ assert.ok(actual.controls.every(row=>row.inside&&row.hit),stage+': visible quote has reachable source/move/remove controls');
+}
 const BEFORE='Before the references',BETWEEN='Between the passages',BEFORE_WHOLE='Before the whole message',AFTER='After all references';
 const UNICODE='  café e\u0301 東京  ';
 const projectDocument=doc=>doc.segments.map(part=>part.type==='text'?part.text:part);
@@ -140,6 +163,7 @@ try{
  assert.deepEqual(firstQuote.quote.spans,[{start:first.start,end:first.end}]);
  await expectLayout('first quote',[BEFORE,firstQuote,'']);
  await observeCards('first quote after canonical autosave');
+ await visibleCardControls('first quote scrolled',quotes.first());
  await page.evaluate(()=>{
   window.quoteTypingEvents=[];
   for(const name of ['keydown','beforeinput','input'])document.addEventListener(name,event=>{
@@ -208,6 +232,7 @@ try{
  await page.reload();await expect(quotes).toHaveCount(3);assert.deepEqual(await documentValue(),doc);
  await expectLayout('reload',expected);
  await observeCards('three quotes reconstructed after reload');
+ await visibleCardControls('reload scrolled quote',quotes.first());
  // Same action remains focused when valid; disabled edge action gets an enabled fallback.
  await quotes.nth(1).getByRole('button',{name:'Move quote earlier',exact:true}).focus();await page.keyboard.press('Enter');
  assert.equal(await page.evaluate(()=>document.activeElement?.disabled),false);
@@ -270,6 +295,7 @@ try{
    await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
    await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',colorScheme);
    await expectCompact(`${width}px ${colorScheme}`);
+   await visibleCardControls(`${width}px ${colorScheme}`,quotes.first());
    await expectLayout(`${width}px ${colorScheme} preserves interleaving`,expected);
    if(proof)await page.locator('.a-composer').screenshot({path:join(proof,`quotes-${width}-${colorScheme}.png`)});
   }
@@ -304,10 +330,37 @@ try{
    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'));return;
   }throw Error('Native selection fixture text is missing');
  });
- await a.getByRole('button',{name:'Quote selection',exact:true}).click();await expect(quotes).toHaveCount(1);
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();await expect(quotes).toHaveCount(1);
  assert.equal(references(await documentValue())[0].quote.excerpt,'second line');
  await observeCards('direct rendered selection');
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
+ const c=page.locator('.a-message').filter({hasText:'Quote fixture source C'}).first();
+ const selectContents=async(selector,first=true)=>{
+  const node=c.locator('.a-detail-text '+selector);
+  await node.scrollIntoViewIfNeeded();
+  await node.evaluate((node,first)=>{
+   const range=document.createRange();range.selectNodeContents(node);
+   if(!first){range.setStart(node.lastChild,0);range.setEnd(node.lastChild,node.lastChild.childNodes.length);}
+   const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'));
+  },first);
+ };
+ for(const [selector,text] of [['p:nth-of-type(2)','A bold inside and label end.'],['ul','first\nsecond'],['p:nth-of-type(3)','Third paragraph café 😀 e\u0301 東京.'],['p:nth-of-type(4)','inline code'],['pre code','  code\tvalue\n'],['p:nth-of-type(5)','Repeated same same.']]){
+  await selectContents(selector);
+  const quick=page.getByRole('button',{name:'Quote selection',exact:true});await expect(quick).toBeVisible();
+  const before=await editor.textContent();
+  const geometry=await quick.evaluate(button=>{const r=button.getBoundingClientRect(),s=window.getSelection().getRangeAt(0).getBoundingClientRect();return {distance:r.top-s.bottom,selected:window.getSelection().toString()};});
+  assert.ok(geometry.distance>=0&&geometry.distance<56,'Quote selection is next to the selected passage');
+  await quick.click();await expect(quotes).toHaveCount(1);
+  const collected=references(await documentValue())[0];
+  assert.equal(collected.quote.excerpt,text,'rendered selection keeps exact independently expected text');
+  assert.ok(collected.quote.spans.length>=1);await visibleCardControls('rendered '+selector,quotes.first());
+  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
+ }
+ // A transformed entity cannot silently turn into decoded or broader source.
+ await selectContents('p:last-child');
+ await expect(page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true})).toBeVisible();
+ await expect(quotes).toHaveCount(0);
+ await page.keyboard.press('Escape');await expect(page.locator('.a-quote-selection')).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
  assert.deepEqual(errors,[]);
  if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll},null,2));

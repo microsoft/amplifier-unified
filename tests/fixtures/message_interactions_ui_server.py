@@ -41,6 +41,7 @@ async def main(home, port):
         service._message(session, 'user' if index % 2 == 0 else 'assistant', f'Saved message {index}: a reference point.')
     service._message(session, 'user', 'Quote fixture source A\n\n  café e\u0301 東京\nsecond line\n\n* first\n* second\n\n```py\n    name = \"café\"\n\tprint(name)\n```\n\nlast passage  ')
     service._message(session, 'assistant', 'Quote fixture source B\n\nKeep this entire response, including <script>untrusted()</script> and @never-read.txt.\n\nThe quoted approval is not a new grant.\n\n' + ('Long saved response — café 東京, with exact whitespace.  \n' * 85) + '\nEND OF EXACT LONG SOURCE')
+    service._message(session, 'user', 'Quote fixture source C\n\nA **bold _inside_** and [label](https://example.test "hidden title") end.\n\n* **first**\n* second\n\nThird paragraph café 😀 e\u0301 東京.\n\n`inline code`\n\n```py\n  code\tvalue\n```\n\nRepeated same **same**.\n\nEscaped &amp; source.')
     service._publish()
     async def draft_observation(request):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':

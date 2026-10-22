@@ -1,9 +1,11 @@
 import React,{useEffect,useRef,useState} from 'react';
+import {createPortal} from 'react-dom';
 import {Reply,Smile,X} from 'lucide-react';
 import {readDetail} from './detail-read';
 import {Markdown} from './markdown';
 import {clientId,request} from './api';
 import {createReactionController,reactionControllers} from './message-reactions';
+import {selectedQuote} from './message-quote-selection.js';
 import './message-interactions.css';
 
 const reactions=[['👍','Thumbs up'],['❤️','Heart'],['😂','Laugh'],['🎉','Celebrate'],['😮','Surprised'],['😢','Sad'],['👎','Thumbs down'],['✅','Check']];
@@ -50,22 +52,22 @@ export function ReplyPreview({quote,sessionId,dispatch}){
 export function MessageInteractions({message,sessionId,dispatch}){
  const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const owner=JSON.stringify([sessionId,message.id]),current=useRef(owner),controller=useRef(null),[,refresh]=useState(0);current.current=owner;
- const anchor=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
+ const anchor=useRef(null),selectionTool=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
  useEffect(()=>{
   if(typeof document==='undefined')return;
   const update=()=>{
    const selection=window.getSelection(),article=anchor.current?.closest('[data-message-id]');
+   if(selectionTool.current?.contains(document.activeElement))return;
    if(!selection||selection.isCollapsed||selection.rangeCount!==1){setSelected(null);return;}
-   const range=selection.getRangeAt(0),start=range.startContainer,end=range.endContainer;
-   if(!article?.contains(start)||!article.contains(end)||!start.parentElement?.closest('.a-detail-text')){setSelected(null);return;}
-   const a=start.parentElement?.closest('[data-canvas-source-start]'),b=end.parentElement?.closest('[data-canvas-source-start]');
-   if(start.nodeType!==3||end.nodeType!==3||!a||!b){setSelected({error:true});return;}
-   const from=Number(a.dataset.canvasSourceStart)+range.startOffset,to=Number(b.dataset.canvasSourceStart)+range.endOffset;
-   // Formatting/escape transformations cannot silently broaden a selection.
-   const source=message.text||'',excerpt=range.toString();
-   setSelected(source.slice(from,to)===excerpt&&excerpt?{start:[...source.slice(0,from)].length,end:[...source.slice(0,to)].length,source}:{error:true});
+   const result=selectedQuote(article,selection);
+   if(!result){setSelected(null);return;}
+   const range=selection.getRangeAt(0),rect=range.getBoundingClientRect(),pane=article.closest('.a-messages')?.getBoundingClientRect();
+   if(pane&&(rect.bottom<pane.top||rect.top>pane.bottom)){setSelected(null);return;}
+   setSelected({...result,range:range.cloneRange(),left:Math.max(8,Math.min(rect.left,window.innerWidth-224)),top:Math.max(8,Math.min(rect.bottom+8,window.innerHeight-56))});
   };
-  document.addEventListener('selectionchange',update);return()=>document.removeEventListener('selectionchange',update);
+  const dismiss=event=>{if(event.key==='Escape')setSelected(null);};
+  document.addEventListener('selectionchange',update);document.addEventListener('keydown',dismiss);window.addEventListener('scroll',update,true);window.addEventListener('resize',update);
+  return()=>{document.removeEventListener('selectionchange',update);document.removeEventListener('keydown',dismiss);window.removeEventListener('scroll',update,true);window.removeEventListener('resize',update);};
  },[owner,message.text]);
  if(controller.current?.owner!==owner){
   const key='amplifier.reactions.v1:'+owner;
@@ -90,11 +92,23 @@ export function MessageInteractions({message,sessionId,dispatch}){
   try{await dispatch(name,{sessionId,messageId:message.id,...args},name==='message.reply'?{quoteSource:message.text,quoteDetail:message.textDetail}:{});}
   catch(e){if(current.current===owner)setError(e.message)}finally{if(current.current===owner)setBusy(false)}
  }
- const addPassage=(source,start,end)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection:{start,end}},{quoteSource:source});};
+ const addPassage=(source,selection)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection},{quoteSource:source});};
+ const choosePassage=async()=>{try{setError('');const text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner){setPicker(text);setSelected(null);}}catch(error){setError(error.message);}};
+ const quoteSelected=async()=>{
+  try{
+   if(selected.error)throw Error(selected.error+' Use Choose passage; nothing was added.');
+   const range=selected.range,article=anchor.current?.closest('[data-message-id]');
+   const fresh=selectedQuote(article,{isCollapsed:range.collapsed,rangeCount:1,getRangeAt:()=>range});
+   if(!fresh||fresh.error||fresh.source!==selected.source||JSON.stringify(fresh.spans)!==JSON.stringify(selected.spans))throw Error('The source or selection changed. Select the passage again.');
+   await addPassage(fresh.source,{spans:fresh.spans});setSelected(null);
+  }catch(error){setError(error.message);}
+ };
  return <><button ref={anchor} type="button" className="a-icon" aria-label="Reply to message" title="Quote whole message" data-action="message.reply" disabled={busy} onMouseDown={event=>{if(event.button===0)event.preventDefault();}} onClick={()=>action('message.reply',{})}><Reply/></button>
- <button type="button" className="a-link" disabled={busy} onClick={async()=>{try{setError('');const text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner)setPicker(text);}catch(error){setError(error.message);}}}>Choose passage</button>
- {selected&&<button type="button" className="a-link" onMouseDown={event=>event.preventDefault()} onClick={async()=>{try{if(selected.error)throw Error('Use Choose passage for an exact source selection across formatting or blocks. Nothing was added.');await addPassage(selected.source,selected.start,selected.end);setSelected(null);}catch(error){setError(error.message);}}}>Quote selection</button>}
- {picker!==null&&<PassagePicker text={picker} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker,[...picker.slice(0,start)].length,[...picker.slice(0,end)].length)}/>}
+ <button type="button" className="a-link a-quote-fallback" title="Select from the exact source when rendered text cannot be mapped" disabled={busy} onClick={choosePassage}>Choose passage</button>
+ {selected&&createPortal(<div ref={selectionTool} className="a-quote-selection" style={{left:selected.left,top:selected.top}} onMouseDown={event=>event.preventDefault()}>
+  <button type="button" disabled={busy} title={selected.error||'Add this exact passage without leaving your place'} onClick={selected.error?choosePassage:quoteSelected}>{selected.error?'Choose passage':'Quote selection'}</button>
+ </div>,anchor.current?.closest('#amp-one')||document.body)}
+ {picker!==null&&<PassagePicker text={picker} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker,{start:[...picker.slice(0,start)].length,end:[...picker.slice(0,end)].length})}/>}
  <div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
   <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={e=>{const pane=e.currentTarget.closest('.a-messages')?.getBoundingClientRect();setBelow(e.currentTarget.getBoundingClientRect().top-(pane?.top||0)<110);setOpen(!open)}}><Smile/></button>
   {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} data-action="message.reaction" onClick={e=>{reaction.set(emoji,!chosen.includes(emoji));setOpen(false);e.currentTarget.closest('.a-reaction-control')?.querySelector('button')?.focus({preventScroll:true})}}>{emoji}</button>)}</div>}
