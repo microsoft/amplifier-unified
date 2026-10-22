@@ -63,8 +63,8 @@ test('trusted peer caption is always visible outside hover actions with a matchi
  const render=message=>renderToStaticMarkup(React.createElement(MessageEntry,{message,session:{id:'chat'},state:{view:{}},act:()=>{},working:false}));
  const html=render({id:'peer',role:'user',text:'Original **α**',via:'peer',attribution:{caption}});
  assert.match(html,/aria-label="Sent by Amplifier from another chat"/);
- assert.match(html,/<span class="a-message-attribution">Sent by Amplifier from another chat<\/span>/);
- assert.match(html,/a-peer-summary" aria-expanded="false"/);
+ assert.match(html,/<p class="a-message-attribution">Sent by Amplifier from another chat<\/p>/);
+ assert.match(html,/class="a-peer-summary"[^>]*aria-expanded="false"/);
  assert.doesNotMatch(html,/a-message-actions|a-peer-content|Original/);
  assert.match(html,/a-external-message/);assert.doesNotMatch(html,/aria-label="Edit message"/);
  assert.doesNotMatch(html,/via peer/);assert.doesNotMatch(html,/Your message/);

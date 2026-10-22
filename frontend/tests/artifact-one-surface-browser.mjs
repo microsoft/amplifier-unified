@@ -1,6 +1,7 @@
 // Focused presentation acceptance. Run only against the isolated fixture.
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -10,7 +11,8 @@ import {mkdir,writeFile} from 'node:fs/promises';
 const evidence=process.env.ARTIFACT_EVIDENCE_DIR||'/artifacts/one-surface';
 await mkdir(evidence,{recursive:true});
 const fixture=spawn(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.ARTIFACT_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url))],{stdio:'inherit'});
-let browser,page;const errors=[];
+const stop=ownFixture(fixture,{label:'Artifact presentation fixture'});
+let browser,page,failure;const errors=[];
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 try{
  for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}if(fixture.exitCode!==null)throw Error('Fixture exited before readiness');await new Promise(resolve=>setTimeout(resolve,100));}
@@ -182,5 +184,5 @@ try{
  await writeFile(`${evidence}/settings-draft.json`,JSON.stringify({unrelatedInlineDidNotNavigate:true,unsavedValuePreserved:true,replacementGuarded:true}));
  assert.deepEqual(errors,[]);
  console.log('PASS one-surface default, explicit transitions/reset refusal, hide/reopen/reload/second client, exact version, shared document controls, dirty unrelated Canvas/draft, keyboard and narrow containment');
-}catch(error){if(page)await page.screenshot({path:`${evidence}/failure.png`});throw error}
-finally{await browser?.close();fixture.kill();}
+}catch(error){failure=error;if(page)await page.screenshot({path:`${evidence}/failure.png`});throw error}
+finally{await finishFixture({label:'Artifact presentation fixture',close:[['Artifact browser',()=>browser?.close()]],stop,originalError:failure})}
