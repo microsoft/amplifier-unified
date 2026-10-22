@@ -73,7 +73,9 @@ def optional_build(uv, python, project, prefix):
     started = time.monotonic()
     try:
         result = prepare_build(uv, python, project, prefix)
-    except (subprocess.CalledProcessError, ValueError):
+    except (subprocess.CalledProcessError, ValueError) as error:
+        if isinstance(error, subprocess.CalledProcessError) and error.returncode < 0:
+            raise  # A signalled helper is not an ordinary packaging rejection.
         # Full bounded subprocess diagnostics remain in the retained builder log.
         # Cancellation, timeout, helper loss and filesystem failures still escape.
         result = {'available': False,

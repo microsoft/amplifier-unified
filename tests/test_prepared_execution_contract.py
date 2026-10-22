@@ -1,7 +1,10 @@
 """Prepared checks advertise actual tools/source and retain everything once."""
 import copy
 import json
+import os
+import signal
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -239,3 +242,25 @@ def test_optional_build_never_swallows_deadline_or_cancellation(tmp_path, monkey
     with pytest.raises(type(error)):
         guest.optional_build('uv', 'python', tmp_path, tmp_path)
     assert not (tmp_path / 'build-preparation.json').exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Negative subprocess signal status is POSIX-specific')
+@pytest.mark.parametrize('signal_name', ['SIGTERM', 'SIGKILL'])
+def test_optional_build_propagates_real_terminated_helper(tmp_path, signal_name):
+    child_signal = getattr(signal, signal_name)
+    project, prefix = tmp_path / 'project', tmp_path / 'prepared'
+    project.mkdir(); prefix.mkdir()
+    (project / 'pyproject.toml').write_text(
+        '[build-system]\nrequires=["hatchling"]\nbuild-backend="hatchling.build"')
+    uv = tmp_path / 'uv'
+    uv.write_text(f'#!{sys.executable}\nimport os, signal\nos.kill(os.getpid(), {int(child_signal)})\n')
+    uv.chmod(0o700)
+
+    # Exercise the real prepare_build -> run -> subprocess path. Only the
+    # disposable child terminates; the test runner and other work remain alive.
+    with pytest.raises(subprocess.CalledProcessError) as failure:
+        guest.optional_build(str(uv), sys.executable, project, prefix)
+
+    assert failure.value.returncode == -child_signal
+    assert failure.value.cmd[0] == str(uv)
+    assert not (prefix / 'build-preparation.json').exists()
