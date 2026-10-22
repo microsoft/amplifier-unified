@@ -207,7 +207,7 @@ try {
   });
   // The already-open page can read published observer records before control
   // returns; observe that boundary before triggering it, including warm reads.
-  await control({op:'delegate-observer',instruction,reply});
+  await control({op:'delegate-observer',instruction,reply,olderRecords:true});
   await page.setViewportSize({width:1280,height:1000});
   await page.reload();
   await showFixtureConversation(page);
@@ -215,6 +215,11 @@ try {
   const observedToggle=observed.locator(':scope > button');
   await expect(observedToggle).toBeVisible();
   if(await observedToggle.getAttribute('aria-expanded')!=='true')await observedToggle.click();
+  // This fixture deliberately places the stamped exchange beyond the recent
+  // window. Follow its explicit bounded lookup before copying full fields.
+  const earlier=observed.getByRole('button',{name:'Search older saved details',exact:true});
+  await expect(earlier).toHaveCount(1);
+  await earlier.click();
   await expect(observed.getByRole('region',{name:'Request',exact:true})).toContainText('OBSERVER REQUEST café');
   await expect(observed.getByRole('region',{name:'Reply',exact:true})).toContainText('OBSERVER REPLY');
   await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{
