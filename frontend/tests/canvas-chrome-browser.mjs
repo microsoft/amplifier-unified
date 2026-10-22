@@ -161,7 +161,7 @@ try{
    ])
   ].filter(Boolean);
  };
- const assertNavigation=async()=>{const g=await navigationGeometry();assert.deepEqual(navigationViolations(g),[],'FIXED_CANVAS_NAVIGATION');return g};
+ const assertNavigation=async()=>{const g=await navigationGeometry();report.lastNavigation=g;assert.deepEqual(navigationViolations(g),[],'FIXED_CANVAS_NAVIGATION');return g};
  const wheel=async(locator,x,y)=>{
   const b=await locator.boundingBox();assert.ok(b?.width>0&&b.height>0,'Wheel target must be rendered');
   await page.mouse.move(b.x+b.width*.8,b.y+b.height/2);await page.mouse.wheel(x,y);
@@ -296,6 +296,15 @@ try{
   await page.emulateMedia({reducedMotion:'reduce'});
   await expect.poll(async()=>milliseconds((await transition()).width).every(ms=>ms===0)).toBe(true);
   const reduced=await transition();assert.ok(milliseconds(reduced.label).every(ms=>ms===0));
+  const compactNavigation=await assertNavigation(),alignment=await overviewTab.evaluate(el=>el.style.justifyContent);
+  try{
+   await overviewTab.evaluate(el=>{el.style.justifyContent='center'});
+   const broken=await navigationGeometry();
+   assert.ok(navigationViolations(broken).includes('Chat overview clips svg'));
+   await assert.rejects(assertNavigation(),/FIXED_CANVAS_NAVIGATION/);
+   report.compactIconNegative={sample:broken,rejected:true};
+  }finally{await overviewTab.evaluate((el,value)=>{el.style.justifyContent=value},alignment)}
+  await assertNavigation();
   const lastTab=strip.getByRole('tab',{name:titles[29],exact:true});
   await requireReachable(lastTab,'Far document');await lastTab.click();await expect(lastTab).toHaveAttribute('aria-selected','true');
   await overviewTab.click();await expect(overviewTab).toHaveAttribute('aria-selected','true');
@@ -322,7 +331,7 @@ try{
    await page.keyboard.press('Home');await expect(overviewTab).toBeFocused();await page.keyboard.press('Enter');
    await expect(overviewTab).toHaveAttribute('aria-selected','true');
   }finally{report.keyboardOrder=await page.evaluate(()=>{const o=window.canvasKeyboardObservation,r=o.read();o.stop();delete window.canvasKeyboardObservation;return r})}
-  return {horizontal,vertical,normal,reduced};
+  return {horizontal,vertical,normal,reduced,compactNavigation};
  });
  const presentation=async scheme=>{
   await page.waitForFunction(()=>window.amplifier.getShellState()?.effectiveComposition);
