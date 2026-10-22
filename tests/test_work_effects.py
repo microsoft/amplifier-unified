@@ -266,6 +266,35 @@ async def test_unqualified_deferred_effect_owner_refuses_before_admission(app):
     assert retained_bytes(app) == before
 
 
+async def test_ordinary_child_tool_keeps_existing_policy_without_work_authority(app):
+    owner = app.state['sessions'][0]
+    await generation(app, owner, 'ordinary-child-generation', ['ordinary-input'])
+    args = tool_args()
+    result = await app.app_bridge('work.effect.check', {
+        **args, **transport(owner, principal='delegated-runtime')}, owner['id'])
+    assert result['applicable'] is False and result['allowed'] and result['effectAuthorized'] is False
+    pinned = await app.app_bridge('dispatch', {
+        'action': 'session.pin', 'args': {'id': owner['id'], 'pinned': True},
+        'id': 'ordinary-child-pin', **transport(owner, principal='delegated-runtime')}, owner['id'])
+    assert pinned['accepted'] and owner['id'] in app._state['pinnedSessionIds']
+
+
+async def test_bound_work_keeps_question_reads_and_refuses_self_notify_input(app):
+    from amplifier_web.service import AppError
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'safe-questions')
+    _, child = await assert_available_commission(app, owner, item, 'safe-question-commission')
+    read_result = await app_effect(app, child, 'question.list', {'sessionId': child['id']}, 'question-list')
+    assert read_result['accepted']
+    required = (await current_work(app, child))['required']
+    args = {'sessionId': child['id'], 'text': 'Do not enqueue.', 'mode': 'notify'}
+    witness = app_witness(child, required, 'conversation.send', args, 'self-notify')
+    before, inputs = retained_bytes(app), list(app.runtime.inputs)
+    with pytest.raises(AppError, match='no qualified final effect owner'):
+        await app_effect(app, child, 'conversation.send', args, 'self-notify', witness)
+    assert retained_bytes(app) == before and app.runtime.inputs == inputs
+
+
 @pytest.mark.parametrize('fault', ['none', 'uncovered', 'changed_args', 'host_stop', 'promise'])
 @pytest.mark.parametrize('target', ['tool', 'app_control'])
 async def test_real_delivery_worker_and_service_join_at_effect(app, fault, target):

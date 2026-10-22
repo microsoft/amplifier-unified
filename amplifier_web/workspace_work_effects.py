@@ -33,6 +33,12 @@ SAFE_ACTIONS = frozenset({
     'operations.list', 'operations.read', 'operations.wait',
     'workspace.tests.read', 'workspace.tests.result', 'workspace.tests.cancel',
     'workspace.environments.read', 'workspace.environments.reconcile',
+    'question.list', 'question.read', 'capacity.read',
+    'outputs.list', 'outputs.read', 'outputs.image', 'outputs.images',
+    'coordination.recap', 'workspace.resources.list', 'workspace.resources.read',
+    'workspace.resources.managed', 'session.inspect', 'access.get',
+    'schedule.list', 'schedule.read', 'schedule.overview',
+    'worktree.inspect', 'worktree.status',
 })
 SAFE_TOOLS = frozenset({'read_file', 'grep', 'glob'})
 
@@ -93,7 +99,8 @@ def guard(service, action, arguments, origin, caller, *, final=False):
         'workspace.work.create', 'workspace.work.revise', 'workspace.work.link',
         'workspace.work.disposition', 'session.pin'}
         or action in {'coordination.send', 'conversation.send'}
-        and arguments.get('mode') == 'notify')
+        and arguments.get('mode') == 'notify'
+        and arguments.get('sessionId') not in (None, caller))
     if not supported:
         raise AppError('This Work-dependent action has no qualified final effect owner. '
                        'Read current Work or report the blocked action; no effect was admitted.',
@@ -148,6 +155,14 @@ def check(invocation, sid, args):
     result = {'applicable': True, 'allowed': False, 'reason': None,
               'requiredVersion': None, 'effectAuthorized': False}
     try:
+        # Applicability is a host fact about the root's actual delivered inputs.
+        # An ordinary delegated child must still reach its existing permission
+        # owner; root-only Work authority is checked only when Work applies.
+        target = invocation.service._session(sid, hydrate=False)
+        applicable, reason = applicability(invocation, target)
+        result.update(applicable=applicable, reason=reason)
+        if not applicable:
+            return {**result, 'allowed': True, 'reason': 'No commissioned Work association in this host input set; ordinary authority still applies.'}
         target = invocation.bound_root(sid)
         if recovery_read(args['toolName'], args['toolInput']):
             return {**result, 'allowed': True, 'reason': 'Exact read or safe reporting; ordinary authority still applies.'}
@@ -156,10 +171,6 @@ def check(invocation, sid, args):
             # BoundDispatch supplies this fact. Each inner call stays guarded.
             return {**result, 'allowed': True,
                     'reason': 'Host-verified guarded programmatic container; each inner effect must pass its own check.'}
-        applicable, reason = applicability(invocation, target)
-        result.update(applicable=applicable, reason=reason)
-        if not applicable:
-            return {**result, 'allowed': True, 'reason': 'No commissioned Work association in this host input set; ordinary authority still applies.'}
         if reason:
             return result
         required, _ = invocation.required(sid)
