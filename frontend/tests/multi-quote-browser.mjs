@@ -45,14 +45,16 @@ try{
  const second=await passage('```py','\n\nlast passage');await expect(quotes).toHaveCount(2);
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Before the whole message');
  const wholeButton=b.getByRole('button',{name:'Reply to message',exact:true});
+ await expect(b.locator('.a-detail-text')).toContainText('END OF EXACT LONG SOURCE');
  await wholeButton.scrollIntoViewIfNeeded();const beforeScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
  await wholeButton.evaluate(button=>{
   window.quoteScroll=[];window.beforeQuoteFocus=document.activeElement;
-  for(const event of ['pointerdown','mousedown','focus','click'])button.addEventListener(event,()=>window.quoteScroll.push({event,top:document.querySelector('.a-messages').scrollTop}),{capture:true,once:true});
+  window.quoteGeometry=()=>{const pane=document.querySelector('.a-messages');return {top:pane.scrollTop,height:pane.clientHeight,scrollHeight:pane.scrollHeight,buttonTop:button.getBoundingClientRect().top,composerHeight:document.querySelector('.a-composer').clientHeight};};
+  for(const event of ['pointerdown','mousedown','focus','click'])button.addEventListener(event,()=>window.quoteScroll.push({event,...window.quoteGeometry()}),{capture:true,once:true});
  });
  await wholeButton.click();await expect(quotes).toHaveCount(3);
  const afterScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
- const scrollEvents=await page.evaluate(()=>window.quoteScroll);
+ const scrollEvents=await page.evaluate(()=>[...window.quoteScroll,{event:'after',...window.quoteGeometry()}]);
  if(proof)writeFileSync(join(proof,'collect-scroll.json'),JSON.stringify({beforeScroll,afterScroll,scrollEvents},null,2));
  assert.ok(Math.abs(afterScroll-beforeScroll)<=1,`Collecting moved the reading position: ${beforeScroll} -> ${afterScroll}; ${JSON.stringify(scrollEvents)}`);
  assert.ok(await page.evaluate(()=>document.activeElement===window.beforeQuoteFocus),'Collecting must not move focus');

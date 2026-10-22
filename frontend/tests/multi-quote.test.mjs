@@ -67,3 +67,13 @@ test('explicit quote removal is undoable without changing commentary',()=>{
  assert.ok(undo(view.state,view.dispatch));assert.deepEqual(composerDocument(view.state.doc),original);
  assert.ok(redo(view.state,view.dispatch));assert.equal(composerDocument(view.state.doc),null);
 });
+test('plain drafts stay plain while the last removed quote retains exact commentary',()=>{
+ const plain=editor('Hello');plain.dispatch(plain.state.tr.insertText(' ',6));
+ assert.equal(composerDocument(plain.state.doc),null,'ordinary drafts must not become attributed documents');
+ const view=editor('Hello world');insertQuote(view,quote('first'),{doc:view.state.doc,pos:7});
+ const original=texts(view);changeQuote(view,quotes(view)[0].instanceId,0);
+ const checkpoint=composerDocument(view.state.doc,true);
+ assert.deepEqual(checkpoint.segments.map(part=>part.text),original);
+ const restored=composerState(composerMarkdown(view.state.doc),checkpoint);
+ assert.deepEqual(composerDocument(restored.doc,true),checkpoint);
+});

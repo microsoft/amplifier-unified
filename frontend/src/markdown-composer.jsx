@@ -29,7 +29,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
    attributes:{role:'textbox','aria-label':'Message Amplifier','aria-multiline':'true','data-action':'view.update','data-private':'true','data-view-label':'Message Amplifier',class:'a-markdown-composer',spellcheck:'true'},
    dispatchTransaction(transaction){
     view.updateState(view.state.apply(transaction));
-    if(transaction.docChanged){published.current=composerMarkdown(view.state.doc);publishedDocument.current=composerDocument(view.state.doc);latest.current.onChange(published.current,publishedDocument.current);}
+    if(transaction.docChanged){published.current=composerMarkdown(view.state.doc);publishedDocument.current=composerDocument(view.state.doc,!!publishedDocument.current);latest.current.onChange(published.current,publishedDocument.current);}
     refreshQuoteControls(view);
     view.dom.dataset.empty=String(view.state.doc.childCount===1&&view.state.doc.firstChild.type.name==='paragraph'&&view.state.doc.firstChild.content.size===0);
     resizeComposer(view.dom);
@@ -79,7 +79,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
   if(quoteApi)quoteApi.current={
    capture:()=>({doc:view.state.doc,mode:insertionMode.current,pos:usedCaret&&insertionMode.current==='caret'?view.state.selection.to:view.state.doc.content.size}),
    insert:(quote,target)=>{if(!alive||!editable())throw Error('The composer changed. Add the quote again.');insertQuote(view,quote,target);usedCaret=true;},
-   document:()=>composerDocument(view.state.doc),
+   document:()=>composerDocument(view.state.doc,!!publishedDocument.current),
    append:text=>{if(!alive||!editable()||view.composing)throw Error('Finish the current edit before dictating.');if(text)view.dispatch(view.state.tr.insertText(text,view.state.doc.content.size-1));},
   };
   refreshQuoteControls(view);

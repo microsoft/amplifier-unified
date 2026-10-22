@@ -27,7 +27,7 @@ const serializer=new MarkdownSerializer({...defaultMarkdownSerializer.nodes,
 },defaultMarkdownSerializer.marks);
 export const composerMarkdown=doc=>serializer.serialize(doc);
 export const parseComposer=text=>composerParser.parse(text||'');
-export function composerDocument(doc){
+export function composerDocument(doc,preserveCommentary=false){
  const segments=[];let quoted=false;
  doc.forEach(node=>{
   if(node.type.name==='reference'){quoted=true;segments.push({type:'quote',instanceId:node.attrs.instanceId,quote:node.attrs.quote});}
@@ -36,7 +36,7 @@ export function composerDocument(doc){
  // Markdown is the readable projection, not an exact editor checkpoint. Keep
  // structured commentary even after the last quote is removed if reparsing
  // would change it (for example, a split paragraph's trailing space).
- return quoted||!parseComposer(composerMarkdown(doc)).eq(doc)?{version:1,segments}:null;
+ return quoted||preserveCommentary&&!parseComposer(composerMarkdown(doc)).eq(doc)?{version:1,segments}:null;
 }
 export function parseDocument(text,document){
  if(!document?.segments)return parseComposer(text);

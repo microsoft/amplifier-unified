@@ -571,7 +571,8 @@ function App(){
   dictationControl.current?.cancel();
   e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable)return;
   preserveOtherDraft(session?.id??null);
-  const submittedText=draft,submittedDocument=quoteApi.current?.document(),id=crypto.randomUUID(),attachments=availableAttachments;
+  const submittedText=draft,editorDocument=quoteApi.current?.document(),id=crypto.randomUUID(),attachments=availableAttachments;
+  const submittedDocument=editorDocument?.segments.some(part=>part.type==='quote')?editorDocument:null;
   const activeGeneration=session?.collaborationGeneration;
   const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
