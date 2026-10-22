@@ -17,6 +17,22 @@ const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join
 const button=(root,label)=>root.root.findAllByType('button').find(node=>text(node)===label);
 const read={action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'a',offset:0}};
 
+for(const outcome of ['passed','failed','unknown','cancelled'])test(`later cleanup preserves the ${outcome} check outcome`,async()=>{
+ let root;const calls=[];
+ const check={id:'q',status:'unknown',detail:'Old cleanup was not confirmed.',
+  recoveredOutcome:{outcome,cleanup:{environmentState:'removed'}},check:{state:outcome==='passed'?'completed':'outcome_unknown'}};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,
+   act:async(action,args)=>{calls.push(action);return accepted({...page,checks:[check]})}}))});
+  const statuses=root.root.findAllByProps({role:'status'}).map(text);
+  assert.ok(statuses.includes('Check: '+outcome));
+  assert.match(text(root.toJSON()),/Cleanup recovered\. The environment was removed; the check was not repeated\./);
+  assert.equal(calls.length,1);assert.equal(calls[0],'workspace.environments.read');
+  assert.ok(button(root,'Read check result'),'original result remains inspectable');
+  assert.equal(button(root,'Cancel check'),undefined);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 for(const status of ['stopped','running'])test(`artifact evidence export is ${status==='stopped'?'available':'blocked'} for ${status} work`,async()=>{
  let root;const calls=[],resource={id:'env',revision:8,status,recovery:{available:true}};
  const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?{items:[resource],capability:{status:'unavailable'}}:{request:{state:'completed'}})};

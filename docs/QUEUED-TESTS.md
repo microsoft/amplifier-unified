@@ -36,6 +36,16 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   into every queue row or workspace catalog.
 - `workspace.tests.result` pages that exact recorded output after cleanup,
   preserving the exit code and any capture-limit indicator.
+- Reads also show a separate `recoveredOutcome` when later, independently named
+  cleanup has confirmed removal of the exact queued environment. This projection
+  binds the allocation, original launch, owner, source, profile, backend and
+  physical identity to the canonical completed cleanup receipt. The check result
+  is evaluated separately from its exact execution receipt (and terminal guest
+  job for durable checks); successful cleanup cannot make an unknown check pass.
+  The existing list displays “Cleanup recovered” with that check outcome. The
+  original queue outcome, notifications and operation receipts remain unchanged.
+  Reading does not rerun a check, export files, remove a guest or release an
+  uncertain reservation. Missing or conflicting evidence keeps the original view.
 - Cancellation before admission starts no command. New admitted checks run in a
   durable guest supervisor, independent of host request/connection lifetime.
   Cancellation requests termination of the exact command group; the supervisor

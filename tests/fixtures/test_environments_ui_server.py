@@ -49,7 +49,7 @@ async def main(home, port, backend='docker'):
     calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True,
                                  'backendAvailable': True, 'longOutput': False, 'executeFailure': False,
                                  'setupRequired': False, 'artifactTimeout': False,
-                                 'removeUnknown': False, 'removeFailure': False}
+                                 'removeUnknown': False, 'removeFailure': False, 'finishCleanupFailure': False}
     setup_calls = []
     probes = Counter()
     lock = threading.Lock()
@@ -104,7 +104,7 @@ async def main(home, port, backend='docker'):
             elif action == 'remove' and mode['removeUnknown']:
                 return {'ok': False, 'status': 'unknown', 'universeId': identity,
                         'message': 'Synthetic removal outcome unknown; no retry is implied.'}
-            elif action == 'remove' and mode['removeFailure']:
+            elif action == 'remove' and mode['removeFailure'] or action == 'finishCleanup' and mode['finishCleanupFailure']:
                 return {'ok': False, 'status': 'stopped', 'effectAdmitted': False, 'phase': 'verifying', 'code': 'archive_verification_failed'}
             elif action in {'remove', 'finishCleanup'}:
                 states[row['id']] = 'removed'
@@ -181,7 +181,7 @@ async def main(home, port, backend='docker'):
                 mode['capacityAvailable'] = bool(value['capacityAvailable'])
             if 'backendAvailable' in value:
                 mode['backendAvailable'] = bool(value['backendAvailable'])
-            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout', 'removeUnknown', 'removeFailure'):
+            for key in ('longOutput', 'executeFailure', 'setupRequired', 'artifactTimeout', 'removeUnknown', 'removeFailure', 'finishCleanupFailure'):
                 if key in value:
                     if type(value[key]) is not bool:
                         raise web.HTTPBadRequest(text=key + ' must be boolean')
