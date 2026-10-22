@@ -185,25 +185,33 @@ try{
  await expect(second.locator(`[data-message-id="${messageId}"]`).getByRole('button',{name:'Remove Check reaction',exact:true})).toBeVisible();
  // Stop is a non-reaction command: a pending reaction must not hold its admission
  // or clear the durable interruption revision when its late response arrives.
- let stopHeld;
- const holdAtStop=route=>{
-  if(route.request().postDataJSON()?.action==='message.reaction'){pendingRoutes.add(route);stopHeld=route;return}
+ let stopHeld,stopHeldResponse,stopHeldReceipt;
+ const holdAtStop=async route=>{
+  if(route.request().postDataJSON()?.action==='message.reaction'){
+   pendingRoutes.add(route);stopHeld=route;
+   stopHeldResponse=await route.fetch();stopHeldReceipt=await stopHeldResponse.json();return;
+  }
   return route.continue();
  };
  await page.route('**/api/actions',holdAtStop);
  await stable.getByRole('button',{name:'React to message',exact:true}).click();
  await stable.getByRole('button',{name:'Heart',exact:true}).click();
- await expect.poll(()=>!!stopHeld).toBe(true);
- const preStop=(await state()).sessions.find(row=>row.id===before.sessionId)?.interruptionRevision||0;
+ await expect.poll(()=>!!stopHeldReceipt).toBe(true);
+ assert.equal(stopHeldReceipt.accepted,true);
+ const stopState=await state(),preStop=stopState.sessions.find(row=>row.id===before.sessionId)?.interruptionRevision||0;
  const stopResponse=page.waitForResponse(response=>response.request().method()==='POST'&&
-  new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='conversation.stop');
+  new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='conversation.stop'&&
+  response.request().postDataJSON()?.args?.sessionId===before.sessionId&&response.request().headers()['x-amplifier-client']===stopState.client.id);
  await page.getByRole('button',{name:'Stop response',exact:true}).click();
- assert.equal((await (await stopResponse).json()).accepted,true);
- await expect.poll(async()=>(await state()).sessions.find(row=>row.id===before.sessionId)?.interruptionRevision||0).toBeGreaterThan(preStop);
- const stoppedRevision=(await state()).sessions.find(row=>row.id===before.sessionId).interruptionRevision;
- pendingRoutes.delete(stopHeld);await stopHeld.continue();await page.unroute('**/api/actions',holdAtStop);
+ const stopReceipt=await (await stopResponse).json();assert.equal(stopReceipt.accepted,true);
+ assert.ok(stopReceipt.stateRevision>stopHeldReceipt.stateRevision);
+ await expect.poll(async()=>(await state()).revision).toBeGreaterThanOrEqual(stopReceipt.stateRevision);
+ assert.equal((await state()).sessions.find(row=>row.id===before.sessionId).interruptionRevision,preStop+1);
+ pendingRoutes.delete(stopHeld);await stopHeld.fulfill({response:stopHeldResponse});await page.unroute('**/api/actions',holdAtStop);
  await expect(stable.getByRole('button',{name:'Remove Heart reaction',exact:true})).not.toHaveAttribute('data-pending','true');
- assert.equal((await state()).sessions.find(row=>row.id===before.sessionId).interruptionRevision,stoppedRevision);
+ assert.equal((await state()).sessions.find(row=>row.id===before.sessionId).interruptionRevision,preStop+1);
+ measurements.push({check:'stop-before-held-reaction-response',reactionRevision:stopHeldReceipt.stateRevision,
+  stopRevision:stopReceipt.stateRevision,interruptionRevision:preStop+1});
  await control('release');
  await page.waitForFunction(()=>{const s=window.amplifier.getState();return s.sessions.find(row=>row.id===s.selectedSessionId)?.status==='idle'});
  assert.deepEqual(errors,[]);console.log('Verified: quoted draft preservation/reload/removal/send, source navigation, assistant replies, persistent cross-client emoji add/remove, mobile affordances.');
