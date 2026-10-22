@@ -82,6 +82,68 @@ def test_no_graph_transcript_children_or_accounting_reads(owner, monkeypatch):
     assert all('aggregateUsage' not in row and 'turnId' not in row for row in page['items'])
 
 
+@pytest.mark.parametrize('action', ['message', 'steer'])
+def test_followup_is_typed_request_with_lazy_exact_text_not_a_reply(owner, action):
+    session, path = owner
+    text = 'Follow-up café 日本語\n' * 1400 + 'FOLLOWUP-END'
+    write(path, [event(1, tool_name='live_worker',
+                      tool_input={'action': action, 'session_id': 'child', 'text': text},
+                      result={'success': True, 'output': {'accepted': True, 'completed': False}})])
+    row = read(session)['items'][0]
+    assert row['association'] == 'unverified'
+    assert row['delegateRequest'].startswith('Follow-up café')
+    assert len(row['delegateRequest']) < len(text)
+    assert 'delegateResponse' not in row and 'delegateResponseDetail' not in row
+    ref = row['_eventFields']['delegateRequest']
+    chunks, offset = [], 0
+    while offset is not None:
+        chunk = windows.read_field(session, ref, offset=offset, limit=1024)
+        chunks.append(chunk['text'])
+        offset = chunk['nextOffset']
+    assert ''.join(chunks) == text and len(chunks) > 1
+    with pytest.raises(ValueError, match='Invalid delegation field'):
+        windows.read_field(session, {**row['_eventFields']['output'], 'delegateField': 'delegateResponse'})
+
+
+@pytest.mark.parametrize('action', ['list', 'cancel', 'finish'])
+def test_nonmessage_worker_operations_do_not_become_exchanges(owner, action):
+    session, path = owner
+    write(path, [event(1, tool_name='live_worker',
+                      tool_input={'action': action, 'text': 'not a follow-up'},
+                      result='not a child reply')])
+    row = read(session)['items'][0]
+    assert 'delegateRequestDetail' not in row
+    assert 'delegateResponseDetail' not in row
+    with pytest.raises(ValueError, match='Invalid delegation field'):
+        windows.read_field(session, {**row['_eventFields']['input'], 'delegateField': 'delegateRequest'})
+
+
+def test_followup_pre_and_result_only_post_remain_independent_observations(owner):
+    session, path = owner
+    write(path, [
+        {'event': 'tool:pre', 'timestamp': 1, 'data': {'session_id': 'root',
+         'tool_call_id': 'follow', 'tool_name': 'live_worker',
+         'tool_input': {'action': 'message', 'session_id': 'child', 'text': 'Continue café'}}},
+        {'event': 'tool:post', 'timestamp': 2, 'data': {'session_id': 'root',
+         'tool_call_id': 'follow', 'tool_name': 'live_worker',
+         'result': {'accepted': True, 'completed': False}}},
+    ])
+    before, after = read(session)['items']
+    assert before['delegateRequest'] == 'Continue café'
+    assert 'delegateRequest' not in after and 'delegateResponse' not in after
+    assert before['association'] == after['association'] == 'unverified'
+
+
+def test_error_record_cannot_be_reselected_as_successful_delegate_reply(owner):
+    session, path = owner
+    write(path, [event(1, 'tool:error', tool_name='delegate',
+                      result={'output': {'response': 'not completed'}})])
+    row = read(session)['items'][0]
+    assert 'delegateResponseDetail' not in row
+    with pytest.raises(ValueError, match='failed tool observation'):
+        windows.read_field(session, {**row['_eventFields']['output'], 'delegateField': 'delegateResponse'})
+
+
 def test_large_unrequested_prefix_does_not_change_read_cost_or_rows(owner):
     session, path = owner
     tail = b''.join(json.dumps(event(n)).encode() + b'\n' for n in range(120))
