@@ -9,7 +9,7 @@
         "Keep credentials, including Team Pulse keys, hidden when inspecting current or older conversation configuration. Editing redacted settings preserves values only for the same module, connection and source; ordinary user data remains readable.",
         "Reduce repeated work when reading chat catalogs with many saved read receipts. Existing unread state, ordering and bounded results are preserved.",
         "Keep mobile app options below the wrapped header so their controls remain reachable at narrow widths and when header content changes.",
-        "Update chat-menu and mobile navigation smoke checks for the current action names, history controls and two-row header while retaining drawer, keyboard, draft and Canvas checks."
+        "Update smoke checks for current chat menus, mobile navigation, browser transport and workflow lanes while retaining drawer, keyboard, draft and Canvas checks."
       ],
       "notices": [
         {
