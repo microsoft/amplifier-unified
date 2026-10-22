@@ -202,7 +202,7 @@ available. Settings changes use a revision check, and a lost reply is recovered
 with the original request ID rather than submitting another cleanup.
 
 The policy asks the existing ecosystem-generation and purpose-installed test
-runner owners to remove only copies they can still prove unused. Current and
+runner and qualified dependency-layer owners to remove only copies they can still prove unused. Current and
 rollback versions, live generation leases, configurations, observed process
 references, local source edits/untracked files/unpublished commits, and uncertain
 operations protect a copy. Owners repeat their checks at removal admission;
@@ -212,7 +212,8 @@ receipts remain visible and are not permission to repeat an uncertain effect.
 
 **Review unused copies** is an explicit bounded inspection. The ordinary setting
 read performs no scan and starts no worker. Each pass inspects at most four
-ecosystem candidates and eight purpose-installed runner candidates, with time
+ecosystem candidates, eight purpose-installed runner candidates and eight
+qualified dependency layers, with time
 limits and a retained cursor. Incomplete inspection is labeled; uninspected
 copies stay put. File-content measurements are not physical disk-allocation
 promises: hard links, shared runtimes and copy-on-write blocks can retain storage.
@@ -225,7 +226,7 @@ global off setting or retention grace. Explicit user uninstall and Skip actions
 retain their separate existing authorization and exact-owner guards.
 
 The policy never deletes chats, project folders, Git worktrees, saved test source
-or result archives, the only copy of an artifact, shared dependency stores, or
+or result archives, the only copy of an artifact, dependency stores owned by other components, or
 old application-installation generations. Current, previously selected,
 rollback and unknown Incus engine generations also remain retained until their
 shared references can be proved absent. Those categories remain inspectable by
@@ -238,3 +239,18 @@ synthetic installed graph: global settings, stale concurrent saves, exact retry
 after a lost save/cleanup acknowledgment, real owner removal, saved evidence
 preservation, and desktop/narrow draft protection. It makes no claim that a
 production installation or a remote runner has been cleaned.
+
+### Reusable isolated-test dependencies
+
+The same global automatic cleanup policy also owns qualified source-free Python
+dependency images. Their private records live under `test-dependency-layers` in
+the app data directory. Only unused, exactly identified images are candidates;
+active borrows, incomplete native builds and unconfirmed removals remain kept.
+Each borrow remains held until its task image is confirmed removed. Fresh use
+invalidates an earlier cleanup selection and restarts retention. Native image
+references and the saved cleanup policy are rechecked before removal. Small
+ownership, inventory and removal receipts remain after image cleanup. Task
+source, output and test evidence are never dependency-cache cleanup targets.
+Docker measurements exclude the exact immutable base image; shared blocks may
+still remain after removal. Other dependency stores retain their existing
+ownership and preservation rules.

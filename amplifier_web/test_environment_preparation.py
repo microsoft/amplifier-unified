@@ -161,9 +161,10 @@ def validate_execution_contract(value, expected):
     return value
 
 
-def run(arguments, env, log, *, timeout=PREPARATION_SECONDS, watch_cancel=True, require_complete=False):
+def run(arguments, env, log, *, timeout=PREPARATION_SECONDS, watch_cancel=True, require_complete=False, cancel_folder=None):
     """Bound host memory/log size while draining noisy dependency installers."""
-    if watch_cancel and cancelled(log.parent):
+    cancel_folder = cancel_folder or log.parent
+    if watch_cancel and cancelled(cancel_folder):
         raise PreparationCancelled('Dependency preparation was cancelled.')
     process = subprocess.Popen(arguments, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -174,7 +175,7 @@ def run(arguments, env, log, *, timeout=PREPARATION_SECONDS, watch_cancel=True, 
     deadline = time.monotonic() + timeout
     try:
         while selector.get_map():
-            if watch_cancel and cancelled(log.parent):
+            if watch_cancel and cancelled(cancel_folder):
                 raise PreparationCancelled('Dependency preparation was cancelled.')
             if time.monotonic() > deadline:
                 raise TimeoutError('Dependency preparation exceeded its time limit; inspect the owned build resource before retrying.')
@@ -214,15 +215,18 @@ def _environment(folder, config):
     return result
 
 
-def backend_identity(config, folder, env):
+def backend_identity(config, folder, env, *, timeout=30):
     log = folder / 'inspection.log'
     if config.get('backend', 'docker') == 'docker':
-        value = json.loads(run(['docker', '--host', config['dockerHost'], 'info', '--format', '{{json .}}'], env, log, timeout=30, watch_cancel=False, require_complete=True))
-        if not value.get('ID'):
+        value = json.loads(run(['docker', '--host', config['dockerHost'], 'info', '--format', '{{json .}}'], env, log, timeout=timeout, watch_cancel=False, require_complete=True))
+        if not isinstance(value, dict) or not isinstance(value.get('ID'), str) or not value['ID']:
             raise ValueError('The Docker daemon identity is unavailable.')
         return {'backend': 'docker', 'daemon': value['ID']}
     settings = config['incus']
-    value = json.loads(run(_incus_query(settings, '/1.0'), env, log, timeout=30, watch_cancel=False, require_complete=True))['environment']
+    reply = json.loads(run(_incus_query(settings, '/1.0'), env, log, timeout=timeout, watch_cancel=False, require_complete=True))
+    if not isinstance(reply, dict) or not isinstance(reply.get('environment'), dict):
+        raise ValueError('The Incus preparation daemon identity is unavailable.')
+    value = reply['environment']
     if value.get('project') != settings['project'] or (settings.get('daemonFingerprint') and value.get('certificate_fingerprint') != settings['daemonFingerprint']):
         raise ValueError('The Incus preparation daemon or project changed.')
     return {'backend': 'incus', 'daemon': value['certificate_fingerprint'], 'project': value['project']}
@@ -309,7 +313,7 @@ def preparation_slot(config, folder, profile_id, *, seconds=PREPARATION_SECONDS,
         os.close(descriptor)
 
 
-def prepare(config, root, snapshot, profile_id, request_id, *, resource_request=None, host_reservation=None, timing_request=None):
+def prepare(config, root, snapshot, profile_id, request_id, *, resource_request=None, host_reservation=None, timing_request=None, dependency_store=None):
     root = Path(root)
     folder = root / 'preparation'
     if any(path.is_symlink() for path in (folder, *folder.parents)):
@@ -362,9 +366,15 @@ def prepare(config, root, snapshot, profile_id, request_id, *, resource_request=
         with (nullcontext() if (host_reservation or {}).get('admitted') else preparation_slot(config, folder, profile_id, seconds=seconds, resource_request=resource_request)):
             # The monotonic deadline is process-local, never part of the saved
             # dependency recipe identity. Waiting and building share one budget.
-            build = {**expected, '_deadline': deadline}
-            image, inventory = (_docker(config, folder, build, env) if expected['backend'] == 'docker'
-                                else _incus(config, folder, build, env))
+            from . import test_dependency_layers as layers
+            with layers.borrow(dependency_store, config, folder, expected, root / 'source.tar', deadline) as borrowed:
+                build = {**expected, '_deadline': deadline}
+                if borrowed:
+                    build['_dependencyBase'] = borrowed['image']
+                    write(context / 'plan.json', {**expected, 'dependencyMode': 'finalize'})
+                    write(folder / 'dependency-reuse.json', borrowed)
+                image, inventory = (_docker(config, folder, build, env) if expected['backend'] == 'docker'
+                                    else _incus(config, folder, build, env))
         if cancelled(folder):
             raise PreparationCancelled('Dependency preparation was cancelled.')
         inventory_value = json.loads(inventory)
@@ -426,8 +436,9 @@ def status(root):
 def _docker(config, folder, expected, env):
     docker = ['docker', '--host', config['dockerHost']]
     context = folder / 'context'
-    image = expected['baseImage']
-    if not re.fullmatch(r'[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}', image):
+    image = expected.get('_dependencyBase', expected['baseImage'])
+    pattern = r'sha256:[a-f0-9]{64}' if '_dependencyBase' in expected else r'[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}'
+    if not re.fullmatch(pattern, image):
         raise ValueError('Preparation requires an immutable qualified base image.')
     name = expected['resourceName']
     budget = profiles.resources(expected['profileId'], expected.get('resourceRequest'))
@@ -439,7 +450,8 @@ def _docker(config, folder, expected, env):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError('The saved dependency preparation time limit was reached.')
-        return run([*docker, *args], env, log, timeout=min(remaining, timeout) if timeout is not None else remaining)
+        return run([*docker, *args], env, log, timeout=min(remaining, timeout) if timeout is not None else remaining,
+                   cancel_folder=expected.get('_cancelFolder'))
     # A separate ordinary container avoids unowned BuildKit caches. The only
     # network-enabled phase has no source mounts, runtime secrets or Docker socket.
     call('create', '--name', name, '--label', 'io.amplifier.preparation=' + name,
@@ -514,8 +526,9 @@ def _incus(config, folder, expected, env):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError('The saved dependency preparation time limit was reached.')
-        return run([*incus, *args], env, log, timeout=min(remaining, timeout) if timeout is not None else remaining)
-    call('init', 'local:' + settings['image'], name, '--no-profiles', '--storage', settings['preparationStorage'],
+        return run([*incus, *args], env, log, timeout=min(remaining, timeout) if timeout is not None else remaining,
+                   cancel_folder=expected.get('_cancelFolder'))
+    call('init', 'local:' + expected.get('_dependencyBase', settings['image']), name, '--no-profiles', '--storage', settings['preparationStorage'],
          '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=' + str(budget['memoryMiB']) + 'MiB',
          '-c', 'limits.cpu=' + str(budget['cpus']), '-c', 'limits.processes=' + str(budget['pids']), '-c', 'user.amplifier.preparation=' + name)
     call('config', 'device', 'add', name, 'prepare-network', 'nic', 'nictype=bridged', 'parent=' + settings['preparationNetwork'], 'name=eth0')
@@ -541,16 +554,24 @@ def _incus(config, folder, expected, env):
     return identity, inventory
 
 
-def cleanup(config, root):
+def cleanup(config, root, *, cleanup_guard=None):
     """Return bounded incomplete recovery for malformed or unavailable records."""
     try:
-        return _cleanup(config, root)
+        from .test_dependency_layers import cleanup_seed, release
+        seeded = cleanup_seed(Path(root) / 'preparation')
+        if not seeded.get('complete'):
+            return {'complete': False, 'status': 'unknown', 'dependencySeed': seeded,
+                    'reason': 'The source-free dependency builder is not confirmed settled; its reservation and recovery records remain held.'}
+        result = _cleanup(config, root, cleanup_guard=cleanup_guard)
+        if result.get('complete'):
+            release(Path(root) / 'preparation')
+        return result
     except Exception:  # noqa: BLE001 - preserve uncertain external-effect recovery at the host boundary.
         return {'complete': False, 'status': 'unknown',
                 'reason': 'The owned dependency preparation could not be inspected or removed; retained source and recovery records are unchanged.'}
 
 
-def _cleanup(config, root):
+def _cleanup(config, root, *, cleanup_guard=None):
     """Remove only this completed preparation's image, after test guest removal.
 
     Interrupted builds need explicit recovery; absence of a final receipt is not
@@ -583,6 +604,8 @@ def _cleanup(config, root):
                 # container. Tags are checked rather than deleting unrelated aliases.
                 if set(images[0].get('RepoTags') or []) != {name + ':latest'}:
                     raise ValueError('The prepared image has additional owners or aliases.')
+                if cleanup_guard:
+                    cleanup_guard()
                 run([*command, 'image', 'rm', name + ':latest'], env, log, timeout=120, watch_cancel=False)
         else:
             settings = config['incus']
@@ -593,6 +616,8 @@ def _cleanup(config, root):
                     raise ValueError('The prepared image ownership changed.')
                 if {item.get('name') for item in images[0].get('aliases', [])} != {name}:
                     raise ValueError('The prepared image has additional owners or aliases.')
+                if cleanup_guard:
+                    cleanup_guard()
                 run([*command, 'image', 'delete', identity], env, log, timeout=120, watch_cancel=False)
         result = {'complete': True, 'status': 'removed', 'image': identity,
                   'inventoryRetained': True, 'removedAt': time.time()}

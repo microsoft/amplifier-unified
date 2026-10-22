@@ -30,6 +30,7 @@ def definitions(schema, string):
     from .assignment_tasks import definitions as task_definitions
     return {
         **task_definitions(schema, string),
+        'assignment.brief': ('Read a compact paged current-member brief with blockers and latest direct-request outcome links. Passive and bounded; no history, worker admission or permission changes. Previews do not replace exact constraints or evidence.', schema({**target, 'after': string(2048), 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 16}}, ['sessionId'])),
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
         'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Adding an existing chat requires explicit adoption.', schema(target, ['sessionId'])),
         'assignment.adoption': ('Review adding one settled existing workspace chat to this manager’s assignment. Does not start work or change membership.', schema({**target, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId'])),
@@ -336,6 +337,9 @@ class Assignments:
         if action in {'assignment.adoption', 'assignment.adopt'}:
             from .assignment_adoption import dispatch
             return await dispatch(self, action, args, origin, command_id, caller)
+        if action == 'assignment.brief':
+            from .assignment_brief import dispatch
+            return dispatch(self, args, origin, caller)
         collaboration = self.service.collaboration
         source = collaboration.source({'sessionId': args['sessionId']}, origin, caller)
         if source['id'] != args['sessionId']:

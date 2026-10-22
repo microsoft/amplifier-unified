@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.26.0",
+      "title": "Keep managers focused and prepare isolated checks more efficiently",
+      "changes": [
+        "Give managers a compact view of assignment members, current tasks and request outcomes, with links to exact details. Reading the brief does not wake idle chats or replace their original instructions.",
+        "Let requesters acknowledge an exact reviewed result so the same completion notification does not wake them again. Changed results still receive their own notification.",
+        "Send queued checks to another approved test machine when an earlier target has no room, without double-counting an already admitted job or weakening the final capacity check.",
+        "Release a stopped test environment\u2019s stale resource reservation only after its exact native owner is confirmed stopped or absent. Uncertain operations keep their evidence and protection.",
+        "Reuse verified Python dependencies across compatible isolated checks while installing and checking each task\u2019s current source separately. Unsupported sources keep the existing preparation path, and unused dependency images follow Storage\u2019s cleanup policy.",
+        "Keep malformed dependency observations protected during cleanup, and align first-use browser checks with the current Canvas controls."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.25.1",
       "title": "Keep delegated work and saved history clear and reliable",
       "changes": [
