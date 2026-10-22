@@ -11,11 +11,21 @@ import time
 import uuid
 import weakref
 import os
+from dataclasses import dataclass
 from .token_usage import with_gross_tokens
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
 CURRENT_PROVIDER = contextvars.ContextVar("amplifier_web_public_provider", default=None)
+ADMITTED_CALL = contextvars.ContextVar("amplifier_web_admitted_provider_call", default=None)
+
+
+@dataclass(frozen=True)
+class AdmittedProviderCall:
+    id: str
+    root_id: str
+    session_id: str
+    guarded: bool
 
 
 def public_usage(value):
@@ -185,6 +195,8 @@ class ExecutionEvents:
         row = await self._begin_provider_call(sid, provider, request, label=label)
         token = CURRENT_CALL.set(row["id"])
         owner = CURRENT_PROVIDER.set(id(provider))
+        admitted = ADMITTED_CALL.set(AdmittedProviderCall(row['id'], self.root_id, sid,
+                                                        self.admission_guard is not None))
         self.publish(row)
         try:
             response = await invoke()
@@ -199,6 +211,7 @@ class ExecutionEvents:
         finally:
             CURRENT_CALL.reset(token)
             CURRENT_PROVIDER.reset(owner)
+            ADMITTED_CALL.reset(admitted)
 
     def instrument_provider(self, sid, provider):
         """Observe the public complete boundary; Core hook callbacks may use new tasks.
@@ -241,16 +254,19 @@ class ExecutionEvents:
             self.publish(row)
             iterator = None
             phase = "completed"
+            admission = AdmittedProviderCall(row['id'], self.root_id, sid, self.admission_guard is not None)
             async def scoped(awaitable):
                 # Do not leak context across a yield or retain a token that
                 # another task (timeout/close) would have to reset.
                 token = CURRENT_CALL.set(row["id"])
                 owner = CURRENT_PROVIDER.set(id(provider))
+                admitted = ADMITTED_CALL.set(admission)
                 try:
                     return await awaitable
                 finally:
                     CURRENT_CALL.reset(token)
                     CURRENT_PROVIDER.reset(owner)
+                    ADMITTED_CALL.reset(admitted)
             try:
                 iterator = original_stream(request, **kwargs).__aiter__()
                 while True:

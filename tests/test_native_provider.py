@@ -696,7 +696,8 @@ async def test_compaction_capacity_denial_prevents_sdk_and_success_records_usage
 
 
 @pytest.mark.asyncio
-async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(tmp_path, monkeypatch):
+@pytest.mark.parametrize('work_boundary', [False, True])
+async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(tmp_path, monkeypatch, work_boundary):
     pytest.importorskip('amplifier_module_provider_openai.native')
     from amplifier_module_provider_openai import OpenAIProvider
     from amplifier_module_loop_live.scope import LIVE_OWNER
@@ -734,8 +735,9 @@ async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(
     # exercising the real admitted-call join, not a visual-only legacy fixture.
     scope = {'rootSessionId': c.session_id, 'runtimeSessionId': c.session_id,
              'generationId': 'generation-1', 'inputIds': ['ordinary-input'], 'inputCoverage': 'complete'}
-    delivery = CoordinationDelivery(Delivery(), AsyncMock(), origin_scope=lambda: copy.deepcopy(scope))
-    c.caps['web.surface_delivery'] = delivery
+    delivery = CoordinationDelivery(Delivery(), AsyncMock(), origin_scope=lambda: copy.deepcopy(scope)) if work_boundary else Delivery()
+    if work_boundary:
+        c.caps['web.surface_delivery'] = delivery
     surface=SurfaceProvider(observed,delivery)
     selected.execution_adapter=lambda provider:surface
     def socket(response_id):

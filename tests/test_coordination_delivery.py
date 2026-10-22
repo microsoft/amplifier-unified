@@ -333,6 +333,36 @@ async def test_work_dto_shape_and_read_handles_are_required_below_byte_bound(cha
     assert 'HIDDEN_SOURCE_BODY' not in prepared.model_dump_json()
 
 
+@pytest.mark.parametrize('reason', ['input_projection_incomplete', 'input_coverage_overflow'])
+@pytest.mark.parametrize('fault', ['none', 'nested_body', 'wrong_count', 'claimed_complete'])
+def test_unavailable_input_projection_preserves_discovery_with_strict_counts(reason, fault):
+    from amplifier_web.coordination_delivery import _work_reference
+    header = unavailable_requirements('Invocation projection unavailable.')
+    coverage = {'complete': False, 'supportedInputIds': [], 'unsupportedInputs': [],
+                'reason': reason, 'deliveredInputCount': 17 if reason.endswith('overflow') else 3,
+                'projectedInputCount': 1}
+    if reason.endswith('overflow'):
+        header.update(inputIds=[], inputCount=17)
+    else:
+        header['inputIds'] = ['a', 'b', 'c']
+        coverage['missingInputIds'] = ['b', 'c']
+    header['coverage'] = coverage
+    work = {'available': True, 'discovery': empty_discovery(), 'required': header}
+    assert _work_reference(work) == work
+    if fault == 'nested_body':
+        coverage['projectedInputCount'] = {'body': 'PRIVATE'}
+    elif fault == 'wrong_count':
+        coverage['deliveredInputCount'] = 1
+    elif fault == 'claimed_complete':
+        coverage['complete'] = True
+    result = _work_reference(work)
+    assert result['available'] is (fault == 'none')
+    assert result['required']['effectAuthorized'] is False
+    if fault == 'none':
+        assert result['discovery'] == work['discovery']
+        assert result['required']['coverage'] == coverage
+
+
 @pytest.mark.parametrize('stream', [False, True])
 async def test_work_observation_is_measured_and_transported_once_per_request(stream):
     calls, measured, transported = [], [], []
@@ -606,6 +636,27 @@ async def test_capacity_await_cannot_bind_a_successor_input_to_old_fitted_bytes(
     assert transported == []
 
 
+async def test_untasked_input_change_during_admission_is_unproven_not_refused():
+    from amplifier_web.execution_events import ExecutionEvents
+    scope = {'rootSessionId': 'root', 'runtimeSessionId': 'root', 'generationId': 'g',
+             'inputIds': ['first'], 'inputCoverage': 'complete'}
+    delivery = CoordinationDelivery(Previous(), AsyncMock(return_value={}), origin_scope=lambda: scope)
+    telemetry = ExecutionEvents('root', lambda event: None)
+    async def admit(row):
+        scope['inputIds'].append('next')
+    telemetry.admission_guard = admit
+    sent = []
+    class Provider:
+        def get_info(self):
+            return SimpleNamespace(id='fixture', defaults={})
+        async def complete(self, value, **kwargs):
+            sent.append(value)
+            return {}
+    wrapped = SurfaceProvider(telemetry.instrument_provider('root', Provider()), delivery)
+    await wrapped.complete(request(tools=False))
+    assert len(sent) == 1 and next(iter(delivery.attempts.values()))['origin'] is None
+
+
 async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
     import asyncio
     from amplifier_module_provider_openai import OpenAIProvider
@@ -613,6 +664,10 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
     from amplifier_web.native_provider import install_native
     adapter, _, required = await installed_work_adapter(app)
     await adapter.fill(required)
+    if fault == 'overflow_scope':
+        adapter.scope['inputCoverage'] = 'overflow'
+    if fault == 'missing_scope':
+        adapter.delivery.begin_work.__self__.origin_scope = lambda: None
     c = adapter.coordinator
     providers = {'configured': OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'})}
     c.get = lambda key: {'tools': adapter.tools, 'providers': providers,
@@ -649,6 +704,16 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
         {'type': 'response.output_item.done', 'response_id': response_id, 'item': item},
         {'type': 'response.completed', 'response': {'id': 'response-one', 'output': [item], 'usage': {}}},
     ]
+    if fault == 'no_event_response':
+        events[1].pop('response_id')
+        events[1].update(output_index=0, sequence_number=2)
+    if fault == 'ambiguous_response':
+        events.insert(1, {'type': 'response.created', 'response': {'id': 'ambiguous'}})
+        events[2].pop('response_id')
+    if fault == 'retention':
+        # Expired owners must not permanently poison native transport.
+        owner = adapter.delivery.begin_work.__self__
+        host.response_origins = {f'old-{i}': (owner, {'id': f'expired-{i}'}) for i in range(128)}
     async def send(wire):
         sent.append(wire)
     native.socket = SimpleNamespace(send=send, recv=AsyncMock(side_effect=[json.dumps(e) for e in events]),
@@ -678,6 +743,10 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
             return {'tokens': 100}
         async def complete(self, value, **kwargs):
             assert value.model_dump_json() == measured[0]
+            if fault == 'live_retention':
+                from amplifier_web.coordination_delivery import WORK_ATTEMPT
+                owner, attempt = WORK_ATTEMPT.get()
+                host.response_origins = {f'live-{i}': (owner, attempt) for i in range(128)}
             native._request_messages = [m.model_dump() for m in value.messages]
             params = {'input': super(NativeResponsesProvider, native)._convert_messages(native._request_messages),
                       'tools': [{'type': 'function', 'name': 'delegate', 'parameters': {'type': 'object'}}]}
@@ -699,9 +768,10 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
     else:
         await wrapped.complete(original)
         assert len(sent) == len(proofs) == 1
-        assert proofs[0]['complete'] is (fault == 'none'), proofs
+        proven = fault in {'none', 'no_event_response', 'retention'}
+        assert proofs[0]['complete'] is proven, proofs
         assert proofs[0]['effectAuthorized'] is False
-        if fault == 'none':
+        if proven:
             import hashlib
             assert proofs[0]['outboundSha256'] == hashlib.sha256(sent[0].encode()).hexdigest()
             assert proofs[0]['responseId'] == 'response-one'

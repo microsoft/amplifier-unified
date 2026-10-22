@@ -116,11 +116,33 @@ def _valid_required(required):
         return False
     coverage = required.get('coverage')
     if (not isinstance(coverage, dict)
-            or set(coverage) - {'complete', 'supportedInputIds', 'unsupportedInputs', 'reason', 'detail'}
+            or set(coverage) - {'complete', 'supportedInputIds', 'unsupportedInputs', 'reason', 'detail',
+                               'missingInputIds', 'deliveredInputCount', 'projectedInputCount'}
             or type(coverage.get('complete')) is not bool
             or not _texts(coverage.get('supportedInputIds', []), 16)
             or any(not _text(coverage[k]) for k in ('reason', 'detail') if k in coverage)):
         return False
+    extra = {'missingInputIds', 'deliveredInputCount', 'projectedInputCount'} & set(coverage)
+    if extra:
+        delivered, projected = coverage.get('deliveredInputCount'), coverage.get('projectedInputCount')
+        if (coverage['complete'] or not _integer(delivered, 1, 10**9)
+                or not _integer(projected, 0, delivered)):
+            return False
+        if coverage.get('reason') == 'input_projection_incomplete':
+            missing = coverage.get('missingInputIds')
+            inputs = required.get('inputIds')
+            if (extra != {'missingInputIds', 'deliveredInputCount', 'projectedInputCount'}
+                    or not _texts(missing, 16) or not missing or len(set(missing)) != len(missing)
+                    or not _texts(inputs, 16) or delivered != len(inputs)
+                    or not set(missing) <= set(inputs) or len(missing) != delivered - projected):
+                return False
+        elif coverage.get('reason') == 'input_coverage_overflow':
+            if (extra != {'deliveredInputCount', 'projectedInputCount'}
+                    or delivered <= 16 or required.get('inputCount') != delivered
+                    or required.get('inputIds') != []):
+                return False
+        else:
+            return False
     unsupported = coverage.get('unsupportedInputs', [])
     if (not isinstance(unsupported, list) or len(unsupported) > 16
             or any(not isinstance(row, dict) or set(row) != {'inputId', 'reason'}
@@ -279,7 +301,10 @@ class CoordinationDelivery:
                 or not _texts(value.get('inputIds'), 16) or not value['inputIds']
                 or len(set(value['inputIds'])) != len(value['inputIds'])):
             return None
-        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+        # Membership is a set. Preserve every ID, with the same canonical order
+        # as the service producer rather than delivery chronology.
+        return json.dumps({**value, 'inputIds': sorted(value['inputIds'])},
+                          sort_keys=True, ensure_ascii=False)
 
     def admit_work(self, attempt, row, *, guarded):
         """Join only inside the actual post-capacity-admission provider call."""
@@ -287,7 +312,9 @@ class CoordinationDelivery:
             raise ValueError('Work origin expired before admission.')
         scope = self._scope()
         if attempt['scope'] != scope:
-            raise ValueError('Work origin changed during admission; refit before transport.')
+            if attempt['required']['status'] == 'available':
+                raise ValueError('Work origin changed during admission; refit before transport.')
+            return  # Untasked requests may continue, but cannot gain proof.
         if not guarded or not scope:
             return  # An observation-only provider wrapper is not an admission.
         fields = json.loads(scope)
@@ -312,6 +339,7 @@ class CoordinationDelivery:
             self.attempts.clear()
             self.calls.clear()
             self.seen_calls.clear()
+            self.executed_calls.clear()
             self.binding_overflow = False
             self.binding_generation = generation
         if streaming:
@@ -356,7 +384,7 @@ class CoordinationDelivery:
         return attempt
 
     async def prepare_native(self, attempt):
-        if not self.origin_current(attempt):
+        if attempt['origin'] is not None and not self.origin_current(attempt):
             raise ValueError('Native host origin is unavailable or changed.')
         required = attempt['required']
         if required['status'] == 'available':
@@ -365,12 +393,13 @@ class CoordinationDelivery:
             if (check.get('current') is not True or check.get('required') != required
                     or check.get('effectAuthorized') is not False):
                 raise ValueError('Native Work requirements changed.')
-        if not self.origin_current(attempt):
+        if attempt['origin'] is not None and not self.origin_current(attempt):
             raise ValueError('Native host origin changed while checking currentness.')
 
     def admit_native(self, attempt, envelope, *, send_id):
         """Observe the exact immutable send argument, not a trace or checkpoint."""
-        if (not self.origin_current(attempt) or envelope.attempt_id != attempt['id']
+        if (attempt['origin'] is not None and not self.origin_current(attempt)
+                or envelope.attempt_id != attempt['id']
                 or envelope.kind not in {'response.create', 'response.steer'}
                 or attempt['native_send'] is not None):
             return False
@@ -383,7 +412,7 @@ class CoordinationDelivery:
                      if isinstance(item, dict) and item.get('role') == 'user'
                      for block in item.get('content', []) if isinstance(block, dict)
                      and block.get('type') == 'input_text']
-            complete = bool(attempt['coverage'].get('complete') and
+            complete = bool(self.origin_current(attempt) and attempt['coverage'].get('complete') and
                             (attempt['required'].get('requirementCount') == 0
                              or attempt['plaintext'] and texts.count(attempt['plaintext']) == 1))
         attempt['native'] = True

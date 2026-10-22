@@ -209,16 +209,16 @@ class Worker:
             args = {**args, '_runtimeSessionId': coordinator.session_id,
                     '_inputBindings': [{'inputId': i, 'clientId': bound_context.get(i, {}).get('clientId')} for i in bound_ids],
                     '_inputClients': [bound_context.get(i, {}).get('clientId') for i in bound_ids]}
-            if operation == 'dispatch':
+            if operation in {'dispatch', 'work.effect.check'}:
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task())
                 check = coordinator.get_capability('web.work_effect_origin')
                 # The executing task, not model-supplied IDs, supplies this
                 # observation. The service independently owns applicability.
                 if dispatch and callable(check):
-                    args['_workOrigin'] = await check({
-                        **dispatch, 'tool_name': 'app_control',
-                        'tool_input': {'operation': operation,
-                                       'args': {k: v for k, v in args.items() if not k.startswith('_')}}})
+                    tool_name = args.get('toolName') if operation == 'work.effect.check' else 'app_control'
+                    tool_input = args.get('toolInput') if operation == 'work.effect.check' else {
+                        'operation': operation, 'args': {k: v for k, v in args.items() if not k.startswith('_')}}
+                    args['_workOrigin'] = await check({**dispatch, 'tool_name': tool_name, 'tool_input': tool_input})
             if operation.startswith('context.'):
                 context = self.context_bindings if assigned_context is None else assigned_context
                 bindings = [context[i] for i in ids if i in context]
@@ -266,6 +266,26 @@ class Worker:
         register = getattr(coordinator, "register_capability", None)
         if callable(register):
             register('web.app_access.bridge', bridge)
+            async def effect_check(name, arguments):
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task())
+                runtime, gate = self.runtime, self.activation_gate
+                generation = getattr(runtime, 'generation', None)
+                epoch, before = self.stop_revision, copy.deepcopy(arguments)
+                if (not dispatch or not gate or not gate.current_valid or not generation
+                        or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled):
+                    return {'allowed': False, 'effectAuthorized': False}
+                identity = dispatch.get('tool_call_id')
+                result = await bridge('work.effect.check', {
+                    'toolName': name, 'toolInput': before, 'toolCallId': identity})
+                if (self.runtime is not runtime or runtime.generation is not generation
+                        or not gate.current_valid or self.stop_revision != epoch
+                        or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled
+                        or getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task()) is not dispatch
+                        or dispatch.get('tool_call_id') != identity
+                        or json.dumps(arguments, sort_keys=True) != json.dumps(before, sort_keys=True)):
+                    return {'allowed': False, 'effectAuthorized': False}
+                return result
+            register('web.work_effect_check', effect_check)
             async def install_child_access(child_coordinator):
                 from amplifier_web.app_guidance import install_app_access
                 await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,

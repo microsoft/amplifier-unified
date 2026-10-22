@@ -127,6 +127,33 @@ async def install_app_access(coordinator, bridge):
     # applicability and permissions; absent producer wiring is not a grant.
     coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)
     coordinator.register_capability('web.work_effect_origin', delivery.claim_effect_origin)
+    def guard_tools():
+        check = coordinator.get_capability('web.work_effect_check')
+        if not callable(check):
+            return
+        class WorkCheckedTool:
+            def __init__(self, original, name):
+                self.original, self.mounted_name = original, name
+                self._work_check = check
+            def __getattr__(self, name):
+                return getattr(self.original, name)
+            async def execute(self, arguments):
+                # The engine has already awaited hooks/approval and installed
+                # its real per-task call ID. Nested dispatch also holds its
+                # original execution lock and validates the live lease first.
+                result = await check(self.mounted_name, arguments)
+                if not isinstance(result, dict) or result.get('allowed') is not True:
+                    return ToolResult(success=False, error={
+                        'code': 'work_precondition_unavailable',
+                        'message': 'Current Work requirements or host execution scope are unavailable.'})
+                return await self.original.execute(arguments)
+        tools = coordinator.get('tools') or {}
+        for name, tool in list(tools.items()):
+            # AppControl carries its witness into service-owned synchronous
+            # action admission. Avoid consuming that execution twice.
+            if name != 'app_control' and getattr(tool, '_work_check', None) is not check:
+                tools[name] = WorkCheckedTool(tool, name)
+    coordinator.register_capability('web.work_guard_tools', guard_tools)
     from .surface_delivery import SurfaceProvider
     from .request_recovery import RecoveringProvider, install as install_recovery
     install_recovery(coordinator)
@@ -141,6 +168,7 @@ async def install_app_access(coordinator, bridge):
     transformed = []
     def transform(provider):
         delivery.install_dispatch(coordinator)
+        guard_tools()
         if isinstance(provider, SurfaceProvider) and provider.delivery is delivery:
             return provider
         observe = coordinator.get_capability('web.provider_observe')
@@ -221,6 +249,7 @@ async def install_app_access(coordinator, bridge):
 
     await coordinator.mount('tools', AppControl(), name='app_control')
     delivery.install_dispatch(coordinator)
+    guard_tools()
     coordinator.hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
     coordinator.hooks.register('provider:request', guidance, name='web-canvas-guidance')
     coordinator.hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
