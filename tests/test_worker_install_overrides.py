@@ -172,8 +172,11 @@ async def test_failed_replacement_start_restores_exact_saved_files(policy_worker
         write_private(path, 'original bytes '+name)
     before = {name: path.read_bytes() for name, path in journal.paths.items()}
     marker = object()
-    async def begin(home, workspace, received):
+    admission = AsyncMock(return_value={})
+    monkeypatch.setattr(state.worker, 'bridge', admission)
+    async def begin(home, workspace, received, *, admit):
         assert state.worker.shared_handle is not None
+        await admit()
         journal.begin()
         for path in journal.paths.values():
             write_private(path, '{}')
@@ -187,6 +190,7 @@ async def test_failed_replacement_start_restores_exact_saved_files(policy_worker
         task.cancel()
     with pytest.raises(asyncio.CancelledError if cancel else RuntimeError):
         await task
+    admission.assert_awaited_once_with('configuration.nextMessage.admit', {})
     assert state.options['resolved_root'] is marker
     assert {name: path.read_bytes() for name, path in journal.paths.items()} == before
     assert not journal.path.exists()

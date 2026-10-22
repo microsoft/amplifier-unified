@@ -40,6 +40,26 @@ test('browse destination differs from retained selected chat; tabs replace the c
  assert.deepEqual(destinationCommand(history.snapshot().entries[1]),['view.update',{patch:{workSurface:'workspace',workWorkspaceId:'project',workWorkspaceTab:'files',navExpanded:false}}]);
 });
 
+test('Shared Work workspace visit survives traversal and reload without private state',()=>{
+ const {history,store}=harness();
+ history.observe(frame('a'));
+ history.observe(frame('a',2,{surface:'workspace',tab:'work'}));
+ history.observe(frame('b',3));
+ const entry=history.begin(history.snapshot().backKey);
+ assert.equal(entry.tab,'work');
+ assert.deepEqual(destinationCommand(entry),['view.update',{patch:{workSurface:'workspace',workWorkspaceId:'project',workWorkspaceTab:'work',navExpanded:false}}]);
+ history.observe(frame('b',4,{surface:'workspace',tab:'work'}));
+ assert.equal(history.finish(receipt(4)),true);
+ const restored=harness(store).history;
+ restored.observe(frame('b',5,{surface:'workspace',tab:'work'}),{baseline:true});
+ assert.deepEqual(restored.snapshot().entries,history.snapshot().entries);
+ assert.equal(restored.snapshot().entries[restored.snapshot().cursor].tab,'work');
+ const next=restored.begin(restored.snapshot().forwardKey);
+ assert.equal(next.kind,'chat');assert.equal(next.id,'b');
+ restored.observe(frame('b',6));assert.equal(restored.finish(receipt(6)),true);
+ assert.doesNotMatch(store.getItem(STORAGE),/PRIVATE|messages|canvas|draft|content/);
+});
+
 test('Home is one reloadable destination; filters and reading state do not become visits',()=>{
  const {history,store}=harness();history.observe(frame('a'));
  const home=frame('a',2,{surface:'home'});history.observe(home);

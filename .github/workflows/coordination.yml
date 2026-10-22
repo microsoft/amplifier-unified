@@ -94,6 +94,50 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --group dev
+      - name: Resolve the declared live-runtime source
+        id: runtime-dependency
+        run: |
+          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.runtime-dependency.outputs.revision }}
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - name: Prepare the declared runtime for mounted coordination tests
+        run: >-
+          uv pip install --python .venv/bin/python
+          .ci/loop-live
+          'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main'
+      - name: Verify and retain coordination runtime readiness
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json, subprocess, sys, tomllib
+          from importlib import import_module
+          from importlib.metadata import version
+          from pathlib import Path
+          from amplifier_module_loop_live import BundleLiveOrchestrator
+          from amplifier_module_context_simple import mount
+          assert callable(BundleLiveOrchestrator) and callable(mount)
+          declared = tomllib.loads(Path('amplifier_web/runtime_deps/pyproject.toml').read_text())
+          git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
+          record = {
+              'candidate': git('rev-parse', 'HEAD'),
+              'declaredLoopRevision': declared['tool']['uv']['sources']['amplifier-module-loop-live']['rev'],
+              'selectedLoopRevision': git('-C', '.ci/loop-live', 'rev-parse', 'HEAD'),
+              'python': sys.version.split()[0],
+              'versions': {name: version(name) for name in (
+                  'amplifier-core', 'amplifier-module-loop-live',
+                  'amplifier-module-loop-streaming', 'amplifier-module-context-simple')},
+              'imports': {name: bool(import_module(name)) for name in (
+                  'amplifier_module_loop_live', 'amplifier_module_context_simple')},
+          }
+          output = Path('output/coordination-runtime-readiness.json')
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(record, indent=2) + '\n')
+          print(json.dumps(record))
+          PY
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
@@ -151,5 +195,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-environments-browser-evidence
-          path: ${{ runner.temp }}/test-environments
+          path: |
+            ${{ runner.temp }}/test-environments
+            output/coordination-runtime-readiness.json
           if-no-files-found: warn

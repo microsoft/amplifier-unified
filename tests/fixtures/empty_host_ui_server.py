@@ -9,7 +9,8 @@ import signal
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+installed_mode = os.environ.get('AMPLIFIER_TEST_INSTALLED') == '1'
+sys.path.insert(0, str(Path(__file__).resolve().parent if installed_mode else Path(__file__).resolve().parents[2]))
 
 
 class Runtime:
@@ -65,6 +66,24 @@ async def main(home):
     seed_connection(home / 'shared-settings')
     from aiohttp import web
     from amplifier_web.server import create_app
+    installed_identity = None
+    if installed_mode:
+        import importlib.metadata
+        import amplifier_web.server
+        expected = json.loads(Path(os.environ['AMPLIFIER_TEST_INSTALLED_IDENTITY']).read_text())
+        prefix = Path(sys.prefix).resolve()
+        package = Path(amplifier_web.server.__file__).resolve().parent
+        assert package.is_relative_to(prefix), (package, prefix)
+        assert not package.is_relative_to('/workspace')
+        assert not any(Path(p).resolve().is_relative_to('/workspace') for p in sys.path if p)
+        dist = importlib.metadata.distribution('amplifier-unified')
+        assert Path(dist.locate_file('')).resolve().is_relative_to(prefix)
+        for name, digest in expected['files'].items():
+            source = Path(dist.locate_file(name)).resolve()
+            assert source.is_relative_to(prefix) and hashlib.sha256(source.read_bytes()).hexdigest() == digest, name
+        installed_identity = {'verified': True, 'wheelSha256': expected['wheelSha256'],
+            'fileCount': len(expected['files']), 'prefix': str(prefix),
+            'server': str(package / 'server.py'), 'static': expected['static']}
     import amplifier_web
     package_root = Path(amplifier_web.__file__).resolve().parent
     expected_package_root = os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT')
@@ -75,7 +94,7 @@ async def main(home):
                        for p in (package_root / 'static').rglob('*') if p.is_file()} if expected_package_root else None
 
     workspace = home / "workspace"
-    workspace.mkdir()
+    workspace.mkdir(exist_ok=True)
     stored_copy_path = None
     if '--canvas-versions' in sys.argv:
         stored_copy_path = workspace / 'stored-copy.html'
@@ -107,9 +126,19 @@ async def main(home):
     runtime.service = app['service']
     if '--first-use' not in sys.argv:
         await runtime.service.dispatch('view.update', {'patch': {'setupJourney': 'done'}})
+    if '--shared-work-seed-only' in sys.argv:
+        from shared_work_scenario import install
+        assert '--shared-work' in sys.argv and not (home / 'shared-work-manifest.json').exists()
+        try:
+            await install(app, runtime, manifest_path=home / 'shared-work-manifest.json')
+        finally:
+            await runtime.service.close()
+        print(json.dumps({'sharedWorkSeed': {'complete': True, 'pid': os.getpid()}}), flush=True)
+        return
 
     async def inspect(request):
-        return web.json_response({"foundationCachePresent": (home / "app/foundation").exists(),
+        return web.json_response({"installedIdentity": installed_identity,
+            "foundationCachePresent": (home / "app/foundation").exists(),
             "installedPackageVerified": installed_package_verified, "staticSha256": static_identity,
             "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
             "registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
@@ -175,6 +204,9 @@ async def main(home):
 
         app.router.add_post('/fixture/activity', activity)
         app.router.add_post('/fixture/damage', damage)
+    if '--shared-work' in sys.argv:
+        from shared_work_scenario import install
+        await install(app, runtime, manifest_path=home / 'shared-work-manifest.json')
     release_query_gate = lambda: None
     if '--scoped-query-control' in sys.argv:
         # Only this synthetic browser opts in. Target its visible Chats search,
@@ -315,11 +347,20 @@ async def main(home):
         try:
             release_query_gate()
             await runner.cleanup()
+            if '--shared-work' in sys.argv:
+                print(json.dumps({'sharedWorkCleanup': {'complete': True, 'at': time.monotonic()}}), flush=True)
         finally:
             for signum in shutdown_signals:
                 loop.remove_signal_handler(signum)
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory(prefix="amplifier-empty-host-") as directory:
-        asyncio.run(main(Path(directory)))
+    retained_home = os.environ.get('AMPLIFIER_TEST_SHARED_WORK_HOME')
+    if retained_home:
+        assert '--shared-work' in sys.argv
+        directory = Path(retained_home).resolve(strict=True)
+        assert directory.is_dir()
+        asyncio.run(main(directory))
+    else:
+        with tempfile.TemporaryDirectory(prefix="amplifier-empty-host-") as directory:
+            asyncio.run(main(Path(directory)))

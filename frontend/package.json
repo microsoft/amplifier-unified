@@ -113,7 +113,8 @@
     "test:adaptive-work-browser": "node tests/adaptive-work-browser.mjs",
     "test:shared-landing-browser": "node tests/shared-landing-browser.mjs",
     "test:home-sidebar-browser": "node tests/home-sidebar-browser.mjs",
-    "test:focus-navigation-browser": "node tests/focus-navigation-browser.mjs"
+    "test:focus-navigation-browser": "node tests/focus-navigation-browser.mjs",
+    "test:shared-work-browser": "node tests/shared-work-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.3.1",

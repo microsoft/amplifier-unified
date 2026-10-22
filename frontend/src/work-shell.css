@@ -95,7 +95,7 @@
 #amp-one.a-approachable-shell .a-work-browser .a-workspace-select{min-height:58px;padding:10px}
 #amp-one.a-approachable-shell .a-work-browser .a-workspace-modes{justify-content:flex-end;font-size:12px}
 #amp-one.a-approachable-shell .a-work-tabs{display:flex;gap:16px;border-bottom:1px solid var(--a-line);margin:18px 0}
-#amp-one.a-approachable-shell .a-work-tabs button{padding:10px 3px;font-size:13px;background:none;border:0;color:var(--a-muted);border-bottom:2px solid transparent}
+#amp-one.a-approachable-shell .a-work-tabs button{padding:10px 3px;min-width:44px;min-height:44px;font-size:13px;background:none;border:0;color:var(--a-muted);border-bottom:2px solid transparent}
 #amp-one.a-approachable-shell .a-work-tabs button[aria-pressed=true]{color:var(--a-accent);border-bottom-color:var(--a-accent)}
 #amp-one.a-approachable-shell .a-work-details{max-width:600px;font-size:14px;line-height:1.7}
 #amp-one.a-approachable-shell .a-work-file-path{display:flex;align-items:center;gap:8px;color:var(--a-muted);font-size:12px;overflow-wrap:anywhere;margin:10px 0}

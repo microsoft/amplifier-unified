@@ -202,6 +202,29 @@ def exception_details(error):
     return failure_details(error)
 
 
+def terminal_exception_failure(session, value):
+    """Enrich only an exact retained terminal; never replace or redate a cause."""
+    from .support_diagnostics import terminal_exception_capture
+    capture = terminal_exception_capture(value)
+    existing = session.get('failure')
+    if (not capture or not isinstance(existing, dict) or existing.get('exceptionChain')
+            or session.get('status') in {'stopped', 'stopping'}):
+        return None
+    latest = next((event for event in reversed(session.get('generations', []))
+                   if event.get('sessionId', session['id']) == session['id']
+                   and event.get('rootSessionId', session['id']) == session['id']), {})
+    if (latest.get('event') != 'generation.failed'
+            or latest.get('generation_id') != capture['generationId']
+            or existing.get('generationId') != capture['generationId']
+            or latest.get('error_type') != capture['errorType']
+            or existing.get('errorType') != capture['errorType']
+            or existing.get('category') != 'unknown' or existing.get('stage') != 'manager_turn'
+            or set(latest.get('input_ids') or []) != set(capture['inputIds'])
+            or set(existing.get('inputIds') or []) != set(capture['inputIds'])):
+        return None
+    return {**existing, 'exceptionChain': capture['exceptionChain']}
+
+
 def inspection_stamp(session):
     """Match the diagnostic snapshot without comparing conversation content."""
     return (tuple(session.get(key) for key in (

@@ -58,6 +58,7 @@ def outcome_sender(request):
 
 def definitions(schema, string):
     from .result_artifacts import REFERENCE_HELP
+    from .workspace_work_invocation import references_schema
     sid = {"sessionId": string(200)}
     references = {"type": "array", "maxItems": 16, "items": string(2000)}
     message = {**sid, "senderSessionId": string(200), "grantId": string(200),
@@ -94,6 +95,7 @@ def definitions(schema, string):
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
             "returnNotification": {"type": "boolean", "default": True},
+            "workReferences": references_schema(schema, string),
         }, ["title", "text"])),
         "coordination.read": ("Read a bounded window from one existing native conversation without selecting or warming it.", schema({
             **sid, "scope": {"enum": ["workspace", "all"]}, "messageId": string(200), "offset": {"type": "integer", "minimum": 0},
@@ -515,7 +517,7 @@ class Collaboration:
                 and self.service._session(sid, hydrate=False)['workspace'] != reader['workspace']):
             self.error("This result is outside the caller's request and workspace scope.")
 
-    def resolve_message(self, session, identity):
+    def resolve_message(self, session, identity, *, strict_source=False):
         def correlated(row):
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
                            if item["messageId"] == identity and item["nativeIndex"] == row.get("nativeIndex")), None)
@@ -540,6 +542,15 @@ class Collaboration:
             if len(candidates) != 1:
                 self.error("The exact saved message cannot be reconciled unambiguously.", 409)
             retained = candidates[0]
+            if strict_source and (
+                    native.get("nativeInputId") and retained.get("inputId")
+                    and native["nativeInputId"] != retained["inputId"]
+                    or retained.get("text") != native.get("text")):
+                self.error("The retained source conflicts with its exact native input.", 409)
+            if (strict_source and native.get("role") == "user"
+                    and not (native.get("nativeInputId") and retained.get("inputId") == native["nativeInputId"])):
+                # An index alone is not host input provenance for accepted Work.
+                retained = {**retained, "inputOrigin": "unknown"}
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
                            if item["messageId"] == identity and item["nativeIndex"] == native.get("nativeIndex")), None)
             if (retained.get("role") != native.get("role")
@@ -662,6 +673,8 @@ class Collaboration:
         if (source['workspace'] != receipt['workspace']
                 or (source.get('workingDirectory') or source['workspace']) != receipt['result']['workingDirectory']):
             return 'The requester execution placement changed.'
+        if receipt.get('workReferences'):
+            return self.service.work_invocation.plan_reason(receipt)
 
     def can_steer(self, target):
         active = target.get("collaborationGeneration") or {}
@@ -1426,11 +1439,15 @@ class Collaboration:
             prepared_artifacts = await prepare(self, source, args, origin, identity, digest)
             if prepared_artifacts.get('duplicate'):
                 return prepared_artifacts['duplicate']
-        async with self.service.lock, AsyncExitStack() as recovery_boundary:
+        async with (self.service.lock,
+                    self.service.work_invocation.initial_transaction(action, identity),
+                    AsyncExitStack() as recovery_boundary):
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
                 return duplicate
+            from .workspace_work_effects import guard
+            guard(self.service, action, args, origin, source['id'], final=True)
             if args.get("grantId"):
                 self.error("Legacy grant-bearing writes are unsupported. Read the original receipt; do not replay it as new work.", 410)
             creation = CREATION.get()
@@ -1501,6 +1518,8 @@ class Collaboration:
             elif action == "coordination.create":
                 if source.get('fileAccessPending'):
                     self.error('Finish applying the source chat’s file settings before creating another task.', 409)
+                if args.get('workReferences'):
+                    self.service.work_invocation.validate_references(source, args['workReferences'])
                 # Creation is handled outside the service lock below.
                 self.require_continuation()
                 receipt = None
@@ -1583,6 +1602,8 @@ class Collaboration:
                 if creation and identity == creation[4]['requestId'] + ':brief':
                     operation = self.receipt(creation[4]['requestId'])
                     if operation.get('creationVersion') == 1:
+                        if operation.get('workReferences'):
+                            self.service.work_invocation.seal(operation, receipt, source, target)
                         receipt['creationOperationId'] = operation['requestId']
                         wait = operation.get('subscription')
                         if wait:
@@ -1627,6 +1648,8 @@ class Collaboration:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 return duplicate
+            if args.get('workReferences'):
+                self.service.work_invocation.validate_references(source, args['workReferences'])
             from .test_execution_settings import concurrency
             maximum = concurrency(self.service)['maxTaskChatsPerSource']
             if maximum:
@@ -1683,6 +1706,8 @@ class Collaboration:
                 'sourceTaskId': task.get('id'), 'sourceTaskRevision': task.get('revision'),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
             receipt['assignmentId'] = assignment_id
+            if args.get('workReferences'):
+                receipt['workReferences'] = copy.deepcopy(args['workReferences'])
             if notify:
                 receipt['subscription'] = self.saved_wait(source, identity, status='reserved')
             self.service.db.execute('INSERT INTO collaboration_preparations(request_id,configuration) VALUES(?,?)',

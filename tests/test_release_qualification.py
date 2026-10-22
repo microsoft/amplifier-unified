@@ -408,7 +408,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'remote-test-origins']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
@@ -437,6 +437,25 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert '--junitxml=output/python-checks/junit.xml' in focused['run']
     assert 'tee output/python-checks/pytest.log' in focused['run']
     assert '${{' not in focused['run'] and '${{' not in steps[1]['run']
+    receipts = next(step for step in steps if step.get('name') == 'Prepare pinned native receipt dependencies')
+    installed = next(step for step in steps if step.get('name') == 'Verify installed native receipt boundary outside checkout')
+    assert receipts['if'] == installed['if'] == "${{ env.CHECK_SUITE == 'shared-work-native' }}"
+    assert '2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' in receipts['run']
+    assert 'NativeSendAdmission, NativeOutboundEnvelope' in receipts['run']
+    assert 'unset PYTHONPATH' in installed['run']
+    assert '--no-deps -r output/python-checks/installed-requirements.txt' in installed['run']
+    assert 'uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"' in installed['run']
+    assert 'assert not actual.is_relative_to(source)' in installed['run']
+    assert "('failure', 'error', 'skipped')" in installed['run']
+    assert installed['run'].index('uv pip check') < installed['run'].index(' -m pytest')
+    assert "result.returncode == 1 and len(cases) == 1" in installed['run']
+    assert 'negative-control.json' in installed['run']
+    assert 'origin-negative.json' in installed['run']
+    assert 'test_effect_origin_joins_actual_admission_and_full_input_scope[new_input]' in installed['run']
+    manager = next(step for step in steps if step.get('name') == 'Build the exact manager-boundary candidate wheel')
+    assert manager['if'] == "${{ env.CHECK_SUITE == 'manager-exception-boundary' }}"
+    assert 'assert path.is_relative_to(root)' in manager['run']
+    assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [
@@ -446,7 +465,10 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
     ('patch-placement-recovery', ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py']),
     ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
-    ('managed-removal-recovery', ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
+    ('managed-removal-recovery', ['tests/test_prepared_execution_contract.py', 'tests/test_environment_preparation.py', 'tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
+    ('shared-work-continuity', ['tests/test_task_continuity.py', 'tests/test_coordination_delivery.py', 'tests/test_work_invocation.py', 'tests/test_schedules.py', 'tests/test_collaboration_input.py', 'tests/test_coordination_revisions.py', 'tests/test_release_qualification.py', 'tests/test_voice_visual.py', 'tests/test_surface_context.py', 'tests/test_output_image_pairs.py', 'tests/test_memory_personalization.py', 'tests/test_capacity.py']),
+    ('shared-work-native', ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py']),
+    ('manager-exception-boundary', ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
 def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):
@@ -779,3 +801,33 @@ def test_recipe_probe_installs_its_declared_module_before_freezing_runtime(workf
     assert commands.index('uv sync --project') < commands.index('WARM_RECIPES_PATH=')
     # Dependencies stay owned by the checked-out module, not a stale hand list.
     assert 'tree-sitter' not in commands
+
+
+def test_coordination_prepares_real_loop_before_first_contract_suite():
+    workflow = yaml.load((ROOT / '.github/workflows/coordination.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert set(workflow['on']) == {'pull_request'}
+    steps = workflow['jobs']['contracts']['steps']
+    resolve = next(i for i, s in enumerate(steps) if s.get('id') == 'runtime-dependency')
+    checkout = next(i for i, s in enumerate(steps)
+                    if s.get('with', {}).get('repository') == 'microsoft/amplifier-module-loop-live')
+    install = next(i for i, s in enumerate(steps) if s.get('name') == 'Prepare the declared runtime for mounted coordination tests')
+    verify = next(i for i, s in enumerate(steps) if s.get('name') == 'Verify and retain coordination runtime readiness')
+    contracts = next(i for i, s in enumerate(steps) if 'tests/test_coordination_delivery.py' in s.get('run', ''))
+    assert resolve < checkout < install < verify < contracts
+    assert 'runtime_deps/pyproject.toml' in steps[resolve]['run']
+    assert steps[checkout]['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live',
+        'ref': '${{ steps.runtime-dependency.outputs.revision }}',
+        'path': '.ci/loop-live', 'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}',
+        'persist-credentials': 'false'}
+    assert '--python .venv/bin/python' in steps[install]['run'] and '.ci/loop-live' in steps[install]['run']
+    assert 'amplifier-module-context-simple' in steps[install]['run']
+    assert 'BundleLiveOrchestrator' in steps[verify]['run'] and 'selectedLoopRevision' in steps[verify]['run']
+    assert 'importorskip' not in steps[verify]['run']
+    assert not any('continue-on-error' in s for s in steps)
+    assert any(s.get('name') == 'Verify mounted child identity and file boundaries' for s in steps[contracts + 1:])
+    assert any(s.get('run') == 'node tests/coordination-browser.mjs' for s in steps)
+    assert steps[-1]['if'] == 'always()'
+    assert '${{ runner.temp }}/test-environments' in steps[-1]['with']['path']
+    assert 'output/coordination-runtime-readiness.json' in steps[-1]['with']['path']

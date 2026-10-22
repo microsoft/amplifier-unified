@@ -279,6 +279,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'tool-previews': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/tool-previews'},
         'shared-landing': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-landing'},
         'focus-navigation': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/focus-navigation'},
+        'shared-work': {'AMPLIFIER_TEST_COLD_TASK': '1', 'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/shared-work'},
         'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
         'compact-composer': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/compact-composer'},
         'peer-preview': {'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-preview'},
@@ -301,7 +302,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 117
+    assert len(original) == 65 and len(rows) == 118
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -516,6 +517,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     attachment = 'tests/attachment-consumption-browser.mjs'
     assert attachment in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', attachment] for row in plan['scenarios']) == 1
+    # Shared Work is also additive: keep the pre-existing union and its single
+    # source owner, rather than counting it as an original baseline script.
+    shared_work = 'tests/shared-work-browser.mjs'
+    assert shared_work in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', shared_work] for row in plan['scenarios']) == 1
     # Destination history adds one source-only journey without replacing an owner.
     history = 'tests/destination-history-browser.mjs'
     assert history in extended_scripts - readiness_scripts
@@ -554,8 +560,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum('node tests/composer-options-browser.mjs' in line for _, line in commands) == 1
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant} - feature_additions) == 146
-    assert len(readiness_scripts | extended_scripts) == 160
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions) == 146
+    assert len((readiness_scripts | extended_scripts) - {shared_work}) == 160
+    assert len(readiness_scripts | extended_scripts) == 161
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
@@ -588,7 +595,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     coordination = yaml.load((workflows / 'coordination.yml').read_text(), Loader=yaml.BaseLoader)
     assert 'frontend/' + environment in coordination['on']['pull_request']['paths']
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
-               and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
+               and step.get('with', {}).get('path', '').splitlines() == [
+                   '${{ runner.temp }}/test-environments',
+                   'output/coordination-runtime-readiness.json']
                for step in coordination['jobs']['contracts']['steps'])
 
 
