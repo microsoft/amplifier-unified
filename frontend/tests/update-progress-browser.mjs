@@ -1,5 +1,6 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {resolve} from 'node:path';
 import {writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ fixture.stderr.on('data',data=>log+=data);
 try{
  const headers={Authorization:'Bearer fixture-browser-control-token'};
  const boot=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error(log||'Fixture timeout')),60000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+log))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}})});
- assert.equal(boot.package,fileURLToPath(new URL('../../amplifier_web/__init__.py',import.meta.url)));
+ assert.equal(boot.package,process.env.AMPLIFIER_TEST_PACKAGE_ROOT?resolve(process.env.AMPLIFIER_TEST_PACKAGE_ROOT,'__init__.py'):fileURLToPath(new URL('../../amplifier_web/__init__.py',import.meta.url)));
  const base=boot.url;
  browser=await chromium.launch({channel:'chromium',headless:true,args:process.env.UNIFIED_BROWSER_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers});
