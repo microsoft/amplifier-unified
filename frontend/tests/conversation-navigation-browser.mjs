@@ -138,17 +138,32 @@ try{
  await pane.evaluate(el=>{el.scrollTop=(el.scrollHeight-el.clientHeight)/2;el.dispatchEvent(new Event('scroll'))});
  const latest=page.getByRole('button',{name:'Jump to latest messages'});await expect(latest).toBeVisible();
  // Published compact composer puts both controls in one Chat options dialog.
- // Reopen for each control while retaining the exact jump-overlay hit test.
+ // Reopen for each control. The compact layout need not overlap Latest;
+ // when it does, keep the original intersection hit test. Always hit-test
+ // Close as well, so separation cannot turn this into a vacuous visibility check.
  for(const label of ['Conversation model','Registered root bundles']){
   await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click({timeout:8000});
   const popup=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(popup).toBeVisible();
   await expect(popup.getByRole('combobox',{name:label,exact:true})).toBeVisible();
-  await expect.poll(()=>popup.evaluate((el,jump)=>{
+  const unobscured=()=>popup.evaluate((el,jump)=>{
    const a=el.getBoundingClientRect(),b=document.querySelector(jump).getBoundingClientRect();
    const left=Math.max(a.left,b.left),right=Math.min(a.right,b.right),top=Math.max(a.top,b.top),bottom=Math.min(a.bottom,b.bottom);
-   if(right<=left||bottom<=top)return 'no overlap';
-   return el.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));
-  },'.a-chat-jump button')).toBe(true);
+   if(right>left&&bottom>top&&!el.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2)))return false;
+   const close=el.querySelector('[aria-label="Close chat options"]'),rect=close.getBoundingClientRect();
+   return close.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2));
+  },'.a-chat-jump button');
+  await expect.poll(unobscured).toBe(true);
+  // Deliberate detector control, not product evidence: an intercepting layer
+  // must fail the same predicate even when Latest itself does not overlap.
+  await popup.evaluate(el=>{
+   const r=el.querySelector('[aria-label="Close chat options"]').getBoundingClientRect(),block=document.createElement('div');
+   block.id='navigation-obscuration-control';
+   Object.assign(block.style,{position:'fixed',left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px',zIndex:'2147483647',pointerEvents:'auto'});
+   document.body.append(block);
+  });
+  try{assert.equal(await unobscured(),false,'An obscured control must fail the hit test')}
+  finally{await page.evaluate(()=>document.getElementById('navigation-obscuration-control')?.remove())}
+  await expect.poll(unobscured).toBe(true);
   await popup.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
  await page.screenshot({path:'/tmp/conversation-navigation-narrow.png'});
