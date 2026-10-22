@@ -250,7 +250,9 @@ function App(){
     const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
     if(historyVisit)destinationHistory.current.finish(result);
     if(result.state)acceptState(result.state);
-    else await awaitState(result);
+    // Exact annotation receipts settle locally; all navigation still waits for
+    // its authoritative frame and the history owner's exact confirmation.
+    else if(action!=='message.reaction')await awaitState(result);
     if(historyVisit){
      // awaitState's recovery may return without the receipt's revision. The
      // history model requires its own exact route/host/revision evidence.
