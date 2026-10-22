@@ -356,6 +356,10 @@ try{
   const node=c.locator('.a-detail-text '+selector);
   await node.scrollIntoViewIfNeeded();
   await node.evaluate(node=>{
+   // A real selection gesture in the transcript leaves the editor's focus.
+   // Merely installing a Range while ProseMirror still owns focus lets its next
+   // transaction replace the browser selection, an impossible mouse fixture.
+   document.activeElement?.blur();
    const range=document.createRange();range.selectNodeContents(node);
    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'));
   });
@@ -392,7 +396,17 @@ try{
  const selectionHeld=new Promise(resolve=>selectionRelease=resolve),selectionWaiting=new Promise(resolve=>selectionStarted=resolve);
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();selectionStarted();await selectionHeld;await route.fulfill({response});}else await route.continue();});
  await selectContents('p:nth-of-type(2)');await page.getByRole('button',{name:'Quote selection',exact:true}).click();await selectionWaiting;
- await selectContents('p:nth-of-type(3)');selectionRelease();await expect(quotes).toHaveCount(1);await page.unroute('**/api/actions');
+ await selectContents('p:nth-of-type(3)');
+ const selectionState=()=>page.evaluate(()=>({
+  text:window.getSelection()?.toString(),active:document.activeElement?.outerHTML.slice(0,300),
+  action:document.querySelector('.a-quote-selection')?.textContent,
+ }));
+ const selectionBefore=await selectionState();
+ assert.equal(selectionBefore.text,'Third paragraph café 😀 e\u0301 東京.');
+ assert.equal(selectionBefore.active.includes('a-markdown-composer'),false,'Transcript selection does not retain composer focus');
+ selectionRelease();await expect(quotes).toHaveCount(1);await page.unroute('**/api/actions');
+ if(proof)writeFileSync(join(proof,'selection-receipt.json'),JSON.stringify({before:selectionBefore,after:await selectionState()},null,2));
+ await expect.poll(async()=>(await selectionState()).text).toBe('Third paragraph café 😀 e\u0301 東京.');
  await expect(page.getByRole('button',{name:'Quote selection',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Quote selection',exact:true}).click();await expect(quotes).toHaveCount(2);
  assert.deepEqual(references(await documentValue()).map(row=>row.quote.excerpt),['A bold inside and label end.','Third paragraph café 😀 e\u0301 東京.']);
@@ -420,12 +434,18 @@ try{
  await expect(quotes).toHaveCount(0);await page.unroute('**/api/actions');await page.keyboard.press('Escape');
  // A held reply belongs to its captured chat, never a new chat's private draft.
  const originalSession=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ await page.evaluate(()=>window.amplifier.dispatch('session.create',{title:'Separate synthetic quote draft'}));
+ const separateSession=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ assert.notEqual(separateSession,originalSession);
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
  await editor.fill('Retain original draft');
  let chatRelease,chatStarted;
  const chatHeld=new Promise(resolve=>chatRelease=resolve),chatWaiting=new Promise(resolve=>chatStarted=resolve);
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();chatStarted();await chatHeld;await route.fulfill({response});}else await route.continue();});
  await b.getByRole('button',{name:'Reply to message',exact:true}).click();await chatWaiting;
- await page.evaluate(()=>window.amplifier.dispatch('session.create',{title:'Separate synthetic quote draft'}));
+ // Navigation paints immediately; its ordered acknowledgement may follow the
+ // deliberately held reply. Do not await it before releasing that reply.
+ await page.evaluate(id=>{void window.amplifier.dispatch('session.select',{id});},separateSession);
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).not.toBe(originalSession);
  await editor.fill('Separate draft');chatRelease();await page.unroute('**/api/actions');
  await page.getByText('The conversation changed. The quote was not added.',{exact:true}).first().waitFor();
