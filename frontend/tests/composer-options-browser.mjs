@@ -106,6 +106,7 @@ try{
  await page.emulateMedia({reducedMotion:'reduce'});
  const chat=page.getByRole('button',{name:'Chat',exact:true}),chatActions=page.getByRole('group',{name:'Chat',exact:true});
  await options.click();await expect(menu.locator('#chat-provider')).toBeFocused();
+ await expect.poll(()=>menu.evaluate(el=>el.getBoundingClientRect().top>=document.querySelector('.a-work-header').getBoundingClientRect().bottom)).toBe(true);
  await chat.click();await expect(menu).toHaveCount(0);await expect(chatActions).toBeVisible();
  assert.ok(await chatActions.evaluate(el=>el.contains(document.activeElement)));
  await page.keyboard.press('Escape');await expect(chatActions).toBeHidden();await expect(chat).toBeFocused();
