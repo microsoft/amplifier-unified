@@ -68,7 +68,7 @@ try{
  await expect(page.getByRole('button',{name:'Chat controls',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Chat actions',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Chat',exact:true}).click();
- await expect(page.getByRole('group',{name:'Chat'}).getByRole('button')).toHaveText(['Rename','Pin','Share or save','Chat info','Help & diagnostics','Advanced','Archive']);
+ await expect(page.getByRole('group',{name:'Chat',exact:true}).getByRole('button')).toHaveText(['Rename','Pin','Share or save','Chat info','Help & diagnostics','Advanced','Archive']);
  await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'Chat',exact:true})).toBeFocused();
  await openChat('Chat info');
  const info=page.locator('.a-chat-info');
