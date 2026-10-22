@@ -81,11 +81,20 @@ try{
  await expect.poll(()=>menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.left>=0&&r.bottom<=innerHeight+1&&r.right<=innerWidth+1})).toBe(true);
  await page.screenshot({path:output+'/restored-options-mobile.png'});
  await closeMenu();
+ await composer.fill('Keep this draft while managing connections');
  await options.click();await expect(menu).toBeVisible();
  await menu.getByRole('button',{name:'Manage connections'}).click();
  await expect(menu).toHaveCount(0);
- await page.getByRole('button',{name:'Close panel',exact:true}).click();
- assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1,'Opening settings while busy must not send again');
+ // Settings is a canvas surface, not the old generic panel. Use its own
+ // accessible close control, which also unwinds compact Settings history.
+ const settings=page.locator('[data-part="settings-experience"]');
+ await expect(settings).toBeVisible();
+ await expect(settings).toHaveAttribute('data-settings-page','ai-connections');
+ await settings.getByRole('button',{name:'Close settings',exact:true}).click();
+ await expect(settings).toBeHidden();
+ await expect(composer).toBeVisible();
+ await expect(composer).toHaveDraft('Keep this draft while managing connections');
+ assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1,'Opening and closing settings must not send again');
  for(const scheme of ['light','dark']){await page.evaluate(scheme=>window.amplifier.dispatch('view.update',{patch:{scheme}}),scheme);await expect(options).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:`${output}/readiness107-composer-${scheme}.png`});}
  assert.deepEqual(errors,[]);console.log('PASS: one compact model/options menu; real model/bundle/effort selection, preserved draft and reload, viewport resize, exact first submission, light/dark 320px.');
 }finally{await browser?.close();fixture.kill()}
