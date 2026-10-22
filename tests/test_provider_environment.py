@@ -81,6 +81,21 @@ def test_inherited_module_credentials_distinguish_literals_references_and_benign
     assert 'SYNTHETIC_' not in json.dumps(inherited)
 
 
+def test_optional_null_credentials_survive_inheritance_without_host_rebinding():
+    original = {'providers': [{'module': 'provider-fixture', 'instance_id': 'optional',
+                              'config': {'api_key': None}}],
+                'tools': [{'module': 'tool-team-pulse', 'config': {'key': None}}]}
+    before = copy.deepcopy(original)
+    inherited = credential_bindings(original)
+    assert inherited == original == before
+    rebound, bound = rebind_provider_credentials(inherited, original)
+    assert rebound == original and bound is False
+    optional_schema = {'fields': [{'id': 'api_key', 'field_type': 'secret', 'required': False}]}
+    assert materialize_provider_config(rebound['providers'][0]['config'], optional_schema, environment={}) == {'api_key': None}
+    with pytest.raises(ValueError, match='required_secret'):
+        materialize_provider_config(rebound['providers'][0]['config'], SCHEMA, environment={})
+
+
 @pytest.mark.parametrize(("config", "identifier"), [
     ({"api_key": "${MISSING_KEY}"}, "MISSING_KEY"),
     ({"api_key": "${EMPTY_KEY}"}, "provider_environment.required_secret:api_key"),

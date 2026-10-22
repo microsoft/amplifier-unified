@@ -180,7 +180,7 @@ def credential_bindings(value, *, provider=False, module=None):
         result = {}
         for key, item in value.items():
             if credential_field(key, module=module):
-                if isinstance(item, str) and _ENV_REFERENCE.fullmatch(item):
+                if item is None or isinstance(item, str) and _ENV_REFERENCE.fullmatch(item):
                     result[key] = item
                 elif provider:
                     result[key] = copy.deepcopy(HOST_CREDENTIAL)

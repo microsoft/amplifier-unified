@@ -426,6 +426,8 @@ def test_nested_configuration_arrays_and_null_round_trip_without_inventing_missi
     old = {'tools': [{'module': 'tool-fixture', 'config': {
         'headers': [{'authorization': 'SYNTHETIC_HEADER', 'label': 'first'},
                     {'authorization': None, 'label': 'second'}],
+        'routes': [{'module': 'backend', 'authorization': 'SYNTHETIC_ROUTE_A'},
+                   {'module': 'backend', 'authorization': 'SYNTHETIC_ROUTE_B'}],
         'api_key': None, 'modes': ['one', 'two']}}]}
     before = copy.deepcopy(old)
     visible = public_config(old)

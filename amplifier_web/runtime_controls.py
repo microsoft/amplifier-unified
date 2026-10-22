@@ -51,27 +51,28 @@ def identity(row):
 _MISSING_SETTING = object()
 
 
-def restore_redactions(value, old):
+def restore_redactions(value, old, *, _config=False):
     if value == REDACTED:
         if old is _MISSING_SETTING:
             raise ValueError("A redacted value cannot be used for a new setting")
         return copy.deepcopy(old)
     if isinstance(value, dict):
-        if ("module" in value or isinstance(old, dict) and "module" in old) and (
+        if not _config and ("module" in value or isinstance(old, dict) and "module" in old) and (
                 not isinstance(old, dict) or identity(value) != identity(old)
                 or value.get("module") != old.get("module")
                 or value.get("source") != old.get("source")):
             old = _MISSING_SETTING
         return {key:restore_redactions(item, old.get(key, _MISSING_SETTING)
-                                      if isinstance(old, dict) else _MISSING_SETTING)
+                                      if isinstance(old, dict) else _MISSING_SETTING,
+                                      _config=_config or key == "config")
                 for key,item in value.items()}
     if isinstance(value, list):
         # Only module collections can reorder by identity. Arrays inside a
         # matched configuration retain their structural positions.
-        if not any(isinstance(row, dict) and "module" in row
+        if _config or not any(isinstance(row, dict) and "module" in row
                    for row in [*value, *(old if isinstance(old, list) else [])]):
             return [restore_redactions(row, old[i] if isinstance(old, list) and i < len(old)
-                                       else _MISSING_SETTING) for i, row in enumerate(value)]
+                                       else _MISSING_SETTING, _config=_config) for i, row in enumerate(value)]
         def previous(row):
             matches = [item for item in old if isinstance(item, dict)
                        and identity(item) == identity(row)
