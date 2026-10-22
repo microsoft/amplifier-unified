@@ -84,3 +84,60 @@ def test_legacy_row_requires_exact_current_configuration_without_guessing(tmp_pa
     with pytest.raises(ValueError, match='older environment'):
         configs.resolve(app, row, {**value, 'python': '/new/python'})
     assert not (tmp_path / 'workspace-resources').exists()
+
+
+def test_new_incus_generation_does_not_rebind_existing_owner(tmp_path, monkeypatch):
+    from amplifier_web.incus_environment_worker import QUALIFIED_PACKAGES
+    old = {'enabled': True, 'backend': 'incus', 'python': '/snapshot/python',
+           'incus': {'executable': '/owned/old/adapter', 'packageSha256': QUALIFIED_PACKAGES['0.4.1']}}
+    current = {**old, 'incus': {'executable': '/owned/new/adapter', 'packageSha256': QUALIFIED_PACKAGES['0.4.2']}}
+    identity = configs.retain(tmp_path, old)
+    seen = []
+    def qualify(app, candidate):
+        seen.append(candidate)
+        return old, 'ready', 'qualified'
+    monkeypatch.setattr(owner, 'validate_configuration_value', qualify)
+    row = {'backendKey': identity, 'backendConfigRetained': True}
+    assert configs.resolve(SimpleNamespace(data_dir=tmp_path), row, current) == old
+    assert seen[0]['incus'] == old['incus']
+    assert configs.retain(tmp_path, current) != identity
+
+
+def test_snapshot_refresh_retains_exact_qualified_owner_and_rejects_rebinding(tmp_path):
+    old_commit = '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04'
+    assert owner.DTU_COMMIT != old_commit
+    app = SimpleNamespace(data_dir=tmp_path, smart_tools=SimpleNamespace(state={'installations': []}))
+
+    def installed(identity, commit):
+        python = tmp_path / 'smart-tools' / 'installs' / identity / 'venv' / 'bin' / 'python'
+        python.parent.mkdir(parents=True)
+        python.write_text('managed interpreter fixture')
+        app.smart_tools.state['installations'].append({
+            'id': identity, 'commit': commit, 'repository': owner.REPOSITORY,
+            'status': 'installed', 'extras': [], 'python': str(python),
+        })
+        request = {'enabled': True, 'installationId': identity, 'commit': commit,
+                   'dockerHost': 'unix:///owned/docker.sock'}
+        value, status, _ = owner.validate_configuration_value(app, request)
+        assert status == 'ready'
+        return value
+
+    old = installed('a' * 24, old_commit)
+    current = installed('b' * 24, owner.DTU_COMMIT)
+    identity = configs.retain(tmp_path, old)
+    row = {'backendKey': identity, 'backendConfigRetained': True}
+    assert configs.resolve(app, row, current) == old
+    assert configs.resolve(app, row, None) == old  # Cold reopen, no selected host.
+    assert configs.retain(tmp_path, current) != identity
+
+    def request(value):
+        return {key: value[key] for key in ('enabled', 'installationId', 'commit', 'dockerHost')}
+
+    # Qualification is a pair, not interchangeable approved commit names.
+    with pytest.raises(ValueError, match='qualified DTU core'):
+        owner.validate_configuration_value(app, {**request(old), 'commit': owner.DTU_COMMIT})
+    with pytest.raises(ValueError, match='qualified DTU core'):
+        owner.validate_configuration_value(app, {**request(old), 'commit': 'c' * 40})
+    app.smart_tools.state['installations'][0]['commit'] = owner.DTU_COMMIT
+    with pytest.raises(ValueError, match='qualified DTU core'):
+        configs.resolve(app, row, current)

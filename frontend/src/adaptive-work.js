@@ -14,8 +14,8 @@ export function workReadingKey(view,mode){
  return JSON.stringify([mode,view.workHomeScope||'all',view.workHomeQuery||'',view.workHomeFilter||'all',
   ...['attention','unread','working','idle'].map(key=>view.workHomePages?.[key]||0)]);
 }
-export function rememberHomeScroll(pane,key){
- const browser=pane.ownerDocument.defaultView,storageKey='amplifier.work-home-reading.v1';
+export function rememberHomeScroll(pane,key,storageKey='amplifier.work-home-reading.v1'){
+ const browser=pane.ownerDocument.defaultView;
  let storage,saved,timer;
  try{storage=browser.sessionStorage;saved=JSON.parse(storage.getItem(storageKey)||'null')}catch{}
  pane.scrollTop=saved?.key===key&&Number.isFinite(saved.top)?Math.max(0,saved.top):0;

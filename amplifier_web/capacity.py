@@ -226,6 +226,12 @@ class CapacityController:
                 # after authoritative admission, preserving limits and usage.
                 self.last_denial = None
                 self.controls.persist(task_only=True)
+        if not result['allowed'] and result.get('state') == 'cancelled':
+            raise asyncio.CancelledError('; '.join(result['reasons']))
+        if not result['allowed'] and result.get('state') == 'wait_expired':
+            # No provider call was made. A bounded queue expiry is not a saved
+            # cumulative budget pause and must not poison later continuation.
+            raise TimeoutError('; '.join(result['reasons']))
         if not result['allowed']:
             self.last_denial = {**result, 'at': time.time(), 'callId': row['id']}
             self.controls.persist(task_only=True)
@@ -354,12 +360,14 @@ def fresh_human_input(service, session, row, denial):
         and receipt.get('delivery') in {'accepted', 'applied', 'submitting'})
 
 
-async def admission(service, session_id, args):
+async def admission(service, session_id, args, *, guard=None, queue_turn=None, on_wait=None, before_reserve=None):
     """Private worker-to-host gate; model actions cannot supply accounting data."""
     from .service import AppError
     async with service.lock:
         session = service._session(session_id)
         row = copy.deepcopy(args.get('call', {}))
+        if guard and (reason := guard(session)):
+            return {'allowed': False, 'state': 'cancelled', 'reasons': [reason]}
         if row.get('rootSessionId') != (session.get('runtimeSessionId') or session_id):
             raise AppError('Budget admission belongs to the calling root', 409)
         for key in ('rootSessionId', 'sessionId'):
@@ -392,8 +400,19 @@ async def admission(service, session_id, args):
             row.pop(key, None)  # Assignment authority is selected by the host.
         assignment = service.assignments.admission(session, row)
         if not assignment['allowed']:
-            result.update(allowed=False, state='paused', reasons=result['reasons'] + assignment['reasons'])
+            waiting = result['allowed'] and assignment.get('waiting', False)
+            result.update(allowed=False, state='waiting' if waiting else 'paused',
+                          reasons=result['reasons'] + assignment['reasons'])
+        if result['allowed'] and queue_turn and not queue_turn():
+            result.update(allowed=False, state='waiting',
+                          reasons=['Earlier model requests are waiting for assignment capacity.'])
+        if result.get('state') == 'waiting' and on_wait and (refusal := on_wait(session)):
+            return refusal
         if result['allowed']:
+            # The lock may have been contended beyond a finite waiting deadline.
+            # Recheck at the reservation boundary; never alter an admitted call.
+            if before_reserve and (refusal := before_reserve()):
+                return refusal
             # Persist intent using the existing execution ID before any provider
             # request. A crash leaves pending/unknown evidence, never a replay.
             from .execution import ingest
@@ -432,3 +451,25 @@ async def admission(service, session_id, args):
                 refresh_usage(session['execution'])
                 raise
         return result
+
+
+async def abandoned(service, session_id, args):
+    """Private transport cancellation: preserve an admitted but unacknowledged call."""
+    from .collaboration import PRINCIPAL
+    from .execution import LIVE_PHASES, refresh_usage
+    async with service.lock:
+        session = service._session(session_id)
+        row = args.get('call') or {}
+        native = session.get('runtimeSessionId') or session_id
+        if PRINCIPAL.get() != native or row.get('rootSessionId') != native:
+            return {'retained': False}
+        node = next((n for n in session.get('execution', {}).get('nodes', [])
+                     if n.get('id') == row.get('id') and n.get('kind') == 'llm'
+                     and n.get('producerId') == row.get('producerId')
+                     and n.get('turnId') == row.get('turnId')), None)
+        if node and node.get('admittedAt') and not node.get('endedAt') and node.get('phase') in LIVE_PHASES:
+            node['phase'] = 'outcome_unknown'
+            refresh_usage(session['execution'])
+            service._publish_changes(sessions={session_id})
+            return {'retained': True}
+        return {'retained': False}

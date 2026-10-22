@@ -129,7 +129,7 @@ class SessionStore:
         # Runtime checkpoints may carry an old naming policy. Exclude it from
         # the incoming patch so Foundation merges the latest fields under its
         # metadata lock, including changes from another host during this save.
-        for key in ('name_auto', 'name_auto_revision', 'name_policy_revision', 'naming_completed_inputs'):
+        for key in ('name_auto', 'name_auto_revision', 'name_policy_revision', 'naming_completed_inputs', 'naming_refinement'):
             saved_metadata.pop(key, None)
         initial_policy = None
         if not previous.get('name'):

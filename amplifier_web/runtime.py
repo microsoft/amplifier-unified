@@ -141,6 +141,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+        from .tool_observations import metadata as tool_metadata
+        public.update(tool_metadata(event))
         if event.get('kind') == 'tool' and event.get('label') == 'todo' and 'statusPlan' in event:
             from .status_protocol.hook import accepted_plan
             public['statusPlan'] = accepted_plan({'todos': event['statusPlan']})
@@ -299,9 +301,8 @@ class RuntimeManager:
         if self.command:
             return list(self.command)
         worker = Path(__file__).with_name("runtime_worker.py")
-        uv = shutil.which("uv")
-        if not uv:
-            raise RuntimeError("Install uv to prepare the Amplifier runtime.")
+        from .host_dependencies import require_uv
+        uv = require_uv()
         # The packaged manifest is copied to a writable cache: installed package
         # directories may be read-only and uv creates its lock and .venv there.
         from .updates import active_release
@@ -610,6 +611,15 @@ class RuntimeManager:
             except ValueError as exc:
                 await self._write(row, {"op":"bridge.result","id":data["id"],"error":str(exc)})
 
+    async def _cancel_capacity_bridge(self, sid, row, bridge):
+        bridge['task'].cancel()
+        await asyncio.gather(bridge['task'], return_exceptions=True)
+        # Cancellation is not evidence that an already admitted call was unused.
+        # The private accounting operation only marks an exact existing receipt
+        # uncertain; it cannot invent a receipt or free an allowance.
+        if self.workers.get(sid) is row and self.app_bridge:
+            await self.app_bridge('capacity.abandoned', bridge['args'], sid)
+
     async def _read(self, sid, row):
         from .runtime_event_batches import BufferedLines, EventSink, MAX_BYTES, finish_owned, terminal
         lines = BufferedLines(row['process'].stdout)
@@ -686,6 +696,14 @@ class RuntimeManager:
                     task = asyncio.create_task(self._bridge(sid, row, data))
                     row["bridge_tasks"].add(task)
                     task.add_done_callback(row["bridge_tasks"].discard)
+                    if data.get('operation') == 'capacity.admit' and data.get('args', {}).get('waitForCapacity'):
+                        row.setdefault('capacity_bridges', {})[data['id']] = {'task': task, 'args': data['args']}
+                elif data.get('op') in {'bridge.cancel', 'bridge.received'}:
+                    bridge = row.get('capacity_bridges', {}).pop(data.get('id'), None)
+                    if bridge and data['op'] == 'bridge.cancel' and self.workers.get(sid) is row:
+                        task = asyncio.create_task(self._cancel_capacity_bridge(sid, row, bridge))
+                        row['bridge_tasks'].add(task)
+                        task.add_done_callback(row['bridge_tasks'].discard)
                 elif data.get("op") == "reply":
                     row["inflight"].discard(data.get("id"))
                     input_id = row.get('sendInputs', {}).pop(data.get('id'), None)
@@ -730,6 +748,14 @@ class RuntimeManager:
                         await self._emit_progress(sid, row)
                 elif data.get("type") == "runtime.ready":
                     if not row["ready"].done():
+                        # uv is the managed launcher, not necessarily the Python
+                        # worker. Bind configuration effects to the identity on
+                        # this worker's own pipe, scoped to the started session.
+                        identity = data.get("workerIdentity")
+                        if (isinstance(identity, dict)
+                                and identity.get("sessionId") == row.get("runtime_id")
+                                and type(identity.get("pid")) is int and identity["pid"] > 0):
+                            row["native_worker_pid"] = identity["pid"]
                         row["ready"].set_result(data.get("report", {}))
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),

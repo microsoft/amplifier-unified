@@ -40,11 +40,11 @@ try{
  await page.locator('select#chat-model').selectOption('chosen-model');
  await page.locator('#chat-effort').press('End');
  await page.getByRole('button',{name:'Close model settings',exact:true}).click();
- await page.getByRole('button',{name:'Choose project',exact:true}).click();
+ await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
  await page.getByRole('textbox',{name:/Folder on/}).fill(originalWorkspace+'/../');
  await page.getByRole('button',{name:'Use folder',exact:true}).click();
- await expect(page.getByRole('dialog',{name:'Choose a project',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('dialog',{name:'Choose a workspace',exact:true})).toHaveCount(0);
  await expect.poll(async()=>(await state()).view.newSessionDraft.workspace).not.toBe(originalWorkspace);
  await composer.fill('Do the planned work');await expect(composer).toHaveDraft('Do the planned work');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Use these notes')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();

@@ -1043,3 +1043,25 @@ async def test_untyped_worker_error_does_not_override_generation_error_type():
         assert 'errorType' not in errors[0]
     finally:
         await manager.close()
+
+
+@pytest.mark.parametrize('reported_session', ['identity-owner', 'different-owner'])
+async def test_ready_worker_identity_is_private_and_bound_to_native_session(reported_session):
+    script = (
+        "import json,os,sys;sys.stdin.readline();"
+        "print(json.dumps({'type':'runtime.ready','report':{'public':True},"
+        f"'workerIdentity':{{'sessionId':{reported_session!r},'pid':os.getpid()}}}}),flush=True);"
+        "sys.stdin.readline()"
+    )
+    manager = RuntimeManager(command=[sys.executable, '-c', script])
+    events = []
+    async def emit(kind, data): events.append((kind, data))
+    try:
+        await manager.start({'id': 'app-owner', 'runtimeSessionId': 'identity-owner'}, emit)
+        row = manager.workers['app-owner']
+        assert row.get('native_worker_pid') == (
+            row['process'].pid if reported_session == 'identity-owner' else None)
+        assert all('workerIdentity' not in value and 'native_worker_pid' not in value for _, value in events)
+        assert next(value['report'] for kind, value in events if value.get('status') == 'ready') == {'public': True}
+    finally:
+        await manager.close()

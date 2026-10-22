@@ -17,7 +17,7 @@ Viewing a detail is not an execution or authority-changing action.
 ```text
 Browse organization
   Pinned       selected conversations                  (collapsible)
-  Projects     registered workspace → full chat list   (collapsible)
+  Workspaces   registered workspace → full chat list   (collapsible)
   Recent       unpinned conversations, all locations   (collapsible)
 Status organization
   Existing attention / unread / working / other saved chats
@@ -33,8 +33,7 @@ Workspace details → Files · Chats · Directions · Settings
    Creation/attachment returns to that unsent draft with the workspace selected.
    Attachment asks for a folder, never a developer mode or a redundant preview.
 
-2. **Navigation uses shared controls.** Browse groups Pinned, Projects (registered
-   workspaces), and Recent in shared collapsible sections. An alternate Status
+2. **Navigation uses shared controls.** Browse groups Pinned, Workspaces, and Recent in shared collapsible sections. An alternate Status
    organization uses existing chat activity, not another work store; the web
    [Home/sidebar contract](../../shell/work-discovery.v1.md) owns its presentation.
    One rich chat row renders pins consistently; one workspace explorer provides

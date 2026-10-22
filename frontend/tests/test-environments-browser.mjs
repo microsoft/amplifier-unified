@@ -52,7 +52,7 @@ try{
  await expect(panel.getByText('Environment: running',{exact:true})).toBeVisible();
  assert.equal(writes.length,2);assert.equal(writes[0].id,writes[1].id);assert.deepEqual(writes[0].args,writes[1].args);
  assert.equal((await facts()).callCounts.start,1,'Lost acknowledgement never starts a replacement');
- await panel.getByLabel('Check command',{exact:true}).fill('python check.py');
+ await panel.locator('[data-test-environment]').getByLabel('Check command',{exact:true}).fill('python check.py');
  await panel.getByRole('button',{name:'Run check',exact:true}).click();
  await expect.poll(async()=>(await facts()).callCounts.execute).toBe(1);
  await expect(panel.getByText('Last request: completed',{exact:true})).toBeVisible();
@@ -62,7 +62,7 @@ try{
  const peer=await context.newPage();await peer.goto(url);await showFixtureConversation(peer);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await openEnvironments(peer);
  const peerPanel=peer.getByRole('region',{name:'Test environments',exact:true});
- await peerPanel.getByLabel('Check command',{exact:true}).fill('python slow_check.py');
+ await peerPanel.locator('[data-test-environment]').getByLabel('Check command',{exact:true}).fill('python slow_check.py');
  await peerPanel.getByRole('button',{name:'Run check',exact:true}).click();
  await expect.poll(async()=>(await facts()).callCounts.execute).toBe(2);
  await expect(peerPanel.getByText('Last request: outcome unknown',{exact:true})).toBeVisible();

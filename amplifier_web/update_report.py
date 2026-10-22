@@ -15,7 +15,7 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from .update_diagnostics import ERROR_TYPES, RECOVERY_REASONS, PROBE_PREFIX, probe_record
+from .update_diagnostics import ERROR_TYPES, RECOVERY_REASONS, RESOLUTION_FIELDS, PROBE_PREFIX, probe_record
 
 
 def scalar(value, pattern):
@@ -68,6 +68,11 @@ def event(row):
             result[key] = row[key]
     if scalar(row.get('package'), r'amplifier-[a-z0-9-]{1,120}'):
         result['package'] = row['package']
+    if isinstance(row.get('resolutionMismatches'), list):
+        fields = sorted({value for value in row['resolutionMismatches']
+                         if isinstance(value, str) and value in RESOLUTION_FIELDS})
+        if fields:
+            result['resolutionMismatches'] = fields
     if type(row.get('timedOut')) is bool:
         result['timedOut'] = row['timedOut']
     if isinstance(row.get('probe'), dict):

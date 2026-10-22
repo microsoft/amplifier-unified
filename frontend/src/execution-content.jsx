@@ -1,4 +1,4 @@
-import React,{useEffect,useState} from 'react';
+import React,{useEffect,useMemo,useState} from 'react';
 import {Check,Circle,Copy,LoaderCircle} from 'lucide-react';
 import {request,download,clientUrl} from './api';
 import {providerRecordExport} from './provider-record-export';
@@ -7,7 +7,8 @@ import {UsageDetails} from './usage-details.jsx';
 import {useShellContext} from './shell/runtime';
 import {selectedMetrics,metricsVisible} from './execution-observability.js';
 import {detailLinks,elapsedLabel,isRunning} from './timeline-data';
-import {textValue,record} from './execution-content.js';
+import {textValue,record,contentUnavailable} from './execution-content.js';
+import {readablePayload} from './tool-input-preview.js';
 import {settingsPatch} from './settings-navigation';
 import {WorkNavigationContext} from './work-navigation';
 import {JsonPayload} from './json-payload.jsx';
@@ -30,17 +31,17 @@ function CopyText({text,label,disabled=false}){
  useEffect(()=>setStatus(''),[text]);
  return <><button type="button" className="a-link" disabled={disabled} aria-label={`Copy ${label.toLowerCase()}`} onClick={async()=>{try{await navigator.clipboard.writeText(text);setStatus('Copied')}catch{setStatus('Select the text to copy it manually.')}}}><Copy/>{status==='Copied'?'Copied':'Copy'}</button>{status&&<span className="a-caption" role="status">{status}</span>}</>;
 }
-export function ExecutionText({text}){
- const [full,setFull]=useState(false),value=textValue(text),lines=value.split('\n'),long=lines.length>15||value.length>3000,preview=long?lines.slice(0,10).join('\n').slice(0,2000):value;
+export function ExecutionText({text,partial=false}){
+ const [full,setFull]=useState(false),raw=textValue(text),value=useMemo(()=>partial?raw:readablePayload(raw),[raw,partial]),lines=value.split('\n'),long=lines.length>15||value.length>3000,preview=long?lines.slice(0,10).join('\n').slice(0,2000):value;
  useEffect(()=>setFull(false),[value]);
- return <><pre><code>{full?value:preview}</code></pre>{long&&<button type="button" className="a-link a-execution-more" aria-expanded={full} onClick={()=>setFull(!full)}>{full?'Show less':lines.length>15?`Show all ${lines.length} lines`:`Show all ${value.length.toLocaleString()} characters`}</button>}</>;
+ return <><pre><code>{full?value:preview}{long&&!full?'\n…':''}</code></pre>{long&&!full&&<p className="a-caption a-execution-preview-note">Showing a preview.</p>}{long&&<button type="button" className="a-link a-execution-more" aria-expanded={full} onClick={()=>setFull(!full)}>{full?'Show less':lines.length>15?`Show all ${lines.length} lines`:`Show all ${value.length.toLocaleString()} characters`}</button>}</>;
 }
 export function ExecutionBlock({label,text,meta,children,copy=true,loading=false}){
  if(text==null&&!children)return null;
- return <section className="a-execution-payload"><header><span>{label}</span>{meta!=null&&<span>{textValue(meta)}</span>}{copy&&<CopyText text={textValue(text)} label={label} disabled={loading}/>}</header>{children||<ExecutionText text={text}/>}</section>;
+ return <section className="a-execution-payload"><header><span>{label}{loading?' · Preview':''}</span>{meta!=null&&<span>{textValue(meta)}</span>}{copy&&<CopyText text={textValue(text)} label={label} disabled={loading}/>}</header>{children||<ExecutionText text={text} partial={loading}/>}</section>;
 }
 export function FieldStatus({label,field}){
- return field.error?<p role="alert" className="a-execution-load-error">{field.error} <button type="button" className="a-link" onClick={field.retry}>Retry {label.toLowerCase()}</button></p>:field.loading?<small role="status">Loading complete {label.toLowerCase()}…</small>:null;
+ return field.error?<p role="alert" className="a-execution-load-error">{field.error} <button type="button" className="a-link" onClick={field.retry}>Retry {label.toLowerCase()}</button></p>:field.loading?<small role="status">Loading saved {label.toLowerCase()}… Any text above is a preview.</small>:null;
 }
 function Patch({action}){
  const [full,setFull]=useState(false),rows=action.rows.filter(row=>row.type!=='header'||!/^\*\*\* (Begin|End) Patch$/.test(row.text));
@@ -52,23 +53,23 @@ function Patch({action}){
 export function ToolContent({node,action,input,output,error}){
  const a=action,body=textValue(a.output),streams=typeof a.out.stdout==='string'||typeof a.out.stderr==='string',hasOutput=output.value!=null;
  let content;
- if(a.kind==='command')content=<><ExecutionBlock label="Command" text={a.command} meta={a.args.working_directory||a.args.cwd}/>{hasOutput&&(streams?<><ExecutionBlock label="Output" text={a.out.stdout||'No output'} meta={a.exit!=null?`Exit ${a.exit}`:null}/>{a.out.stderr&&<ExecutionBlock label="Standard error" text={a.out.stderr}/>}</>:<ExecutionBlock label="Output" text={body||'No output'} loading={output.incomplete}/>)}</>;
+ if(a.kind==='command'||a.kind==='code')content=<><ExecutionBlock label={a.kind==='code'?'Code':'Command'} text={a.command||a.code} meta={a.args.working_directory||a.args.cwd} loading={input.incomplete}/>{hasOutput&&(streams?<><ExecutionBlock label="Output" text={a.out.stdout||'No output'} meta={a.exit!=null?`Exit ${a.exit}`:null} loading={output.incomplete}/>{a.out.stderr&&<ExecutionBlock label="Standard error" text={a.out.stderr} loading={output.incomplete}/>}</>:<ExecutionBlock label="Output" text={body||'No output'} loading={output.incomplete}/>)}</>;
  else if(a.kind==='patch')content=<><Patch action={a}/>{hasOutput&&<ExecutionBlock label="Result" text={body} loading={output.incomplete}/>}</>;
  else if(a.kind==='read'||a.kind==='write')content=<><ExecutionBlock label={a.kind==='read'?'File content':a.done?'Written content':'Requested content'} text={a.kind==='read'&&a.failed?null:a.content||null} loading={a.kind==='read'?output.incomplete:input.incomplete}/>{hasOutput&&(!a.content||a.failed||a.kind==='write')&&<ExecutionBlock label="Result" text={body} loading={output.incomplete}/>}</>;
  else if(a.kind==='tasks')content=<><section className="a-execution-payload"><header><span>{a.done?'Task list':'Requested task list'}</span><span>{a.preview}</span></header><ul className="a-execution-checklist">{a.tasks.map((task,index)=>{const status=typeof task?.status==='string'?task.status:'unknown',Icon=status==='completed'?Check:status==='in_progress'?LoaderCircle:Circle;return <li key={index} data-status={status}><Icon aria-label={status}/><span>{textValue(task?.content||task?.activeForm||task?.title||task)}</span><small>{status.replaceAll('_',' ')}</small></li>})}</ul></section>{hasOutput&&<ExecutionBlock label="Result" text={body} loading={output.incomplete}/>}</>;
  else if(a.kind==='delegate')content=<><ExecutionBlock label="Task sent" text={a.task}/>{hasOutput&&<ExecutionBlock label="Result" text={body} loading={output.incomplete}/>}</>;
  else content=<><ExecutionBlock label={a.kind==='app'?a.target:'Input'} text={input.value} loading={input.incomplete}/><ExecutionBlock label="Result" text={output.value} loading={output.incomplete}/></>;
- const used={command:['command','cmd','working_directory','cwd'],patch:['patch','diff','file_path','path','filename','old_string','old_text','new_string','new_text'],read:['file_path','path','filename'],write:['file_path','path','filename','content','text'],tasks:['todos'],delegate:['agent','name','description','instruction','instructions','prompt','task']}[a.kind];
+ const used={command:['command','cmd','working_directory','cwd'],code:['code','working_directory','cwd'],patch:['patch','diff','file_path','path','filename','old_string','old_text','new_string','new_text'],read:['file_path','path','filename'],write:['file_path','path','filename','content','text'],tasks:['todos'],delegate:['agent','name','description','instruction','instructions','prompt','task']}[a.kind];
  const extra=used?Object.fromEntries(Object.entries(a.args).filter(([key])=>!used.includes(key))):{};
  // Typed blocks consume individual fields. Preserve every remaining result
  // field once, including envelope metadata such as artifact URLs.
- const consumed=a.kind==='command'&&streams?['stdout','stderr','returncode','exit_code','exitCode']:a.kind==='read'&&a.content&&!a.failed?[typeof a.out.content==='string'&&a.out.content?'content':'text']:null;
+ const consumed=['command','code'].includes(a.kind)&&streams?['stdout','stderr','returncode','exit_code','exitCode']:a.kind==='read'&&a.content&&!a.failed?[typeof a.out.content==='string'&&a.out.content?'content':'text']:null;
  const remainder=consumed?Object.fromEntries(Object.entries(a.out).filter(([key])=>!consumed.includes(key))):{};
  const envelope=Object.hasOwn(record(a.result),'output')?Object.fromEntries(Object.entries(a.result).filter(([key])=>!['output','success','error'].includes(key))):{};
  const details={...envelope,...remainder};
  return <>{content}{Object.keys(extra).length>0&&<ExecutionBlock label="Arguments" text={textValue(extra)} loading={input.incomplete}/>}<ExecutionBlock label="Result details" text={used&&Object.keys(details).length?textValue(details):null}/><ExecutionBlock label="Error" text={error.value??(a.kind!=='generic'&&a.kind!=='app'&&Object.hasOwn(record(a.result),'output')?a.result.error:null)} loading={error.incomplete}/>{[['Input',input],['Result',output],['Error',error]].map(([label,field])=><FieldStatus key={label} label={label} field={field}/>)}
   {detailLinks(output.value).map(url=><a key={url} className="a-execution-result-link" href={url} target="_blank" rel="noopener noreferrer">{url}</a>)}
-  {input.value==null&&output.value==null&&error.value==null&&!input.loading&&!output.loading&&!error.loading&&<small>{a.running?'Waiting for the event log…':'No action content is available in the event log.'}</small>}
+  {input.value==null&&output.value==null&&error.value==null&&!input.loading&&!output.loading&&!error.loading&&<small>{a.running?'Waiting for saved action details…':contentUnavailable(node)}</small>}
  </>;
 }
 

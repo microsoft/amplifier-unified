@@ -34,15 +34,27 @@ try{
  await action('conversation.send',{text:'How can we make navigation work better on a phone?'});
  await patch({navPinned:true,navExpanded:false});
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent draft');
- const drawer=page.getByRole('dialog',{name:'Projects and chats'});
+ const drawer=page.getByRole('dialog',{name:'Workspaces and chats',exact:true});
  for(const width of [320,360,390,412,600,760,1024,1440]){
   await page.setViewportSize({width,height:844});await page.waitForTimeout(150);
   const metrics=await page.evaluate(()=>{
    const box=s=>{const el=document.querySelector(s),b=el.getBoundingClientRect();return {x:b.x,width:b.width,height:b.height,display:getComputedStyle(el).display}};
-   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),home:box('.a-work-home-crumb'),title:box('.a-work-heading strong'),nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),width:b.getBoundingClientRect().width}))};
+   const title=document.querySelector('.a-work-heading strong'),style=getComputedStyle(title),measure=document.createElement('canvas').getContext('2d');measure.font=style.font;
+   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),home:box('.a-work-home-crumb'),title:{...box('.a-work-heading strong'),text:title.textContent,full:title.title,readableWidth:measure.measureText(title.textContent.split(/\s+/)[0]+'…').width},nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),x:b.getBoundingClientRect().x,width:b.getBoundingClientRect().width,height:b.getBoundingClientRect().height}))};
   });
   results.push(metrics);assert.equal(metrics.body,width);assert.equal(metrics.font,'14px');
-  if(width<=760){assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');assert.ok(metrics.title.width>100);assert.notEqual(metrics.home.display,'none');assert.ok(metrics.home.width>=44&&metrics.home.height>=44);assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Chat','Open canvas']);assert.ok(metrics.actions.every(row=>row.width>=44))}
+  if(width<=760){
+   assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');
+   assert.equal(metrics.title.text,'Improve mobile navigation and Canvas');assert.equal(metrics.title.full,metrics.title.text);
+   // Home has an explicit visible label. The remaining title space must still
+   // show a recognizable word, fit between controls, and retain full identity.
+   assert.ok(metrics.title.width>=metrics.title.readableWidth);assert.ok(metrics.title.height>0);
+   assert.ok(metrics.title.x>=metrics.home.x+metrics.home.width);
+   assert.ok(metrics.title.x+metrics.title.width<=metrics.actions.find(row=>row.label==='Chat').x);
+   assert.notEqual(metrics.home.display,'none');assert.ok(metrics.home.width>=44&&metrics.home.height>=44);
+   assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Chat','Open canvas']);
+   assert.ok(metrics.actions.every(row=>row.width>=44&&row.height>=44&&row.x>=0&&row.x+row.width<=width));
+  }
   await page.screenshot({path:`${out}/chat-${width}.png`});
   if(width<=760){
    await page.getByRole('button',{name:'Open navigation',exact:true}).tap();await drawer.waitFor();
@@ -69,11 +81,11 @@ try{
  assert.ok(await page.locator('.a-conversation').evaluate(el=>el.inert));
  await page.screenshot({path:`${out}/drawer.png`});assert.ok(await drawer.locator('input').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).every(node=>parseFloat(getComputedStyle(node).fontSize)>=16)));
  const toggle=page.locator('#navigation-toggle');
- await expect(drawer.getByRole('button',{name:'Browse',exact:true})).toBeFocused();
+ await expect(drawer.getByRole('button',{name:'Home',exact:true})).toBeFocused();
  await page.keyboard.press('Shift+Tab');await expect(toggle).toBeFocused();
  await page.keyboard.press('Shift+Tab');assert.ok(await drawer.evaluate(el=>el.contains(document.activeElement)));
  await page.keyboard.press('Tab');await expect(toggle).toBeFocused();
- await page.keyboard.press('Tab');await expect(drawer.getByRole('button',{name:'Browse',exact:true})).toBeFocused();
+ await page.keyboard.press('Tab');await expect(drawer.getByRole('button',{name:'Home',exact:true})).toBeFocused();
  const details=drawer.locator('.a-navigation-more').first();await details.focus();await details.click();await page.locator('.a-navigation-flyout').waitFor();
  await page.screenshot({path:`${out}/details.png`});
  await page.keyboard.press('Escape');assert.equal(await drawer.isVisible(),true);

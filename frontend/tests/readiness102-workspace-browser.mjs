@@ -43,7 +43,7 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),info.sessionId);
  await dispatch(page,'workspace.archive',{id:info.workspaceId});
  await view(page,{workSurface:'workspaces'});
- const filter=page.getByRole('combobox',{name:'Project archive filter'});
+ const filter=page.getByRole('combobox',{name:'Workspace archive filter'});
  await filter.selectOption('archived');
  await page.getByRole('searchbox',{name:'Filter workspaces'}).fill('Cleanup demo');
  await expect(page.locator('.a-work-browser .a-workspace-row').filter({hasText:'Cleanup demo'})).toBeVisible();

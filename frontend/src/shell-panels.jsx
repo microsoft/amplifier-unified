@@ -11,7 +11,7 @@ export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {WorkNavigationContext} from './work-navigation';
-import {SlidersHorizontal,MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
+import {Home as HomeIcon,SlidersHorizontal,MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
 import {PaneResizer,usePanelLayout,showingOverview} from './panel-layout';
 import {chatPage,visibleWorkspaces} from './chat-navigation';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -37,9 +37,9 @@ export function WorkspaceRail({state,session,act,selectSession,newSession,shell,
  const workspaces=visibleWorkspaces(state),workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId);
  const add=()=>{(newSession||(()=>act('session.draft',{})))();if(!pinned)patch(act,{navExpanded:false})};
  return <NavigationOpen.Provider value={expanded}><ChatShortcutScope navigation={nav} enabled={expanded&&!view.panel&&!view.toolbarMenuOpen&&!draft.mode&&!view.canvasFocused} scope={[state.selectedSessionId,view.workSurface,view.workWorkspaceId,view.navChatScope].join(':')}>{layout.narrow&&expanded&&<div className="a-navigation-scrim" onClick={close}/>}
- <aside ref={nav} id="workspace-navigation" role={layout.narrow?'dialog':undefined} aria-modal={layout.narrow&&expanded||undefined} aria-owns={layout.narrow&&expanded?'navigation-toggle':undefined} hidden={!expanded} inert={!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Projects and chats" onClick={e=>{if(layout.narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}}>
+ <aside ref={nav} id="workspace-navigation" role={layout.narrow?'dialog':undefined} aria-modal={layout.narrow&&expanded||undefined} aria-owns={layout.narrow&&expanded?'navigation-toggle':undefined} hidden={!expanded} inert={!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and chats" onClick={e=>{if(layout.narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}}>
   <div className="a-nav-rail">
-   <div className="a-nav-head a-sidebar-modes" role="group" aria-label="Sidebar view">{supportsStatus?['browse','status'].map(mode=><button type="button" key={mode} aria-pressed={(view.navMode||'browse')===mode} onClick={()=>patch(act,{navMode:mode})}>{mode==='browse'?'Browse':'Status'}</button>):<strong>Browse</strong>}</div>
+   <div className="a-nav-head a-sidebar-modes">{navigation&&<button type="button" className="a-sidebar-home a-icon" aria-label="Home" title="Home" aria-current={view.workSurface==='home'?'page':undefined} onClick={()=>navigation.home(layout.narrow?{navExpanded:false}:{})}><HomeIcon/></button>}<div className="a-sidebar-organizations" role="group" aria-label="Sidebar view">{supportsStatus?['browse','status'].map(mode=><button type="button" key={mode} aria-pressed={(view.navMode||'browse')===mode} onClick={()=>patch(act,{navMode:mode})}>{mode==='browse'?'Browse':'Status'}</button>):<strong>Browse</strong>}</div></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.draft" aria-label="New chat" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
    {navigation&&<button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>}
    <div className="a-nav-content a-nav-reveal"><ShellModules shell={shell}/></div>{footer}

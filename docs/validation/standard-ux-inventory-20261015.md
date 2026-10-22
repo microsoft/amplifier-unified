@@ -742,6 +742,28 @@ state isolation. The new smoke is a regression owner, not a requirement to rerun
 the unrelated browser census before release. Frozen inventory counts remain
 unchanged; current results must name the actual source/build and cleanup outcome.
 
+### Fresh Linux installation and helper recovery (October 21)
+
+Before the first AI connection, exercise a restricted initial PATH with no uv
+and missing curl/Git. Ubuntu instructions must identify all missing prerequisites
+together and must never prescribe Xcode. The installer provisions its helper
+and passes its directory to the app and generated service without a shell reload
+or reboot. Repeat with uv already in `~/.local/bin`, legacy `~/.cargo/bin`, and a
+custom PATH location; preserve custom executable precedence and dispatcher names.
+
+Start with a stale service PATH, then retry after installing the helper. Both
+ChatGPT sign-in and API-key model discovery must identify an unavailable host
+helper accurately; generic provider errors and secrets remain redacted. Doctor
+checks helper discovery; reset keeps the existing service/data ownership and
+uses the same startup environment. Owners: `test_installer_script.py`,
+`test_host_dependencies.py`, `test_deployment_service.py`, and `test_setup.py`.
+These run in Public readiness; use focused DTU checks for installation changes.
+The maintained `chatgpt-sign-in` browser journey also checks both launch links
+(Open ChatGPT and Continue with ChatGPT) for keyboard focus and at least 4.5:1
+text contrast at desktop/phone widths in light/dark appearance. Accessible names
+alone do not prove the visible text can be read. Synthetic downloads and
+subprocess/browser checks do not prove live account sign-in.
+
 ### Everyday settings draft ownership (October 19)
 
 The existing `settings-everyday-browser.mjs` Public readiness journey starts by
@@ -860,6 +882,13 @@ It runs as an affected-flow smoke in the owned DTU and in Extended browser
 checks; it adds no broad publication gate.
 
 
+## Model capacity waiting settings — October 20
+
+`frontend/tests/model-capacity-settings-browser.mjs` owns the global Advanced settings journey using the production built UI and AppService with a synthetic runtime. It proves finite and unlimited waiting, two-client stale-save refusal, retained private edits, exact command retry after a lost acknowledgement and reopen, no extra saved mutation, unchanged worker starts/stops, saved cold reopen, and desktop/narrow layouts. No paid provider or live-host policy change is involved.
+
+This additive owner gives this isolated branch 100 registered scenarios and 143 distinct readiness/extended browser scripts (142 excluding the attachment script). The original 65-scenario identity is unchanged. This focused qualification does not add a broad browser census as a release gate.
+
+
 ### Global test capacity (October 20)
 
 **TEST-CAPACITY** adds `testing-settings` to Extended browser checks and the
@@ -878,3 +907,91 @@ Global testing settings adds one source-only browser owner: this isolated branch
 has 100 registered scenarios and 143 distinct source/readiness browser scripts
 (142 excluding attachment consumption). Integrating other additive owners must
 reconcile these totals without altering the frozen 65-scenario baseline.
+
+
+### Shared machine test resources (October 20)
+
+**TEST-MACHINE-RESOURCES** extends the registered `testing-settings` owner with
+shared-account machine limits, effective sources, observations/reservations, lost
+save acknowledgement readback, stale installation-writer refusal and narrow build
+slot controls. Its fixture uses a private synthetic authority and never changes
+a real host policy. `test_test_host_resources.py` owns bounded simultaneous
+admissions across backends and machine identities, frozen requests, pressure and
+zero overrides, queue reuse, unknown outcomes and exact owner cleanup.
+
+This is additive ownership for the existing browser scenario; it does not change
+the frozen inventory, add a duplicate browser lane, or claim remote/native-device
+qualification. Remote and unsupported machine authority remains an explicit
+boundary while existing backend testing continues.
+
+### Existing-chat adoption (October 20)
+
+`assignment-adoption` owns the new existing-chat assignment flow in Extended
+browser checks and focused affected-flow qualification. It covers stale target
+review, lost acknowledgement with the same request identity, one committed
+member, retained drafts and history, no input or Stop replay, cold reopen,
+and desktop/phone layout. The fixture uses the production service and built
+client with a synthetic runtime. Live provider execution and production adoption
+remain separate evidence. The frozen baseline inventory is unchanged.
+
+Existing-chat adoption adds one source-only browser owner: this isolated branch
+has 100 registered scenarios and 143 distinct source/readiness browser scripts
+(142 excluding attachment consumption). Integrating other additive owners must
+reconcile these totals without altering the frozen 65-scenario baseline.
+
+The integrated branch containing both testing settings and existing-chat adoption has 101 registered scenarios, 144 distinct readiness/extended scripts, and 143 excluding attachment consumption. Both additive owners preserve the original 65-scenario identity.
+
+
+### Test execution limits (October 20)
+
+**TEST-EXECUTION-LIMITS** extends the registered `testing-settings` browser owner
+with global future-job queue depth, zero waiting expiry, profile CPU and check
+durations, effective values, stale edits, lost-acknowledgement readback, narrow
+unsaved-close/Keep settings open and cold reopen. The settings fixture remains
+private and synthetic; no production policy is changed.
+
+`test_test_execution_settings.py` owns global authority, private revisioned
+settings, complete journal counts and pagination beyond 64 requests, frozen
+accepted policy and historical direct-execution defaults. Durable queue coverage
+checks that a restarted scheduler retains resources and timeouts after settings
+change. Preparation tests cover one saved waiting/build deadline and independent
+dependency recipe identity. This adds no duplicate browser scenario or broad
+publication gate and does not claim physical-runner deployment acceptance.
+
+
+## Registered test machines (October 20)
+
+PR #922 extends the existing `testing-settings-browser.mjs` owner with global
+approved-machine setup and per-target limits. The frozen inventory and browser
+registry remain unchanged. `settings.registered-test-machines` records the additive
+workflow in the delta inventory.
+
+The mounted built-client/AppService fixture covers named unsaved drafts,
+registration and target-policy acknowledgement loss with one write/readback,
+stale policy revisions, zero limits, pause plus controller refresh, narrow layout
+and cold reopen. Remote transport is a bounded fixture and changes no live policy.
+Focused origin/controller tests cover target identity, pre-effect binding,
+cancellation, unknown recovery, archive containment and original-package cleanup.
+
+Separate native Linux evidence includes source/check/export/cleanup on two
+approved machines, a bounded serial-versus-concurrent workload and an actual
+AppService/TestQueue route with the first target's observed capacity saturated.
+See [Registered test machines](../registered-test-machines.md) for timings,
+evidence boundaries and remaining platform setup work.
+
+Integrated model-capacity, testing settings and existing-chat adoption coverage totals 102 registered scenarios and 145 distinct readiness/extended scripts (144 excluding attachment consumption), preserving the frozen 65-scenario baseline.
+
+
+### Per-chat test queue (October 20)
+
+PR #925 extends the existing `testing-settings-browser.mjs` owner with the global
+Maximum pending checks per chat field. The production service and built client
+passed saved-value readback after a lost acknowledgement, stale-writer refusal
+with retained edits, desktop/narrow controls and cold reopen. The default remains
+1; higher values queue FIFO work behind the chat's single owned environment.
+
+Focused real-dispatch tests cover full counts beyond a displayed page, local and
+remote cleanup boundaries, concurrent scheduler passes, restart and the exact
+initial-allocation cancellation gap. Unknown or advanced owners remain held. This
+is controlled-backend and rendered-client evidence, not live runner deployment.
+No new broad test lane or publication gate is added.

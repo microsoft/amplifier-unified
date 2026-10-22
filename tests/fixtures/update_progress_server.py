@@ -39,12 +39,53 @@ async def main(home):
     diagnostics.record('ecosystem-activation','succeeded')
     diagnostics.begin('ecosystem','b'*32,tier='other',components=['amplifier-module-hooks-approval'])
     attempt=diagnostics.state['attemptId']
+    original_application = dict(service.state['updates']['application'])
+    original_notice_start = service.state['releaseNoticeStartVersion']
+    summary_notes = [{'version': version, 'title': title, 'changes': [change], 'notices': []}
+        for version, title, change in [('0.20.207', 'Later release', 'A later improvement.'),
+            ('0.20.206', 'Clearer update summaries', 'See what an update includes before installing.'),
+            ('0.20.205', 'Earlier installed release', 'Earlier improvements.')]]
+    summary_notes[1]['notices'] = [{'id': 'summary-guidance', 'title': 'Example important guidance',
+        'detail': 'Synthetic guidance retained separately.', 'action': 'Review your settings.'}]
     service.state['updates'].update(initialPreparation=False,phase='validating',error=None,pendingRelease=None,
         sequence={'stage':'other','install':True},
         probeProgress={'attemptId':attempt,'phase':'prepare','completed':24,'total':37,'startedAt':time.time()})
     async def transition(request):
         stage=(await request.json())['stage']
-        if stage in {'initial', 'regular'}:
+        if stage == 'summary-before':
+            # Simulate the install's notice history as well as its displayed version.
+            service.state['releaseNoticeStartVersion'] = '0.20.205'
+            await manager.publish(phase='checked', error=None, pendingApp=None, pendingRestart=None,
+                pendingReplacement=None, pendingSmartTools=[], pendingRelease=None, applicationResult=None,
+                sequence={'stage':'application','install':False},
+                application={**original_application,'current':'0.20.205','latest':'v0.20.206',
+                    'status':'update','revision':'b'*40,'runningRevision':'a'*40,'releaseNotes':summary_notes})
+        elif stage == 'summary-queued':
+            application = service.state['updates']['application']
+            await manager.publish(phase='app-staged', pendingApp=dict(application),
+                application={**application,'latest':'v0.20.207','revision':'e'*40},
+                sequence={'stage':'application','install':True})
+        elif stage == 'summary-restarting':
+            await manager.publish(phase='activating', pendingApp=None,
+                pendingRestart={'version':'0.20.206','requestStatus':'uncertain'})
+        elif stage == 'summary-after':
+            # This transition models only the runner remaining after installation.
+            application = {**service.state['updates']['application'],'current':'0.20.206',
+                'latest':'v0.20.206','status':'current','runningRevision':'b'*40}
+            await manager.publish(phase='staged', application=application, pendingRestart=None,
+                pendingSmartTools=[{'id':'runner','runnerSource':True}],
+                sequence={'stage':'included','install':True},
+                applicationResult={'attemptId':'c'*32,'phase':'restart-ack','version':'0.20.206',
+                    'revision':'b'*40,'verifiedAt':time.time()})
+        elif stage == 'summary-missing':
+            await manager.publish(phase='activating', pendingSmartTools=[],
+                pendingRestart={'version':'0.20.204','requestStatus':'uncertain'})
+        elif stage == 'summary-reset':
+            service.state['releaseNoticeStartVersion'] = original_notice_start
+            await manager.publish(phase='installed', pendingApp=None, pendingRestart=None,
+                pendingSmartTools=[], applicationResult=None, application=original_application,
+                sequence={'stage':'complete','install':False})
+        elif stage in {'initial', 'regular'}:
             await manager.publish(initialPreparation=stage=='initial')
         elif stage=='waiting':
             service.state['voice']={'status':'connected'}
@@ -68,6 +109,33 @@ async def main(home):
         elif stage=='failed':
             diagnostics.record('ecosystem-prepare','failed',errorType='BundleNotFoundError')
             await manager.publish(phase='error',error='Synthetic activation failure; active generation preserved.')
+        elif stage=='source-mismatch':
+            from amplifier_web.update_diagnostics import failure_guidance
+            failure=diagnostics.record('ecosystem-validation','failed',errorType='ValueError',
+                reason='runtime-installed-source-mismatch',package='amplifier-foundation',
+                resolutionMismatches=['revision'])
+            await manager.publish(phase='error',error=failure_guidance(failure))
+        elif stage=='application-confirmed':
+            # Browser presentation fixture only. The real readiness proof and
+            # persisted receipt are exercised by test_update_readiness.py.
+            application={**service.state['updates']['application'], 'status':'current', 'runningRevision':'c'*40}
+            result={'attemptId':'d'*32,'phase':'restart-ack','version':application['current'],
+                    'revision':application['runningRevision'],'verifiedAt':time.time()}
+            await manager.publish(application=application,applicationResult=result,phase='installed',
+                pendingApp=None,pendingRestart=None,pendingReplacement=None,pendingRelease=None,error=None,
+                sequence={'stage':'included','install':False},lastAttempt=None)
+        elif stage=='component-source-changed':
+            diagnostics.begin('ecosystem','e'*32,tier='other',components=['amplifier-foundation'])
+            diagnostics.record('ecosystem-validation','failed',errorType='ValueError',reason='runtime-source-changed')
+            await manager.publish(phase='error',sequence={'stage':'other','install':False},
+                error='Worker sources changed while checking. Check for updates again.')
+        elif stage=='app-result-stale':
+            await manager.publish(application={**service.state['updates']['application'],'runningRevision':'f'*40})
+        elif stage=='unconfirmed-restart':
+            await manager.publish(pendingRestart={'requestStatus':'uncertain'},phase='activating',error=None)
+        elif stage=='clear-app-result':
+            await manager.publish(applicationResult=None,pendingRestart=None,phase='installed',error=None,
+                sequence={'stage':'complete','install':False})
         elif stage=='compatibility':
             await manager.publish(probeProgress={'attemptId':attempt,'phase':'compatibility','completed':12,'total':37,'startedAt':time.time()})
         else:raise web.HTTPBadRequest()

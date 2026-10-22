@@ -50,7 +50,7 @@ try{
  const updateUnread=(await state()).attention.pages.updates;assert.equal(updateUnread,2,'Fixture supplies two current release notices');
  assert.equal(await page.locator('[data-settings-section=updates] .a-attention-badge').innerText(),String(updateUnread));
  await openSettingsPage(page,'updates');
- const advanced=page.locator('[data-part=ecosystem-update-details]');if(!await advanced.evaluate(el=>el.open))await advanced.locator(':scope > summary').click();await page.getByText('What’s new',{exact:true}).click();
+ const advanced=page.locator('[data-part=ecosystem-update-details]');if(!await advanced.evaluate(el=>el.open))await advanced.locator(':scope > summary').click();await page.locator('[data-part=important-release-changes]>summary').click();
  await page.locator('#available-updates-list > li').first().waitFor();
  assert.equal(await page.locator('#available-updates-list > li').count(),1);
  assert.match(await page.locator('#available-updates-list').innerText(),/×2/);
@@ -140,7 +140,7 @@ try{
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');
- await page.getByRole('button',{name:'Choose project',exact:true}).click();
+ await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
  const attach=page.getByRole('form',{name:'Use existing folder',exact:true});
  await attach.getByRole('button',{name:'Browse',exact:true}).click();

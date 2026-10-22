@@ -63,8 +63,8 @@ def process_identity(pid):
 
 def bound(payload):
     seconds, command = payload['timeoutSeconds'], payload['command']
-    if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= 1800:
-        raise ValueError('The guest deadline must be between 1 and 1800 seconds.')
+    if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= 2147483647:
+        raise ValueError('The guest deadline must be between 1 and 2147483647 seconds.')
     if not isinstance(command, str) or not command or len(command) > 16384:
         raise ValueError('A bounded command is required.')
     value = {key: payload[key] for key in ('rootOwner', 'operationId', 'universeId', 'jobId')}

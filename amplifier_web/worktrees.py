@@ -619,6 +619,13 @@ class Worktrees:
                 # A UI placement choice does not elevate the running task's
                 # peer inputs or reset their retained causal chain.
                 record['causalDepth'] = self.app.collaboration.causal_depth(session, lineage, 'agent')
+            if record['resumeRequested'] and not manager and not previous:
+                from .handoff_admission import worker_instance
+                instance = worker_instance(self.app, sid)
+                if instance:
+                    record['finishingTurn'] = {'workerInstance': instance,
+                        'generationId': active['id'], 'inputIds': copy.deepcopy(active.get('inputIds', [])),
+                        'configurationRevision': session.get('configurationPendingRevision', 0)}
             if manager:
                 source = self.app._session(manager['sourceSessionId'])
                 self.app.collaboration.require_inbox_slot(source['id'])

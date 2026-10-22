@@ -106,6 +106,38 @@ function ResultFileStatus({response}){
  return null;
 }
 
+function RequestCancellation({dispatch,sessionId,request,onChanged}){
+ const [busy,setBusy]=useState(false),[error,setError]=useState(''),[note,setNote]=useState(''),[unknown,setUnknown]=useState(false);
+ const operation=useRef(null),inflight=useRef(false);
+ const cancellation=request.cancellation;
+ const report=request.response||{};
+ const finished=report.status==='sealed'&&report.kind==='result'&&['success','failed','cancelled','declined'].includes(report.outcome);
+ const canCancel=request.senderSessionId===sessionId&&!cancellation&&!finished&&['queued','pending_steer','submitting','accepted','applied','unknown'].includes(request.delivery);
+ const queued=['queued','pending_steer'].includes(request.delivery);
+ const cancel=async()=>{
+  if(inflight.current)return;
+  inflight.current=true;setBusy(true);setError('');
+  // Retain exactly one operation across a lost acknowledgement; do not turn
+  // a retry into another request or send the original work again.
+  operation.current??={id:crypto.randomUUID(),args:{sessionId,requestId:request.requestId,reason:note}};
+  try{
+   const answer=await dispatch('coordination.cancel',operation.current.args,{id:operation.current.id,feedback:false});
+   if(answer?.accepted!==true)throw Error(answer?.error||'Cancellation could not be confirmed.');
+   setUnknown(false);await onChanged();
+  }catch(error){setUnknown(true);setError('Cancellation could not be confirmed. Refresh or check again; the original work was not resent. '+error.message)}
+  finally{inflight.current=false;setBusy(false)}
+ };
+ return <div data-part="request-cancellation">
+  {cancellation&&<p role="status">{cancellation.detail}</p>}
+  {canCancel&&<details><summary>{queued?'Withdraw this request':'Ask to stop this request'}</summary>
+   <p>{queued?'Remove this request from the queue. Other work can continue.':'Ask the recipient to stop only this request at its next check. Work may continue until it responds.'}</p>
+   <label>Optional guidance<textarea value={note} disabled={busy||unknown} maxLength={1000} onChange={event=>setNote(event.target.value)}/></label>
+   <button className="a-link" disabled={busy} data-action="coordination.cancel" onClick={cancel}>{busy?'Sending…':unknown?'Check cancellation again':queued?'Withdraw request':'Request cancellation'}</button>
+  </details>}
+  {error&&<p role="alert">{error}</p>}
+ </div>;
+}
+
 export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorkspace,onScopeReady,scopeInvalid=false}){
  const visit=useRef(0),openingRef=useRef(false),sectionRef=useRef(null),refreshFocus=useRef(null);
  const [review,setReview]=useState(false);
@@ -177,7 +209,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
   {session&&<IntegrationEvidence key={'integration:'+sessionId} session={session} act={dispatch}/>}
   <details onToggle={event=>setRecap(event.currentTarget.open)}><summary>Changes since your last view and diagnostics</summary>{recap&&<CoordinationObservations key={'observations:'+sessionId} dispatch={dispatch} sessionId={sessionId}/>}</details>
   <details><summary>Workspace chat list</summary>
-   {items.map(row=><div key={row.target.sessionId} data-workspace-chat-id={row.target.sessionId}>{row.title||'Untitled chat'}{row.target.sessionId===sessionId?' (this chat)':''} · {labels[row.status]||row.status} · {row.collaboration?'Commissioned chat':'Independent chat'} <button type="button" className="a-link" data-action="session.select" aria-label={'Open chat: '+(row.title||'Untitled chat')} disabled={opening!==null||!onOpenChat} onClick={()=>openChat(row.target.sessionId)}>{opening===row.target.sessionId?'Opening…':'Open chat'}</button><details><summary>Chat identity</summary><code>{row.target.sessionId}</code></details></div>)}
+   {items.map(row=><div key={row.target.sessionId} data-workspace-chat-id={row.target.sessionId}>{row.title||'Untitled chat'}{row.target.sessionId===sessionId?' (this chat)':''} · {labels[row.status]||row.status} · {row.collaboration?'Commissioned chat':'Started independently'} <button type="button" className="a-link" data-action="session.select" aria-label={'Open chat: '+(row.title||'Untitled chat')} disabled={opening!==null||!onOpenChat} onClick={()=>openChat(row.target.sessionId)}>{opening===row.target.sessionId?'Opening…':'Open chat'}</button><details><summary>Chat identity</summary><code>{row.target.sessionId}</code></details></div>)}
    {next!==null&&<button className="a-link" onClick={more}>Load more workspace chats</button>}
   </details>
   <details><summary>Exact requests, messages and saved results</summary>
@@ -187,6 +219,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
    <small>{row.senderSessionId===sessionId?'Sent to':'Received from'} {name(row.senderSessionId===sessionId?row.target.sessionId:row.senderSessionId)} · {row.delivery}</small><details><summary>Request identity</summary><code>{row.requestId}</code></details>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>
+   <RequestCancellation dispatch={dispatch} sessionId={sessionId} request={receipt} onChanged={refresh}/>
    {response&&<div data-part="exact-result"><p>Result: {response.status} · {response.outcome} · {response.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{response.text}</p>{response.detail&&<p role="alert">{response.detail}</p>}
     {response.terminalMessageId&&response.status==='sealed'&&<button className="a-link" data-message-id={response.terminalMessageId} onClick={()=>reveal(row.target.sessionId,response.terminalMessageId)}>Open exact terminal message</button>}
     <ResultFileStatus response={response}/>

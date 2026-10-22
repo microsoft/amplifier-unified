@@ -6,6 +6,7 @@ import {readDetail} from './detail-read';
 import {request} from './api';
 import {delegationRoutingLabel} from './delegation-routing.js';
 import {isRunning} from './timeline-data';
+import {contentUnavailable} from './execution-content.js';
 
 export function DelegateMessage({node,field,label,direction,expanded,toggle,partial=false}){
  const id=`exchange:${node.id}:${field}`,full=expanded.has(id);
@@ -52,13 +53,13 @@ export function DelegateExchange({node,expanded,toggle,activity,activityOpen,tog
  const phase=[workerPhase,exchange.phase].find(value=>failures.includes(value))||workerPhase||exchange.phase;
  const failure=failures.includes(phase);
  return <div className="a-delegate-exchange">
-  {requestPresent?<DelegateMessage node={exchange} field="delegateRequest" label="Request to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>:<p className="a-caption">Request not recorded.</p>}
+  {requestPresent?<DelegateMessage node={exchange} field="delegateRequest" label="Request to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>:<p className="a-caption">{contentUnavailable(exchange.contentAvailability?exchange:node,'Request')}</p>}
   {childrenCount>0&&<><button type="button" className="a-link a-delegate-activity-toggle" aria-expanded={activityOpen} onClick={toggleActivity}><ChevronRight className={activityOpen?'open':''}/>Worker activity · {childrenCount} {childrenCount===1?'step':'steps'}{isRunning(node)?' · running':''}</button>{activityOpen&&activity}</>}
   {entries.map(entry=><React.Fragment key={entry.id}>
    {(entry.delegateRequest!=null||entry.delegateRequestDetail)&&<Followup entry={entry} expanded={expanded} toggle={toggle}/>}
    <DelegateMessage node={entry} field="delegateResponse" label={entry.report?'Update from delegate':'Response to parent'} direction="Delegate → Parent" expanded={expanded} toggle={toggle} partial={entry.partial}/>
   </React.Fragment>)}
-  {response?<><DelegateMessage node={exchange} field="delegateResponse" label="Response to parent" direction="Delegate → Parent" expanded={expanded} toggle={toggle}/><p className="a-caption">Recorded delegate return. Parent consumption is not confirmed by this tool record.</p></>:exchange.delivery!=='separate'&&!failure&&<p className="a-caption" role="status">{isRunning({phase})?'Waiting for response…':'Response not recorded.'}</p>}
+  {response?<><DelegateMessage node={exchange} field="delegateResponse" label="Response to parent" direction="Delegate → Parent" expanded={expanded} toggle={toggle}/><p className="a-caption">Recorded delegate return. Parent consumption is not confirmed by this tool record.</p></>:exchange.delivery!=='separate'&&!failure&&<p className="a-caption" role="status">{isRunning({phase})?'Waiting for response…':contentUnavailable(exchange.contentAvailability?exchange:node,'Response')}</p>}
   {failure&&<p className="a-caption" role="status">Worker {phase}. Any earlier reports remain available; they do not establish completion.</p>}
   {exchange.delivery==='separate'&&!failure&&isRunning({phase})&&<p className="a-caption" role="status">{phase==='idle'?'Worker remains available.':'Worker is still active; earlier reports are not a final outcome.'}</p>}
   {!response&&exchange.delivery!=='separate'&&node.summary&&<><DelegateMessage node={node} field="summary" label="Recorded worker summary" direction="Delegate report" expanded={expanded} toggle={toggle} partial/><p className="a-caption">Legacy summary; not evidence of the exact response returned to the parent.</p></>}

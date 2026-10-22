@@ -119,6 +119,11 @@ async def test_scheduled_retirement_does_not_wrap_inspection_in_lifecycle(tmp_pa
         assert not manager.service.runtime_lifecycle_lock.locked()
     async def publish(**values):
         published.append(values)
+    from amplifier_web import storage_cleanup
+    async def policy_run(service, identity, *, automatic):
+        assert service is manager.service and automatic
+        return await retention.reclaim(manager)
+    monkeypatch.setattr(storage_cleanup, 'run', policy_run)
     monkeypatch.setattr(retention, 'verify_generation', verify)
     monkeypatch.setattr(asyncio, 'sleep', no_delay)
     manager.publish = publish

@@ -9,6 +9,8 @@ from pathlib import Path
 import stat
 import uuid
 
+from . import test_host_resources as host_resources
+
 LIMITS = {'maxRunning': 15, 'maxInstances': 256, 'minFreeBytes': 10 * 1024**3}
 MAXIMUM = 2**53 - 1
 
@@ -17,6 +19,8 @@ def definitions(schema, string):
     limits = schema({key: {'type': 'integer', 'minimum': 0, 'maximum': MAXIMUM}
                      for key in LIMITS}, [])
     return {
+        'testing.machine.read': ('Read shared local-machine test budgets and current reservations. Does not launch work.', schema()),
+        'testing.machine.save': ('Change shared local-machine resource budgets for future test admissions across cooperating installations. Active work continues; zero disables a ceiling.', schema({'expectedRevision': string(64), 'limits': schema({key: {'type': 'integer', 'minimum': 0, 'maximum': MAXIMUM} for key in host_resources.FIELDS}, [])}, ['expectedRevision', 'limits'])),
         'testing.capacity.read': ('Read global test capacity settings and the selected runner. Passive; does not probe or launch environments.', schema()),
         'testing.capacity.save': ('Change global test admission limits, optionally overriding the selected runner. Zero disables that limit. Affects future admissions across workspaces on this app installation; never stops active work. Requires global host-defaults authority.', schema({
             'expectedRevision': string(64), 'defaults': limits,
@@ -27,6 +31,11 @@ def definitions(schema, string):
 
 def execution_key(config):
     """Only capacity integers are mutable; endpoint/code/source/auth stay bound."""
+    inherited = config.get('capacityPolicyId')
+    if inherited:
+        if not isinstance(inherited, str) or len(inherited) != 64 or any(c not in '0123456789abcdef' for c in inherited):
+            raise ValueError('The retained capacity policy identity is invalid.')
+        return inherited
     value = copy.deepcopy(config)
     for key in LIMITS:
         value.pop(key, None)
@@ -140,6 +149,16 @@ async def dispatch(app, action, args, authority):
     from .service import AppError
     try:
         async with app.lock:
+            if action.startswith('testing.machine.'):
+                if action.endswith('.save'):
+                    app.configuration_authority.check(authority)
+                    current = host_resources.save(args['expectedRevision'], args['limits'])
+                    app.test_queue.backoff.clear()
+                    app.test_queue.wakeup.set()
+                    app.test_queue.start()
+                else:
+                    current = host_resources.snapshot()
+                return {'accepted': True, 'result': current}
             current = snapshot(app)
             if action.endswith('.save'):
                 app.configuration_authority.check(authority)

@@ -159,6 +159,9 @@ def _time(value):
         return None
 
 
+from .tool_observations import outcome_summary as _outcome_summary
+
+
 def _observation(event, raw, offset, path, identity):
     if not isinstance(event, dict) or not isinstance(event.get('data'), dict):
         return None
@@ -232,6 +235,34 @@ def _observation(event, raw, offset, path, identity):
                 row[field + 'Recording'] = recording
         if field not in {'request', 'response'}:
             row[field] = _preview(data[key])
+        if field == 'input' and kind == 'tool':
+            # Only header hints from the accepted input, never reconstructed
+            # arguments or evidence that the operation completed.
+            from .tool_observations import input_hints
+            row.update(input_hints(data.get('tool_name') or data.get('tool'), data[key]))
+    if kind == 'tool':
+        from .tool_observations import identity as tool_identity
+        token = tool_identity(data.get('unified_tool_observation_id'))
+        if token:
+            row['_hostToolId'] = token
+        outcome = _outcome_summary(name, data)
+        if outcome:
+            row['outcomeSummary'] = outcome
+        from .delegate_exchange import FIELDS, select, source_field, tool_name
+        if tool_name(row) == 'delegate':
+            for field in FIELDS:
+                source = row['_eventFields'].get(source_field(field))
+                if source is None or field == 'delegateResponse' and (name == 'tool:error'
+                        or data.get('error') or data.get('error_message')):
+                    continue
+                value = select(data[source['key']], field)
+                if not isinstance(value, str):
+                    continue
+                row[field] = _preview(value)
+                row['_eventFields'][field] = {**source, 'delegateField': field}
+                row[field + 'Detail'] = {'part': 'nodes', 'id': row['id'], 'field': field,
+                    'digest': hashlib.sha256(('event-field-v1:' + sha + ':' + source['key'] + ':' + field).encode()).hexdigest(),
+                    'digestKind': 'event-field-v1', 'length': len(value)}
     # Neither usage nor lifecycle aggregates are derived from a partial range.
     return row
 
@@ -401,9 +432,14 @@ def read_field(session, reference, *, offset=0, limit=4096, check_budget=None):
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 16384:
         raise ValueError('Invalid event field page')
     path, _, _ = _source(session)
-    if (not isinstance(reference, dict) or set(reference) != {'path', 'offset', 'bytes', 'sha256', 'key'}
+    keys = {'path', 'offset', 'bytes', 'sha256', 'key'}
+    delegate_fields = {'delegateRequest': {'tool_input', 'arguments', 'input', 'prompt'},
+                       'delegateResponse': {'result', 'tool_result'}}
+    if (not isinstance(reference, dict) or set(reference) not in (keys, keys | {'delegateField'})
             or reference['path'] != str(path) or not isinstance(reference['key'], str)
             or reference['key'] not in FIELD_KEYS
+            or 'delegateField' in reference and (not isinstance(reference['delegateField'], str)
+                or reference['key'] not in delegate_fields.get(reference['delegateField'], set()))
             or type(reference['offset']) is not int or reference['offset'] < 0
             or type(reference['bytes']) is not int or not 0 < reference['bytes'] <= MAX_BYTES
             or not isinstance(reference['sha256'], str) or len(reference['sha256']) != 64):
@@ -411,7 +447,7 @@ def read_field(session, reference, *, offset=0, limit=4096, check_budget=None):
     guard = check_budget or (lambda: None)
     guard()
     fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOFOLLOW', 0))
-    with os.fdopen(fd, 'rb') as stream:
+    with os.fdopen(fd, 'rb', buffering=0) as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise ValueError('Canonical events must be a regular file')
@@ -426,6 +462,11 @@ def read_field(session, reference, *, offset=0, limit=4096, check_budget=None):
         if not isinstance(event, dict) or not isinstance(event.get('data'), dict):
             raise ValueError('Invalid canonical event field')
         value = event['data'][reference['key']]
+        if 'delegateField' in reference:
+            from .delegate_exchange import select
+            value = select(value, reference['delegateField'])
+            if value is None:
+                raise StaleWindow('The delegation field is no longer available')
         chunks = (value,) if isinstance(value, str) else json.JSONEncoder(
             ensure_ascii=False, indent=2, allow_nan=False).iterencode(value)
         parts, total, digest = [], 0, hashlib.sha256()
@@ -436,8 +477,22 @@ def read_field(session, reference, *, offset=0, limit=4096, check_budget=None):
             if start < end:
                 parts.append(chunk[start:end])
             total += len(chunk)
-        if _stamp(os.fstat(stream.fileno())) != stamp or _stamp(path.stat()) != stamp:
+        current = _stamp(os.fstat(stream.fileno()))
+        named = path.lstat()
+        if not stat.S_ISREG(named.st_mode) or _stamp(named) != current or current[:2] != stamp[:2]:
             raise StaleWindow('The event field source changed during its read')
+        if current != stamp:
+            # Other calls may append while a large accepted field is formatted.
+            # A growing same-inode log is safe only after rechecking this exact
+            # bounded record from the file, not from a buffered read snapshot.
+            if current[2] <= stamp[2]:
+                raise StaleWindow('The event field source changed during its read')
+            guard()
+            stream.seek(reference['offset'])
+            if hashlib.sha256(stream.read(reference['bytes'])).hexdigest() != reference['sha256']:
+                raise StaleWindow('The event field source changed during its read')
+            if _stamp(os.fstat(stream.fileno())) != current or _stamp(path.lstat()) != current:
+                raise StaleWindow('The event field source changed during its read')
     text = ''.join(parts)
     return {'text': text, 'offset': offset, 'total': total,
             'nextOffset': offset + len(text) if offset + len(text) < total else None,

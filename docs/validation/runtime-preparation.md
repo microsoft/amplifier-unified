@@ -91,3 +91,163 @@ is retained in workspace evidence under output/approved-followups.
 
 This release fixes the demonstrated pre-registration cancellation boundary;
 it makes no broader CPU improvement claim. Platform acceptance remains separate.
+
+## Source policy survives immutable installation
+
+The qualified worker manifest pins exact installed commits for reproducibility.
+Those commits are separate from the branch, tag, or explicit pin selected for
+future updates. Before freezing a newly prepared graph, preserve an authored
+requirement only when its repository, subdirectory, lock revision, and installed
+revision agree. A full commit written by the resolver may then retain the
+prepared declaration's original ref. An explicit installed tag, other branch,
+fork, different directory, or changed revision cannot be relabeled this way.
+
+Recovery needs explicit branch authority even when the resolver retains a named
+`rev` rather than normalizing it into an exact SHA. Authored tags (including non-version names such as `stable`)
+and ambiguous `rev`/PEP 508 names retain the exact installed commit. A matching
+repository and commit do not prove that a name is a branch. Branch/tag conflicts
+remain protected, even when their names are identical.
+
+Only unconditional selected requirements and explicitly selected default groups
+can authorize recovery. Marker alternatives, unused extras/groups, constraints,
+and unknown source selection can block conflicting recovery but cannot authorize
+it alone. The app's managed default group remains supported
+through its actual checked stage receipt; an unchecked group URI is not branch
+proof. Resolving ambiguous refs later requires selected-source reconciliation with
+exact repository ref evidence, not a guess from names such as `main`.
+
+`runtime-sources.json` records `policyOrigin` beside each newly captured policy:
+its basis, original ref, exact source identity, and (for prepared declarations)
+the manifest digest. Ambiguous names use `unresolved-reference` and `originalRef`;
+explicit tags use `tag-reference`. Both remain fixed until separate policy proof. Checked policies carry that origin through subsequent
+staging and freeze. Exact source drift still fails qualification. Installed
+owned clean cache modules retain their declared policy; unrelated or newer
+adjacent caches do not explain a Git distribution's old pin.
+
+Older pins without recorded origin remain unchanged. Their update-source detail
+reports that the origin is not recorded, so an intentional pin is not silently
+converted into branch tracking. Resolving a legacy policy requires the actual
+source declarations and configuration; conflicting bundle declarations require
+an explicit compatibility decision. This preservation step does not migrate legacy pins, alter registry component
+policy, or refresh qualified test adapters. The separate reconciliation path below
+can recover selected source policy in a fresh candidate.
+
+Focused tests cover declaration recovery before freeze, direct/transitive
+requirements, policy origin across stage/freeze/next check, exact identity drift,
+explicit pins/branches/tags/forks, ambiguous declarations, clean owned cache
+boundaries, and retention of an unknown legacy pin. They establish source-policy
+behavior, not deployment or fresh-worker adoption on a user's installation.
+Real local Git/uv tests also exercise normalized installs through production freeze,
+recorded verification, and next inventory: explicit selected branches and checked
+managed groups remain eligible; tags, ambiguous names, inactive markers and unused
+extras remain pinned.
+
+Actual authored-manifest resolver tests separately cover a repository with only a
+`stable` tag, same-name branch/tag, and a real branch. Both `rev="stable"` and
+PEP 508 `@stable` remain protected without branch-kind proof. The original-ref
+evidence survives unrelated stage/freeze/inventory cycles.
+
+Scope boundary: Foundation cache/shared-binding metadata can also contain an
+untyped non-version ref. Its existing ownership checks establish source identity,
+not branch-versus-tag intent. That adjacent path is tracked separately for exact
+ref proof; this correction does not claim to resolve all cache policy ambiguity.
+
+A universal lock's `branch` entry is not selected-intent proof: uv can collapse a
+selected marker-specific SHA and an inactive branch at the same commit into that
+one entry. Such conflicts stay exact unless an independent matching checked
+policy already exists. Actual resolver regressions cover both marker selections.
+
+## Cached source reference proof
+
+The cache/shared-binding and raw installed-Git follow-up verifies an untyped ref against both its exact
+branch and same-name tag in one remote response. Availability checks join identical
+repository/ref lookups within the existing access scope; a cached branch-only
+lookup cannot substitute for this proof. Tag-only and same-name branch/tag sources
+remain protected, while missing/failed evidence is reported as a failed check.
+A normal unambiguous branch continues to update without a name allowlist.
+
+Fresh qualification also proves newly inferred cache-module policies at the
+installed revision. Changed, unavailable or ambiguous evidence preserves the exact
+commit with its original reference and reason. An already checked policy still
+requires the existing installed-identity validation and is not reinterpreted.
+Active and recorded generations are never rewritten for this check.
+
+Real local Git/uv regressions exercise both legacy cache metadata and Foundation's
+actual shared binding/build view through installed graph, production freeze,
+recorded verification and next inventory. Separate production updater checks
+cover tag-only, conflicting-name, ordinary branch and offline cases. Focused
+tests cover grouped queries, access boundaries, fresh-check cache invalidation,
+changed revisions, cancellation and preservation of checked policy. This is
+isolated qualification, not deployment or live-provider evidence.
+
+Real direct Git installs are checked before their first freeze, including a tag-only source,
+a branch/tag name collision, and an ordinary branch. An exact qualified authored-branch
+receipt remains authoritative even when a same-name tag exists. Unchecked transitive
+references stay protected with their original name available for selected-source
+reconciliation; they are not assumed to be permanently fixed by this check.
+
+Fully qualified `refs/heads/...` and `refs/tags/...` names preserve their explicit
+branch or fixed-tag intent; only unqualified names need the same-name collision
+check. Other ref namespaces remain protected without inferred policy.
+
+
+### Reconciling earlier generated pins
+
+Older worker receipts may have recorded a resolver-normalized commit as their
+standing update policy. The ordinary component Updates flow offers “Refresh included components”
+when these receipts have no recorded origin or an unresolved reference. It does not load bundles while
+checking or browsing settings. During an unpublished candidate only, a
+collection-only pass observes the effective selected bundle, include and module
+sources after configuration precedence, and binds them to the dependency
+batch's exact package identities.
+Host-selected app behaviors participate in that same observation: their winning
+module declaration is recorded even when it replaces a root's or late module
+choice. Installed and local host components remain local; explicit pins and
+conflicting selected refs remain protected. Selection-version 3 rechecks earlier
+no-op receipts that could have omitted these host-owned declarations. The
+maintained source-policy tests cover an actual host-selected Bundle through
+collection, checked Git refresh and preserved prior-generation evidence.
+
+Only an unambiguous moving branch for the same repository and subdirectory can
+replace an unknown-origin SHA. The candidate resolves that branch, aligns its
+owned cache or shared-source binding to the exact checked commit, and collects
+again before ordinary installation. A same-named branch/tag ambiguity, explicit
+pin, fork, local override, separate resolver configuration, dirty source or
+missing ownership evidence never grants migration. The normal installed graph,
+source identity and immutable freeze checks still decide qualification.
+
+A generation receipt records migrated, protected and unselected packages.
+A receipt matching the current configuration and exact installed identity marks
+packages absent from the offered-profile batch as usage unknown, kept for existing
+chats. It does not claim they are globally unused or remove them. Changing profile
+configuration invalidates that classification.
+Unselected catalog providers remain unresolved; merely offering a provider
+does not select its source. The receipt suppresses repeated no-op update
+prompts for the same configuration. If another component already prompts a
+fresh candidate, remaining legacy decisions are reconsidered against that
+candidate's selected declarations. Existing generations and rollback evidence
+are unchanged; this is not a live-worker dependency rewrite.
+
+
+Selected static root manifests also seed a dependency closure. The collection
+pass follows applicable installed Requires-Dist edges using the candidate's
+marker environment and explicitly requested extras. An installed distribution
+outside that closure cannot authorize recovery. Dependency-only Git choices
+must match the current installed package, repository, subdirectory and commit;
+conditional Git declarations, conflicting pins and local choices stay protected.
+
+For a proven moving dependency that is not a direct prepared source, the fresh
+candidate replaces only its exact generated old-SHA manifest entry with the
+checked commit. It refreshes and verifies that resolver lock, installs it into
+the candidate, then recollects selection and runs the ordinary freeze checks.
+The serving generation and its old receipts remain unchanged. Reconciliation
+receipts include a selection-version marker so earlier direct-only no-op results
+receive one recheck rather than permanently concealing reachable dependencies.
+
+Qualification covers real local Git and uv installs where a dependency-only
+@main advances from an old generated SHA, freezes exactly and remains eligible
+on the next inventory. Tag-only and same-name branch/tag cases retain the old
+commit. Additional tests cover markers, requested extras, fixed version edges,
+unused packages, explicit pins/forks/local sources, and changed generated
+manifest entries. Dynamic or unverifiable dependency metadata remains
+unresolved; these tests are not production adoption evidence.

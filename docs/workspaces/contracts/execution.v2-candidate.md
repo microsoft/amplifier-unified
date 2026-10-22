@@ -256,8 +256,9 @@ claim with evidence and does not claim physical teardown.
 
 Stable command IDs retain their exact results across restart, including release
 and later reacquisition. Retries cannot resurrect an old reservation. Updates
-require the observed revision. Admission is bounded at 64 held reservations per
-root (including its children) and 1024 per app data home; existing holders remain
+require the observed revision. Admission uses global Advanced execution limits,
+defaulting to 64 held reservations per root (including its children) and 1024 per app data home. Lowering those limits
+only gates new acquisitions; existing held or uncertain claims remain
 readable and releasable at the limit. Reads are paginated, passive and do not
 load or resume conversations. Shared actions serve both clients and agents.
 

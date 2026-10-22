@@ -73,6 +73,8 @@ class WorkWindows:
         self.retry_at = {}
         from .resident_work_pages import ResidentWorkPages
         self.live_pages = ResidentWorkPages(self)
+        from .tool_payload_windows import ToolPayloadWindows
+        self.tool_payloads = ToolPayloadWindows(self)
 
     def _worker(self):
         if self.projector is None and not sys.platform.startswith('linux'):
@@ -240,6 +242,8 @@ class WorkWindows:
         group = 'event-window:' + page['generation']
         page['group'] = group
         page['providerRecords'] = self._provider_records(page)
+        from .tool_window_records import records
+        page['toolRecords'] = records(page)
         page['hasProviderRecords'] = any(row.get('requestDetail') or row.get('responseDetail') for row in page['items'])
         self.pages.pop(group, None)
         self.pages[group] = page
@@ -309,6 +313,11 @@ class WorkWindows:
         return source
 
     def live_node(self, session, node):
+        if node.get('kind') == 'tool' and not node.get('canonicalHistory') and not node.get('nativeHistory'):
+            from .tool_window_records import attach, linked
+            page = self.pages.get(self.current.get(session['id']))
+            fields = linked(page, session, node) if page and page['source'] == source_identity(session) else None
+            return attach(node, fields)
         if node.get('kind') != 'llm':
             return node
         from .browser_detail import detail_version
@@ -353,9 +362,13 @@ class WorkWindows:
 
     def _page(self, identity, group):
         owner = self._owner(identity)  # Current canonical authority, not cache presence.
+        if str(group).startswith('open-work:'):
+            return self.live_pages.open_fields.page(owner, group)
         page = self.pages.get(group)
-        if page is None or page['sessionId'] != identity or source_identity(owner) != page['source']:
+        if page is None or page['sessionId'] != identity or source_identity(owner) != page.get('ownerSource', page['source']):
             raise ValueError('This saved work window expired. Open the recent window again.')
+        if '_toolScope' in page:
+            self.tool_payloads.check(owner, page)
         self.pages.move_to_end(group)
         return page
 
@@ -410,7 +423,7 @@ class WorkWindows:
         for original in page['items']:
             row = {key: deepcopy(value) for key, value in original.items() if not key.startswith('_')}
             row.update(turnId=group, detailVersion=page['generation'], observationWindow=True)
-            for field in ('input', 'output', 'error', 'request', 'response'):
+            for field in ('input', 'output', 'error', 'request', 'response', 'delegateRequest', 'delegateResponse'):
                 if field + 'Detail' in row:
                     row[field + 'Detail'].update(sessionId=identity, windowKey=group)
             if known is None or known.get(row['id']) != row['detailVersion']:
@@ -418,6 +431,18 @@ class WorkWindows:
         return {'items': items, 'order': [row['id'] for row in page['items']],
                 'offset': 0, 'total': len(page['items']), 'before': None,
                 'group': group, 'revision': page['generation'], 'coverage': page['coverage']}
+
+    async def read_tool(self, identity, args):
+        return await self.tool_payloads.read(self._owner(identity), args)
+
+    @staticmethod
+    def field_failure(result):
+        reason = result.get('reason')
+        if reason == 'source_changed':
+            raise ValueError('This saved field changed. Reopen its Work window.')
+        if reason in {'queue_full', 'timeout'}:
+            raise ValueError('Saved content is taking longer to read. Try again shortly.')
+        raise ValueError('Saved content could not be read. Try again.')
 
     async def read_text(self, identity, args):
         owner = self._owner(identity)
@@ -431,11 +456,13 @@ class WorkWindows:
         result = await self._worker().project({'operation': 'field', 'session': page['source'],
             'reference': reference, 'offset': int(args.get('offset', 0)),
             'limit': min(16384, max(1, int(args.get('limit', 16000))))}, key=owner['id'] + ':field:' + row['id'])
-        if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
-                or source_identity(owner) != page['source']):
+        if (self.closed or self._owner(owner['id']) is not owner or self._page(owner['id'], page['group']) is not page
+                or source_identity(owner) != page.get('ownerSource', page['source'])):
             raise ValueError('This saved field expired.')
         if result.get('status') != 'complete':
-            raise ValueError('This saved field changed. Reopen its Work window.')
+            self.field_failure(result)
+        if '_toolScope' in page:
+            self.tool_payloads.check(owner, page)
         value = result['field']
         return {'value': value['text'], 'nextOffset': value['nextOffset'], 'total': value['total']}
 
@@ -451,8 +478,8 @@ class WorkWindows:
         return owner, page, row, reference
 
     def check_recording(self, owner, page):
-        if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
-                or source_identity(owner) != page['source']):
+        if (self.closed or self._owner(owner['id']) is not owner or self._page(owner['id'], page['group']) is not page
+                or source_identity(owner) != page.get('ownerSource', page['source'])):
             raise ValueError('This provider recording expired. Reopen its saved work window.')
 
     async def close(self):

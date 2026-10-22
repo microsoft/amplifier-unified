@@ -289,6 +289,7 @@ async def test_default_app_naming_uses_current_selected_provider_not_priority_or
     host.release.set()
     result = await namer.suggest()
     assert result['name'] == 'Generated project' and len(host.calls) == 1
+    assert host.calls[0].model == 'chosen-model'
     loop.root_provider = SelectedProvider(Unwanted(), {'model': 'missing'})
     with pytest.raises(ValueError, match='no longer mounted'):
         namer.hook._select_session_provider(providers)
@@ -322,12 +323,11 @@ async def test_first_exchange_and_periodic_refresh_change_titles_without_idle_ca
     assert host.metadata.read()['name'] == 'Generated project'
     host.provider.response_name = 'Expanded project'
     for number in range(2, 6): await turn(number)
-    assert len(host.calls) == 2
+    assert len(host.calls) == 3  # Initial, early refinement, then interval review.
     assert host.metadata.read()['name'] == 'Expanded project'
-    # Both calls use the initial title+description contract; the second adds
-    # a stability instruction instead of the upstream description-only prompt.
-    assert 'Only change it when' in str(host.calls[1])
-    assert 'name + description' in str(host.calls[1])
+    assert 'early clarification' in str(host.calls[1])
+    assert 'periodic review' in str(host.calls[2])
+    assert '"keep"' in str(host.calls[1])
     before = len(host.calls)
     namer.refresh_seconds = .01
     namer.observe({'type': 'generation.started'})

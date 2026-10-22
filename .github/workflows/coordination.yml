@@ -4,6 +4,9 @@ on:
     paths:
       - 'amplifier_operations/coordination.py'
       - 'amplifier_web/coordination.py'
+      - 'amplifier_web/request_cancellation.py'
+      - 'tests/test_request_cancellation.py'
+      - 'frontend/tests/request-cancellation-browser.mjs'
       - 'amplifier_web/collaboration*.py'
       - 'amplifier_web/app_guidance.py'
       - 'amplifier_web/workspace_awareness.py'
@@ -46,6 +49,11 @@ on:
       - 'tests/test_peer_creation_operation.py'
       - 'amplifier_web/canvas_files.py'
       - 'amplifier_web/worktrees.py'
+      - 'amplifier_web/handoff_admission.py'
+      - 'amplifier_web/handoff_boundary.py'
+      - 'amplifier_web/capacity.py'
+      - 'amplifier_web/capacity_wait.py'
+      - 'tests/test_handoff_model_admission.py'
       - 'amplifier_web/workspace_resources.py'
       - 'amplifier_web/task_environments.py'
       - 'amplifier_web/environment_retention.py'
@@ -89,13 +97,14 @@ jobs:
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
-          tests/test_coordination_revisions.py
+          tests/test_coordination_revisions.py tests/test_request_cancellation.py
           tests/test_coordination_bridge_returns.py
           tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
           tests/test_workspace_repair_outcomes.py tests/test_worktrees.py
+          tests/test_handoff_model_admission.py
           tests/test_peer_creation_operation.py
           tests/test_resource_reservations.py
           tests/test_workspace_awareness.py
@@ -120,6 +129,9 @@ jobs:
       - name: Exercise related work through the browser
         working-directory: frontend
         run: node tests/coordination-browser.mjs
+      - name: Exercise exact request withdrawal and cancellation
+        working-directory: frontend
+        run: node tests/request-cancellation-browser.mjs
       - name: Exercise resource reservations through the browser
         working-directory: frontend
         run: node tests/resource-reservations-browser.mjs

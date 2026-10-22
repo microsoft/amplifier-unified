@@ -28,6 +28,9 @@ def included_sources():
         name, separator, uri = value.partition(' @ ')
         if separator and git_source(uri):
             packages.add(package_name(name))
+    from .runtime_registry_updates import open_policy
+    if open_policy(manifest_path().read_bytes()) is not None:
+        packages.add('amplifier-core')
     # Includes and module sources in shipped app behaviors are required even
     # before the first conversation has populated their source cache.
     sources = {}

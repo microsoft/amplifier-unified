@@ -24,7 +24,7 @@ import time
 from filelock import FileLock, Timeout
 
 LEGACY_REPOSITORY = 'https://github.com/microsoft/amplifier-bundle-digital-twin-universe'
-LEGACY_COMMIT = '241849071f682706791ae5f4a1e5462d0e316df7'
+LEGACY_COMMIT = 'ce9219d8dac2770efe0b8270acd8ec017af625c7'
 INCUS_IMAGE_SERVER = 'https://images.linuxcontainers.org'
 INCUS_IMAGE_ALIAS = 'ubuntu/24.04/cloud'
 ACTIVE = {'accepted', 'running'}
@@ -199,6 +199,11 @@ def discover():
 
 async def readiness(app, *, force=False):
     from .task_environments import configuration, invoke
+    config, state, reason = await settled_thread(configuration, app)
+    if config and config.get('remoteRunner'):
+        return {'status': 'ready', 'reason': reason, 'remote': True, 'backend': 'incus'}
+    if not sys.platform.startswith('linux'):
+        return {'status': state, 'reason': reason}
     raw = read_json(Path(app.data_dir) / 'test-environments.json')
     installs = [{'id': row.get('id'), 'status': row.get('status'), 'commit': row.get('commit'), 'python': row.get('python')} for row in getattr(getattr(app, 'smart_tools', None), 'state', {}).get('installations', [])]
     key = hashlib.sha256(json.dumps([raw, installs], sort_keys=True).encode()).hexdigest()
@@ -229,6 +234,13 @@ async def readiness(app, *, force=False):
 
 
 async def read(app):
+    from .task_environments import configuration
+    config, state, reason = await settled_thread(configuration, app)
+    if config and config.get('remoteRunner'):
+        return {'status': 'ready', 'reason': reason, 'remote': True, 'backend': 'incus',
+                'requestId': None, 'backends': [], 'operation': None}
+    if not sys.platform.startswith('linux'):
+        return {'status': state, 'reason': reason, 'requestId': None, 'backends': [], 'operation': None}
     cached = getattr(app, '_test_setup_discovery', None)
     if cached and time.monotonic() - cached['at'] < 60:
         choices = cached['value']
@@ -399,6 +411,8 @@ async def _run(app, record, lock, guard):
         if installed.get('commit') != owner.DTU_COMMIT or installed.get('extras'):
             raise ValueError('The managed runner did not match the approved core.')
         record['installationId'] = installed['id']
+        record['runnerSourcePolicy'] = {'version': 1, 'repository': owner.REPOSITORY,
+                                        'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
         write_json(path, record)
         base = {'enabled': True, 'installationId': installed['id'], 'commit': owner.DTU_COMMIT, 'backend': record['backend']}
         owned = folder / record['id']
@@ -508,7 +522,9 @@ async def setup_docker(base, selected, owned, record, step):
 
 
 async def setup_incus(base, selected, owned, record, step):
-    from .incus_environment_worker import file_digest, package_digest, QUALIFIED_PACKAGES
+    from .incus_environment_worker import file_digest, package_digest, QUALIFIED_PACKAGES, CURRENT_QUALIFIED_VERSION
+    record['engineSourcePolicy'] = {'version': 1, 'repository': LEGACY_REPOSITORY,
+                                    'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
     binary = selected['executable']
     uv = shutil.which('uv')
     if not uv:
@@ -518,8 +534,8 @@ async def setup_incus(base, selected, owned, record, step):
     await settled_thread(command, [uv, 'venv', '--python', sys.executable, str(venv)], timeout=120)
     python = venv / 'bin/python'
     await settled_thread(command, [uv, 'pip', 'install', '--python', str(python), 'git+' + LEGACY_REPOSITORY + '@' + LEGACY_COMMIT], timeout=600)
-    package = json.loads(await settled_thread(command, [str(python), '-I', '-c', 'import importlib.util,json; print(json.dumps(next(iter(importlib.util.find_spec("amplifier_bundle_digital_twin_universe").submodule_search_locations))))']))
-    if package_digest(package) != QUALIFIED_PACKAGES['0.4.1']:
+    package = json.loads(await settled_thread(command, [str(python), '-I', '-c', 'import importlib.util,importlib.metadata,json; print(json.dumps({"directory":next(iter(importlib.util.find_spec("amplifier_bundle_digital_twin_universe").submodule_search_locations)),"version":importlib.metadata.version("amplifier-bundle-digital-twin-universe")}))']))
+    if package.get('version') != CURRENT_QUALIFIED_VERSION or package_digest(package['directory']) != QUALIFIED_PACKAGES[CURRENT_QUALIFIED_VERSION]:
         raise ValueError('The installed Incus adapter did not match the approved package bytes.')
     client, admission = owned / 'client', owned / 'admission'
     client.mkdir(mode=0o700)
@@ -570,7 +586,7 @@ async def setup_incus(base, selected, owned, record, step):
     daemon = json.loads(await incus(['query', '/1.0']))['environment']['certificate_fingerprint']
     launcher = venv / 'bin/amplifier-digital-twin'
     config = {**base, 'incus': {'executable': str(launcher), 'executableSha256': file_digest(launcher, 65536)[0],
-        'packageSha256': QUALIFIED_PACKAGES['0.4.1'], 'incusExecutable': binary, 'configDir': str(client),
+        'packageSha256': QUALIFIED_PACKAGES[CURRENT_QUALIFIED_VERSION], 'incusExecutable': binary, 'configDir': str(client),
         'admissionDir': str(admission), 'project': project, 'image': image,
         'daemonFingerprint': daemon, 'preparationNetwork': bridge, **capacity_defaults()}}
     await step('checking_profile', 'Running a disposable offline check in the private test project.')

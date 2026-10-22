@@ -457,7 +457,7 @@ async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files
     assert destroyed == ['owned-universe'] and sum(c[0] == 'export' for c in effects) == 2
     assert before == {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir()}
     assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
-    with pytest.raises(AppError, match='already owns an environment'):
+    with pytest.raises(AppError, match='already owns its allowed environments'):
         await start(app, 'not-a-new-removal-attempt')
 
 
@@ -705,11 +705,12 @@ async def test_queue_origin_interruption_restart_holds_original_removal(app, que
     before = owner.get(app.data_dir, row['sessionId'], row['id'])
     begun, faults, helper_calls = [], [], []
 
-    def observe_begin(sid, action, args, actor):
-        result, fresh = begin(sid, action, args, actor)
+    def observe_begin(sid, action, args, actor, **bindings):
+        result, fresh = begin(sid, action, args, actor, **bindings)
         if action == 'workspace.environments.remove':
-            assert fresh and 'resourceId' not in result
-            begun.append(copy.deepcopy(result))  # Actual queue-produced unbound admission.
+            assert fresh and result['resourceId'] == row['id']
+            assert requests.read(sid, args['requestId'])['resourceId'] == row['id']
+            begun.append(copy.deepcopy(result))  # Resource identity is atomic with admission.
         return result, fresh
 
     def interrupted_finish(saved, state, **fields):
@@ -745,7 +746,7 @@ async def test_queue_origin_interruption_restart_holds_original_removal(app, que
     saved = requests.read(row['sessionId'], request_id)
     assert saved['state'] == 'admitting' and saved['requestId'] == begun[0]['requestId']
     assert saved['createdAt'] == begun[0]['createdAt']
-    assert saved.get('resourceId') == (row['id'] if boundary == 'after-helper' else None)
+    assert saved['resourceId'] == row['id']
     if boundary != 'after-helper':
         assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
 
@@ -780,10 +781,10 @@ async def test_queue_removal_persists_binding_before_helper_and_keeps_completion
     begin, invoke = requests.begin, owner.invoke
     begun, calls = [], []
     request_id = receipt['requestId'] + ':remove'
-    def observe_begin(sid, action, args, actor):
-        result, fresh = begin(sid, action, args, actor)
+    def observe_begin(sid, action, args, actor, **bindings):
+        result, fresh = begin(sid, action, args, actor, **bindings)
         if action == 'workspace.environments.remove':
-            assert fresh and 'resourceId' not in result
+            assert fresh and result['resourceId'] == row['id']
             begun.append(copy.deepcopy(result))
         return result, fresh
     def inspect(configured, home, raw, action, args):

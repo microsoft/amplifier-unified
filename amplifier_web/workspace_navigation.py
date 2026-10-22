@@ -357,7 +357,9 @@ def snapshot(state, *, index=None, pinned_only=False, exclude_pinned=False, work
             'breadcrumbs': breadcrumbs, 'filter': query, 'mode': mode, 'archive': state.get('view', {}).get('navWorkspaceArchive', 'active'),
             'rows': rows if pinned_only else rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE],
             'selected': next((_row(path, node, selected) for path, node in nodes.items() if selected in node.get('workspaceSelections', {})), None),
-            'totalWorkspaces': total, 'totalRows': len(rows), 'page': page, 'pages': pages}
+            'totalWorkspaces': total, 'totalRows': len(rows), 'page': page, 'pages': pages,
+            'start': 0 if pinned_only else (page - 1) * PAGE_SIZE,
+            'end': len(rows) if pinned_only else min(page * PAGE_SIZE, len(rows))}
 
 
 def view_patch(state, patch):
