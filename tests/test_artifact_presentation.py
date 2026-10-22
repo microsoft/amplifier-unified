@@ -130,12 +130,17 @@ async def test_canonical_file_presentation_refusal_does_not_publish_again(app, t
             {'id': 'second-message', 'role': 'user', 'text': 'Keep the saved example'})
         before = deepcopy(app.state['canvasArtifacts'])
         tabs = deepcopy(app.state['canvasTabs'])
-    with pytest.raises(AppError) as refused:
-        await command(app, 'canvas.show', {'kind': 'auto', 'path': str(path)})
-    assert refused.value.code == 'canvas_preview_reset_required'
-    assert app.state['canvasArtifacts'] == before
-    with app.clients.bind('one'):
-        assert app.state['canvasTabs'] == tabs
+    for action, args in (
+        ('canvas.show', {'kind': 'auto', 'path': str(path)}),
+        ('canvas.openFile', {'sessionId': saved['state']['selectedSessionId'],
+                             'workspace': str(tmp_path), 'path': str(path)}),
+    ):
+        with pytest.raises(AppError) as refused:
+            await command(app, action, args)
+        assert refused.value.code == 'canvas_preview_reset_required'
+        assert app.state['canvasArtifacts'] == before
+        with app.clients.bind('one'):
+            assert app.state['canvasTabs'] == tabs
 
 
 async def test_chat_return_preserves_inline_choice_and_disposed_primary(app):

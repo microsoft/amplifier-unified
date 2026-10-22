@@ -1,4 +1,5 @@
 """Explicit file navigation from a chat; no message submission or tool replay."""
+import copy
 import uuid
 from .workspace_canvas import canvas_command, ReferencedFileChanged
 from .canvas_library import remember
@@ -72,7 +73,16 @@ def open_file(service, args, origin, *, retained_file=None):
         scoped['canvas']['id'] = uuid.uuid4().hex
     from .canvas_versions import assert_clean
     assert_clean(service, scoped['canvas']['id'])
+    scoped['canvasArtifacts'] = [copy.deepcopy(row) if row['id'] == scoped['canvas']['id'] else row
+                                 for row in scoped.get('canvasArtifacts', [])]
+    if 'canvasTabs' in scoped:
+        scoped['canvasTabs'] = copy.deepcopy(scoped['canvasTabs'])
     remember(scoped, service.db)
+    service.canvas_views.choose(scoped['canvas'], scoped['canvas'].get('revision', 1),
+                                'canvas', origin=origin)
+    service.state['canvasArtifacts'] = scoped['canvasArtifacts']
+    if 'canvasTabs' in scoped:
+        service.state['canvasTabs'] = scoped['canvasTabs']
     service.state['canvas'] = scoped['canvas']
     service.state['view'].setdefault('canvasDraft', {}).update(library=False, open=False, browser=False)
     if args.get('showConversation'):
