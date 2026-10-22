@@ -258,8 +258,10 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
+        'pin-rapid-reorder': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-rapid-reorder'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
         'destination-history': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/destination-history'},
+        'dormant-controls': {'AMPLIFIER_DORMANT_EVIDENCE': '{root}/output/browser-checks/dormant-controls'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
         'mcp-clients': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-clients.png'},
         'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
@@ -292,7 +294,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 108
+    assert len(original) == 65 and len(rows) == 110
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -308,6 +310,21 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     assert ['node', 'tests/empty-host-browser.mjs', '--lost-create'] in commands
     assert all((ROOT / 'frontend' / command[2 if command[1] == '--test' else 1]).is_file()
                for command in commands)
+
+
+def test_dormant_controls_has_standard_ux_and_plan_owned_evidence():
+    deltas = json.loads((ROOT / 'frontend/tests/standard-ux-inventory-deltas.json').read_text())
+    delta = next(row for row in deltas['changes'] if row['id'] == 'delta.1035')
+    workflow, = delta['workflowsAdded']
+    owner = 'frontend/tests/dormant-controls-browser.mjs'
+    assert workflow['id'] == 'conversation.next-message-settings'
+    assert owner in {row['path'] for row in workflow['existingTests']}
+    # This is evidence ownership, not a claim that a browser run has passed.
+    source = (ROOT / owner).read_text()
+    assert "process.env.AMPLIFIER_DORMANT_EVIDENCE||" in source
+    assert "evidenceDir+'/browser-result.json'" in source
+    assert "evidenceDir+'/dormant-controls-narrow.png'" in source
+    assert "evidenceDir+'/dormant-controls-desktop.png'" in source
 
 
 def assert_readiness_python_coverage(workflow, *, targets, run_blocks_sha256):
@@ -480,8 +497,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     tool_previews = 'tests/tool-previews-browser.mjs'
     assert tool_previews in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', tool_previews] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews}) == 146
-    assert len(readiness_scripts | extended_scripts) == 151
+    pin_reorder = 'tests/pin-rapid-reorder-browser.mjs'
+    assert pin_reorder in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', pin_reorder] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, pin_reorder}) == 146
+    assert len(readiness_scripts | extended_scripts) == 152
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

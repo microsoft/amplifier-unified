@@ -2165,6 +2165,112 @@
         }
       ],
       "qualification": "docs/UPDATES.md"
+    },
+    {
+      "id": "delta.pin-rapid-reorder",
+      "sourceCommit": "b806bbc37eec1b9152be7472b73cfe3bde835c89",
+      "reason": "Consecutive pin gestures and saved-display recovery gain an additive browser owner; preserve the frozen inventory and original 65-scenario plan hash.",
+      "workflowsAdded": [
+        {
+          "id": "navigation.pin-rapid-reorder",
+          "family": "navigation",
+          "title": "Reorder different sidebar pins while an earlier move settles",
+          "scope": "standard-path",
+          "entryPath": ["Sidebar", "Pinned"],
+          "prerequisites": [
+            "Production bundled client with synthetic mixed session and workspace pins",
+            "Two fixture clients and controlled receipt/projection delivery; no live pins or model calls"
+          ],
+          "steps": [
+            "Move two different pins before the first response and authoritative readback",
+            "Repeat an adjacent sequence and compare both clients and reload",
+            "Hold a second drag across the first move's success or unknown result",
+            "Recover a saved-display error through Refresh pinned list without replay",
+            "Use keyboard reordering and the narrow drag target"
+          ],
+          "expectedResults": [
+            "Both admitted intents remain in the preview and execute once in order after exact predecessor settlement.",
+            "The complete canonical vector preserves hidden and cross-workspace IDs; final display, second client and reload agree.",
+            "A matching successful commit preserves the held gesture; rejection or unknown outcome cancels later unsent gestures.",
+            "One bounded read can recover cold display completion without reconnect, duplicate mutation or model startup.",
+            "Externally stale pages block new moves; keyboard and narrow controls remain usable."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "delayed-receipt", "delayed-projection", "unknown-outcome", "second-client", "reload"],
+          "existingTests": [
+            {
+              "path": "frontend/tests/pin-rapid-reorder-browser.mjs",
+              "relation": "Registered additive owner pin-rapid-reorder; evidence in output/browser-checks/pin-rapid-reorder"
+            },
+            {
+              "path": "frontend/tests/pin-order-settlement.test.mjs",
+              "relation": "Complete hidden-ID vector, scope, queue capacity, stale read, rejection and supersession boundaries"
+            },
+            {
+              "path": "tests/test_pinned_navigation.py",
+              "relation": "Canonical mixed identities, idempotence, revision conflict and safe authoritative read"
+            }
+          ],
+          "limits": [
+            "Synthetic source-host checks, not installed/native/live-user acceptance.",
+            "Historical old-race negative-control proof is retained separately; registration alone is not a current pass."
+          ]
+        }
+      ],
+      "qualification": "docs/navigation.md"
+    },
+    {
+      "id": "delta.1035",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/1035",
+      "reason": "Worker-free Next message choices gain an additive maintained browser owner; preserve the frozen inventory and original scenario commands and hash.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.next-message-settings",
+          "family": "conversation",
+          "title": "Choose the next message's configuration before starting a dormant chat worker",
+          "scope": "standard-path",
+          "entryPath": ["Conversation", "Model and reasoning settings / Conversation bundle / Chat options"],
+          "prerequisites": [
+            "Built production client and isolated production-service fixture with saved history, cached catalogs and a saved artifact",
+            "Conversation runtime calls forbidden; controlled slow/failing catalog resolution and two fixture clients"
+          ],
+          "steps": [
+            "Read saved text and keep an unsent draft while preparation is displayed",
+            "Save bundle, provider, model and effort through visible controls and keyboard selection",
+            "Hold catalog resolution while renaming the chat and opening a saved artifact",
+            "Reload saved choices and reject an older configuration revision from a second client",
+            "Select another bundle with the narrow keyboard controls after catalog failure"
+          ],
+          "expectedResults": [
+            "Choices remain usable before worker readiness and are labeled Next message, not mounted configuration.",
+            "Slow catalog discovery does not block manual naming, saved artifact browsing or the unsent draft.",
+            "Saved choices survive reload; a stale client cannot replace a newer revision or another client's draft.",
+            "Desktop and narrow keyboard controls remain usable after discovery failure.",
+            "Passive controls cause zero conversation-worker starts, prewarms, model calls or input starts."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-keyboard", "absent-worker", "held-catalog", "failed-catalog", "second-client", "reload"],
+          "existingTests": [
+            {
+              "path": "frontend/tests/dormant-controls-browser.mjs",
+              "relation": "Registered additive owner dormant-controls; plan supplies output/browser-checks/dormant-controls for results and screenshots"
+            },
+            {
+              "path": "tests/test_next_message_configuration.py",
+              "relation": "Real retired-record no-hydration, current input, exact revision, Stop and permission guards"
+            },
+            {
+              "path": "tests/fixtures/next_message_native_probe.py",
+              "relation": "Separate genuine-send qualification for latest saved settings, adjacent input, failed mount and Stop rollback"
+            }
+          ],
+          "limits": [
+            "Browser uses synthetic runtime and catalog boundaries; it does not qualify a live provider or native worker.",
+            "Manual rename and artifact opening use the client's public action bridge, not pointer traversal of every entry control.",
+            "Resident retired-record proof is not a universal nonresident zero-I/O claim; no latency or automatic prewarm claim.",
+            "Registration is coverage ownership, not a claim that the current candidate passed."
+          ]
+        }
+      ],
+      "qualification": "docs/clients/live-sessions.md"
     }
   ]
 }
