@@ -523,7 +523,15 @@ Membership, limits and Stop are retained in existing command receipts; model
 usage stays in existing execution receipts and is attributed at admission.
 
 Assignment limits cover aggregate supported model calls and open commissioned
-roots. Optional token/cost reservations are declared allowances per call, not
+roots. New assignments have no execution count ceiling: `maxOpenTasks` and
+`maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
+explicit ceiling or `null` for no count limit (blank in the UI). Existing saved
+finite values are preserved until their owner explicitly changes them. The
+retained member roster remains structurally bounded by `maxMembers` (1–64,
+default 64); removing execution ceilings never discards members or unknown
+receipts, changes Stop/ownership, or bypasses token/cost budgets, the installation's
+separate per-source task-chat policy, or host resource admission. Optional
+token/cost reservations are declared allowances per call, not
 provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
