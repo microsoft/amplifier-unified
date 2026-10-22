@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import nullcontext
 from dataclasses import asdict, is_dataclass
 import inspect
 import json
@@ -122,9 +123,10 @@ def validate_plan(plan):
 
 
 class RuntimeControls:
-    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False):
+    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False, tool_invocation=None):
         self.session, self.runtime, self.telemetry = session, runtime, telemetry
         self.preserve_configuration = preserve_configuration
+        self._tool_invocation = tool_invocation
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
@@ -735,6 +737,10 @@ class RuntimeControls:
             raise ValueError("Tool is not mounted")
         jsonschema.validate(arguments, getattr(tool,"input_schema",{}))
         call = str(uuid.uuid4())
+        # Capture the acquired worker owner before approval can await. Only the
+        # final, policy-approved arguments enter its short execution scope.
+        issuer = getattr(self, '_tool_invocation', None)
+        invocation = issuer(self, coordinator, name, tool, call) if issuer else lambda _: nullcontext()
         data = {"tool_name":name,"tool_call_id":call,"tool_input":arguments,"source":"user", "tool_obj":tool, **(provenance or {})}
         hooks = coordinator.hooks
         pre = await hooks.emit("tool:pre", data)
@@ -781,7 +787,8 @@ class RuntimeControls:
                     raise ValueError("The mounted shell does not support identity-bound input")
                 if checker is not None:
                     checker(*expected_process_owner)
-            result = await tool.execute(arguments)
+            with invocation(arguments):
+                result = await tool.execute(arguments)
             await hooks.emit("tool:post",{**data,"tool_result":result.model_dump() if hasattr(result,"model_dump") else result})
             if checkpoint:
                 await self.checkpoint()

@@ -121,11 +121,18 @@ try {
       work.getByText('STREAM FIRST REPLY', {exact: true}), work.locator('[data-node-id="stream-main-model"]'),
       work.getByText('STREAM FOLLOW-UP', {exact: true}), work.locator('[data-node-id="stream-child-model"]'),
       work.getByText('STREAM SECOND REPLY', {exact: true})];
-    let bottom = -Infinity;
     for (const row of rows) {
       await expect(row).toHaveCount(1);
       await expect(row).toBeVisible();
-      const box = await row.boundingBox();
+    }
+    // Compare one layout frame: chat scroll restoration can move viewport
+    // coordinates between separate boundingBox requests without any overlap.
+    const handles = await Promise.all(rows.map(row => row.elementHandle()));
+    const boxes = await page.evaluate(elements => elements.map(element =>
+      element?.isConnected ? element.getBoundingClientRect().toJSON() : null), handles);
+    await Promise.all(handles.map(handle => handle?.dispose()));
+    let bottom = -Infinity;
+    for (const box of boxes) {
       assert.ok(box && box.y >= bottom - 1, 'Exchange and operations must be vertically ordered without overlap');
       bottom = box.y + box.height;
     }
@@ -200,7 +207,7 @@ try {
   });
   // The already-open page can read published observer records before control
   // returns; observe that boundary before triggering it, including warm reads.
-  await control({op:'delegate-observer',instruction,reply});
+  await control({op:'delegate-observer',instruction,reply,olderRecords:true});
   await page.setViewportSize({width:1280,height:1000});
   await page.reload();
   await showFixtureConversation(page);
@@ -208,6 +215,11 @@ try {
   const observedToggle=observed.locator(':scope > button');
   await expect(observedToggle).toBeVisible();
   if(await observedToggle.getAttribute('aria-expanded')!=='true')await observedToggle.click();
+  // This fixture deliberately places the stamped exchange beyond the recent
+  // window. Follow its explicit bounded lookup before copying full fields.
+  const earlier=observed.getByRole('button',{name:'Search older saved details',exact:true});
+  await expect(earlier).toHaveCount(1);
+  await earlier.click();
   await expect(observed.getByRole('region',{name:'Request',exact:true})).toContainText('OBSERVER REQUEST café');
   await expect(observed.getByRole('region',{name:'Reply',exact:true})).toContainText('OBSERVER REPLY');
   await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{

@@ -5,10 +5,15 @@ on:
       - 'amplifier_operations/coordination.py'
       - 'amplifier_web/coordination.py'
       - 'amplifier_web/request_cancellation.py'
+      - 'amplifier_web/outcome_acknowledgement.py'
       - 'tests/test_request_cancellation.py'
+      - 'tests/test_outcome_acknowledgement.py'
       - 'frontend/tests/request-cancellation-browser.mjs'
       - 'amplifier_web/collaboration*.py'
       - 'amplifier_web/app_guidance.py'
+      - 'amplifier_web/assignments.py'
+      - 'amplifier_web/assignment_brief.py'
+      - 'tests/test_assignment_brief.py'
       - 'amplifier_web/workspace_awareness.py'
       - 'amplifier_web/coordination_delivery.py'
       - 'frontend/src/workspace-awareness.jsx'
@@ -141,8 +146,9 @@ jobs:
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
-          tests/test_coordination_revisions.py tests/test_request_cancellation.py
+          tests/test_coordination_revisions.py tests/test_request_cancellation.py tests/test_outcome_acknowledgement.py
           tests/test_coordination_bridge_returns.py
+          tests/test_assignment_brief.py
           tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py

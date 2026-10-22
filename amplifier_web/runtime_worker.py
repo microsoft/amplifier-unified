@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import copy
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -49,6 +50,7 @@ class Worker:
         self.shutdown = asyncio.Event()
         self.telemetry = None
         self.controls = None
+        self.control_invocations = {}
         self.naming = None
         self.naming_park_task = None
         self.workspace = None
@@ -286,25 +288,39 @@ class Worker:
             register('web.app_access.bridge', bridge)
             async def effect_check(name, arguments):
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task())
+                control = self.control_invocations.get(asyncio.current_task())
                 runtime, gate = self.runtime, self.activation_gate
                 generation = getattr(runtime, 'generation', None)
                 epoch, before = self.stop_revision, copy.deepcopy(arguments)
                 inputs = copy.deepcopy((generation or {}).get('input_ids'))
-                if (not dispatch or not gate or not gate.current_valid or not generation
+                def current_control():
+                    return (control is not None and control['valid']()
+                        and self.control_invocations.get(asyncio.current_task()) is control
+                        and control['coordinator'] is coordinator and control['name'] == name
+                        and control['arguments'] == arguments)
+                if (not gate or not gate.current_valid or not runtime
                         or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled):
                     return {'allowed': False, 'effectAuthorized': False}
-                identity = dispatch.get('tool_call_id')
+                if control is not None:
+                    if not current_control():
+                        return {'allowed': False, 'effectAuthorized': False}
+                    identity = control['callId']
+                elif dispatch and generation:
+                    identity = dispatch.get('tool_call_id')
+                else:
+                    return {'allowed': False, 'effectAuthorized': False}
                 try:
                     result = await asyncio.wait_for(bridge('work.effect.check', {
                         'toolName': name, 'toolInput': before, 'toolCallId': identity}), WORK_EFFECT_TIMEOUT)
                 except (TimeoutError, ConnectionError):
                     return {'allowed': False, 'effectAuthorized': False}
                 if (self.runtime is not runtime or runtime.generation is not generation
-                        or generation.get('input_ids') != inputs
+                        or (generation or {}).get('input_ids') != inputs
                         or not gate.current_valid or self.stop_revision != epoch
                         or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled
-                        or getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task()) is not dispatch
-                        or dispatch.get('tool_call_id') != identity
+                        or (not current_control() if control is not None else
+                            getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task()) is not dispatch
+                            or dispatch.get('tool_call_id') != identity)
                         or json.dumps(arguments, sort_keys=True) != json.dumps(before, sort_keys=True)):
                     return {'allowed': False, 'effectAuthorized': False}
                 return result
@@ -656,7 +672,8 @@ class Worker:
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
-                preserve_configuration=config.get('_preserveConfiguration') is True)
+                preserve_configuration=config.get('_preserveConfiguration') is True,
+                tool_invocation=self.tool_invocation)
             self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {
                 "call": row, "waitForCapacity": True, "_runtimeSessionId": self.session.session_id,
                 "_generationId": (getattr(self.runtime, 'generation', None) or {}).get('id')})
@@ -933,6 +950,42 @@ class Worker:
                 raise failure from exc
         finally:
             self.remounting = False
+
+    def tool_invocation(self, controls, coordinator, name, tool, identity):
+        """Bind an explicit control to its acquired owner, never a model actor."""
+        runtime, session, gate = self.runtime, self.session, self.activation_gate
+        handle, activation, epoch = self.shared_handle, self.activation, self.stop_revision
+        generation = getattr(runtime, 'generation', None)
+        inputs = copy.deepcopy((generation or {}).get('input_ids'))
+        task = asyncio.current_task()
+        root = session.coordinator
+        def valid():
+            children = root.get_capability('live.children')
+            child = children.sessions.get(coordinator.session_id) if children else None
+            return (self.controls is controls and controls.coordinator is root and session.coordinator is root
+                and controls.runtime is runtime and self.runtime is runtime and self.session is session
+                and (coordinator is root or child is not None and child.coordinator is coordinator)
+                and asyncio.current_task() is task and self.activation_gate is gate
+                and gate is not None and gate.current_valid
+                and handle is not None and self.shared_handle is handle and self.activation is activation
+                and not self.parked and not self.ownership.yielding and not self.remounting
+                and self.stop_revision == epoch and runtime.generation is generation
+                and (generation or {}).get('input_ids') == inputs
+                and not runtime.closed and not runtime.stop_requested
+                and not coordinator.cancellation.is_cancelled
+                and (coordinator.get('tools') or {}).get(name) is tool)
+        @contextmanager
+        def bind(arguments):
+            if not valid() or task in self.control_invocations:
+                raise ValueError('The tool control execution owner changed before invocation.')
+            scope = {'valid': valid, 'coordinator': coordinator, 'name': name,
+                     'arguments': copy.deepcopy(arguments), 'callId': identity}
+            self.control_invocations[task] = scope
+            try:
+                yield
+            finally:
+                self.control_invocations.pop(task, None)
+        return bind
 
     def bind_activation(self):
         """Bind the current capability to a command task, never to a global writer."""

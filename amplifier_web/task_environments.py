@@ -182,6 +182,7 @@ def public(home, row):
         'status': row.get('environmentState', 'unknown'), 'universeId': row.get('universeId'),
         'source': row['source'], 'snapshot': row.get('snapshot'), 'sourceReady': row.get('sourceReady'), 'services': row.get('services', []),
         'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
+        'reservationRecovery': row.get('reservationRecovery'),
         'previousCleanup': row.get('previousCleanup'),
         'artifactExport': row.get('artifactExport'), 'lastArtifactExport': row.get('lastArtifactExport'),
         'preparation': ({'status': 'ready' if row.get('preparedDependencies') else 'pending', 'remote': True} if row.get('testMachine') else dependencies.status(storage.directory(home, row))) if row.get('preparationPending') or row.get('preparedDependencies') else None,
@@ -702,7 +703,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                         else:
                             prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
                                 row['snapshot'], row['profileId'], request['requestId'],
-                                resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'))
+                                resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'),
+                                dependency_store=Path(home) / 'test-dependency-layers')
                         row = save(home, row, preparedDependencies=prepared_dependencies)
                         host_resources.settle(row, phase='launching')
                     if policy_admit:
@@ -906,6 +908,7 @@ def read(app, sid, config, offset=0, limit=10):
         rows = [json.loads(value[0]) for value in db.execute(
             "SELECT body FROM allocations WHERE root=? AND json_extract(body,'$.kind')=? ORDER BY rowid DESC LIMIT ? OFFSET ?", (sid, KIND, limit, offset))]
     result, configurations = [], {}
+    reservation_probe = recovery.reservation_candidate(app, rows)
     for row in rows:
         selected = None
         availability = {'available': False, 'reason': 'This environment is already retired.'}
@@ -962,6 +965,16 @@ def read(app, sid, config, offset=0, limit=10):
                         try:
                             row = recovery.bind_configuration(app, row, selected)
                             observed = invoke(selected, home, row, 'read', {})
+                            # An absent owner can make the ordinary read fail.
+                            # Only the selected bounded native proof can recover it.
+                            if row['id'] == reservation_probe:
+                                recovered = recovery.recover_reservation(app, row, selected, observed)
+                                if recovered is not row:
+                                    physical = recovered['reservationRecovery']['environmentStatus']
+                                    observed = {**(observed if observed.get('ok') is True else {}),
+                                                'ok': True, 'universeId': row['universeId'],
+                                                'status': 'removed' if physical == 'absent' else physical}
+                                row = recovered
                             if observed.get('ok'):
                                 changes = {key: observed[key] for key in ('universeId', 'services', 'snapshot', 'sourceReady') if key in observed and observed[key] != row.get(key)}
                                 if observed.get('status') != row.get('environmentState'):

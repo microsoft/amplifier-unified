@@ -806,3 +806,44 @@ Root and child mounting reject reference modules that cannot honor the selected
 read policy before model input. The same check runs in existing no-model runtime
 qualification. Dependency updates use the existing checked staging/activation
 path; no capability approval or automatic replay repairs a recorded old worker.
+
+
+### Explicit review of completion notifications — 2026-10-22
+
+A requester may acknowledge an exact outcome after reviewing it through
+`coordination.acknowledge`, using the current result's revision and review key.
+This is the caller's explicit disposition, not a claim that a passive read was
+consumed by a model. Reads, UI views and assistant prose do not acknowledge.
+
+The host retains the acknowledgement in the existing command journal, checks the
+current root, original requester/workspace, task continuation epoch, assignment
+and Stop boundary, and atomically suppresses only the matching still-queued
+notification. An already submitting, admitted or unknown notification is kept
+unchanged. If backpressure prevented enqueueing, the same reviewed outcome does
+not enqueue later. A changed outcome remains eligible for its own notification.
+Results, declarations, successful qualification, task status, budgets and
+permissions are unchanged; acknowledging never cancels work or permits replay.
+A stable command identity recovers a lost acknowledgement without repeating an
+effect. This action is available on the explicit recovery/report surface.
+
+### Compact assignment orientation
+
+`assignment.brief` reads current member metadata and the caller's latest direct
+request to each member, with exact inspection/result handles. It does not load
+conversation history, admit a dormant worker, change task authority or create
+another task/context store. Shared Work and original constraints remain authoritative.
+A short objective/result preview is labeled when truncated; idle is not completion,
+and a response's qualification is reported separately from delivery.
+
+Each page is at most 9 KiB UTF-8, defaults to eight members and accepts `limit`
+1–16. Follow `nextAfter` for further members; current progress can change between
+pages, while assignment membership changes invalidate the cursor. Unavailable,
+detached or moved members expose no title, task or request preview. This is a
+current orientation view, not a global snapshot, history search or instruction
+supersession mechanism.
+
+The brief reads directory metadata without admitting dormant members. Task text
+comes only from already resident fields or bounded scalar projections of existing
+retained runtime/session records; absent projections stay unknown. It does not
+open native control files or decode saved view/history bodies to fill a preview.
+The agent bridge also avoids unrelated pending-progress publication for this read.

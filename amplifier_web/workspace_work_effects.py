@@ -28,7 +28,7 @@ SAFE_ACTIONS = frozenset({
     'coordination.context', 'coordination.list', 'coordination.read',
     'coordination.result', 'coordination.artifact', 'coordination.review',
     'coordination.awareness', 'coordination.intent.read', 'coordination.diagnostics',
-    'coordination.reply', 'coordination.cancel', 'coordination.wait',
+    'coordination.reply', 'coordination.cancel', 'coordination.acknowledge', 'coordination.wait',
     'task.get', 'task.history', 'task.detail', 'task.receipt',
     'operations.list', 'operations.read', 'operations.wait',
     'workspace.tests.read', 'workspace.tests.result', 'workspace.tests.cancel',
@@ -43,7 +43,7 @@ SAFE_ACTIONS = frozenset({
     'recall.status', 'recall.search', 'recall.read',
     'permissions.get', 'runtime.dependencies', 'canvas.versions.inspect',
     'history.list', 'history.shared.list', 'history.shared.view',
-    'assignment.read', 'assignment.tasks.list', 'assignment.tasks.read',
+    'assignment.brief', 'assignment.read', 'assignment.tasks.list', 'assignment.tasks.read',
     'assignment.tasks.wait', 'workspace.environments.removal.read',
     'workspace.environments.removal.list',
 })

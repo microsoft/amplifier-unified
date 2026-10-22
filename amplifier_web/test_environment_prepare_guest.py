@@ -111,20 +111,24 @@ def main():
                       PLAYWRIGHT_BROWSERS_PATH=str(PREFIX / 'browsers'))
     Path('/tmp/build-home').mkdir(mode=0o700, exist_ok=True)
     PREFIX.mkdir(parents=True, exist_ok=True)
-    run('apt-get', 'update')
-    run('apt-get', 'install', '-y', '--no-install-recommends', 'ca-certificates', 'git',
-        'build-essential', 'python3', 'python3-venv', 'pkg-config', 'libffi-dev')
-    run('python3', '-m', 'venv', str(PREFIX / 'bootstrap'))
+    reused = plan.get('dependencyMode') == 'finalize'
+    layer = plan.get('dependencyMode') == 'layer'
+    if not reused:
+        run('apt-get', 'update')
+        run('apt-get', 'install', '-y', '--no-install-recommends', 'ca-certificates', 'git',
+            'build-essential', 'python3', 'python3-venv', 'pkg-config', 'libffi-dev')
+        run('python3', '-m', 'venv', str(PREFIX / 'bootstrap'))
     bootstrap = str(PREFIX / 'bootstrap/bin/python')
-    run(bootstrap, '-m', 'pip', '--isolated', 'install', '--index-url',
-        'https://pypi.org/simple', 'uv==' + UV_VERSION)
+    if not reused:
+        run(bootstrap, '-m', 'pip', '--isolated', 'install', '--index-url',
+            'https://pypi.org/simple', 'uv==' + UV_VERSION)
     uv = str(PREFIX / 'bootstrap/bin/uv')
     # Install an exact-source wheel for package metadata and console scripts;
     # virtual projects naturally install dependencies only. Python source checks
     # still prefer the exact workspace through the executor's PYTHONPATH.
     # The manifest's default groups are honored, not every optional integration.
     if plan['pythonProject']:
-        run(uv, 'sync', '--locked', '--no-editable', '--python',
+        run(uv, 'sync', '--locked', '--no-editable', *(['--no-install-local'] if layer else []), '--python',
             '3.13', cwd='/workspace')
     else:
         run(uv, 'venv', '--python', '3.13', str(PREFIX / 'venv'))
@@ -132,13 +136,21 @@ def main():
                  'sourceSha256': plan['sourceSha256'], 'lockfiles': plan['lockfiles'],
                  'uv': run(uv, '--version', capture=True).strip(),
                  'python': run(str(PREFIX / 'venv/bin/python'), '--version', capture=True).strip()}
-    contract = dict(plan['executionContract'])
+    contract = dict(plan.get('executionContract', {}))
     contract['pythonBuild'] = {'available': False, 'reason': 'This source declares no Python build backend.'}
-    if plan['pythonProject']:
+    if plan['pythonProject'] and not layer:
         build = optional_build(uv, PREFIX / 'venv/bin/python', '/workspace', PREFIX)
         inventory['pythonBuild'] = build
         contract['pythonBuild'] = {key: build[key] for key in ('available', 'reason', 'python', 'backend', 'command') if key in build}
-    inventory['executionContract'] = contract
+    if not layer:
+        inventory['executionContract'] = contract
+    else:
+        # The seed has never received the source archive. Do not publish a root
+        # package, build environment, task plan or execution contract in it.
+        name = plan['dependencyProject']
+        run(str(PREFIX / 'venv/bin/python'), '-c',
+            'import importlib.metadata as m,re,sys; assert not any(re.sub(r"[-_.]+","-",d.metadata["Name"].lower())==sys.argv[1] for d in m.distributions())', name)
+        inventory['dependencyKey'] = plan['dependencyKey']
     if plan['profileId'] == 'browser-test':
         architecture = {'aarch64': 'arm64', 'x86_64': 'x64'}.get(os.uname().machine)
         if not architecture:
@@ -196,7 +208,7 @@ def main():
     inventory['pythonPackages'] = run(uv, 'pip', 'freeze', '--python', str(PREFIX / 'venv/bin/python'), capture=True).splitlines()
     inventory['systemPackages'] = run('dpkg-query', '-W', '-f=${Package}=${Version}\n', capture=True).splitlines()
     inventory['preparedFiles'] = {}
-    for directory in ('browsers', 'node', 'build-venv'):
+    for directory in (('venv', 'bootstrap', 'python') if layer else ('browsers', 'node', 'build-venv')):
         digest = hashlib.sha256()
         for path in sorted((PREFIX / directory).rglob('*')) if (PREFIX / directory).exists() else []:
             digest.update(str(path.relative_to(PREFIX)).encode())
@@ -207,11 +219,13 @@ def main():
                     for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                         digest.update(chunk)
         inventory['preparedFiles'][directory] = digest.hexdigest()
-    verify_contract(contract)
-    (PREFIX / 'execution-contract.json').write_text(json.dumps(contract, sort_keys=True))
+    if not layer:
+        verify_contract(contract)
+        (PREFIX / 'execution-contract.json').write_text(json.dumps(contract, sort_keys=True))
     (PREFIX / 'inventory.json').write_text(json.dumps(inventory, sort_keys=True))
-    shutil.copyfile('/prepare/initialize.py', PREFIX / 'initialize.py')
-    (PREFIX / 'plan.json').write_text(json.dumps(plan, sort_keys=True))
+    if not layer:
+        shutil.copyfile('/prepare/initialize.py', PREFIX / 'initialize.py')
+        (PREFIX / 'plan.json').write_text(json.dumps(plan, sort_keys=True))
     # Keep all prepared dependencies accessible to the unprivileged check user.
     for root, directories, files in os.walk(PREFIX):
         for name in directories:

@@ -126,7 +126,7 @@ async def test_actual_or_unobservable_work_still_holds_update(held, guard):
     elif guard == 'working-worker':
         session['workers'] = [{'status': 'working'}]
     elif guard == 'running-turn':
-        session['execution'] = {'turns': [{'phase': 'running'}]}
+        session['execution'] = {'turns': [{'id': 'running-turn', 'phase': 'running'}]}
     elif guard == 'unobservable-runtime':
         app.runtime.has_pending_operations = None
     try:

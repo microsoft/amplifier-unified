@@ -50,8 +50,28 @@ async def observe(session, paths):
         raise ValueError('Inspect at most 32 absolute resource paths.')
     coordinator = getattr(session, 'coordinator', None)
     tools = dict(coordinator.get('tools') or {}) if coordinator else {}
-    result = await asyncio.to_thread(check, tools, paths)
+    capability = getattr(coordinator, 'get_capability', lambda _: None)
+    inspect = capability('web.work_inspect_tool')
+    def inspect_tools():
+        inspected = {}
+        for name, mounted in tools.items():
+            tool = inspect(name, mounted) if callable(inspect) else mounted
+            if isinstance(tool, GuardedFileTool) and (tool.guard is not capability('web.file_source_guard')
+                    or tool.guard.coordinator is not coordinator):
+                raise ValueError('The mounted file guard cannot be verified.')
+            inspected[name] = tool
+        return inspected
+    try:
+        inspected = inspect_tools()
+    except ValueError:
+        return {'status': 'unknown', 'paths': {}, 'runtimeSessionId': getattr(session, 'session_id', None)}
+    result = await asyncio.to_thread(check, inspected, paths)
     current = (coordinator.get('tools') or {}) if coordinator else {}
     stable = set(current) == set(tools) and all(current.get(name) is tool for name, tool in tools.items())
+    if stable:
+        try:
+            stable = all(tool is inspected[name] for name, tool in inspect_tools().items())
+        except ValueError:
+            stable = False
     return {'status': 'observed' if stable and coordinator else 'unknown', 'paths': result if stable else {},
             'runtimeSessionId': getattr(session, 'session_id', None)}
