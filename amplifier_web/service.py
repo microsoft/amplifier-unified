@@ -1904,6 +1904,8 @@ class AppService:
             raise AppError(exc.message) from exc
         except ValueError as exc:
             raise AppError(str(exc)) from None
+        from .workspace_work_effects import guard as work_effect_guard
+        work_effect_guard(self, action, args, origin, caller_session_id)
         if action == 'canvas.openGif' and (origin != 'ui' or client_id is None
                 or args.get('clientId', client_id) != client_id
                 or self.clients.record().get('kind') != 'web'):
@@ -2527,6 +2529,7 @@ class AppService:
                         from .chat_permissions import PENDING_DETAIL
                         raise AppError(PENDING_DETAIL, 409)
             if action == 'session.pin':
+                work_effect_guard(self, action, args, origin, caller_session_id, final=True)
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
             if action in {'workspace.pin', 'workspace.pinOrder', 'navigation.pinOrder'}:
@@ -4649,6 +4652,14 @@ class AppService:
         args = {key: value for key, value in args.items()
                 if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
                                '_workOrigin', '_workDispatchGuarded'}}
+        from .workspace_work_effects import APP_EFFECT, app_request
+        token = APP_EFFECT.set(app_request(operation, args, session_id))
+        try:
+            return await self._client_app_bridge(operation, args, session_id, transport)
+        finally:
+            APP_EFFECT.reset(token)
+
+    async def _client_app_bridge(self, operation, args, session_id, transport):
         if '_inputClients' not in transport:
             return await self._app_bridge(operation, args, session_id)
         # The worker stamps this from accepted inputs, replacing any tool args.

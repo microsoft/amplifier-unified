@@ -1446,6 +1446,8 @@ class Collaboration:
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
                 return duplicate
+            from .workspace_work_effects import guard
+            guard(self.service, action, args, origin, source['id'], final=True)
             if args.get("grantId"):
                 self.error("Legacy grant-bearing writes are unsupported. Read the original receipt; do not replay it as new work.", 410)
             creation = CREATION.get()

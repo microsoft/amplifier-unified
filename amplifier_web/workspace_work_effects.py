@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
+from contextvars import ContextVar
 
 from .collaboration import BINDING
+
+APP_EFFECT = ContextVar('workspace_work_app_effect', default=None)
 
 # Explicit recovery surface, including attributed reports and own-request
 # cancellation. Reporting is not a read, but must remain possible when stuck.
@@ -25,7 +29,7 @@ SAFE_ACTIONS = frozenset({
     'coordination.result', 'coordination.artifact', 'coordination.review',
     'coordination.awareness', 'coordination.intent.read', 'coordination.diagnostics',
     'coordination.reply', 'coordination.cancel', 'coordination.wait',
-    'task.get', 'task.context', 'task.source', 'task.history',
+    'task.get', 'task.history', 'task.detail', 'task.receipt',
     'operations.list', 'operations.read', 'operations.wait',
     'workspace.tests.read', 'workspace.tests.result', 'workspace.tests.cancel',
     'workspace.environments.read', 'workspace.environments.reconcile',
@@ -42,7 +46,54 @@ def recovery_read(tool_name, tool_input):
     if operation in {'get_state', 'list_actions', 'history', 'context.read'}:
         return True
     arguments = tool_input.get('args')
+    if (operation == 'dispatch' and isinstance(arguments, dict)
+            and arguments.get('action') == 'runtime.control'):
+        values = arguments.get('args')
+        return isinstance(values, dict) and values.get('operation') in {
+            'task.get', 'task.history', 'task.detail', 'task.receipt'}
     return operation == 'dispatch' and isinstance(arguments, dict) and arguments.get('action') in SAFE_ACTIONS
+
+
+def app_request(operation, arguments, sid):
+    """Capture the original AppControl body before aliases/defaults change it."""
+    if operation not in {'dispatch', 'action.dispatch'}:
+        return None
+    witness = (BINDING.get() or {}).get('_workOrigin') or {}
+    return {'sessionId': sid, 'toolName': 'app_control',
+            'toolInput': {'operation': operation, 'args': copy.deepcopy(arguments)},
+            'toolCallId': witness.get('toolCallId') if isinstance(witness, dict) else None}
+
+
+def guard(service, action, arguments, origin, caller, *, final=False):
+    """Fail closed for applicable effects without a qualified final owner.
+
+    Only synchronous mutation owners audited below can proceed. Delayed work
+    needs its own retained Work binding and is not implicitly admitted here.
+    Reads, reporting and unrelated roots retain their existing domain checks.
+    """
+    request = APP_EFFECT.get()
+    if request is None or origin != 'agent':
+        return
+    from .service import AppError
+    if caller != request['sessionId']:
+        raise AppError('Work effect calling root changed.', 409)
+    query = {key: copy.deepcopy(request[key]) for key in ('toolName', 'toolInput', 'toolCallId')}
+    # Missing origin must deny a bound mutation, not accidentally bypass policy.
+    query['toolCallId'] = query['toolCallId'] or 'unavailable-origin'
+    result = check(service.work_invocation, caller, query)
+    if not result['allowed']:
+        raise AppError(result['reason'], 409, code='work_coverage_unavailable')
+    if not result['applicable'] or recovery_read(query['toolName'], query['toolInput']):
+        return
+    supported = (action in {
+        'workspace.work.create', 'workspace.work.revise', 'workspace.work.link',
+        'workspace.work.disposition', 'session.pin'}
+        or action in {'coordination.send', 'conversation.send'}
+        and arguments.get('mode') == 'notify')
+    if not supported:
+        raise AppError('This Work-dependent action has no qualified final effect owner. '
+                       'Read current Work or report the blocked action; no effect was admitted.',
+                       409, code='work_effect_owner_unavailable')
 
 
 def _receipt(invocation, identity):

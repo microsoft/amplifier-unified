@@ -5,6 +5,7 @@ execution. The adapter integration must supply its independently observed facts.
 """
 import hashlib
 import json
+import asyncio
 
 import pytest
 
@@ -172,4 +173,94 @@ async def test_same_witness_is_invalid_after_real_promise_change(app):
     before = retained_bytes(app)
     result = await check(app, child, args, witness)
     assert not result['allowed'] and result['effectAuthorized'] is False
+    assert retained_bytes(app) == before
+
+
+async def app_effect(app, child, action, args, command, witness=None):
+    payload = {'action': action, 'args': args, 'id': command}
+    envelope = transport(child)
+    if witness is not None:
+        envelope['_workOrigin'] = witness
+    return await app.app_bridge('dispatch', {**payload, **envelope}, child['id'])
+
+
+def app_witness(child, required, action, args, command):
+    return trusted_fixture(child, required, {
+        'toolName': 'app_control', 'toolInput': {'operation': 'dispatch', 'args': {
+            'action': action, 'args': args, 'id': command}}, 'toolCallId': command + ':call'})
+
+
+async def test_app_effect_requires_coverage_but_safe_reads_stay_available(app):
+    from amplifier_web.service import AppError
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'app-effect')
+    _, child = await assert_available_commission(app, owner, item, 'app-effect-commission')
+    args = {'id': child['id'], 'pinned': True}
+    before = retained_bytes(app)
+    with pytest.raises(AppError, match='originating-call coverage'):
+        await app_effect(app, child, 'session.pin', args, 'pin-uncovered')
+    assert retained_bytes(app) == before
+    read_result = await app_effect(app, child, 'workspace.work.invocation',
+                                   {'sessionId': child['id']}, 'read-uncovered')
+    assert read_result['accepted']
+    required = (await current_work(app, child))['required']
+    witness = app_witness(child, required, 'session.pin', args, 'pin-covered')
+    result = await app_effect(app, child, 'session.pin', args, 'pin-covered', witness)
+    assert result['accepted'] and child['id'] in app._state['pinnedSessionIds']
+
+
+@pytest.mark.parametrize('change', [False, True])
+async def test_peer_notify_rechecks_after_real_history_await(app, monkeypatch, change):
+    from amplifier_web.service import AppError
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'await-effect')
+    _, child = await assert_available_commission(app, owner, item, 'await-effect-commission')
+    required = (await current_work(app, child))['required']
+    args = {'sessionId': owner['id'], 'text': 'Retained notification.', 'mode': 'notify'}
+    command = 'await-notification'
+    witness = app_witness(child, required, 'conversation.send', args, command)
+    reached, release = asyncio.Event(), asyncio.Event()
+    original = app.history.ensure_loaded
+
+    async def held(sid, *values, **options):
+        if sid == owner['id']:
+            reached.set()
+            await release.wait()
+        return await original(sid, *values, **options)
+
+    monkeypatch.setattr(app.history, 'ensure_loaded', held)
+    pending = asyncio.create_task(app_effect(app, child, 'conversation.send', args, command, witness))
+    try:
+        await asyncio.wait_for(reached.wait(), 3)
+        monkeypatch.setattr(app.history, 'ensure_loaded', original)
+        if change:
+            current = (await read(app, owner, item['id']))['item']
+            await revise(app, owner, current, 'await-effect-revision',
+                         source=source(app, owner, 'New promise while notification waits.'),
+                         constraints=['New promise before notification.'])
+        before = retained_bytes(app)
+    finally:
+        release.set()
+    if change:
+        with pytest.raises(AppError, match='Work|coverage'):
+            await pending
+        assert retained_bytes(app) == before
+        assert command not in retained_bytes(app)
+    else:
+        result = await pending
+        assert result['accepted'] and result['delivery'] == 'notified'
+        assert command in retained_bytes(app)
+
+
+async def test_unqualified_deferred_effect_owner_refuses_before_admission(app):
+    from amplifier_web.service import AppError
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'deferred-effect')
+    _, child = await assert_available_commission(app, owner, item, 'deferred-effect-commission')
+    required = (await current_work(app, child))['required']
+    args = {'sessionId': owner['id'], 'text': 'Do not enqueue.', 'mode': 'queue'}
+    witness = app_witness(child, required, 'coordination.send', args, 'deferred')
+    before = retained_bytes(app)
+    with pytest.raises(AppError, match='no qualified final effect owner'):
+        await app_effect(app, child, 'coordination.send', args, 'deferred', witness)
     assert retained_bytes(app) == before

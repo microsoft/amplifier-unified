@@ -462,6 +462,8 @@ class WorkspaceWork:
             duplicate = self.receipts.duplicate(command_id, digest)
             if duplicate:
                 return duplicate
+            from .workspace_work_effects import guard
+            guard(self.service, action, args, origin, caller, final=True)
             if self.db.in_transaction:
                 self.db.commit()
             self.db.execute('BEGIN IMMEDIATE')
