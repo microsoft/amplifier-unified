@@ -212,6 +212,11 @@ try{
  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
  const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ let delayedFrames=null;
+ await page.routeWebSocket(/\/api\/events\/ws(?:\?|$)/,socket=>{
+  const server=socket.connectToServer();
+  server.onMessage(message=>{if(delayedFrames)delayedFrames.push(()=>socket.send(message));else socket.send(message)});
+ });
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const saved=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.destinationHistory')));
@@ -493,6 +498,27 @@ try{
  await expect(page.locator('.a-work-live-controls .a-call-strip[role="status"]')).toHaveCount(0);
  await expect(page.locator('[data-part="work-browser"]').getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
  const captured=await state();assert.equal(Object.hasOwn(captured,'destinationHistory'),false);
+ // An accepted receipt alone cannot confirm a traversal. Withhold actual
+ // stream frames and return a deliberately stale recovery snapshot; the
+ // existing dispatch owner must reject confirmation without moving its cursor.
+ const unconfirmedTrail=await saved(),staleFrame=await state();delayedFrames=[];
+ const recoveryRoute=/\/api\/state(?:\?|$)/;
+ await page.route(recoveryRoute,route=>route.fulfill({json:staleFrame}));
+ const traversalReceipt=page.waitForResponse(response=>response.request().method()==='POST'&&
+  new URL(response.url()).pathname==='/api/actions'&&['session.select','view.update'].includes(response.request().postDataJSON()?.action));
+ await back.click();
+ const acceptedTraversal=await (await traversalReceipt).json();assert.equal(acceptedTraversal.accepted,true);
+ await expect(back).toBeDisabled();assert.deepEqual(await saved(),unconfirmedTrail);
+ await expect(page.getByRole('alert').filter({hasText:'Navigation was not confirmed'})).toBeVisible();
+ assert.deepEqual(await saved(),unconfirmedTrail);
+ const delayed=delayedFrames;delayedFrames=null;await page.unroute(recoveryRoute);for(const deliver of delayed)deliver();
+ await expect.poll(async()=>(await state()).revision).toBeGreaterThanOrEqual(acceptedTraversal.stateRevision);
+ await writeFile(path.join(out,'receipt-without-frame.json'),JSON.stringify({accepted:true,receiptRevision:acceptedTraversal.stateRevision,
+  staleRevision:staleFrame.revision,delayedFrames:delayed.length,historyUnchangedBeforeFrame:true,confirmationRejected:true},null,2));
+ // Restore this test's original destination for the independent touch-client
+ // assertion; no failed input, file open or other effect is replayed.
+ await action('session.select',{id:captured.selectedSessionId});
+ await action('view.update',{patch:{workSurface:captured.view.workSurface}});
  const originalTrail=await saved();await wideTouchHome(browser,url,b);
  assert.equal((await state()).selectedSessionId,captured.selectedSessionId);
  assert.deepEqual(await saved(),originalTrail,'A separate touch client must not change this tab history');
