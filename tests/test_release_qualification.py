@@ -440,6 +440,8 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert '2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' in receipts['run']
     assert 'NativeSendAdmission, NativeOutboundEnvelope' in receipts['run']
     assert 'unset PYTHONPATH' in installed['run']
+    assert '--no-deps -r output/python-checks/installed-requirements.txt' in installed['run']
+    assert 'uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"' in installed['run']
     assert 'assert not actual.is_relative_to(source)' in installed['run']
     assert "('failure', 'error', 'skipped')" in installed['run']
 

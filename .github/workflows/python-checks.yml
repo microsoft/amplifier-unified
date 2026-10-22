@@ -166,8 +166,11 @@ jobs:
           Path('output/python-checks/installed-requirements.txt').write_text('\n'.join(rows) + '\n')
           PY
           uv venv --python 3.13 "$RUNNER_TEMP/native-receipt-installed"
-          uv pip install --python "$RUNNER_TEMP/native-receipt-installed/bin/python" -r output/python-checks/installed-requirements.txt
+          # Install the complete already-resolved snapshot, not a new graph
+          # combining pinned VCS commits with moving transitive URLs.
+          uv pip install --python "$RUNNER_TEMP/native-receipt-installed/bin/python" --no-deps -r output/python-checks/installed-requirements.txt
           uv pip install --python "$RUNNER_TEMP/native-receipt-installed/bin/python" --no-deps output/python-checks/wheel/*.whl
+          uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"
           mkdir "$RUNNER_TEMP/native-receipt-tests"
           cp tests/test_native_provider.py tests/conftest.py "$RUNNER_TEMP/native-receipt-tests/"
           unset PYTHONPATH
