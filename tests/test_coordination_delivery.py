@@ -720,8 +720,10 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
                                     close=AsyncMock())
     native._connect = AsyncMock()
     native._guard_assembled_params_with_provider_count = AsyncMock()
-    native.owner = SimpleNamespace(coordinator=c, config={'background_delegate': True},
-                                   runtime=SimpleNamespace(emit=AsyncMock()), start_native_job=start)
+    native_owner = SimpleNamespace(coordinator=c, config={'background_delegate': True},
+        runtime=SimpleNamespace(emit=AsyncMock()), start_native_job=start, native_job=lambda identity: None,
+        context=SimpleNamespace(get_messages=AsyncMock(return_value=[m.model_dump() for m in adapter.messages])))
+    native.owner = native_owner
     if fault in {'opaque_only', 'changed_plaintext'}:
         def checkpoint(params, full):
             params = copy.deepcopy(params)
@@ -743,6 +745,18 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
             return {'tokens': 100}
         async def complete(self, value, **kwargs):
             assert value.model_dump_json() == measured[0]
+            if fault == 'full_provider':
+                from amplifier_module_loop_live.scope import LIVE_OWNER
+                native.owner = None
+                native._provider_count_available = lambda: False
+                client = SimpleNamespace(responses=SimpleNamespace())
+                client.with_options = lambda **options: client
+                native._client = client
+                token = LIVE_OWNER.set(native_owner)
+                try:
+                    return await native.complete(value, model='gpt-6-astra')
+                finally:
+                    LIVE_OWNER.reset(token)
             if fault == 'live_retention':
                 from amplifier_web.coordination_delivery import WORK_ATTEMPT
                 owner, attempt = WORK_ATTEMPT.get()
@@ -760,6 +774,9 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
             return {}
     wrapped = adapter.capabilities['web.provider_transform'](Driver())
     original = adapter.request()
+    if fault == 'full_provider':
+        original = original.model_copy(update={'tools': [*original.tools,
+            ToolSpec(name='delegate', parameters={'type': 'object', 'properties': {'instruction': {'type': 'string'}}})]})
     await wrapped.request_budget(original)
     if fault == 'new_input':
         with pytest.raises(Exception):
@@ -768,7 +785,7 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
     else:
         await wrapped.complete(original)
         assert len(sent) == len(proofs) == 1
-        proven = fault in {'none', 'no_event_response', 'retention'}
+        proven = fault in {'none', 'no_event_response', 'retention', 'full_provider'}
         assert proofs[0]['complete'] is proven, proofs
         assert proofs[0]['effectAuthorized'] is False
         if proven:
@@ -779,7 +796,7 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
     assert 'fixture"}' not in host.path.read_text() if host.path.exists() else True
 
 
-async def programmatic_origin_probe(app, fault):
+async def programmatic_origin_probe(app, fault, *, guarded=False):
     import asyncio
     from amplifier_core import ToolResult
     from amplifier_core.message_models import ToolCall
@@ -788,6 +805,22 @@ async def programmatic_origin_probe(app, fault):
     if fault not in {'uncovered', 'same_batch_read'}:
         await adapter.fill(required)
     c = adapter.coordinator
+    if guarded:
+        from amplifier_web.runtime_worker import Worker
+        worker = Worker()
+        worker.session = SimpleNamespace(coordinator=c)
+        worker.runtime = SimpleNamespace(generation={'id': adapter.scope['generationId'],
+            'input_ids': list(adapter.scope['inputIds'])}, closed=False, stop_requested=False)
+        worker.activation_gate = SimpleNamespace(current_valid=True)
+        worker.app_access_bridge(c)
+        adapter.delivery.begin_work.__self__.origin_scope = c.get_capability('web.work_origin_scope')
+        async def service(operation, args):
+            assert operation == 'work.effect.check'
+            # Controlled service policy only; real classifier belongs to the
+            # backend integration. Container execution is not its nested effect.
+            return {'applicable': True, 'allowed': args['toolName'] == 'tool_exec'
+                    or args['_workOrigin'].get('complete') is True, 'effectAuthorized': False}
+        worker.bridge = service
     adapter.loop.config['programmatic_dispatch'] = True
     c.register_capability('tools.dispatch', adapter.loop.approved_dispatch)
     adapter.delivery.install_dispatch(c)
@@ -800,7 +833,8 @@ async def programmatic_origin_probe(app, fault):
             dispatch = c._tool_dispatch_contexts[asyncio.current_task()]
             if fault == 'stop':
                 adapter.scope['stopRevision'] = 1
-            proof = await adapter.delivery.claim_effect_origin({
+            check = adapter.delivery.execution_origin if guarded else adapter.delivery.claim_effect_origin
+            proof = await check({
                 **dispatch, 'tool_name': 'probe', 'tool_input': value})
             proofs.append(proof)
             return ToolResult(success=True, output={'covered': proof.get('complete')})
@@ -833,7 +867,10 @@ async def programmatic_origin_probe(app, fault):
     if fault == 'reused_parent':
         proofs.clear()
         await execute()
-        assert len(proofs) == 2 and all(p['complete'] is False for p in proofs)
+        if guarded:
+            assert proofs == []  # The final check refuses before either effect.
+        else:
+            assert len(proofs) == 2 and all(p['complete'] is False for p in proofs)
     from amplifier_web.coordination_delivery import WORK_NESTED
     assert WORK_NESTED.get() is None and not c._tool_dispatch_contexts
 

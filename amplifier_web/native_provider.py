@@ -73,9 +73,11 @@ class NativeProviderHost:
                     and data.get('input_id') != _STEER_INPUT.get()):
                 raise ValueError("Native steer is not its admitted input")
             if len(self.send_bindings) >= 128:
+                recorded = {row['send_id'] for row in self.state.get('sends', [])}
                 terminal = {row['send_id'] for row in self.state.get('sends', [])
                             if row['outcome'] in {'not_sent', 'completed', 'applied', 'failed'}}
-                self.send_bindings = {k: v for k, v in self.send_bindings.items() if k not in terminal}
+                self.send_bindings = {k: v for k, v in self.send_bindings.items()
+                                      if k in recorded and k not in terminal}
             if len(self.send_bindings) >= 128 or data['send_id'] in self.send_bindings:
                 raise ValueError("Native send binding is ambiguous or full")
             attempt_id = attempt['id'] if attempt else uuid.uuid4().hex
@@ -129,6 +131,7 @@ class NativeProviderHost:
                 self.response_overflow = True
         if kind == 'native.outcome_unknown':
             self.open_responses.clear()
+            self.response_overflow = False
 
     async def prepare_send(self, kind, *, input_id=None):
         from amplifier_module_provider_openai.native import NativeSendAdmission

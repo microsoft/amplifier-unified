@@ -33,6 +33,7 @@ READ_BYTES = 4 * 1024 * 1024
 PLAINTEXT_BYTES = 64 * 1024
 WORK_ATTEMPT = ContextVar('unified_work_delivery_attempt', default=None)
 WORK_NESTED = ContextVar('unified_work_nested_origin', default=None)
+WORK_EXECUTION = ContextVar('unified_work_tool_execution', default=None)
 
 @dataclass(frozen=True)
 class InvocationOrigin:
@@ -582,7 +583,8 @@ class CoordinationDelivery:
             return {**unavailable, 'reason': 'Admitted host origin or full input scope is unavailable.'}
         origin = attempt['origin'].public()
         required = attempt['required']
-        if any(origin[k] != required[k] for k in ('rootSessionId', 'generationId', 'inputIds')):
+        if (any(origin[k] != required[k] for k in ('rootSessionId', 'generationId'))
+                or sorted(origin['inputIds']) != sorted(required['inputIds'])):
             return {**unavailable, 'reason': 'Required input scope differs from the admitted origin.'}
         return {**copy.deepcopy(attempt['coverage']), 'attemptId': attempt['id'],
                 'requestSha256': attempt['requestSha256'], 'origin': origin,
@@ -620,6 +622,19 @@ class CoordinationDelivery:
             self.executed_calls.add(identity)
         return await self.recheck_effect_coverage(data)
 
+    async def execution_origin(self, data):
+        execution = WORK_EXECUTION.get()
+        if execution and execution['delivery'] is self:
+            if not execution['active'] or not _same_json(execution['data'], data):
+                return {'complete': False, 'effectAuthorized': False, 'status': 'unavailable',
+                        'reason': 'Executing tool changed after its proof was consumed.'}
+            proof = execution['proof']
+            if proof.get('complete') and await self.recheck_effect_coverage(data) != proof:
+                return {'complete': False, 'effectAuthorized': False, 'status': 'unavailable',
+                        'reason': 'Executing tool origin changed during its admission.'}
+            return copy.deepcopy(proof)
+        return await self.claim_effect_origin(data)
+
     def observe_nested_pre(self, data):
         nested = WORK_NESTED.get()
         if not nested or nested['delivery'] is not self:
@@ -654,9 +669,16 @@ class CoordinationDelivery:
                 call = lease.scope.call
                 parent = {'tool_call_id': call.id, 'tool_name': call.name, 'tool_input': copy.deepcopy(call.arguments)}
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
-                eligible = (dispatch.get('tool_call_id') == call.id
-                            and call.id not in delivery.executed_calls and len(delivery.executed_calls) < 4096)
-                if eligible:
+                execution = WORK_EXECUTION.get()
+                if execution and execution['delivery'] is delivery:
+                    eligible = (execution['active'] and not execution['leaseIssued']
+                                and execution['proof'].get('complete') is True
+                                and _same_json(execution['data'], {**dispatch, **parent}))
+                    execution['leaseIssued'] = True
+                else:
+                    eligible = (dispatch.get('tool_call_id') == call.id
+                                and call.id not in delivery.executed_calls and len(delivery.executed_calls) < 4096)
+                if eligible and not execution:
                     delivery.executed_calls.add(call.id)
                 class BoundLease:
                     def __getattr__(self, name):

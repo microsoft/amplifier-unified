@@ -194,7 +194,8 @@ class Worker:
             ids = self.context_inputs if assigned is None else assigned
             # Neither approval nor generation identity is model-supplied.
             args = {key: value for key, value in args.items()
-                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait", "_workOrigin"}}
+                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait", "_workOrigin",
+                                   "_workDispatchGuarded"}}
             if assigned is None:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
@@ -219,6 +220,9 @@ class Worker:
                     tool_input = args.get('toolInput') if operation == 'work.effect.check' else {
                         'operation': operation, 'args': {k: v for k, v in args.items() if not k.startswith('_')}}
                     args['_workOrigin'] = await check({**dispatch, 'tool_name': tool_name, 'tool_input': tool_input})
+                if operation == 'work.effect.check':
+                    programmatic = coordinator.get_capability('web.work_programmatic_guarded')
+                    args['_workDispatchGuarded'] = bool(callable(programmatic) and programmatic())
             if operation.startswith('context.'):
                 context = self.context_bindings if assigned_context is None else assigned_context
                 bindings = [context[i] for i in ids if i in context]
