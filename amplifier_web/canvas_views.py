@@ -27,7 +27,7 @@ def definitions(schema, string):
     target = {'viewId': string(100), 'resourceId': IDENTITY,
               'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
     actions = {
-        'canvas.views.inline': ('Open a bounded, client-local preview of a version published in the selected chat.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY}, ['resourceId', 'version', 'messageId', 'previewId'])),
+        'canvas.views.inline': ('Open an exact saved version published in a message OR attached to a question in the selected chat. Supply messageId or questionId with questionRevision, never both. Does not answer or start work.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'questionId': IDENTITY, 'questionRevision': {'type': 'integer', 'minimum': 1}, 'previewId': IDENTITY}, ['resourceId', 'version', 'previewId'])),
         'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
         'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
         'canvas.views.reveal': ('Reveal the exact artifact file in the file manager on its named owning app host. It does not open the browser device file manager. Bind hostId and instanceId from fileReveal.', schema({**target,'hostId':string(200),'instanceId':string(100)}, [*target,'hostId','instanceId'])),
@@ -92,6 +92,9 @@ class CanvasViews:
         client = self.service.clients.record()
         if client is None:
             return
+        if action == 'canvas.select':
+            check(client, [identity for identity, binding in client.get('canvasViews', {}).get('inline', {}).items()
+                           if binding.get('resourceId') == args['id']])
         if (action in {'session.draft', 'session.create', 'session.fork', 'message.edit',
                        'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}
                 or action == 'session.select' and args['id'] != client.get('selectedSessionId')):
@@ -144,6 +147,9 @@ class CanvasViews:
             if (row.get('sessionId') != self.service.state.get('selectedSessionId')
                     or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
                 fail('This preview belongs to another conversation.', 409)
+            if current.get('questionId'):
+                self.service.questions.review_artifact(row['sessionId'], current['questionId'],
+                    current['questionRevision'], identity, current['selectedVersion'])
         from .canvas_versions import definition
         row = definition(row, current.get('selectedVersion'), self.service.db)
         preference = self.preference(view_id, row)
@@ -251,9 +257,19 @@ class CanvasViews:
         if (row.get('sessionId') != self.service.state.get('selectedSessionId')
                 or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
             fail('Open the conversation that contains this artifact first.', 409)
-        publications = row.get('publications') or [{'messageId': row.get('messageId'), 'version': latest(row)}]
-        if {'messageId': args['messageId'], 'version': args['version']} not in publications:
-            fail('This version was not published in that message.', 409)
+        if 'questionId' in args:
+            if 'messageId' in args or 'questionRevision' not in args:
+                fail('Supply one question binding, not a message publication.', 409)
+            self.service.questions.review_artifact(row['sessionId'], args['questionId'],
+                args['questionRevision'], row['id'], args['version'])
+            source = {key: args[key] for key in ('questionId', 'questionRevision')}
+        else:
+            if 'messageId' not in args or 'questionRevision' in args:
+                fail('Supply a message publication or an exact question binding.', 409)
+            publications = row.get('publications') or [{'messageId': row.get('messageId'), 'version': latest(row)}]
+            if {'messageId': args['messageId'], 'version': args['version']} not in publications:
+                fail('This version was not published in that message.', 409)
+            source = {'messageId': args['messageId']}
         saved = definition(row, args['version'], self.service.db)
         if saved['kind'] not in set(KINDS) - {'a2ui', 'browser'}:
             fail('This artifact opens in Canvas.', 409)
@@ -263,7 +279,7 @@ class CanvasViews:
             if binding.get('sessionId') != self.service.state.get('selectedSessionId'):
                 self.release_inline(identity)
         binding = {'resourceId': row['id'], 'selectedVersion': args['version'],
-                   'messageId': args['messageId'], 'sessionId': row['sessionId'], 'previewId': args['previewId']}
+                   **source, 'sessionId': row['sessionId'], 'previewId': args['previewId']}
         identity = next((key for key, value in inline.items() if value == binding), None)
         if identity is None:
             if len(inline) >= 8:

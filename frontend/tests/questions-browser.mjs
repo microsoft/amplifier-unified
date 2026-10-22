@@ -7,7 +7,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUESTIONS_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 let browser;
 const output=process.env.AMPLIFIER_QUESTIONS_OUTPUT,layoutChecks=[];
 if(output)await mkdir(output,{recursive:true});
@@ -61,7 +61,7 @@ try{
    await expect(usage().getByRole('button',{name:'Refresh usage',exact:true})).toBeEnabled();
    await questions.click();await expect(questions.locator('..')).toHaveAttribute('open','');
   }
-  await page.locator('.a-question-history summary').click();
+   await page.locator('.a-question-history > summary').click();
  };
  const close=async()=>{
   // Closing is optimistic; do not reload until the closed panel is saved.
@@ -155,10 +155,72 @@ try{
  state=await check();assert.equal(state.sent.length,3);assert.equal(new Set(state.sent.map(row=>row.inputId)).size,3);
  await page.reload();await expect(composer()).toHaveDraft('Keep this unsent message');
  await page.setViewportSize({width:390,height:844});
- await history({stableUsage:true,usageCalls:12,label:'narrow'});await expect(card(voice.id).getByText('Your answer: Plain language',{exact:true})).toBeVisible();
+ await history({stableUsage:true,usageCalls:12,label:'narrow'});await expect(card(voice.id).locator('.a-question-result .a-markdown')).toHaveText('Plain language');
  await expect(card(voice.id)).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await card(voice.id).scrollIntoViewIfNeeded();await expect(card(voice.id)).toBeInViewport();
  await page.screenshot({path:'/tmp/amplifier-durable-questions-mobile.png'});
+ await close();
+ const reviewResponse=await page.request.post(ready.url+'/fixture/reviews');
+ assert.equal(reviewResponse.status(),200,await reviewResponse.text());
+ const review=await reviewResponse.json(),q=card(review.question.id);
+ await page.setViewportSize({width:1280,height:900});
+ await expect(q.locator('.a-question-prompt h1')).toHaveText('Choose the peer presentation');
+ await expect(q.locator('.a-question-prompt li')).toHaveCount(2);
+ await expect(q.locator('.a-question-prompt pre code')).toHaveText('exact source\n');
+ assert.equal(await q.locator('.a-question-prompt a[href^="javascript:"]').count(),0);
+ assert.equal(await page.evaluate(()=>document.body.dataset.untrusted),undefined);
+ const answerDraft='**Proceed**.\n\nKeep the `source` visible.';
+ await q.getByRole('textbox').fill(answerDraft);
+ await page.reload();await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ const rows=q.locator('.a-compact-artifact'),first=rows.nth(0),second=rows.nth(1);
+ await expect(rows).toHaveCount(2);await expect(q.locator('.a-inline-artifact')).toHaveCount(0);
+ for(const width of [1280,390,320]){
+  await page.setViewportSize({width,height:900});
+  await first.scrollIntoViewIfNeeded();
+  const geometry=await first.locator('.a-compact-artifact-row').evaluate(row=>{
+   const bounds=node=>{const b=node.getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height}};
+   return {row:bounds(row),buttons:[...row.querySelectorAll('button')].map(bounds),scrollWidth:row.scrollWidth,clientWidth:row.clientWidth};
+  });
+  for(const b of geometry.buttons){assert.ok(b.width>=44&&b.height>=44,'44px review targets');assert.ok(b.x>=geometry.row.x&&b.x+b.width<=geometry.row.x+geometry.row.width+1,'Review actions fit row')}
+  assert.ok(Math.abs(geometry.buttons[0].y-geometry.buttons[1].y)<1,'Review actions stay on one row');
+  assert.ok(geometry.scrollWidth<=geometry.clientWidth+1,'No row overflow');
+  layoutChecks.push({label:'compact-question-review',width,...geometry});
+  if(output)await page.screenshot({path:join(output,`question-review-${width}.png`)});
+ }
+ await page.setViewportSize({width:1280,height:900});
+ await first.getByRole('button',{name:/^Preview here:/}).click();
+ await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
+ await expect(first.getByRole('heading',{name:'Latest document v2'})).toHaveCount(0);
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ await first.getByRole('button',{name:/^Open in Canvas:/}).click();
+ await expect(first.locator('.a-inline-artifact')).toHaveCount(0);
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ await first.getByRole('button',{name:/^Preview here:/}).click();
+ await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
+ await first.getByRole('button',{name:/^Hide preview:/}).click();
+ await expect(first.locator('.a-inline-artifact')).toHaveCount(0);
+ await second.getByRole('button',{name:/^Preview here:/}).click();
+ const frame=second.frameLocator('iframe');
+ await expect(frame.getByRole('heading',{name:'HTML mockup v1'})).toBeVisible();
+ await expect(second.locator('iframe')).toHaveAttribute('sandbox','allow-scripts');
+ await frame.getByRole('button',{name:'Try mockup'}).click();
+ await expect(frame.locator('#value')).toHaveText('1');
+ await expect(frame.locator('body')).toHaveAttribute('data-parent-blocked','yes');
+ await expect(frame.locator('body')).toHaveAttribute('data-network-blocked','yes');
+ assert.equal(await page.evaluate(()=>document.body.dataset.untrusted),undefined);
+ assert.equal((await check()).sent.length,3,'Review actions never send or answer');
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ if(output)await page.screenshot({path:join(output,'question-html-review.png')});
+ await second.getByRole('button',{name:/^Hide preview:/}).click();
+ await q.getByRole('button',{name:'Submit answer'}).click();
+ await expect(q).toHaveCount(0);
+ await history();await expect(card(review.question.id).locator('.a-question-result strong').filter({hasText:'Proceed'})).toBeVisible();
+ const savedQuestion=(await check()).questions.find(row=>row.id===review.question.id);
+ assert.equal(savedQuestion.answer.text,answerDraft);assert.equal(savedQuestion.answer.questionRevision,1);
+ assert.equal(savedQuestion.answer.artifacts[0].version,1);
+ assert.equal(savedQuestion.answer.artifacts[0].id,review.markdown.id);
+ if(output)await page.screenshot({path:join(output,'question-formatted-answer.png')});
+ await close();
  assert.deepEqual(errors,[]);
  console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
 }finally{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}await browser?.close();fixture.kill()}

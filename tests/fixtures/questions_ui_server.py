@@ -36,6 +36,29 @@ async def main(home):
     optional = await ask('What title would you like?')
     skipped = await ask('Would you like a subtitle?')
 
+    async def reviews(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        markdown = (await service.app_bridge('dispatch', {'action': 'canvas.show', 'args': {
+            'kind': 'markdown', 'title': 'Peer presentation proposal with a deliberately long descriptive title',
+            'content': '# Pinned document v1\n\n**Original** content.',
+        }}, sid))['result']
+        html = (await service.app_bridge('dispatch', {'action': 'canvas.show', 'args': {
+            'kind': 'html', 'title': 'Interactive peer presentation mockup',
+            'content': '<h1>HTML mockup v1</h1><button id="count">Try mockup</button><p id="value">0</p>'
+                       '<script>document.querySelector("#count").onclick=()=>document.querySelector("#value").textContent="1";'
+                       'try { parent.document.body.dataset.untrusted="yes"; } catch { document.body.dataset.parentBlocked="yes"; }'
+                       'fetch("https://example.invalid/blocked").catch(()=>document.body.dataset.networkBlocked="yes");</script>',
+        }}, sid))['result']
+        q = await ask('# Choose the **peer presentation**\n\nKeep the sender visible.\nPreserve this line.\n\n'
+                      '- Read the proposal\n- Try the mockup\n\n```text\nexact source\n```\n\n'
+                      '[Safe link](https://example.com) [Unsafe](javascript:alert(1))\n\n<script>parent.bad=true</script>',
+                      True, artifacts=[{'id': markdown['id'], 'version': 1}, {'id': html['id'], 'version': 1}])
+        await service.app_bridge('dispatch', {'action': 'canvas.versions.revise', 'args': {
+            'id': markdown['id'], 'expectedRevision': 1, 'content': '# Latest document v2',
+        }}, sid)
+        return web.json_response({'question': q, 'markdown': markdown, 'html': html})
+
     async def check(request):
         return web.json_response({'sent': runtime.sent, 'questions': service.questions.store.all(sid),
                                  'sessionIds': [session['id'] for session in service.state['sessions']],
@@ -83,6 +106,7 @@ async def main(home):
     app.router.add_get('/fixture/check', check)
     app.router.add_post('/fixture/voice', voice)
     app.router.add_post('/fixture/handoff', propose_handoff)
+    app.router.add_post('/fixture/reviews', reviews)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)

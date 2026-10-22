@@ -374,3 +374,88 @@ async def test_agent_cannot_launder_its_own_send_as_a_user_answer(tmp_path):
         assert len(app.runtime.sent) == 1
     finally:
         await app.close()
+
+
+async def test_question_preserves_markdown_source_and_exact_review_versions(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'html', 'title': 'Review mockup', 'content': '<h1>Original v1</h1>',
+        }))['result']
+        prompt = '  **Choose** this design?\n\n- First\n- Second\n\n    code\n'
+        q = await create_question(app, sid, prompt=prompt, artifacts=[{'id': saved['id'], 'version': 1}])
+        assert q['prompt'] == prompt
+        reference = q['artifacts'][0]
+        assert reference['id'] == saved['id'] and reference['version'] == 1
+        assert reference['kind'] == 'html' and reference['title'] == 'Review mockup'
+        assert reference['sessionId'] == sid and len(reference['bodyDigest']) == 64
+        assert 'content' not in reference and 'body' not in reference
+        await app.dispatch('canvas.versions.revise', {
+            'id': saved['id'], 'expectedRevision': 1, 'content': '<h1>New v2</h1>', 'title': 'Changed title',
+        })
+        answer = '  **Yes**.\n\nKeep the `source`.\n'
+        result = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': answer,
+        }))['result']
+        assert result['answer']['text'] == answer
+        assert result['answer']['questionRevision'] == 1
+        assert result['answer']['artifacts'] == [reference]
+        assert result['artifacts'] == [reference]
+        assert len(app.runtime.sent) == 1
+    finally:
+        await app.close()
+
+
+async def test_question_preview_is_bound_not_a_message_publication(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'markdown', 'title': 'Proposal', 'content': '# Exact first version',
+        }))['result']
+        q = await create_question(app, sid, artifacts=[{'id': saved['id'], 'version': 1}])
+        app.clients.attach('review-browser')
+        with app.clients.bind('review-browser'):
+            await app.dispatch('session.select', {'id': sid})
+            await app.dispatch('canvas.versions.revise', {
+                'id': saved['id'], 'expectedRevision': 1, 'content': '# Latest second version',
+            })
+            args = {'resourceId': saved['id'], 'version': 1, 'questionId': q['id'],
+                    'questionRevision': 1, 'previewId': 'question-review'}
+            preview = (await app.dispatch('canvas.views.inline', args))['result']
+            assert app.canvas_views.canvas(preview['viewId'])['content'] == '# Exact first version'
+            assert not app.runtime.sent
+            assert app.questions.store.get(sid, q['id'])['status'] == 'pending'
+            with pytest.raises(AppError, match='question'):
+                await app.dispatch('canvas.views.inline', {**args, 'version': 2})
+            with pytest.raises(AppError, match='question'):
+                await app.dispatch('canvas.views.inline', {**args, 'questionRevision': 2})
+            with pytest.raises(AppError):
+                await app.dispatch('canvas.views.inline', {**args, 'messageId': 'not-a-publication'})
+            await app.dispatch('question.answer', {
+                'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Proceed',
+            })
+            again = (await app.dispatch('canvas.views.inline', {**args, 'previewId': 'history-review'}))['result']
+            assert app.canvas_views.canvas(again['viewId'])['content'] == '# Exact first version'
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('invalid', [
+    [{'id': 'absent', 'version': 1}],
+    [{'id': 'https://example.com/', 'version': 1}],
+    [{'id': 'absent', 'version': 0}],
+])
+async def test_invalid_question_review_reference_never_creates_question(tmp_path, invalid):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        with pytest.raises(AppError):
+            await create_question(app, app._session()['id'], artifacts=invalid)
+        assert app.questions.store.all() == []
+        assert app.runtime.sent == []
+    finally:
+        await app.close()

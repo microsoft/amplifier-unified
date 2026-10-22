@@ -386,6 +386,32 @@ separate pieces of evidence.
 
 ### Inline previews
 
+#### Review material in questions
+
+Use readable Markdown for question prompts, descriptions and answers. Attach up
+to four exact same-chat saved versions using
+`question.create {sessionId,prompt,required,dependency,artifacts:[{id,version}]}`.
+`question.supersede` accepts the same list for a new pending question. IDs and
+versions come from saved Canvas receipts, not arbitrary URLs or file paths.
+The host retains bounded title/kind/owner and content-addressed body identity
+without copying document bodies into the question. An answer retains this
+reference set and the question revision; opening a preview does not attest that
+the person read it, answer the question, grant permission or start work.
+
+Compact review cards expose **Preview here** and **Open in Canvas** separately.
+Bodies load only after explicit expansion. Supported HTML mockups use the same
+sandbox as Canvas, never parent-document HTML. Unsupported kinds and unavailable
+versions report their limits instead of substituting Latest. Saved question and
+answer source is preserved, including whitespace. Free-text drafts are kept in
+the originating browser tab's session storage, keyed by host/chat/question
+revision; storage failure is visible. They are not sent until explicitly answered.
+
+An inline view binds either a message publication or
+`questionId` plus `questionRevision`, never both. The question binding is checked
+again on resource reads. Exact historical references remain inspectable after
+answering; new decisions use a new/superseding question rather than changing a
+past answer.
+
 Saved document and image publications also appear beside their originating chat
 message. The inline preview binds the publication's exact saved version; opening
 it in full view selects that same artifact/version in Canvas. A later revision

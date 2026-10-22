@@ -20,3 +20,11 @@
 #amp-one .a-question-history .a-questions{margin-top:12px}
 #amp-one [data-part="questions"]{scroll-margin-top:16px}
 #amp-one.a-chat-shell .a-messages>.a-questions{max-width:820px}
+#amp-one .a-question .a-markdown{min-width:0;max-width:100%;overflow-wrap:anywhere}
+#amp-one .a-question .a-markdown p,#amp-one .a-question .a-markdown li{white-space:pre-wrap}
+#amp-one .a-question .a-markdown p{margin:6px 0}
+#amp-one .a-question .a-markdown pre{max-width:100%;overflow:auto;white-space:pre}
+#amp-one .a-question .a-markdown h1,#amp-one .a-question .a-markdown h2{font-size:1.15em;margin:8px 0}
+#amp-one .a-question-artifacts{display:grid;gap:6px;margin:12px 0}
+#amp-one .a-question-option-description{font-size:12px;color:var(--a-muted);padding:0 9px}
+#amp-one .a-question form{border-top:1px solid var(--a-line);margin-top:12px;padding-top:4px}

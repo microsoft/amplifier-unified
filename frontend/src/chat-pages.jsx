@@ -34,7 +34,7 @@ const groups=[
  ['chat-context','Context & recovery','Context limits, provider support and recovery','limits'],
  ['chat-computer','Computer access','Screen sources, permission and capture','computer'],
 ];
-function Info({session,act,open}){
+function Info({session,state,act,open}){
  const [report,setReport]=useState(null),[error,setError]=useState('');
  useEffect(()=>{let alive=true;act('session.inspect',{id:session.id}).then(response=>{
   if(!alive)return;
@@ -55,7 +55,7 @@ function Info({session,act,open}){
    {(report?.executionDirectory||session.workingDirectory||session.workspace)&&<CopyDetail label="Execution folder" value={report?.executionDirectory||session.workingDirectory||session.workspace}/>}
    {error&&<p role="alert">{error}</p>}
   </details>
-  <details><summary>Questions &amp; answers</summary><Questions session={session} dispatch={act} history/></details>
+  <details><summary>Questions &amp; answers</summary><Questions session={session} state={state} dispatch={act} history/></details>
   <button type="button" className="a-link" onClick={()=>open('chat-write-files')}>Access &amp; approvals</button>
   <ConversationUsage sessionId={session.id} act={act}/>
  </div>;
@@ -78,7 +78,7 @@ export function ChatPages({page,state,session,act,dispatch=act,open,working,comp
  if(!session)return <p>Select a chat to see its information and options.</p>;
  return <div className="a-chat-pages">
   {show('chat-error')&&<div hidden={page!=='chat-error'}><ConversationDetails key={session.id} session={session} act={dispatch} focused open={open}/></div>}
-  {show('session-details')&&<div hidden={page!=='session-details'}><Info key={session.id} session={session} act={act} open={open}/></div>}
+  {show('session-details')&&<div hidden={page!=='session-details'}><Info key={session.id} session={session} state={state} act={dispatch} open={open}/></div>}
   {show('chat-rename')&&<div hidden={page!=='chat-rename'}><ConversationName session={session} act={dispatch} details={false}/></div>}
   {show('chat-share')&&<div hidden={page!=='chat-share'}><details open><summary>Save to a file</summary><ConversationExport session={session} state={state} act={act}/></details><details><summary>Share a copy</summary><ConversationSharing session={session} act={act}/></details></div>}
   {show('chat-help')&&<div hidden={page!=='chat-help'}><Help state={state} act={act} open={open}/></div>}
