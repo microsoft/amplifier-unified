@@ -403,7 +403,15 @@ try{
   }
  }
  await check('200 percent equivalent layout viewport retains navigation and lower content',async()=>{
-  await page.setViewportSize({width:1280,height:900});await overviewTab.click();
+  await page.setViewportSize({width:1280,height:900});
+  const overviewResponse=page.waitForResponse(response=>{
+   const request=response.request();if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return false;
+   const command=request.postDataJSON();return command.action==='view.update'&&command.args?.patch?.canvasDraft?.library===true;
+  },{timeout:8000}).then(value=>({value}),error=>({error}));
+  await overviewTab.click();
+  const opened=await overviewResponse;if(opened.error)throw opened.error;
+  await acceptedCanvasReceipt(observedReceipts.get(opened.value.request()),opened.value.request().postDataJSON().id);
+  await expect(overview).toBeVisible();await expect(panel).toHaveAttribute('data-focused','false');
   // Browser zoom reduces the CSS layout viewport. CSS zoom on #amp-one alone
   // instead doubles its 100dvh box and is not a faithful browser-zoom emulation.
   // CDP emulates the half-size layout viewport and 2x pixel density; this is not
@@ -413,8 +421,16 @@ try{
   try{
    await expect.poll(()=>page.evaluate(()=>[innerWidth,innerHeight,devicePixelRatio])).toEqual([640,450,2]);
    await requireReachable(toggle,'Header toggle at 200 percent equivalent layout');
-   await top();await page.keyboard.press('End');await requireReachable(summary('publishing'),'Publishing at 200 percent equivalent layout');
+   await top();await expect(overview).toBeFocused();await page.keyboard.press('End');
+   await requireReachable(summary('publishing'),'Publishing at 200 percent equivalent layout');
    await capture('emulated-layout-zoom-200');
+  }catch(error){
+   report.zoomFailure=await summary('publishing').evaluate(el=>{
+    const box=node=>{const r=node?.getBoundingClientRect();return r?{x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right}:null};
+    const owner=el.closest('.a-canvas-overview-page'),r=el.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),active=document.activeElement;
+    return {viewport:[innerWidth,innerHeight,devicePixelRatio],section:box(el),owner:box(owner),scrollTop:owner.scrollTop,scrollHeight:owner.scrollHeight,clientHeight:owner.clientHeight,active:{tag:active?.tagName,label:active?.getAttribute('aria-label')},hit:{tag:hit?.tagName,label:hit?.getAttribute('aria-label')},inert:!!el.closest('[inert]')};
+   });
+   await capture('emulated-layout-zoom-failure');throw error;
   }finally{await metrics.send('Emulation.clearDeviceMetricsOverride');await metrics.detach();await page.setViewportSize({width:1280,height:900})}
   return {scale:2,layout:{width:640,height:450},method:'CDP layout viewport and pixel density, not physical/browser-toolbar zoom'};
  });
@@ -481,6 +497,10 @@ try{
   await counts(11);await expect(successor).toBeFocused();
   report.removeFocus.checks.push({phase:'owned-close',commandId:command.id,accepted:true,focused:ids[29]});
   await action('canvas.select',{id:closingId});await counts(12);
+  // Restore the original following scenario's distinct selected-document setup:
+  // it selects Document 19 from a list where Document 30 is current.
+  await action('canvas.select',{id:ids[29]});
+  await expect(successor).toHaveAttribute('aria-selected','true');
   return report.removeFocus;
  });
  await check('native all-open list, exact counts, close-active/last and saved recovery',async()=>{
