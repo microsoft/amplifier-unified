@@ -414,6 +414,52 @@ async def test_completed_create_is_terminal_even_with_pending_steering(tmp_path)
     assert restored.state['sends'][0]['outcome'] == 'completed'
 
 
+@pytest.mark.parametrize('input_id', [None, 'input-one'])
+async def test_parent_unknown_only_relabels_steer_when_its_input_was_sent(tmp_path, input_id):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    parent = host.bind_send_lifecycle(
+        attempt_id='parent-attempt', generation_id='generation-1', admitted_call_id='parent-budget')
+    steer = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='steer-budget')
+    await parent('native.submitting', send_record(send_id='parent-send'))
+    record = send_record('response.steer', send_id='steer-send')
+    await steer('native.submitting', record)
+    unknown = {'reason': 'steer_send' if input_id else 'connection_closed', 'input_id': input_id}
+    await steer('native.outcome_unknown', unknown)
+    await parent('native.outcome_unknown', unknown)
+    assert host.state['sends'][0]['outcome'] == 'unknown'
+    assert host.state['reason'] == unknown['reason']
+    if input_id is None:
+        assert host.state['sends'][1]['outcome'] == 'submitting'
+        await steer('native.not_sent', {**record, 'reason': 'rejected'})
+        assert host.state['sends'][1]['outcome'] == 'not_sent'
+    else:
+        assert host.state['sends'][1]['outcome'] == 'unknown'
+        before = host.path.read_bytes()
+        with pytest.raises(ValueError):
+            await steer('native.not_sent', {**record, 'reason': 'rejected'})
+        assert host.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('event', ['steering.pending', 'native.error', 'native.connection.renewed'])
+async def test_unhandled_observation_is_not_receipted_as_a_bound_send(tmp_path, event):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    parent = host.bind_send_lifecycle(
+        attempt_id='parent-attempt', generation_id='generation-1', admitted_call_id='parent-budget')
+    steer = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='steer-budget')
+    await parent('native.submitting', send_record(send_id='parent-send'))
+    await steer('native.submitting', send_record('response.steer', send_id='steer-send'))
+    before = host.path.read_bytes()
+    for callback in (parent, steer):
+        await callback(event, {'input_id': 'input-one', 'response_id': 'parent', 'code': 'PRIVATE'})
+    assert host.path.read_bytes() == before
+
+
 @pytest.mark.parametrize('free_terminal', [False, True])
 async def test_receipt_capacity_never_evicts_unknown_sends(tmp_path, monkeypatch, free_terminal):
     c = Coordinator(fake())
@@ -444,9 +490,17 @@ async def test_receipt_capacity_never_evicts_unknown_sends(tmp_path, monkeypatch
 
 
 async def test_real_parent_completion_survives_overlapping_steer_preparation(tmp_path, monkeypatch):
+    await native_parent_overlap(tmp_path, monkeypatch, fail_parent=False)
+
+
+async def test_real_parent_failure_preserves_unsent_overlapping_steer(tmp_path, monkeypatch):
+    await native_parent_overlap(tmp_path, monkeypatch, fail_parent=True)
+
+
+async def native_parent_overlap(tmp_path, monkeypatch, *, fail_parent):
     import asyncio
     from amplifier_module_provider_openai import OpenAIProvider
-    from amplifier_module_provider_openai.native import NativeSendAdmission
+    from amplifier_module_provider_openai.native import NativeSendAdmission, NATIVE_REQUEST
     from amplifier_core.llm_errors import LLMError
     from websockets.protocol import State
 
@@ -484,25 +538,39 @@ async def test_real_parent_completion_survives_overlapping_steer_preparation(tmp
     native.owner = SimpleNamespace(
         config={}, runtime=SimpleNamespace(emit=AsyncMock()), _text=lambda command: 'Synthetic steer')
     native._connect = AsyncMock()
+    native._guard_assembled_params_with_provider_count = AsyncMock()
     socket = SimpleNamespace(state=State.OPEN, send=AsyncMock(), close=AsyncMock(), recv=events.get)
     native.socket = socket
     await events.put(json.dumps({'type': 'response.created', 'response': {'id': 'parent'}}))
-    parent_task = asyncio.create_task(native._native_response({'input': []}))
+    async def run_parent():
+        token = NATIVE_REQUEST.set(native)
+        try:
+            return await native._create_response({'input': []})
+        finally:
+            NATIVE_REQUEST.reset(token)
+    parent_task = asyncio.create_task(run_parent())
     steer_task = None
     try:
         await asyncio.wait_for(parent_created.wait(), 1)
         steer_task = asyncio.create_task(native.steer_live(SimpleNamespace(id='input-one')))
         await asyncio.wait_for(preparing.wait(), 1)
-        await events.put(json.dumps({'type': 'response.completed', 'response': {
-            'id': 'parent', 'status': 'completed', 'output': [], 'usage': {}}}))
-        await asyncio.wait_for(parent_task, 1)
-        assert host.state['outcome'] == 'completed'
+        if fail_parent:
+            await events.put(json.dumps({'type': 'error', 'error': {'code': 'synthetic'}}))
+            with pytest.raises(LLMError):
+                await asyncio.wait_for(parent_task, 1)
+        else:
+            await events.put(json.dumps({'type': 'response.completed', 'response': {
+                'id': 'parent', 'status': 'completed', 'output': [], 'usage': {}}}))
+            await asyncio.wait_for(parent_task, 1)
+        expected = 'unknown' if fail_parent else 'completed'
+        assert host.state['outcome'] == expected
+        assert host.state['sends'][1]['outcome'] == 'submitting'
         resume.set()
         with pytest.raises(LLMError):
             await asyncio.wait_for(steer_task, 1)  # Parent finished: the stale steer is not sent.
         assert socket.send.await_count == 1
-        assert [row['outcome'] for row in host.state['sends']] == ['completed', 'not_sent']
-        assert host.state['outcome'] == 'completed' and native._observer_failure is None
+        assert [row['outcome'] for row in host.state['sends']] == [expected, 'not_sent']
+        assert host.state['outcome'] == expected and native._observer_failure is None
     finally:
         for task in (parent_task, steer_task):
             if task and not task.done():

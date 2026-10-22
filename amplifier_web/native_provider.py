@@ -122,10 +122,18 @@ class NativeProviderHost:
                              and row["input_id"] == data.get("input_id")]
                 elif kind in {"native.request", "native.response.created", "native.completed"}:
                     owned = [row for row in owned if row["operation"] == "response.create"]
+                elif kind == "native.outcome_unknown":
+                    # A parent may fail while a steer is still awaiting prep.
+                    # Only the provider's identified in-flight input can turn a
+                    # steer unknown; preserve the other steer for its not_sent.
+                    owned = [row for row in owned if row["operation"] == "response.create"
+                             or row["input_id"] == data.get("input_id")]
                 phases = {"native.request": "sent", "steering.sent": "sent",
                           "native.response.created": "running", "native.completed": "completed",
                           "native.outcome_unknown": "unknown", "steering.accepted": "pending",
                           "steering.applied": "applied", "steering.failed": "failed"}
+                if kind not in phases:
+                    return  # Other transport observations do not identify a send outcome.
                 if kind in phases:
                     if not owned:
                         # One provider emits interleaved create/steer phases.
@@ -177,6 +185,8 @@ class NativeProviderHost:
                         # the logical summary and the steer's own receipt only.
                         state["outcome"] = ("pending" if kind == "native.completed"
                                             and data.get("pending_steering") else owned[0]["outcome"])
+                        if kind == "native.outcome_unknown":
+                            state["reason"] = owned[0]["reason"]
                         if kind in {"native.response.created", "native.completed"}:
                             state["responseId"] = data.get("response_id")
             # Only bounded identity/phase metadata; never payload or arbitrary
