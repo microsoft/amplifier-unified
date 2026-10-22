@@ -388,6 +388,10 @@ try{
   const geometry=await quick.evaluate(button=>{const r=button.getBoundingClientRect(),s=window.getSelection().getRangeAt(0).getBoundingClientRect();return {distance:r.top-s.bottom,selected:window.getSelection().toString()};});
   assert.ok(geometry.distance>=0&&geometry.distance<56,'Quote selection is next to the selected passage');
   await quick.click();await expect(quotes).toHaveCount(1);
+  await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+  await page.evaluate(()=>window.dispatchEvent(new Event('resize')));
+  await page.locator('.a-messages').evaluate(node=>node.dispatchEvent(new Event('scroll')));
+  await expect(page.locator('.a-quote-selection')).toHaveCount(0);
   const collected=references(await documentValue())[0];
   assert.equal(collected.quote.excerpt,text,'rendered selection keeps exact independently expected text');
   assert.ok(collected.quote.spans.length>=1);await visibleCardControls('rendered '+selector,quotes.first());
@@ -445,6 +449,28 @@ try{
  await editor.fill(Array.from({length:30},(_,i)=>'Plain after removal '+i).join('\n'));
  assert.ok((await editor.boundingBox()).height<=181,'Removing the last quote without remounting restores ordinary draft height');
  await editor.fill('');
+ await selectContents('p:nth-of-type(2)');
+ const dismissedText=await page.evaluate(()=>window.getSelection().toString());
+ await page.keyboard.press('Escape');await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ await page.keyboard.press('Escape');
+ assert.equal(await page.evaluate(()=>window.getSelection().toString()),dismissedText);
+ await page.evaluate(()=>window.dispatchEvent(new Event('resize')));
+ await page.locator('.a-messages').evaluate(node=>node.dispatchEvent(new Event('scroll')));
+ await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ // A fresh source gesture may quote the same range again.
+ await c.locator('.a-detail-text p:nth-of-type(2)').dispatchEvent('pointerdown');
+ await selectContents('p:nth-of-type(2)');
+ let hiddenRelease,hiddenStarted,hiddenSettled;
+ const hiddenHold=new Promise(resolve=>hiddenRelease=resolve),hiddenWait=new Promise(resolve=>hiddenStarted=resolve),hiddenDone=new Promise(resolve=>hiddenSettled=resolve);
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();hiddenStarted();await hiddenHold;await route.fulfill({response});hiddenSettled();}else await route.continue();});
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();await hiddenWait;
+ const readingTop=await page.locator('.a-messages').evaluate(node=>{const top=node.scrollTop;node.scrollTop=0;node.dispatchEvent(new Event('scroll'));return top;});
+ await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ assert.equal(await page.evaluate(()=>window.getSelection().toString()),dismissedText);
+ hiddenRelease();await hiddenDone;await expect(quotes).toHaveCount(1);await page.unroute('**/api/actions');
+ await page.locator('.a-messages').evaluate((node,top)=>{node.scrollTop=top;node.dispatchEvent(new Event('scroll'));},readingTop);
+ await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();
  // Keep keyboard activation, but do not leave the action over unrelated text
  // after scrolling the selected source away.
  await selectContents('p:nth-of-type(2)');await page.getByRole('button',{name:'Quote selection',exact:true}).focus();
