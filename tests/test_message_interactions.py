@@ -183,6 +183,37 @@ async def test_passive_reaction_receipt_is_exact_and_never_replays(app):
     assert not app.runtime.sent
 
 
+async def test_reaction_reads_never_return_dirty_annotations_after_a_failed_save(app, monkeypatch):
+    from amplifier_web.message_interactions import reaction_status
+    args = {**target(app), 'emoji': '\u2764\ufe0f', 'present': True}
+    await call(app, 'message.reaction', args, command_id='saved-reaction')
+    original_save = app._save
+    def fail_save():
+        raise OSError('Synthetic storage failure')
+    monkeypatch.setattr(app, '_save', fail_save)
+    with pytest.raises(OSError):
+        await call(app, 'message.reaction', {**args, 'present': False}, command_id='unsaved-reaction')
+    read = {**args, 'commandId': 'saved-reaction', 'clientId': 'one'}
+    try:
+        async with app.lock:
+            with pytest.raises(OSError):
+                reaction_status(app, read)
+        with pytest.raises(OSError):
+            await app.app_bridge('message.reactions.context', {}, args['sessionId'])
+        assert app._progress_dirty
+    finally:
+        monkeypatch.setattr(app, '_save', original_save)
+    commit = app._commit_pending_progress
+    def locked_commit():
+        assert app.lock.locked(), 'Flush and snapshot must share the same lock'
+        return commit()
+    monkeypatch.setattr(app, '_commit_pending_progress', locked_commit)
+    context = await app.app_bridge('message.reactions.context', {}, args['sessionId'])
+    assert not app._progress_dirty and context['items'][-1]['reactions'] == []
+    async with app.lock:
+        assert reaction_status(app, read)['current']['reactions'] == []
+
+
 async def test_archived_stopped_message_reaction_does_not_resume_or_restore_chat(app):
     args = {**target(app), 'emoji': '\u2705', 'present': True}
     session = app._session()

@@ -56,3 +56,14 @@ test('unavailable browser storage does not silently promise reload recovery',()=
  const {controller:c}=harness({save:()=>false});c.set('heart',true);
  assert.deepEqual(c.view().reactions,['heart']);assert.match(c.view().error,/could not retain/);
 });
+test('rendering more than the idle cache limit cannot evict controllers before subscription',async()=>{
+ const registry=createReactionRegistry(2),rows=Array.from({length:200},(_,i)=>{
+  const h=harness();return {key:String(i),...h,first:registry.acquire(String(i),()=>h.controller)};
+ });
+ const stops=rows.map(row=>row.first.subscribe(()=>{}));
+ rows[0].first.set('heart',true);rows[0].first.set('heart',false);stops[0]();
+ const current=registry.acquire('0',()=>{throw Error('Controller was evicted before its first subscription')});
+ assert.equal(current,rows[0].first);current.set('heart',true);
+ rows[0].writes[0].resolve(receipt(['heart']));await tick();assert.equal(rows[0].writes.length,1);
+ stops.forEach(stop=>stop());
+});

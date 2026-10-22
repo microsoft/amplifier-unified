@@ -197,6 +197,10 @@ def reaction_status(service, args):
     if previous:
         receipt = json.loads(previous[1])
         if receipt.get('accepted') in (True, False) and receipt.get('result', {}).get('reactionActor') == 'user':
+            # Caller owns the lock. No await between a failed-save retry and the
+            # snapshot: uncommitted in-memory state must never settle an intent.
+            if getattr(service, '_progress_dirty', False):
+                service._commit_pending_progress()
             current = read_annotations(session, [args['messageId']])
             result.update(status='accepted' if receipt['accepted'] else 'rejected',
                           receipt=receipt, revision=current['revision'],

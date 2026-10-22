@@ -1,7 +1,7 @@
 // Local intent is not shared acceptance. One flight per emoji preserves click
 // order; different messages/emoji never wait for each other or a model turn.
 export function createReactionController({sessionId,messageId,clientId,send,read,notify=()=>{},save=()=>{},restored=[]}){
- let confirmed={revision:-1,reactions:[]},error='',checking=false,storageError=false;
+ let confirmed={revision:-1,reactions:[]},error='',checking=false,storageError=false,awaitingMount=true;
  const listeners=new Set();
  const pending=new Map(restored.map(row=>[row.emoji,{...row,status:'unknown',restored:true}]));
  const changed=()=>{try{storageError=save([...pending.values()])===false}catch{storageError=true}notify();for(const listener of listeners)listener()};
@@ -52,8 +52,8 @@ export function createReactionController({sessionId,messageId,clientId,send,read
   }catch(e){error=e.message||'Reaction state could not be checked.'}
   finally{checking=false;changed()}
  }
- return {observe,view,set,reconcile,retained:()=>pending.size>0||listeners.size>0,
-  subscribe:listener=>{listeners.add(listener);return()=>listeners.delete(listener)}};
+ return {observe,view,set,reconcile,acquire:()=>{awaitingMount=true},retained:()=>awaitingMount||pending.size>0||listeners.size>0,
+  subscribe:listener=>{awaitingMount=false;listeners.add(listener);return()=>listeners.delete(listener)}};
 }
 
 // A page has one writer for each actor/message even when the row is unmounted
@@ -61,7 +61,7 @@ export function createReactionController({sessionId,messageId,clientId,send,read
 export function createReactionRegistry(limit=128){
  const entries=new Map();
  return {acquire(owner,create){
-  if(entries.has(owner))return entries.get(owner);
+  if(entries.has(owner)){const value=entries.get(owner);value.acquire();return value}
   for(const [key,value] of entries){if(entries.size<limit)break;if(!value.retained())entries.delete(key)}
   const value=create();entries.set(owner,value);return value;
  }};

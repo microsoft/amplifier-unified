@@ -4692,8 +4692,9 @@ class AppService:
             from .message_interactions import reaction_context
             # A previous publication failure leaves progress dirty. Do not
             # describe an unsaved in-memory annotation as committed context.
-            await self._flush_pending_progress()
             async with self.lock:
+                if getattr(self, '_progress_dirty', False):
+                    self._commit_pending_progress()
                 return reaction_context(self._session(session_id, hydrate=False))
         if operation == "questions.admit":
             async with self.lock:
