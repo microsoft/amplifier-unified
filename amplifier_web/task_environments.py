@@ -703,7 +703,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                         else:
                             prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
                                 row['snapshot'], row['profileId'], request['requestId'],
-                                resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'))
+                                resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'),
+                                dependency_store=Path(home) / 'test-dependency-layers')
                         row = save(home, row, preparedDependencies=prepared_dependencies)
                         host_resources.settle(row, phase='launching')
                     if policy_admit:

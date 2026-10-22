@@ -311,3 +311,37 @@ writer transaction, including the allocation-before-queue-link crash gap.
 Environment inspection is paged and every action names the exact resource and
 revision. Separate checks can be inspected, cancelled, and cleaned up without
 selecting or stopping another check from the same chat.
+
+## Reusing prepared Python dependencies
+
+Local Python-project preparations can reuse a qualified immutable dependency
+image on the same backend. Its key binds the exact project manifest and frozen
+lockfile, resolved Git commits, immutable base, backend identity, profile and
+recipe. The shared builder receives only dependency manifests, never the task
+source archive. It omits the root package and source-specific packaging
+environment. Every check then prepares its own current source package, metadata,
+console scripts, packaging prerequisites and final image. A dependency hit does
+not imply a network-free source finalization or that upstream branches are fresh:
+the existing lock/update resolver still owns freshness. Cache reuse never changes
+a branch policy into a standing pin.
+
+The first scope accepts static single-root projects with public hashed registry
+artifacts and exact resolved Git sources. Local/path/workspace dependencies,
+dynamic root metadata, unsupported indexes, hosts without shared file locking and
+browser profiles retain ordinary
+cold preparation. Registered remote controllers also keep cold preparation until
+they have their own settings-governed dependency-storage owner.
+
+Concurrent first use coalesces under one dependency-key lock. A separate durable
+seed record binds its native builder to the task before creation, so interrupted
+seed cleanup participates in the existing task cleanup and resource reservation.
+An unfinished seed is never replayed; another task can use the cold path without
+blocking the original owner's recovery lock. Each finalizer records its borrow
+before native creation and holds it until its task image is confirmed removed.
+The existing global Storage retention settings govern unused dependency images;
+there is no separate background cleanup scheduler or source/result deletion.
+
+If a recorded reusable image is absent, unavailable or malformed at native
+observation, the check uses ordinary cold preparation without modifying or
+rebuilding that uncertain cache entry. Saved owner/receipt corruption still
+requires inspection.
