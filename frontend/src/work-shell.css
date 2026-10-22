@@ -48,6 +48,23 @@
 #amp-one.a-approachable-shell .a-work-heading svg{width:16px;flex-shrink:0}
 #amp-one.a-approachable-shell .a-work-header-actions{display:flex;align-items:center;margin-left:auto;flex:none;gap:4px}
 #amp-one.a-approachable-shell .a-work-menu{position:relative}
+#amp-one.a-approachable-shell .a-destination-history{position:relative;display:flex;align-items:center;flex:none;gap:0}
+#amp-one.a-approachable-shell .a-destination-history>.a-icon{width:32px;min-width:32px;height:36px;padding:6px}
+#amp-one.a-approachable-shell .a-destination-history>.a-icon:disabled{opacity:.4}
+#amp-one.a-approachable-shell .a-destination-menu{position:absolute;left:0;top:calc(100% + 8px);z-index:85;width:320px;max-width:calc(100vw - 64px);max-height:min(440px,70vh);overflow:auto;padding:7px;border:1px solid var(--a-line);border-radius:12px;background:var(--a-surface);box-shadow:0 12px 36px #0003;color:var(--a-ink)}
+#amp-one.a-approachable-shell .a-destination-menu [role=menuitem]{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:8px 10px;text-align:left;border:0;border-radius:7px;background:none;color:inherit}
+#amp-one.a-approachable-shell .a-destination-menu [role=menuitem]:is(:hover,:focus-visible){background:var(--a-soft)}
+#amp-one.a-approachable-shell .a-destination-menu [role=menuitem][aria-current=page]{opacity:.7}
+#amp-one.a-approachable-shell .a-destination-menu [role=menuitem]>svg{flex:none;width:16px}
+#amp-one.a-approachable-shell .a-destination-menu [role=menuitem]>span{flex:1;min-width:0}
+#amp-one.a-approachable-shell .a-destination-menu :is(strong,small){display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one.a-approachable-shell .a-destination-menu strong{font-size:13px;font-weight:500}
+#amp-one.a-approachable-shell .a-destination-menu :is(small,p){font-size:11px;color:var(--a-muted)}
+@media(pointer:coarse),(max-width:760px){
+ #amp-one.a-approachable-shell .a-destination-history>.a-icon{width:44px;min-width:44px;height:44px}
+ #amp-one.a-approachable-shell .a-work-header{gap:4px}
+ #amp-one.a-approachable-shell .a-work-heading .a-work-crumb:not(.a-work-home-crumb),#amp-one.a-approachable-shell .a-work-heading>.a-work-crumb+svg{display:none}
+}
 #amp-one.a-approachable-shell .a-work-menu-items{position:absolute;right:0;top:calc(100% + 8px);z-index:85;padding:7px;min-width:220px;border:1px solid var(--a-line);border-radius:12px;background:var(--a-surface);box-shadow:0 12px 36px #0003;color:var(--a-ink)}
 #amp-one.a-approachable-shell .a-work-menu-items>button{display:flex;align-items:center;justify-content:flex-start;gap:11px;width:100%;padding:11px 10px;text-align:left;background:none;border:0;border-radius:7px;font-size:14px;color:inherit}
 #amp-one.a-approachable-shell .a-work-menu-items>button:hover{background:var(--a-soft)}
@@ -118,7 +135,11 @@
 #amp-one.a-approachable-shell .a-chat-overview ul{padding-left:18px;overflow-wrap:anywhere}
 @media(max-width:760px){
  #amp-one.a-approachable-shell{padding:0}
- #amp-one.a-approachable-shell .a-work-header{min-height:56px;padding:6px 8px;gap:4px}
+ #amp-one.a-approachable-shell .a-work-header{min-height:56px;padding:6px 8px;gap:4px;flex-wrap:wrap}
+ #amp-one.a-approachable-shell .a-work-heading{order:1;flex:1 0 100%;min-height:32px}
+ #amp-one.a-approachable-shell .a-work-heading>.a-work-home-crumb{display:flex}
+ #amp-one.a-approachable-shell .a-work-heading>strong{flex:1;min-width:0}
+ #amp-one.a-approachable-shell .a-destination-menu{position:fixed;left:8px;right:8px;top:var(--a-navigation-top,104px);width:auto;max-width:none;box-sizing:border-box}
  #amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb),#amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb)+svg,#amp-one.a-approachable-shell .a-work-brand{display:none}
  #amp-one.a-approachable-shell[data-work-surface=home] .a-work-brand{display:flex;border:0;padding-right:0}
  /* Keep Home and the chat title usable without spending phone width on a separator. */

@@ -14,6 +14,7 @@ import {Questions} from './questions';
 import {FeedbackDiagnostics} from './feedback';
 import {settingsPatch} from './settings-navigation';
 import {RuntimeSettings} from './runtime-settings';
+import {ScheduleVisibilityContext} from './schedules';
 import {DesktopReadiness} from './desktop-readiness';
 import {BundleControl} from './bundle-controls';
 import {BundleSettings} from './bundles';
@@ -86,11 +87,11 @@ export function ChatPages({page,state,session,act,dispatch=act,open,working,comp
   {show('chat-write-files')&&<div hidden={page!=='chat-write-files'}><AccessMode key={'access-'+session.id} session={session} act={act}/><details><summary>File restrictions when asking for permission</summary><ChatFileAccess key={session.id} state={state} session={session} act={act}/></details></div>}
   {show('chat-files')&&<div hidden={page!=='chat-files'}><p>Shared by chats in this workspace. To change only this chat, use <button type="button" className="a-link" onClick={()=>open('chat-write-files')}>Access &amp; approvals</button>.</p><SettingsPageContext.Provider value="permissions"><MaintenanceSettings state={state} act={act} projectOnly/></SettingsPageContext.Provider></div>}
   {page==='chat-advanced'&&<nav className="a-chat-destinations" aria-label="Advanced chat options"><button type="button" onClick={()=>open('chat-memory')}>Memory &amp; past work<ChevronRight/></button><button type="button" onClick={()=>open('chat-write-files')}>Access &amp; approvals<ChevronRight/></button><button type="button" onClick={()=>open('chat-files')}>Project file access<ChevronRight/></button>{groups.map(([id,title,description])=><button type="button" key={id} onClick={()=>open(id)}><span><strong>{title}</strong><small>{description}</small></span><ChevronRight/></button>)}</nav>}
-  {groups.filter(row=>runtimeSeen.current.has(row[0])).map(activeGroup=><div key={activeGroup[0]} hidden={group?.[0]!==activeGroup[0]}>{back}{page==='runtime'&&<h3>{activeGroup[1]}</h3>}<RuntimeSettings state={state} session={session} act={act} group={activeGroup[3]} computerControls={computerControls} extras={<>
+  {groups.filter(row=>runtimeSeen.current.has(row[0])).map(activeGroup=><div key={activeGroup[0]} hidden={group?.[0]!==activeGroup[0]}>{back}{page==='runtime'&&<h3>{activeGroup[1]}</h3>}<ScheduleVisibilityContext.Provider value={group?.[0]===activeGroup[0]}><RuntimeSettings state={state} session={session} act={act} scheduleAct={dispatch} group={activeGroup[3]} computerControls={computerControls} extras={<>
    {activeGroup[3]==='direction'&&<section className="a-settings-section"><h3>Tasks &amp; workers</h3><div className="a-dialog-actions"><SubagentHistoryButton state={state} session={session} act={act}/><button type="button" className="a-soft" onClick={()=>open('coordination')}>Tasks and workers</button><button type="button" className="a-soft" onClick={()=>open('worker')}>Delegate work</button></div></section>}
    {activeGroup[3]==='tools'&&<><details><summary>Conversation bundle</summary><BundleControl state={state} session={session} act={act} working={working}/></details><details><summary>Conversation modules</summary><SettingsPageContext.Provider value="loaded-modules"><BundleSettings state={state} session={session} act={act}/></SettingsPageContext.Provider></details><details><summary>Save &amp; share a bundle</summary><SettingsPageContext.Provider value="share-bundle"><BundleSettings state={state} session={session} act={act}/></SettingsPageContext.Provider></details></>}
    {activeGroup[3]==='computer'&&<DesktopReadiness state={state} session={session} act={act}/>}
    {activeGroup[3]==='limits'&&<details><summary>Recovery &amp; recorded errors</summary><ConversationDetails session={session} act={act}/></details>}
-  </>}/></div>)}
+  </>}/></ScheduleVisibilityContext.Provider></div>)}
  </div>;
 }
