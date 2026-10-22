@@ -271,7 +271,7 @@ def test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job():
     normal_runs = '\n'.join(step.get('run', '') for step in normal['steps'])
     assert '--budget-seconds 1500' in normal_runs and 'mcp_boundary_checks' not in normal_runs
     job = workflow['jobs']['mcp-boundary']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}"
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     assert job['timeout-minutes'] == '30' and job['runs-on'] == 'ubuntu-latest'
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
