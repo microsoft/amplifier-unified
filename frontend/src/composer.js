@@ -1,3 +1,8 @@
+/** Presentation only: keep short prompts compact; give rich/long content full width. */
+export function composerExpanded({draft='',attachments=[],quote=null}={}){
+ return !!quote||attachments.length>0||draft.includes('\n')||draft.length>80;
+}
+
 /** Re-measure after any draft update, including agent-origin updates. */
 export function resizeComposer(element){
  if(!element)return;

@@ -38,8 +38,9 @@ def input_identity(row):
 
 
 class PeerAttribution:
-    def __init__(self, db):
+    def __init__(self, db, source_descriptor=None):
         self.db = db
+        self.source_descriptor = source_descriptor
 
     def _receipts(self, identities, recipient):
         """Bound IN queries; duplicate/conflicting receipt IDs fail closed."""
@@ -199,4 +200,8 @@ class PeerAttribution:
             if actor == "system" and not self._continuation(receipt, requests.get(receipt.get("dependencyRequestId"))):
                 continue
             row["attribution"] = {"caption": SYSTEM_CAPTION if actor == "system" else AGENT_CAPTION if actor == "agent" else CHAT_CAPTION}
+            if self.source_descriptor and actor != "system":
+                descriptor = self.source_descriptor(session, original, receipt)
+                if descriptor is not None:
+                    row["attribution"]["peer"] = descriptor
         return result

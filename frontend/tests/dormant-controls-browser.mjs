@@ -34,14 +34,15 @@ try{
  await expect(page.getByText('Old saved answer',{exact:true})).toBeVisible();
  assert.deepEqual((await inspect()).runtimeCalls,[]);
  await api('/fixture/state',{status:'starting'});
- await page.getByRole('button',{name:'Conversation bundle',exact:true}).click();
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
  const bundles=page.getByRole('combobox',{name:'Registered root bundles',exact:true});
  await expect(bundles).toBeEnabled();
  await bundles.focus();await bundles.press('w');await bundles.press('Enter');
  await expect.poll(async()=>(await inspect()).session.pendingBundleSelection?.bundle).toBe('work');
  await expect(page.getByText(/Next message/).first()).toBeVisible();
  assert.equal((await inspect()).session.bundle,'anchors');
- await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
  // A new root with no pin has no proven provider default until discovery.
  // Cached choices remain selectable; explicitly choose their connection.
@@ -50,6 +51,10 @@ try{
  await expect(page.locator('#chat-model')).toBeEnabled();
  await page.locator('#chat-model').selectOption('second');
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.model).toBe('second');
+ // The combined dialog shares acknowledged revisions across its controls.
+ // Keep it open for model -> bundle -> effort; no reload/reopen may repair it.
+ await bundles.selectOption('anchors');
+ await expect.poll(async()=>{const value=(await inspect()).session;return value.pendingBundleSelection?.bundle||value.bundle}).toBe('anchors');
  await expect(page.locator('#chat-effort')).toBeEnabled();
  await page.locator('#chat-effort').focus();await page.locator('#chat-effort').press('End');
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection).toEqual({instance:'one',model:'second',effort:'high'});
@@ -81,21 +86,27 @@ try{
  await peerBrowser.close();peerBrowser=null;
  await api('/fixture/state',{resolver:'failed'});
  // Narrow-screen keyboard controls remain usable after resolver failure.
+ // Compact Options is the same retained menu across widths, not a new mobile
+ // component. Close restored presentation before testing a fresh keyboard open.
+ const optionsMenu=page.getByRole('dialog',{name:'Chat options',exact:true});
+ if(await optionsMenu.isVisible())await optionsMenu.getByRole('button',{name:'Close chat options',exact:true}).click();
+ await expect(optionsMenu).toHaveCount(0);
  await page.setViewportSize({width:390,height:844});
- await page.getByRole('button',{name:'Chat options',exact:true}).click();
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).focus();
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).press('Enter');
  await expect(page.getByRole('dialog',{name:'Chat options'})).toBeVisible();
  await expect(page.locator('#composer-options-bundle')).toBeEnabled();
- await page.locator('#composer-options-bundle').focus();await page.locator('#composer-options-bundle').press('a');await page.locator('#composer-options-bundle').press('Enter');
- await expect.poll(async()=>{const value=(await inspect()).session;return value.pendingBundleSelection?.bundle||value.bundle}).toBe('anchors');
+ await page.locator('#composer-options-bundle').focus();await page.locator('#composer-options-bundle').press('w');await page.locator('#composer-options-bundle').press('Enter');
+ await expect.poll(async()=>{const value=(await inspect()).session;return value.pendingBundleSelection?.bundle||value.bundle}).toBe('work');
  await expect(composer).toHaveDraft('Keep my unsent draft');
  await mkdir(evidenceDir,{recursive:true});
  await page.screenshot({path:evidenceDir+'/dormant-controls-narrow.png',fullPage:true});
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.setViewportSize({width:1360,height:920});
- await page.getByRole('button',{name:'Conversation bundle',exact:true}).click();
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await page.screenshot({path:evidenceDir+'/dormant-controls-desktop.png',fullPage:true});
  const final=await inspect();assert.deepEqual(final.runtimeCalls,[]);assert.deepEqual(errors,[]);
- evidence.result={workerStarts:0,prewarmStarts:0,modelCalls:0,inputStarts:0,desktop:true,narrowKeyboard:true,staleClientRefused:true,manualName:final.session.title,finalRevision:final.session.nextMessageRevision,heldResolverIndependent:true,errors};
+ evidence.result={workerStarts:0,prewarmStarts:0,modelCalls:0,inputStarts:0,desktop:true,narrowKeyboard:true,sameDialogModelBundleEffort:true,staleClientRefused:true,manualName:final.session.title,finalRevision:final.session.nextMessageRevision,heldResolverIndependent:true,errors};
  console.log(JSON.stringify(evidence));
 }catch(error){primary=error;evidence.failure={message:error.message,fixtureStderr:log};throw error}
 finally{

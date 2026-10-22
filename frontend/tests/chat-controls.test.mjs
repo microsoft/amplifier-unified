@@ -5,6 +5,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {ModelControl,readAttachment,useNextMessageConfiguration}=await server.ssrLoadModule('/src/chat-controls.jsx');
+const {ComposerOptions}=await server.ssrLoadModule('/src/composer-options.jsx');
 const record=calls=>async(name,args)=>{calls.push({name,args});return {accepted:true,...(name==='conversation.configure'?{result:{revision:args.expectedRevision+1}}:{})}};
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
@@ -326,6 +327,48 @@ const savedModelState=()=>({
   'configuration.catalog':{configurationRevision:0,providers:[{id:'one',info:{defaults:{model:'first'},config_fields:[{id:'reasoning_effort',choices:['low','high']}]}}],effective:{instance:'one',model:'first'}},
   modelCatalogs:{one:{phase:'ready',models:['first','second']}}
  }}
+});
+test('one compact dialog bridges model, bundle and effort saves but not another client revision',async()=>{
+ const calls=[],state={...savedModelState(),registeredBundles:[{value:'anchors'},{value:'work'}]};
+ let session={id:'chat',bundle:'anchors',nextMessageRevision:0},actualRevision=0,root;
+ const act=async(name,args)=>{
+  calls.push({name,args});
+  if(name!=='conversation.configure')return {accepted:true};
+  if(args.expectedRevision!==actualRevision)return {accepted:false,error:'Next message settings changed. Review the current choices.'};
+  session={...session,nextMessageRevision:++actualRevision,...(args.selection?{pendingModelSelection:args.selection}:{}),...(args.bundle?{pendingBundleSelection:{bundle:args.bundle}}:{})};
+  return {accepted:true,result:{revision:actualRevision}};
+ };
+ const render=()=>React.createElement(ComposerOptions,{state,session,act});
+ try{
+  await renderAct(async()=>root=create(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'second'}}));
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({id:'composer-options-bundle'}).props.onChange({target:{value:'work'}}));
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onChange({currentTarget:{value:'1'}}));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onKeyUp());
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args.expectedRevision),[0,1,2]);
+  assert.equal(actualRevision,3);
+  actualRevision=4;session={...session,nextMessageRevision:4,pendingModelSelection:{instance:'one',model:'first',effort:'low'}};
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onChange({currentTarget:{value:'0'}}));
+  await renderAct(async()=>root.root.findByProps({id:'chat-effort'}).props.onKeyUp());
+  assert.equal(calls.at(-1).args.expectedRevision,3);
+  assert.equal(actualRevision,4);
+  assert.match(JSON.stringify(root.toJSON()),/Review the current choices/);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+for(const saving of ['model','bundle'])test('compact menu shares the pending guard during '+saving+' save',async()=>{
+ const state={...savedModelState(),registeredBundles:[{value:'anchors'},{value:'work'}]},session={id:'chat',bundle:'anchors'};
+ let root,release;
+ const act=async(name,args)=>name==='conversation.configure'?new Promise(resolve=>{release=()=>resolve({accepted:true,result:{revision:args.expectedRevision+1}})}):{accepted:true};
+ try{
+  await renderAct(async()=>root=create(React.createElement(ComposerOptions,{state,session,act})));
+  await renderAct(async()=>{root.root.findByProps({id:saving==='model'?'chat-model':'composer-options-bundle'}).props.onChange({target:{value:saving==='model'?'second':'work'}})});
+  for(const id of ['chat-provider','chat-model','chat-effort','composer-options-bundle'])assert.equal(root.root.findByProps({id}).props.disabled,true,id);
+  await renderAct(async()=>release());
+  for(const id of ['chat-provider','chat-model','chat-effort','composer-options-bundle'])assert.equal(root.root.findByProps({id}).props.disabled,false,id);
+ }finally{await renderAct(async()=>root?.unmount())}
 });
 test('starting without accepted input keeps saved choices usable without runtime mutation',async()=>{
  const calls=[],state=savedModelState(),session={id:'chat',status:'starting',nextMessageRevision:3};

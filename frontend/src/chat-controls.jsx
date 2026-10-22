@@ -36,7 +36,7 @@ export function nextMessageBlocked(session,working=false){
 }
 // Bridge only our acknowledged saves while their state update is in flight.
 // Never replace an action's captured revision with a later poll/client revision.
-export function useNextMessageConfiguration(session,act){
+export function useNextMessageConfiguration(session,act,sharedControl=null){
  const sessionId=session?.id,revision=session?.nextMessageRevision||0,owner=useRef(null);
  const [saving,setSaving]=useState(null);
  if(!owner.current||owner.current.sessionId!==sessionId)owner.current={sessionId,pending:false,ack:null};
@@ -54,11 +54,11 @@ export function useNextMessageConfiguration(session,act){
    return true;
   }finally{request.pending=false;setSaving(current=>current===request?null:current)}
  }
- return {configure,pending:saving===owner.current};
+ return sharedControl||{configure,pending:saving===owner.current};
 }
-export function ModelControl({state,session,act,working,embedded=false}){
+export function ModelControl({state,session,act,working,embedded=false,compact=false,children,nextMessageControl}){
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
- const nextMessage=useNextMessageConfiguration(session,act);
+ const nextMessage=useNextMessageConfiguration(session,act,nextMessageControl);
  // A bundle change validates defaults in the background. Keep the current
  // workspace's resolved choices visible until the new result is ready.
  const configurationRevision=state.configurationRevision||0,nextMessageRevision=session?.nextMessageRevision||0;
@@ -115,7 +115,22 @@ export function ModelControl({state,session,act,working,embedded=false}){
   act('view.update',{patch:{composerModel:{...shared,open:true,sessionId}}});
   return()=>{act('view.update',{patch:{composerModel:{open:false,sessionId}}})};
  },[embedded,sessionId]);
- useOutsideDismiss(open&&!embedded,popover,()=>edit({open:false}),panelRef);
+ const focusRequested=useRef(false);
+ const close=reason=>{focusRequested.current=false;edit({open:false});if(compact&&reason!=='outside')popover.current?.querySelector('button')?.focus()};
+ useOutsideDismiss(open&&!embedded,popover,close,panelRef);
+ useEffect(()=>{
+  if(compact&&open&&position.visibility==='visible'&&focusRequested.current){
+   focusRequested.current=false;
+   (panelRef.current?.querySelector('select:not(:disabled)')||panelRef.current?.querySelector('button:not(:disabled)'))?.focus();
+  }
+ },[compact,open,position.visibility]);
+ useEffect(()=>{focusRequested.current=false},[sessionId]);
+ const previousPanel=useRef(state.view?.panel);
+ useEffect(()=>{
+  if(previousPanel.current===state.view?.panel)return;
+  previousPanel.current=state.view?.panel;
+  if(compact&&open)close('outside');
+ },[state.view?.panel]);
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:state.modelCatalogs?.[selected?.sharedCatalogKey]||controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map()),modelCacheKey=JSON.stringify([isDraft?draftDefaultsKey(setup):sessionId,configurationRevision,draft.instance,selected?.sharedCatalogKey||entry?.sharedCatalogKey||null]);let models=modelOptions(entry?.models||[]);
@@ -137,7 +152,8 @@ export function ModelControl({state,session,act,working,embedded=false}){
  useEffect(()=>{
   if(open&&!touched.current){draftRevision.current={sessionId,revision:nextMessageRevision};const instance=effective.instance||effective.id||draft.instance||'',row=providers.find(p=>p.id===instance);edit({instance,model:effective.model||draft.model||row?.info?.defaults?.model||'',effort:effectiveEffort||draft.effort||''})}
  },[open,sessionId,nextMessageRevision,providers.map(row=>row.id).join('|'),effective.instance,effective.id,effective.model,effectiveEffort]);
- function show(){touched.current=false;draftRevision.current={sessionId,revision:nextMessageRevision};effortPending.current=null;setError('');if(open){edit({open:false});return}
+ function show(){touched.current=false;draftRevision.current={sessionId,revision:nextMessageRevision};effortPending.current=null;setError('');if(open){close();return}
+  focusRequested.current=compact;
   edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effectiveEffort||''});
  }
  async function apply(patch,capturedRevision=draftRevision.current.revision){
@@ -171,9 +187,9 @@ export function ModelControl({state,session,act,working,embedded=false}){
  const delayed=isDraft&&checkingDefaults&&discovery.delayed;
  const renderPanel=embedded?content=>content:renderPopover,Advanced=embedded?'details':React.Fragment;
  return <div className="a-model-control" ref={popover}>
-  {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{!effective.model&&(delayed||failure)?'Model settings unavailable':modelLabel}</span>{(session?.pendingModelSelection||pendingBundle)&&<small>Next message</small>}<ChevronDown/></button>}
-  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":"a-model-popover a-compact-popover"} style={embedded?undefined:position} aria-label="Conversation model">
-   {!embedded&&<div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>}
+  {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" aria-haspopup={compact?'dialog':undefined} disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{!effective.model&&(delayed||failure)?'Model settings unavailable':compact?modelAndEffort:modelLabel}</span>{(session?.pendingModelSelection||pendingBundle)&&<small>Next message</small>}<ChevronDown/></button>}
+  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":`a-model-popover a-compact-popover${compact?' a-composer-options-panel':''}`} style={embedded?undefined:position} role={compact?'dialog':undefined} aria-label={compact?'Chat options':'Conversation model'}>
+   {!embedded&&<div className="a-settings-row"><strong>{compact?'Chat options':'Conversation model'}</strong><button type="button" className="a-icon" aria-label={compact?'Close chat options':'Close model settings'} data-action="view.update" onClick={close}><X/></button></div>}
    <p className="a-caption" role="status">{nextMessage.pending?'Saving Next message settings…':!isDraft&&session?.pendingModelSelection?'Next message · Saved; not applied yet.':'Next message · Changes apply when you send.'}</p>
    {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}
    {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
@@ -192,6 +208,8 @@ export function ModelControl({state,session,act,working,embedded=false}){
    {isDraft&&(failure||delayed)&&<div className="a-discovery-recovery" role="status">{delayed&&!failure&&<p>Model settings are taking longer than expected. You can retry without refreshing or losing your draft.</p>}<button type="button" className="a-soft" onClick={discovery.retry}>Retry model settings</button></div>}
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}
+   {children}
+   {compact&&<button type="button" className="a-primary a-composer-options-done" onClick={close}>Done</button>}
   </section>)}
  </div>;
 }

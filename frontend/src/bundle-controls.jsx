@@ -11,9 +11,9 @@ import {nextMessageBlocked,useNextMessageConfiguration} from './chat-controls';
 export const bundleLabel=(state,value)=>state.registeredBundles?.find(row=>row.value===value)?.label||value||'Bundle';
 const EMPTY={};
 export function BundleControl(props){return props.compact?<CompactBundleControl {...props}/>:<DetailedBundleControl {...props}/>}
-function CompactBundleControl({state,session,act,working,embedded=false}){
+function CompactBundleControl({state,session,act,working,embedded=false,nextMessageControl}){
  const setup=newChatSetup(state),defaults=draftDefaults(state),shared=state.view?.composerBundle||EMPTY;
- const nextMessage=useNextMessageConfiguration(session,act);
+ const nextMessage=useNextMessageConfiguration(session,act,nextMessageControl);
  const [draft,setDraft]=useState(shared),[pending,setPending]=useState(false),[error,setError]=useState(''),guard=useRef(false);
  useEffect(()=>setDraft(shared),[shared]);
  const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerBundle:next}})};
@@ -22,7 +22,7 @@ function CompactBundleControl({state,session,act,working,embedded=false}){
  useOutsideDismiss(open&&!embedded,popover,()=>edit({open:false}),panelRef);
  useEffect(()=>{if(!state.registeredBundles?.length)act('bundles.list',{})},[]);
  const catalogPhase=state.actionStatus?.['bundles.list']?.phase,rows=state.registeredBundles||[],unavailable=!!state.navigationPending||session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||conversationHistoryPending(session);
- const blocked=unavailable||pending||nextMessageBlocked(session,working);
+ const blocked=unavailable||pending||nextMessage.pending||nextMessageBlocked(session,working);
  async function choose(bundle,resetModel=false){
   if(guard.current||blocked)return;guard.current=true;setPending(true);setError('');edit({bundle});
   try{if(session)await nextMessage.configure({bundle,resetModel});else await act('view.update',{patch:{newSessionDraft:{...setup,bundle}}})}catch(e){setError(e.message)}finally{guard.current=false;setPending(false)}
