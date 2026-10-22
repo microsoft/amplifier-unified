@@ -17,7 +17,7 @@ class ToolPayloadWindows:
         pages = self.windows.live_pages
         entry = pages._entry(owner, group, reconcile=True)
         position = entry['positions'].get(identity)
-        nodes = raw(owner).get('execution', {}).get('nodes', [])
+        nodes = self.windows.resident_tree(owner, touch=True).get('nodes', [])
         node = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
         if (node is None or node.get('id') != identity or node.get('kind') != 'tool'
                 or not node.get('toolCallId') or not node.get('sessionId')
@@ -33,14 +33,17 @@ class ToolPayloadWindows:
             ('id', 'toolCallId', 'toolObservationId', 'sessionId', 'rootSessionId', 'label',
              'tool', 'turnId', 'parentId', 'startedAt', 'endedAt')}
         scope = {'owner': pages._owner_stamp(owner), 'client': pages._client(), 'group': group,
-                 'id': identity, 'position': position, 'binding': binding}
+                 'id': identity, 'position': position, 'binding': binding,
+                 'placement': deepcopy(raw(owner).get('_coldFields', {}).get('execution'))}
         source = source_identity(owner)
         native = node['sessionId']
         if native == owner['id']:
             native = source.get('nativeIdentity') or source.get('runtimeSessionId') or native
         # This is the one child namespace already present in the host's admitted
         # tool row, never an HTTP path or a descendant-directory search.
-        source['nativeIdentity'] = native
+        effective_native = source.get('nativeIdentity') or source.get('runtimeSessionId') or owner['id']
+        if native != effective_native:
+            source['nativeIdentity'] = native
         return scope, source, node
 
     def check(self, owner, page):
@@ -80,7 +83,7 @@ class ToolPayloadWindows:
                 or self.scope(owner, scope['group'], scope['id'])[0] != scope
                 or previous is not None and windows.pages.get(key) is not previous):
             raise ValueError('This saved tool lookup expired. Reopen its Work steps.')
-        target = (source['nativeIdentity'], node['toolCallId'])
+        target = (source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id'], node['toolCallId'])
         found = [row for row in scanned['items'] if row.get('kind') == 'tool'
                  and (row.get('sessionId'), row.get('toolCallId')) == target]
         existing = previous['items'] if previous else []

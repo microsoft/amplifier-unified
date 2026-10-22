@@ -64,6 +64,81 @@ try{
  const second=await other.newPage();await second.goto(base);await showFixtureConversation(second);
  await expect(second.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await otherBrowser.close();otherBrowser=null;
+ // Exact host-observed tools stay interleaved with prose/model rows after the
+ // saved-view transform. Full service recreation is covered by the HTTP test.
+ const detailed=await control({op:'interim-start',details:true});
+ const detailSession=detailed.state.sessions.find(row=>row.id===started.alpha);
+ const detailGeneration=detailSession.fixtureGeneration;
+ const detailProgress=detailSession.messages.filter(row=>row.role==='assistant');
+ assert.equal(detailProgress.length,2);
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ const detailFinish=await control({op:'interim-finish'});
+ const detailFinal=detailFinish.state.sessions.find(row=>row.id===started.alpha).messages.find(row=>row.text==='The final next step.');
+ await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await expect(group).toHaveCount(1);
+ await control({op:'interim-saved-view'});
+ const reloadNavigation=[];
+ const observeNavigation=request=>{
+  const url=new URL(request.url());
+  if(url.pathname==='/api/conversation/navigation'&&reloadNavigation.length<20)
+   reloadNavigation.push({sessionId:url.searchParams.get('sessionId'),messageId:url.searchParams.get('messageId')});
+ };
+ page.on('request',observeNavigation);
+ await page.reload();await showFixtureConversation(page);
+ await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
+ const readingEvidence=await page.evaluate(({sid,generation})=>{
+  const state=window.amplifier.getState(),pane=document.querySelector('.a-messages'),selection=document.getSelection();
+  const messages=state.sessions.find(row=>row.id===sid)?.messages||[];
+  let saved;try{saved=JSON.parse(sessionStorage.getItem('amplifier.chat-reading.v1')||'{}')[sid]}catch{}
+  return {messageFocus:state.view.messageFocus||null,readingAnchor:saved?.messageId||null,
+   distance:pane.scrollHeight-pane.scrollTop-pane.clientHeight,focused:pane.contains(document.activeElement),
+   selected:!!(selection&&!selection.isCollapsed&&pane.contains(selection.anchorNode)),
+   responses:messages.filter(row=>row.generationId===generation&&row.response?.interim).map(row=>
+    ({id:row.id,status:row.response.status,generationId:row.response.generationId,finalMessageIds:row.response.finalMessageIds}))};
+ },{sid:started.alpha,generation:detailGeneration});
+ console.log('INTERIM-RELOAD-BOUNDARY',JSON.stringify({readingEvidence,reloadNavigation}));
+ assert.equal(readingEvidence.messageFocus,null,'Removed fixture messages cannot remain reveal targets');
+ // Reconnect restores reading position independently of completion. Explicitly
+ // return to the latest rendered frame, without changing the reading guard.
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await expect(page.getByText('Invalid request: This message is no longer available. Refresh the chat navigator.',{exact:true})).toHaveCount(0);
+ await expect(header).toBeVisible();
+ page.off('request',observeNavigation);
+ if(await header.getAttribute('aria-expanded')==='false')await header.click();
+ const expectedOrder=detailProgress.flatMap((message,index)=>[
+  message.id,`tool:${started.alpha}:${detailGeneration}-call-${index+1}`,`${detailGeneration}-model-${index+1}`]);
+ await expect(group.locator('[data-kind="tool"]')).toHaveCount(2);
+ await expect(group.locator('[data-kind="llm"]')).toHaveCount(2);
+ assert.deepEqual(await group.locator('[data-message-id],[data-node-id]').evaluateAll(nodes=>
+  nodes.map(node=>node.getAttribute('data-message-id')||node.getAttribute('data-node-id'))),expectedOrder);
+ assert.equal(await group.locator(`[data-message-id="${detailFinal.id}"]`).count(),0);
+ for(let index=1;index<=2;index++){
+  const node=group.locator(`[data-node-id="tool:${started.alpha}:${detailGeneration}-call-${index}"]`);
+  const button=node.locator(':scope > button.a-execution-action-line');
+  if(await button.getAttribute('aria-expanded')==='false')await button.click();
+  const copyOutput=node.getByRole('button',{name:'Copy file content',exact:true});
+  await expect(copyOutput).toBeEnabled();
+  await copyOutput.click();
+  const output='雪𝄞'.repeat(10000)+`:OUTPUT-${index}`;
+  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(output);
+  const copyInput=node.getByRole('button',{name:'Copy arguments',exact:true});
+  await expect(copyInput).toBeEnabled();await copyInput.click();
+  assert.deepEqual(JSON.parse(await page.evaluate(()=>navigator.clipboard.readText())),
+   {note:'界𝄞'.repeat(10000)+`:INPUT-${index}`});
+  const contents=node.locator('.a-execution-payload').filter({has:page.getByRole('button',{name:'Copy file content',exact:true})});
+  await expect(contents).toHaveCount(1);
+  await contents.getByRole('button',{name:/^Show all /}).click();
+  await expect(contents.locator('pre code')).toHaveText(output);
+  await expect(node.locator('.a-execution-load-error')).toHaveCount(0);
+ }
+ await page.setViewportSize({width:390,height:844});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ if(process.env.EVIDENCE_DIR)await page.screenshot({path:process.env.EVIDENCE_DIR+'/interim-exact-tools-mobile.png',fullPage:true});
+ await page.setViewportSize({width:1280,height:1000});
  await control({op:'interim-start'});await expect(group).toHaveCount(0);
  await expect(page.getByText('Checking the second detail.',{exact:true})).toBeVisible();
  await control({op:'interim-error'});await expect(group).toHaveCount(0);
@@ -132,5 +207,9 @@ try{
  console.log('PASS: off/on/rejected save, final-only, expand/copy/reveal, export equality, reload/Everything, two-client isolation, active/error, focus/scroll deferral, media once/in order, mobile, zero model sends.');
 }catch(error){
  console.error('Browser errors:',debugErrors,'Visible:',await debugPage?.locator('body').innerText().catch(()=>'<page unavailable>'));
+ if(process.env.EVIDENCE_DIR&&debugPage){
+  try{await mkdir(process.env.EVIDENCE_DIR,{recursive:true});await debugPage.screenshot({path:process.env.EVIDENCE_DIR+'/interim-failure.png',fullPage:true})}
+  catch(captureError){console.error('Failure screenshot unavailable:',captureError.name)}
+ }
  console.error('Fixture:',log);throw error;
 }finally{await otherBrowser?.close();await browser.close();fixture.kill('SIGTERM');}
