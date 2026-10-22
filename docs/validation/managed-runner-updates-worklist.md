@@ -61,6 +61,10 @@ the visible newer app action and release notes during a runner wait, reload,
 retained runner receipt, and the app's subsequent idle wait on narrow/desktop
 clients. Composed backend regressions cover both automatic/manual admission,
 continuation after manager reload and actual local component promotion.
+The refresh journey also holds a runner observation in flight: one click must
+remain queued and discover the new app after that observation finishes. Idle
+notifications must not continuously wake a capacity-only runner; ordinary
+tool, app and component idle wakeups remain covered separately.
 
 Selection changes cancel future qualification effects and reconcile only the
 original owner. Unknown start/cleanup results retain that owner without replay.

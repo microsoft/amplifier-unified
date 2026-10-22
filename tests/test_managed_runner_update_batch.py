@@ -281,3 +281,67 @@ async def test_actual_installer_copy_mode_and_interpreter_failed_pip_cleanup(app
         assert not smart.state['installations']
     finally:
         await smart.close()
+
+
+async def test_manual_check_waits_for_inflight_runner_observation(app, monkeypatch):
+    import asyncio
+    manager = app.update_manager
+    pending = [item()]
+    await manager.publish(pendingSmartTools=pending, phase='staged')
+    observing, release = asyncio.Event(), asyncio.Event()
+    async def observe(*args):
+        observing.set()
+        await release.wait()
+        return {'complete': False, 'waiting': 'waiting'}
+    monkeypatch.setattr(runner, 'advance', observe)
+    monkeypatch.setattr(app_updates, 'check', AsyncMock(return_value={
+        'id': 'application', 'status': 'update', 'latest': '9.9.9'}))
+    observation = asyncio.create_task(batch.activate(manager))
+    await observing.wait()
+    check = asyncio.create_task(manager.command('check'))
+    try:
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not check.done(), 'Accepted refresh was dropped while the runner owned the lock'
+        app_updates.check.assert_not_called()
+    finally:
+        release.set()
+        await observation
+        await check
+    app_updates.check.assert_awaited_once()
+    assert app.state['updates']['appAvailable']
+    assert app.state['updates']['pendingSmartTools'] == pending
+
+
+@pytest.mark.parametrize('handoff', [
+    {'pendingRelease': {'id': 'new-handoff'}},
+    {'pendingApp': {'featureSelection': ['native-desktop']}},
+    {'pendingSmartTools': [{'previous': 'ordinary'}]},
+])
+async def test_queued_check_rechecks_new_pending_component_handoff(app, monkeypatch, handoff):
+    import asyncio
+    manager = app.update_manager
+    await manager.publish(pendingSmartTools=[item()], phase='staged')
+    monkeypatch.setattr(app_updates, 'check', AsyncMock())
+    async with manager.lock:
+        check = asyncio.create_task(manager.check())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await manager.publish(**handoff)
+    await check
+    app_updates.check.assert_not_called()
+    assert {key: app.state['updates'][key] for key in handoff} == handoff
+
+
+@pytest.mark.parametrize('pending,other,expected', [
+    ([item()], {}, False),
+    ([item(), {'previous': 'ordinary'}], {}, True),
+    ([item()], {'pendingApp': {'revision': 'f' * 40}}, True),
+    ([item()], {'pendingRelease': {'id': 'component'}}, True),
+])
+async def test_idle_notification_does_not_spin_capacity_only_runner(app, pending, other, expected):
+    manager = app.update_manager
+    await manager.publish(pendingSmartTools=pending, phase='staged', **other)
+    manager.wakeup.clear()
+    manager.notify_idle()
+    assert manager.wakeup.is_set() is expected
