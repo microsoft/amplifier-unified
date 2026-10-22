@@ -68,7 +68,7 @@ export function AttachmentPreview({file,privateDraft,opener,onClose}){
   onDragEnterCapture={blockFile} onDragOverCapture={blockFile} onDropCapture={blockFile}
   onPointerDown={e=>{backdrop.current=e.target===e.currentTarget}} onClick={e=>{if(backdrop.current&&e.target===e.currentTarget)onClose();backdrop.current=false}}>
   <div className="a-image-preview-card">
-   <header><div><strong title={file.name}>{file.name}</strong><small>{natural?`${natural[0]} × ${natural[1]} · original unchanged`:'Original attachment'}</small></div><button ref={close} type="button" className="a-icon" aria-label="Close image preview" onClick={onClose}><X/></button></header>
+   <header><div><strong title={file.name}>{file.name}</strong><small>{natural?`${natural[0]} × ${natural[1]} · original unchanged`:'Original attachment'}</small></div><button ref={close} type="button" className="a-icon" data-tooltip="off" aria-label="Close image preview" onClick={onClose}><X/></button></header>
    <div className="a-image-preview-tools" role="group" aria-label="Image zoom controls">
     <button type="button" disabled={!layout} aria-pressed={zoom===null} onClick={()=>change(null)}><Maximize size={16}/> Fit</button>
     <button type="button" disabled={!layout} onClick={()=>change(1)}>100%</button>

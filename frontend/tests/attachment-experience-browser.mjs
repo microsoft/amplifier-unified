@@ -120,10 +120,15 @@ try{
   const {context,page}=await contextFor({width:1280,height:900},'light');
   try{
    const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Never send this draft');const owner=(await state(page)).selectedSessionId;const data=await png(page,40,24);let admissions=0;page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/api/actions')){try{if(r.postDataJSON()?.action==='attachment.add')admissions++}catch{}}});
-   for(const [index,selector] of ['.a-conversation','.a-messages','.a-composer','.a-markdown-composer','.a-compose-tools button'].entries()){
+   for(const [index,selector] of ['.a-conversation','.a-messages','.a-composer','.a-markdown-composer','.a-compose-tools button','.a-work-header','.a-work-header button'].entries()){
     const start=admissions;const name='drop-'+index+'.png';const files=[{name,base64:data.toString('base64')}];await drops(page,selector,files,'dragenter');await expect(page.locator('[data-part="chat-file-drop"]')).toBeVisible();await drops(page,selector,files);
     await expect.poll(async()=>(await inspect(page)).attachments[owner]?.filter(x=>x.name===name).length).toBe(1);assert.equal(admissions-start,1,'Exactly one upload despite nested handlers');await expect(page.locator('[data-part="chat-file-drop"]')).toHaveCount(0);await expect(composer).toHaveDraft('Never send this draft');
    }
+   // User removal frees two slots; the ordered multi-file case still checks
+   // distinct same-name files, rather than relaxing the existing eight-file cap.
+   await page.getByRole('button',{name:'Remove drop-0.png',exact:true}).click();
+   await page.getByRole('button',{name:'Remove drop-1.png',exact:true}).click();
+   await expect.poll(async()=>(await inspect(page)).attachments[owner]?.length).toBe(5);
    const multi=[{name:'same.png',base64:data.toString('base64')},{name:'same.png',base64:data.toString('base64')}];const start=admissions;await drops(page,'.a-attachment img',multi);await expect.poll(async()=>(await inspect(page)).attachments[owner]?.filter(x=>x.name==='same.png').length).toBe(2);assert.equal(admissions-start,2);
    const originalDraft=await inspect(page);assert.equal(originalDraft.sends.filter(s=>s.sessionId===owner).length,0);
    const text=await page.evaluateHandle(()=>{const d=new DataTransfer();d.setData('text/uri-list','https://example.invalid/not-a-file');return d});await page.locator('.a-messages').dispatchEvent('drop',{dataTransfer:text});await text.dispose();assert.equal(admissions,start+2,'Link drag is not a remote upload');

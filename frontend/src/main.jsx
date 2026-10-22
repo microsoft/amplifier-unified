@@ -670,7 +670,7 @@ function App(){
   <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 
-  <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>
+  <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation} fileDropHandlers={browsing?undefined:chatDrop.handlers}/>
   <AppReloadNotice/>
   {!panel&&<ArchiveNotice value={archiveValue}/>}
   {chatLink?.status==='failed'&&<div className="a-alert" role="alert" data-chat-link-failure><span>Couldn’t open chat: {actionErrorMessage(chatLink.error)}</span><button type="button" onClick={()=>chatLinkReceiver.current.retry()}>Retry opening chat</button><button type="button" aria-label="Dismiss chat link" onClick={()=>chatLinkReceiver.current.dismiss()}><X/></button></div>}

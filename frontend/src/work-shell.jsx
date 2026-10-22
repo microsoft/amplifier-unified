@@ -55,7 +55,7 @@ export function AppFooter({state,connected,open,act}){
   <div className="a-footer-status"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span>{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options"><button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button></ActionMenu></ShellSlot></div>
  </div>;
 }
-export function WorkHeader({state,session,act,open,narrow,presentation}){
+export function WorkHeader({state,session,act,open,narrow,presentation,fileDropHandlers}){
  const nav=useContext(WorkNavigationContext),surface=workSurface(state),browsing=surface!=='chat';
  const displayTitle=useChatTitle(session,{eager:!browsing}).title;
  const setup=!session&&!browsing?newChatSetup(state):null;
@@ -69,7 +69,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   return()=>{observer.disconnect();window.removeEventListener('resize',measure)};
  },[]);
  const title=surface==='home'?'Home':surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
- return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel}>
+ return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel} {...fileDropHandlers}>
   <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
   <button id="navigation-toggle" type="button" className="a-icon a-work-nav-toggle" aria-label={navOpen?'Close navigation':'Open navigation'} aria-expanded={navOpen} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:!navOpen,...(!navigationNarrow?{navPinned:!navOpen}:{}),toolbarMenuOpen:false}})}><PanelLeft/>{!navOpen&&<AttentionBadge state={state}/>}</button>
   <DestinationHistory history={nav.history} onVisit={nav.visitHistory} disabled={!!state.navigationPending}/>

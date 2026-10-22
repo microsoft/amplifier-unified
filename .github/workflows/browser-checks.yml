@@ -245,6 +245,7 @@ jobs:
         env:
           AMPLIFIER_TEST_FIXTURE_ROOT: ${{ runner.temp }}/attachment-fixtures/tests/fixtures
           AMPLIFIER_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+          AMPLIFIER_SHELL_NODE_MODULES: ${{ github.workspace }}/frontend/node_modules
           PYTHONPATH: ''
         run: .venv/bin/python scripts/browser_check_runner.py --plan output/attachment-experience/installed-plan.json --output output/attachment-experience/installed-runner --budget-seconds 600
       - name: Preserve every affected failure
