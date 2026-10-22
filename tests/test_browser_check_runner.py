@@ -259,6 +259,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
+        'destination-history': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/destination-history'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
         'mcp-clients': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-clients.png'},
         'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
@@ -392,6 +393,39 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     )
 
 
+@pytest.mark.parametrize('fault', ['none', 'python-skip', 'frontend-skip', 'unrun-browser', 'missing-junit'])
+def test_destination_history_evidence_gate_rejects_incomplete_results(tmp_path, monkeypatch, fault):
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    step = next(row for row in workflow['jobs']['destination-history']['steps']
+                if row.get('name') == 'Require executed evidence without skips')
+    assert step['if'] == '${{ always() && !inputs.settings_close_diagnostic }}'
+    assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
+    code = step['run'].removeprefix("python - <<'PY'\n").removesuffix('PY\n')
+    output = tmp_path / 'output/destination-history'
+    output.mkdir(parents=True)
+    if fault != 'missing-junit':
+        skipped = '<skipped/>' if fault == 'python-skip' else ''
+        (output / 'python.xml').write_text(f'<testsuites><testsuite><testcase name="proof">{skipped}</testcase></testsuite></testsuites>')
+    skip = int(fault == 'frontend-skip')
+    (output / 'frontend.log').write_text(f'# tests 1\n# pass {1-skip}\n# fail 0\n# skipped {skip}\n# cancelled 0\n# todo 0\n')
+    plan = [{'id': name, 'command': ['node', f'tests/{name}-browser.mjs']} for name in (
+        'destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch', 'automation-hub')]
+    (output / 'plan.json').write_text(json.dumps({'scenarios': plan}))
+    rows = [{**row, 'status': 'passed', 'exitCode': 0, 'reason': None,
+             'cleanup': {'remaining': [], 'terminated': 0}} for row in plan]
+    if fault == 'unrun-browser':
+        rows[-1]['status'] = 'unrun'
+    browser = tmp_path / 'output/browser-checks'
+    browser.mkdir()
+    (browser / 'results.json').write_text(json.dumps({'scenarios': rows, 'complete': True, 'passed': True}))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exit:
+        exec(compile(code, '<workflow-evidence-gate>', 'exec'), {})
+    assert exit.value.code == (0 if fault == 'none' else 1)
+    result = json.loads((output / 'qualification.json').read_text())
+    assert result['passed'] is (fault == 'none')
+
+
 def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     workflows = ROOT / '.github/workflows'
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
@@ -436,6 +470,10 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     shared_work = 'tests/shared-work-browser.mjs'
     assert shared_work in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', shared_work] for row in plan['scenarios']) == 1
+    # Destination history adds one source-only journey without replacing an owner.
+    history = 'tests/destination-history-browser.mjs'
+    assert history in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', history] for row in plan['scenarios']) == 1
     cancellation = 'tests/request-cancellation-browser.mjs'
     assert cancellation in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', cancellation] for row in plan['scenarios']) == 1
@@ -448,9 +486,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     tool_previews = 'tests/tool-previews-browser.mjs'
     assert tool_previews in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', tool_previews] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, shared_work}) == 145
-    assert len((readiness_scripts | extended_scripts) - {shared_work}) == 150
-    assert len(readiness_scripts | extended_scripts) == 151
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, shared_work, history}) == 145
+    assert len((readiness_scripts | extended_scripts) - {shared_work}) == 151
+    assert len(readiness_scripts | extended_scripts) == 152
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
@@ -519,7 +557,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
@@ -566,6 +604,41 @@ def test_performance_reports_are_distinct_and_uploaded():
                    for line in step['with']['path'].splitlines() if line.strip()]
     assert all(any(path.removeprefix('{root}/').startswith(directory) for directory in directories)
                for path in reports.values())
+
+
+def test_destination_history_manual_route_is_fixed_and_preserves_default_coverage():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    option = workflow['on']['workflow_dispatch']['inputs']['destination_history']
+    assert option['type'] == 'boolean' and option['default'] == 'false'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert workflow['jobs']['browser']['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    focused = workflow['jobs']['destination-history']
+    assert focused['if'] == '${{ inputs.destination_history || inputs.settings_close_diagnostic }}'
+    assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
+    assert focused['runs-on'] == 'ubuntu-latest' and focused['timeout-minutes'] == '30'
+    steps = focused['steps']
+    assert not any(step.get('continue-on-error') for step in steps)
+    run = '\n'.join(step.get('run', '') for step in steps)
+    assert 'secrets.' not in json.dumps(focused)
+    assert "wanted = ('destination-history', 'conversation-navigation', 'archive-feedback', 'canvas-dirty', 'draft-switch', 'automation-hub')" in run
+    assert "sum(row['id'] == name for row in rows) == 1" in run
+    assert 'browser_check_runner.py --plan output/destination-history/plan.json --output output/browser-checks --initialize' in run
+    assert '--budget-seconds 1200' in run
+    for target in ('test_history_scope.py', 'test_auth.py', 'test_client_navigation.py',
+                   'test_approachable_shell.py', 'test_automation_overview.py', 'test_schedules.py',
+                   'test_schedule_new_tasks.py', 'test_schedule_policy.py'):
+        assert f'tests/{target}' in run
+    assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
+    assert 'tests/test_release_qualification.py' not in run
+    for target in ('destination-history', 'destination-history-ui', 'api',
+                   'conversation-navigation', 'pending-view', 'settings-drafts',
+                   'work-shell', 'archive-action', 'archive-feedback', 'attention', 'shell-panels',
+                   'automation-hub', 'schedule-editor', 'submission-reset'):
+        assert f'tests/{target}.test.mjs' in run
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    assert len(uploads) == 1 and uploads[0]['if'] == 'always()'
+    assert 'output/destination-history/' in uploads[0]['with']['path']
+    assert 'output/browser-checks/' in uploads[0]['with']['path']
 
 
 # Independent literal identities: do not construct the positive TAP fixture from
