@@ -482,6 +482,37 @@ async def main():
                 await service.event_log_view.refresh(aid)
                 row['execution']['currentTurnId']=row['execution']['plan']['turnId']
                 row['status']=args.get('status','working')
+            elif op=='delegate-observer':
+                # Real host metadata observer and stamped canonical fixture
+                # records; never patch exchange fields or invoke full replay.
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.runtime import normalize_event
+                row=service._session(aid);now=time.time()
+                row.update(status='idle',workers=[],messages=[
+                    {'id':'observer-question','role':'user','text':'Inspect the recorded delegate exchange','createdAt':now-1}],
+                    execution={'turns':[],'nodes':[]})
+                ensure_turn(row,'observer-turn')
+                row['execution']['turns'][0].update(startedAt=now,anchorMessageId='observer-question')
+                emitted=[];events=LoggedEvents(aid,emitted.append);events.turn_id='observer-turn'
+                arguments={'agent':'review','instruction':args['instruction']}
+                events.hook(aid,'tool:pre',{'tool_call_id':'observer-delegate','tool_name':'delegate','tool_input':arguments})
+                log_hook(aid,'delegate:agent_spawned',{'tool_call_id':'observer-delegate','parent_session_id':aid,'sub_session_id':'observer-child'})
+                events.lifecycle({'type':'child.updated','sessionId':'observer-child','parentSessionId':aid,
+                    'callId':'observer-delegate','runId':'observer-run','agent':'review','status':'running'})
+                child_input={'file_path':'/fixture/observed.txt'}
+                events.hook('observer-child','tool:pre',{'tool_call_id':'observer-read','tool_name':'read_file','tool_input':child_input})
+                events.hook('observer-child','tool:post',{'tool_call_id':'observer-read','tool_name':'read_file',
+                    'tool_input':child_input,'result':{'success':True,'output':'OBSERVER CHILD RESULT'}})
+                events.hook(aid,'tool:post',{'tool_call_id':'observer-delegate','tool_name':'delegate','tool_input':arguments,
+                    'result':{'success':True,'output':{'response':args['reply'],'session_id':'observer-child'}}})
+                events.lifecycle({'type':'child.updated','sessionId':'observer-child','parentSessionId':aid,
+                    'callId':'observer-delegate','runId':'observer-run','agent':'review','status':'completed','report':'SUMMARY-DECOY'})
+                for event in emitted:
+                    normalized=normalize_event(event,aid)
+                    if normalized:
+                        await service.on_runtime_event(*normalized)
+                row['execution']['turns'][0].update(phase='completed',endedAt=time.time())
+                assert all('input' not in node and 'output' not in node for node in row['execution']['nodes'])
             elif op=='inspection':
                 from amplifier_web.execution import ensure_turn
                 from amplifier_web.execution_events import ExecutionEvents

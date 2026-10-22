@@ -82,6 +82,19 @@
 #amp-one .a-delegate-exchange .open{transform:rotate(90deg)}
 #amp-one .a-delegate-details{padding:8px 0;min-width:0}
 #amp-one .a-delegate-exchange>.a-execution-children{margin-bottom:12px}
+#amp-one .a-work-stream{min-width:0}
+#amp-one .a-work-exchange-entry{margin:12px 0;min-width:0}
+#amp-one .a-work-actor{font-size:var(--a-text-sm,13px);color:var(--a-muted);max-width:30%;overflow-wrap:anywhere;flex-shrink:0}
+#amp-one .a-delegate-missing{padding:10px 12px;border:1px solid var(--a-line);border-radius:7px}
+#amp-one .a-delegate-missing>header{font-size:var(--a-text-sm,13px);color:var(--a-muted)}
+#amp-one .a-work-delegate-status{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin:8px 0}
+#amp-one .a-work-delegate-status>.a-delegate-details{flex-basis:100%}
+@media(max-width:600px){
+ /* The narrow operation header is a grid (chat-presentation.css). Give the
+    actor its own text-width row instead of auto-placing it in an icon column. */
+ #amp-one .a-work-stream .a-execution-action-line>.a-work-actor{grid-column:3/5;grid-row:2;max-width:100%;min-width:0;margin-left:0}
+ #amp-one .a-work-stream .a-execution-action-line>.a-execution-accounting{grid-row:3}
+}
 @media(max-width:600px){#amp-one .a-execution-call-counts{font-size:var(--a-text-xs,12px);white-space:normal}}
 
 @media(max-width:600px){

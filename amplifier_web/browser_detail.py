@@ -19,7 +19,7 @@ def compact(row, session_id, part, limit):
         from .peer_attribution import neutral
         row = neutral(row)
     fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo','delegate'}
-    fields.update({'toolObservationId', 'savedObservations', 'toolDetail', 'inputSummary', 'outcomeSummary', 'inputPreview', 'actionPath', 'contentAvailability', 'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture', 'requestRecording', 'responseRecording', 'exchange', 'parentWorkerId', 'ancestors'})
+    fields.update({'exchangeOwnerId', 'toolObservationId', 'savedObservations', 'toolDetail', 'inputSummary', 'outcomeSummary', 'inputPreview', 'actionPath', 'contentAvailability', 'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture', 'requestRecording', 'responseRecording', 'exchange', 'parentWorkerId', 'ancestors'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
     if part != 'messages':
         from .tool_observations import metadata as tool_metadata
