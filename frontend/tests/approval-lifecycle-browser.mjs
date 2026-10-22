@@ -85,7 +85,15 @@ try{
  await page.setViewportSize({width:390,height:844});
  await current.scrollIntoViewIfNeeded();
  assert.equal(await current.evaluate(element=>element.scrollWidth<=element.clientWidth),true);
+ await page.locator('[data-part="approvals"]').evaluate(element=>{element.scrollTop=0});
  await page.screenshot({path:join(output,'narrow.png'),animations:'disabled'});
+ const dismissButton=current.getByRole('button',{name:'Dismiss old request'});
+ await dismissButton.scrollIntoViewIfNeeded();
+ assert.equal(await dismissButton.evaluate(button=>{
+  const bounds=button.getBoundingClientRect(),container=button.closest('[data-part="approvals"]').getBoundingClientRect();
+  return bounds.top>=container.top&&bounds.bottom<=container.bottom&&button.contains(document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2));
+ }),true,'Narrow dismissal is visible and hit-testable after scrolling');
+ await page.screenshot({path:join(output,'narrow-actions.png'),animations:'disabled'});
  await current.getByRole('button',{name:'Dismiss old request'}).click();
  await expect(current).toHaveCount(0);
  await page.getByText('Permission history (2)',{exact:true}).click();
