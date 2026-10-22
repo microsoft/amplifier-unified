@@ -68,6 +68,7 @@ async def run(root, regression=False):
     from amplifier_foundation.session.history import SessionHistoryStore
     from amplifier_web.session_files import sessions_dir
     from aiohttp.test_utils import TestClient, TestServer
+    from aiohttp import ServerDisconnectedError
     from amplifier_web.auth import SESSION_COOKIE, new_session
     import yaml
 
@@ -188,9 +189,16 @@ async def run(root, regression=False):
             'args':{'sessionId':sid,'text':'KEEP_STOPPED_INPUT','expectedConfigurationRevision':5},'id':'input-stop'}))
         await until(lambda: (root/'mount-held').exists())
         await action('conversation.stop', {'sessionId':sid}, 'stop-delayed-application')
-        stopped_response = await asyncio.wait_for(sending, 45)
-        stopped = await stopped_response.json()
-        assert not stopped.get('accepted'), stopped
+        try:
+            stopped_response = await asyncio.wait_for(sending, 45)
+            stopped = await stopped_response.json()
+            assert not stopped.get('accepted'), stopped
+            report['stopTransport'] = 'rejected'
+        except ServerDisconnectedError:
+            # Stop cancels the original request handler. A lost response alone
+            # proves nothing: reconcile below against process exit and exact
+            # native history, without replaying the input.
+            report['stopTransport'] = 'interrupted'
         await until(lambda: sid not in runtime.workers)
         assert current['pendingBundleSelection']['bundle'] == bundles[3]
         assert current['interruptionRevision'] == 1
