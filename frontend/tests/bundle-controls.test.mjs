@@ -5,17 +5,21 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {BundleControl,BundleDefaults}=await server.ssrLoadModule('/src/bundle-controls.jsx');
+const {ModuleSettings}=await server.ssrLoadModule('/src/bundles.jsx');
+const {isConversationChoiceRead,createSettingsActionQueue}=await server.ssrLoadModule('/src/settings-action-queue.js');
+const record=calls=>async(name,args)=>{calls.push({name,args});return {accepted:true,...(name==='conversation.configure'?{result:{revision:args.expectedRevision+1}}:{})}};
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
 test('late catalog preserves selection and shared actions target the explicit conversation',async()=>{
- const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const calls=[],act=record(calls);
  let session={id:'chat',bundle:'anchors',status:'idle'},state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}}},root;
  const render=()=>React.createElement(BundleControl,{state,session,act,working:false});
  await renderAct(async()=>{root=create(render())});state={...state,registeredBundles:[{name:'work',label:'Work',value:'work'}]};
  await renderAct(async()=>root.update(render()));assert.equal(root.root.findAllByProps({id:'conversation-bundle'}).find(n=>n.type==='select').props.value,'work');
  await renderAct(async()=>root.root.findByProps({'data-action':'bundle.preview'}).props.onClick());assert.deepEqual(calls.find(row=>row.name==='bundle.preview').args,{sessionId:'chat',bundle:'work'});
  session={...session,bundlePreview:{bundle:'work',previewId:'token',modelCompatible:true,changes:{}},bundleChange:{phase:'ready',action:'bundle.preview'}};
- await renderAct(async()=>root.update(render()));await renderAct(async()=>root.root.findByProps({'data-action':'bundle.switch'}).props.onClick());assert.deepEqual(calls.find(row=>row.name==='bundle.switch').args,{sessionId:'chat',bundle:'work',previewId:'token',resetModel:false});
- session={...session,bundleChange:{phase:'error',error:'Failed mount'}};await renderAct(async()=>root.update(render()));assert.equal(root.root.findAllByProps({id:'conversation-bundle'}).find(n=>n.type==='select').props.value,'work');assert.equal(root.root.findByProps({role:'alert'}).findByType('strong').children.join(''),'Failed mount');await renderAct(async()=>root.unmount());
+ await renderAct(async()=>root.update(render()));await renderAct(async()=>root.root.findByProps({'data-action':'conversation.configure'}).props.onClick());assert.deepEqual(calls.find(row=>row.name==='conversation.configure').args,{sessionId:'chat',expectedRevision:0,bundle:'work',resetModel:false});
+ assert.equal(calls.some(row=>row.name==='bundle.switch'),false);
+ session={...session,nextMessageError:'Failed mount'};await renderAct(async()=>root.update(render()));assert.equal(root.root.findAllByProps({id:'conversation-bundle'}).find(n=>n.type==='select').props.value,'work');assert.equal(root.root.findByProps({role:'alert'}).findByType('strong').children.join(''),'Failed mount');await renderAct(async()=>root.unmount());
 });
 test('registered default selection saves immediately with an explicit scope',async()=>{
  const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}},state={view:{},bundleDefaults:{app:null,shared:'anchors',effective:'anchors',source:'shared',workspacePath:'/workspace'},registeredBundles:[{name:'work',value:'work'}]};
@@ -31,31 +35,31 @@ test('global Settings refuses a retained workspace scope draft',async()=>{
  assert.deepEqual(calls.find(row=>row.name==='bundle.default').args,{scope:'app',bundle:'anchors'});
  await renderAct(async()=>root.unmount());
 });
-test('direct switch and fork need no preview and show immediate pending feedback',async()=>{
+test('Next message save and explicit fork need no preview and show immediate pending feedback',async()=>{
  let release;const calls=[],act=(name,args)=>{if(name==='bundles.list')return Promise.resolve({accepted:true});calls.push({name,args});return new Promise(resolve=>{release=resolve})};
  const session={id:'chat',bundle:'anchors'},state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'work',label:'Work'}]};
  let root,operation;await renderAct(async()=>{root=create(React.createElement(BundleControl,{state,session,act,working:false}))});
- const click=()=>root.root.findByProps({'data-action':'bundle.switch'}).props.onClick();
+ const click=()=>root.root.findByProps({'data-action':'conversation.configure'}).props.onClick();
  await renderAct(async()=>{operation=click()});
- assert.deepEqual(calls,[{name:'bundle.switch',args:{sessionId:'chat',bundle:'work',resetModel:false}}]);
+ assert.deepEqual(calls,[{name:'conversation.configure',args:{sessionId:'chat',expectedRevision:0,bundle:'work',resetModel:false}}]);
  assert.equal(root.root.findByProps({'data-action':'bundle.preview'}).props.disabled,true);
  assert.equal(root.root.findByProps({'data-action':'bundle.fork'}).props.disabled,true);
- assert.ok(root.root.findAll(n=>n.type==='strong'&&n.children.join('')==='Switching bundle…').length);
+ assert.ok(root.root.findAll(n=>n.type==='strong'&&n.children.join('')==='Saving Next message settings…').length);
  await renderAct(async()=>click());assert.equal(calls.length,1);
- await renderAct(async()=>{release();await operation});
+ await renderAct(async()=>{release({accepted:true,result:{revision:1}});await operation});
  await renderAct(async()=>{operation=root.root.findByProps({'data-action':'bundle.fork'}).props.onClick()});
  assert.deepEqual(calls[1],{name:'bundle.fork',args:{sessionId:'chat',bundle:'work',resetModel:false}});
  await renderAct(async()=>{release();await operation;root.unmount()});
 });
-test('an incompatible model stops direct apply until an explicit model choice',async()=>{
- const calls=[],act=async(name,args)=>calls.push({name,args});
+test('an incompatible preview requires an explicit model choice before saving',async()=>{
+ const calls=[],act=record(calls);
  const state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}}},session={id:'chat',bundle:'anchors',bundlePreview:{bundle:'work',previewId:'choice',modelCompatible:false}};
  let root;await renderAct(async()=>{root=create(React.createElement(BundleControl,{state,session,act,working:false}))});
- assert.equal(root.root.findByProps({'data-action':'bundle.switch'}).props.disabled,true);
+ assert.equal(root.root.findByProps({'data-action':'conversation.configure'}).props.disabled,true);
  await renderAct(async()=>root.root.findByType('input').props.onChange({target:{checked:true}}));
- assert.equal(root.root.findByProps({'data-action':'bundle.switch'}).props.disabled,false);
- await renderAct(async()=>root.root.findByProps({'data-action':'bundle.switch'}).props.onClick());
- assert.deepEqual(calls.at(-1),{name:'bundle.switch',args:{sessionId:'chat',bundle:'work',previewId:'choice',resetModel:true}});
+ assert.equal(root.root.findByProps({'data-action':'conversation.configure'}).props.disabled,false);
+ await renderAct(async()=>root.root.findByProps({'data-action':'conversation.configure'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'conversation.configure',args:{sessionId:'chat',expectedRevision:0,bundle:'work',resetModel:true}});
  await renderAct(async()=>root.unmount());
 });
 
@@ -112,21 +116,21 @@ test('compact catalog loading and retry preserve the explicit unlisted bundle',a
  }finally{await renderAct(async()=>root?.unmount())}
 });
 
-test('compact bundle switch locks pending choice and failed completion does not resubmit',async()=>{
+test('compact Next message save locks pending choice and failed completion does not resubmit',async()=>{
  const calls=[];let root,release,operation;
  const state={view:{composerBundle:{open:true,sessionId:'chat'}},registeredBundles:[{value:'work'},{value:'anchors'}]},session={id:'chat',bundle:'work'};
- const act=(name,args)=>{calls.push({name,args});return name==='bundle.switch'?new Promise((resolve,reject)=>{release=()=>reject(Error('Switch unavailable'))}):Promise.resolve({accepted:true})};
+ const act=(name,args)=>{calls.push({name,args});return name==='conversation.configure'?new Promise((resolve,reject)=>{release=()=>reject(Error('Save unavailable'))}):Promise.resolve({accepted:true})};
  try{
   await renderAct(async()=>root=create(React.createElement(BundleControl,{state,session,compact:true,act,working:false})));
   const picker=()=>root.root.findByType('select');
   await renderAct(async()=>{operation=picker().props.onChange({target:{value:'anchors'}})});
   assert.equal(picker().props.disabled,true);assert.equal(picker().props.value,'work');
   await renderAct(async()=>picker().props.onChange({target:{value:'anchors'}}));
-  assert.equal(calls.filter(row=>row.name==='bundle.switch').length,1);
+  assert.equal(calls.filter(row=>row.name==='conversation.configure').length,1);
   await renderAct(async()=>{release();await operation});
-  assert.equal(picker().props.disabled,undefined);assert.equal(picker().props.value,'work');
-  assert.match(JSON.stringify(root.toJSON()),/Switch unavailable/);
-  assert.equal(calls.filter(row=>row.name==='bundle.switch').length,1);
+  assert.equal(picker().props.disabled,false);assert.equal(picker().props.value,'work');
+  assert.match(JSON.stringify(root.toJSON()),/Save unavailable/);
+  assert.equal(calls.filter(row=>row.name==='conversation.configure').length,1);
   assert.equal(calls.some(row=>row.name==='conversation.send'),false);
  }finally{await renderAct(async()=>root?.unmount())}
 });
@@ -161,5 +165,99 @@ test('catalog retry transport rejection stays actionable without changing a choi
   assert.equal(calls,1);assert.equal(root.root.findByType('button').props.disabled,false);assert.equal(root.root.findByProps({role:'alert'}).children.join(''),'Retry transport unavailable');
   await renderAct(async()=>root.root.findByType('button').props.onClick());assert.equal(root.root.findByProps({role:'alert'}).children.join(''),'Bundle choices could not be loaded. Try again.');assert.equal(calls,2);
   assert.deepEqual(state.registeredBundles,[]);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+for(const compact of [true,false])test('starting permits Next message bundle save but not eager switch: '+compact,async()=>{
+ const calls=[],state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'work'},{value:'anchors'}]};
+ let session={id:'chat',status:'starting',bundle:'anchors',nextMessageRevision:7},root;
+ const render=()=>React.createElement(BundleControl,{compact,state,session,working:true,act:record(calls)});
+ try{
+  await renderAct(async()=>root=create(render()));
+  const control=()=>root.root.findByProps({'data-action':'conversation.configure'});
+  assert.equal(control().props.disabled,false);
+  await renderAct(async()=>compact?control().props.onChange({target:{value:'work'}}):control().props.onClick());
+  assert.deepEqual(calls.find(c=>c.name==='conversation.configure').args,{sessionId:'chat',expectedRevision:7,bundle:'work',resetModel:false});
+  assert.equal(session.bundle,'anchors');
+  assert.ok(!calls.some(c=>c.name==='bundle.switch'||c.name==='conversation.send'));
+  session={...session,nextMessageRevision:8,pendingBundleSelection:{bundle:'work',resetModel:false}};
+  await renderAct(async()=>root.update(render()));
+  assert.match(JSON.stringify(root.toJSON()),/not applied yet/);
+  assert.deepEqual(root.root.findByProps({'aria-label':'Conversation bundle'}).findByType('span').children,['work']);
+  session={...session,nextMessageError:'The selected bundle could not be prepared.'};
+  await renderAct(async()=>root.update(render()));
+  assert.match(JSON.stringify(root.toJSON()),/could not be prepared/);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+for(const guard of [
+ {collaborationGeneration:{id:'live',terminal:false}},
+ {messages:[{delivery:{status:'sending'}}]},
+ {workers:[{status:'starting'}]},
+ {pendingConfiguration:{phase:'queued'}},
+ {pendingConfiguration:{phase:'error'}},
+ {ownership:{status:'yielded'}},
+ {configurationBusy:true}
+])test('bundle save retains guards while starting '+JSON.stringify(guard),async()=>{
+ const calls=[],session={id:'chat',bundle:'anchors',status:'starting',...guard},state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'work'}]};
+ for(const compact of [true,false]){
+  let root;
+  try{
+   await renderAct(async()=>root=create(React.createElement(BundleControl,{compact,state,session,working:true,act:record(calls)})));
+   const control=root.root.findByProps({'data-action':'conversation.configure'});
+   assert.equal(control.props.disabled,true);
+   await renderAct(async()=>compact?control.props.onChange({target:{value:'work'}}):control.props.onClick());
+   assert.ok(!calls.some(c=>c.name==='conversation.configure'));
+  }finally{await renderAct(async()=>root?.unmount())}
+ }
+});
+test('compact saves reuse only acknowledged own revisions before a state refresh',async()=>{
+ const calls=[],state={view:{composerBundle:{open:true,sessionId:'chat'}},registeredBundles:[{value:'work'},{value:'anchors'}]},session={id:'chat',bundle:'anchors',nextMessageRevision:2};
+ let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(BundleControl,{compact:true,state,session,act:record(calls)})));
+  await renderAct(async()=>root.root.findByType('select').props.onChange({target:{value:'work'}}));
+  await renderAct(async()=>root.root.findByType('select').props.onChange({target:{value:'anchors'}}));
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args.expectedRevision),[2,3]);
+  assert.equal(session.bundle,'anchors');
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('mounting module details never inspects a runtime; Load configuration is explicit',async()=>{
+ const calls=[],session={id:'chat',title:'Dormant',bundle:'anchors',status:'idle'};
+ let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement('details',{},React.createElement('summary',{},'Conversation modules'),React.createElement(ModuleSettings,{state:{view:{}},session,act:record(calls)}))));
+  assert.ok(!calls.some(c=>c.name==='configuration.inspect'||c.name==='runtime.inspect'||c.name==='runtime.control'));
+  await renderAct(async()=>root.root.findByProps({'data-action':'configuration.inspect'}).props.onClick());
+  assert.deepEqual(calls.filter(c=>c.name==='configuration.inspect'),[{name:'configuration.inspect',args:{id:'chat'}}]);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('only named passive choice requests can leave the command queue',async()=>{
+ for(const action of ['bundles.list','bundle.preview'])assert.equal(isConversationChoiceRead(action),true);
+ assert.equal(isConversationChoiceRead('runtime.control',{operation:'configuration.catalog'}),true);
+ for(const operation of ['configuration.providers','configuration.providerModels','provider.queueSelection','configuration.apply','native.compact','native.status'])
+  assert.equal(isConversationChoiceRead('runtime.control',{operation}),false);
+ for(const action of ['configuration.inspect','bundle.switch','bundle.fork','conversation.configure','view.update'])
+  assert.equal(isConversationChoiceRead(action),false);
+ assert.equal(isConversationChoiceRead('runtime.control',{operation:'configuration.catalog'},{expectedRevision:0}),false);
+ const queue=createSettingsActionQueue(),commands={current:Promise.resolve()},calls=[];
+ let release;const stalled=new Promise(resolve=>{release=resolve});
+ const read=queue({current:Promise.resolve()},async()=>{calls.push('catalog');await stalled},null,commands.current);
+ await queue(commands,async()=>calls.push('save'));
+ assert.ok(calls.includes('save'),'A held catalog may not serialize a later settings save');
+ release();await read;
+});
+test('a detailed bundle draft retains its revision when another client changes settings',async()=>{
+ const calls=[],state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'work'},{value:'anchors'}]};
+ let session={id:'chat',bundle:'anchors',nextMessageRevision:4},root;
+ const act=async(name,args)=>{calls.push({name,args});return name==='conversation.configure'?{accepted:false,error:'Next message settings changed. Review the current choices before saving again.'}:{accepted:true}};
+ const render=()=>React.createElement(BundleControl,{state,session,act});
+ try{
+  await renderAct(async()=>root=create(render()));
+  session={...session,nextMessageRevision:5,pendingModelSelection:{instance:'peer',model:'peer-model'}};
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>root.root.findByProps({'data-action':'conversation.configure'}).props.onClick());
+  assert.equal(calls.find(c=>c.name==='conversation.configure').args.expectedRevision,4);
+  assert.match(JSON.stringify(root.toJSON()),/Review the current choices/);
+  assert.equal(calls.filter(c=>c.name==='conversation.configure').length,1);
  }finally{await renderAct(async()=>root?.unmount())}
 });

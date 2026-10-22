@@ -6,6 +6,10 @@ const editors=new Set(['aiConnectionEditor','imageSettingsEditor','providerEdito
 // or a retry for another draft. They still observe preceding writes.
 export const isDraftDefaultsRead=(action,meta={})=>action==='configuration.defaults'&&meta.expectedRevision===undefined;
 export const isProviderCatalogRead=(action,meta={})=>meta.expectedRevision===undefined&&['providers.list','providers.models','providers.schema'].includes(action);
+// These host-owned reads resolve choices without loading a conversation worker.
+// Other runtime controls (and all configuration writes) retain ordered dispatch.
+export const isConversationChoiceRead=(action,args={},meta={})=>meta.expectedRevision===undefined&&(
+ ['bundles.list','bundle.preview'].includes(action)||action==='runtime.control'&&args.operation==='configuration.catalog');
 export function settingsDraftKey(action,args,meta={}){
  if(action!=='view.update'||meta.id||meta.expectedRevision!==undefined||meta.signal||meta.pendingViewToken)return null;
  if(Object.keys(args).some(key=>!['patch','sessionId'].includes(key)))return null;
