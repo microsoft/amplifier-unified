@@ -372,7 +372,11 @@ try{
     await page.keyboard.press('PageDown');await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeGreaterThan(100);
     await page.keyboard.press('End');await requireReachable(summary('publishing'),'Lower section by End');
     await action('canvas.select',{id:ids[29]});
-    await wheel(strip,-100000,0);await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeLessThanOrEqual(1);
+    // Reset only a displaced strip. A boundary-only horizontal gesture can
+    // invoke browser Back; it does not exercise document-strip scrolling.
+    const remaining=await strip.evaluate(el=>el.scrollLeft);
+    if(remaining>1)await wheel(strip,-remaining,0);
+    await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeLessThanOrEqual(1);
     await expect(overviewTab.locator('span')).toBeVisible();
     await expect.poll(()=>overviewTab.locator('span').evaluate(el=>getComputedStyle(el).opacity)).toBe('1');
     await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
