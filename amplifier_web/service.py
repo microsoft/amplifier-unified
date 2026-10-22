@@ -1816,6 +1816,7 @@ class AppService:
         passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
             action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
             {'task.get', 'task.history', 'task.detail', 'task.receipt'})
+        passive_metadata = passive_task or action == 'assignment.brief'
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
@@ -1850,7 +1851,7 @@ class AppService:
             try:
                 target = self.directory.resolve(args[target_key], scope,
                                                 include_hidden_workspaces=action == 'session.select' and not {'chatReference', 'peerPreview'} & args.keys())
-                if target is None and not passive_task:
+                if target is None and not passive_metadata:
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
                                                     include_hidden_workspaces=action == 'session.select' and not {'chatReference', 'peerPreview'} & args.keys())
@@ -1944,7 +1945,7 @@ class AppService:
             if 'chatReference' in args:
                 raise AppError('Choose one source-chat reference.', 400)
             self.peer_preview.select(args, origin)
-        if resolved_target is not None and not passive_task and action != 'session.titlePreview' and not (action == 'session.select' and {'chatReference', 'peerPreview'} & args.keys()):
+        if resolved_target is not None and not passive_metadata and action != 'session.titlePreview' and not (action == 'session.select' and {'chatReference', 'peerPreview'} & args.keys()):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -4924,9 +4925,10 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
-            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
-                # Do not infer nativeProject through _session: even hydrate=False
-                # admits cold owners. The read validates the exact transport root.
+            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief'}:
+                # Do not infer nativeProject, flush progress or build a snapshot:
+                # even _session(hydrate=False) admits dormant owners. Each passive
+                # action validates its own caller scope without runtime demand.
                 return await self.dispatch(args['action'], action_args, origin='agent',
                     command_id=args.get('id'), include_state=False, caller_session_id=session_id)
             # Resolve native aliases before the existing caller-ownership checks;

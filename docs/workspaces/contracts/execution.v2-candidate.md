@@ -825,3 +825,25 @@ Results, declarations, successful qualification, task status, budgets and
 permissions are unchanged; acknowledging never cancels work or permits replay.
 A stable command identity recovers a lost acknowledgement without repeating an
 effect. This action is available on the explicit recovery/report surface.
+
+### Compact assignment orientation
+
+`assignment.brief` reads current member metadata and the caller's latest direct
+request to each member, with exact inspection/result handles. It does not load
+conversation history, admit a dormant worker, change task authority or create
+another task/context store. Shared Work and original constraints remain authoritative.
+A short objective/result preview is labeled when truncated; idle is not completion,
+and a response's qualification is reported separately from delivery.
+
+Each page is at most 9 KiB UTF-8, defaults to eight members and accepts `limit`
+1–16. Follow `nextAfter` for further members; current progress can change between
+pages, while assignment membership changes invalidate the cursor. Unavailable,
+detached or moved members expose no title, task or request preview. This is a
+current orientation view, not a global snapshot, history search or instruction
+supersession mechanism.
+
+The brief reads directory metadata without admitting dormant members. Task text
+comes only from already resident fields or bounded scalar projections of existing
+retained runtime/session records; absent projections stay unknown. It does not
+open native control files or decode saved view/history bodies to fill a preview.
+The agent bridge also avoids unrelated pending-progress publication for this read.
