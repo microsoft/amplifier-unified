@@ -258,6 +258,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
+        'pin-rapid-reorder': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-rapid-reorder'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
         'destination-history': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/destination-history'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
@@ -292,7 +293,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 108
+    assert len(original) == 65 and len(rows) == 109
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -480,8 +481,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     tool_previews = 'tests/tool-previews-browser.mjs'
     assert tool_previews in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', tool_previews] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews}) == 146
-    assert len(readiness_scripts | extended_scripts) == 151
+    pin_reorder = 'tests/pin-rapid-reorder-browser.mjs'
+    assert pin_reorder in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', pin_reorder] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, pin_reorder}) == 146
+    assert len(readiness_scripts | extended_scripts) == 152
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
