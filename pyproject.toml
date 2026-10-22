@@ -66,7 +66,13 @@ url = "https://pypi.org/simple"
 default = true
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1"]
+dev = [
+    "pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1",
+    # Actual producer/capture coverage uses the maintained installed-runtime pins,
+    # not synthetic replacement modules or moving upstream branches.
+    "amplifier-module-loop-streaming @ git+https://github.com/microsoft/amplifier-module-loop-streaming@dd916499344671e0209d4951bc025777e3e891fd",
+    "amplifier-module-hook-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2#subdirectory=modules/hook-context-intelligence",
+]
 artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "reportlab>=4,<5", "pypdf>=6,<7", "Pillow>=11,<13"]
 
 [tool.pytest.ini_options]

@@ -7,10 +7,37 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium, expect} from '@playwright/test';
-import {mkdirSync} from 'node:fs';
+import {mkdirSync,writeFileSync} from 'node:fs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+// Word ranges detect the one-letter-per-line regression that an element box
+// inside the viewport cannot detect. Hit tests also reject floating overlays.
+function measureOwner(element) {
+  const button=element.closest('button'),bounds=button.getBoundingClientRect();
+  const words=[],problems=[],walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+  for(let text=walker.nextNode();text;text=walker.nextNode()) {
+    for(const match of text.textContent.matchAll(/[\p{L}\p{N}]+/gu)) {
+      const range=document.createRange();
+      range.setStart(text,match.index);range.setEnd(text,match.index+match[0].length);
+      const rects=[...range.getClientRects()].filter(r=>r.width&&r.height);
+      const lines=new Set(rects.map(r=>Math.round(r.top)));
+      if(lines.size!==1)problems.push(`split word: ${match[0]}`);
+      for(const rect of rects) {
+        if(rect.left<Math.max(0,bounds.left)-1||rect.right>Math.min(innerWidth,bounds.right)+1||
+           rect.top<Math.max(0,bounds.top)-1||rect.bottom>Math.min(innerHeight,bounds.bottom)+1)
+          problems.push(`clipped word: ${match[0]}`);
+        for(const fraction of [0.2,0.5,0.8]) {
+          const hit=document.elementFromPoint(rect.left+rect.width*fraction,rect.top+rect.height/2);
+          if(!hit||!button.contains(hit))problems.push(`covered word: ${match[0]}`);
+        }
+      }
+      words.push({text:match[0],lines:lines.size,rects:rects.map(r=>({x:r.x,y:r.y,width:r.width,height:r.height}))});
+    }
+  }
+  if(!words.length)problems.push('No owner words measured');
+  return {text:element.textContent,words,problems};
+}
 const fixture = spawn(root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
   {stdio: ['ignore', 'pipe', 'inherit']});
 let browser;
@@ -123,6 +150,41 @@ try {
     await expect(rows[0]).toBeVisible();
     await expect(operations[0].locator(':scope > button')).toHaveAttribute('aria-expanded', 'false');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
+    const readability=[];
+    for(const operation of operations) {
+      const owner=operation.locator(':scope > button > .a-work-actor');
+      await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
+      // Wait for layout/scroll settlement without relying on a fixed sleep.
+      await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
+      readability.push(await owner.evaluate(measureOwner));
+    }
+    if(name==='mobile') {
+      const owner=operations[0].locator(':scope > button > .a-work-actor');
+      await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
+      await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
+      // Negative controls: the same oracle must reject both the old narrow
+      // column symptom and text covered by another UI element.
+      const style=await owner.getAttribute('style');
+      await owner.evaluate(element=>{element.style.maxWidth='8px';element.style.overflowWrap='anywhere'});
+      const split=await owner.evaluate(measureOwner);
+      assert.ok(split.problems.some(value=>value.startsWith('split word:')),'Readability check must detect split owner words');
+      await owner.evaluate((element,style)=>style===null?element.removeAttribute('style'):element.setAttribute('style',style),style);
+      await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
+      await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
+      await owner.evaluate(element=>{
+        const rect=element.getBoundingClientRect(),cover=document.createElement('div');
+        cover.id='readability-negative-cover';
+        Object.assign(cover.style,{position:'fixed',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',zIndex:'2147483647',background:'white'});
+        document.body.append(cover);
+      });
+      const covered=await owner.evaluate(measureOwner);
+      assert.ok(covered.problems.some(value=>value.startsWith('covered word:')),'Readability check must detect obscured owner text');
+      await page.locator('#readability-negative-cover').evaluate(element=>element.remove());
+      await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
+      writeFileSync(root+'test-results/delegate-work-stream-negative-controls.json',JSON.stringify({split,covered},null,2));
+      await page.screenshot({path:root+'test-results/delegate-work-stream-mobile-owner.png'});
+    }
+    writeFileSync(root+`test-results/delegate-work-stream-${name}-readability.json`,JSON.stringify(readability,null,2));
     await work.scrollIntoViewIfNeeded();
     await page.screenshot({path: root + `test-results/delegate-work-stream-${name}.png`, fullPage: true});
   }

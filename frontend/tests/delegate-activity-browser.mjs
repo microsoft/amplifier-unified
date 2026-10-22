@@ -132,7 +132,15 @@ try{
  assert.ok(focusedReads.some(args=>args.get('group')?.startsWith('event-window:')),'Recorded work is read on disclosure');
  const header=page.locator('.a-work-header');
  await expect(header.getByRole('button',{name:'Chat overview',exact:true})).toHaveCount(0);
- await expect(header.getByRole('button',{name:'Chat',exact:true}).locator('.lucide-sliders-horizontal')).toHaveCount(1);
+ // Assert the current public menu, not a superseded icon implementation.
+ const chat=header.getByRole('button',{name:'Chat',exact:true});
+ await expect(chat).toBeVisible();
+ await chat.click();
+ const chatMenu=page.getByRole('group',{name:'Chat',exact:true});
+ await expect(chatMenu.getByRole('button',{name:'Help & diagnostics',exact:true})).toBeVisible();
+ await expect(chatMenu.getByRole('button',{name:'Advanced',exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');
+ await expect(chatMenu).toHaveCount(0);
  await expect(header.locator('.lucide-ellipsis')).toHaveCount(0);
  await openSettingsPage(page,'diagnostics');
  await expect(page.getByText('Saved recording setting: Off',{exact:true})).toBeVisible();

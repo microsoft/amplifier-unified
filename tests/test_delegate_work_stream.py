@@ -228,19 +228,56 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
             assert len(candidates[-1].get(field, '')) < len(exact)
             assert await read_exact(reference) == exact
             issued.append((reference, exact))
-        # A quiet refresh must retain the same source refs, not replace them with
-        # earlier tool output or synthesize a different association.
+        # The explicit tool lookup admits exact field leases. The first sync may
+        # publish that newly enriched projection (OpenWorkFields.retain), even
+        # though the underlying execution graph is unchanged. Consume it, verify
+        # identity and exact fields, then require a second quiet sync to settle.
         by_group = {}
         for page in pages:
             by_group.setdefault(page['group'], {}).update(
                 (row['id'], row['detailVersion']) for row in page['items'])
         for group, known in by_group.items():
+            original_rows = {row['id']: row for page in pages if page['group'] == group
+                             for row in page['items']}
+            # Pages arrive newest first; derive chronology independently from
+            # source position, not from the sync response's own order.
+            if mode == 'resident':
+                expected_order = [row['id'] for row in before['nodes'] if row['id'] in known]
+            else:
+                expected_order = [row['id'] for page in pages if page['group'] == group
+                                  for row in page['items']]
+            assert len(expected_order) == len(set(expected_order)) == len(known)
             response = await client.post('/api/conversation/work-sync', json={
                 'sessionId': identity, 'group': group, 'known': known})
             assert response.status == 200, await response.text()
             result = await response.json()
-            assert result['items'] == []
-            assert set(result['order']) == set(known)
+            assert result['order'] == expected_order
+            changed_ids = [row['id'] for row in result['items']]
+            assert len(changed_ids) == len(set(changed_ids))
+            if mode == 'resident':
+                assert changed_ids == [target['id']], 'Only the resolved delegate gains field leases'
+                updated = result['items'][0]
+                prior = original_rows[updated['id']]
+                for key in ('id', 'kind', 'sessionId', 'rootSessionId', 'toolCallId',
+                            'toolObservationId', 'parentId', 'turnId', 'phase', 'startedAt', 'endedAt'):
+                    assert updated.get(key) == prior.get(key), key
+                assert updated['detailVersion'] != known[updated['id']]
+                assert updated['contentAvailability']['status'] == 'linked'
+                for field, (reference, exact) in zip(('delegateRequest', 'delegateResponse'), issued):
+                    candidates = [row for row in exchanges([updated]) if row.get(field + 'Detail')]
+                    assert candidates, f'Sync lost {field}'
+                    current = candidates[-1][field + 'Detail']
+                    assert current == reference, 'Sync must retain the exact admitted source lease'
+                    assert await read_exact(current) == exact
+            else:
+                assert result['items'] == []
+            known.update((row['id'], row['detailVersion']) for row in result['items'])
+            response = await client.post('/api/conversation/work-sync', json={
+                'sessionId': identity, 'group': group, 'known': known})
+            assert response.status == 200, await response.text()
+            settled = await response.json()
+            assert settled['items'] == [], 'Accepted field leases must not churn on quiet sync'
+            assert settled['order'] == expected_order
         for reference, exact in issued:
             assert await read_exact(reference) == exact
         assert session['execution'] == before
