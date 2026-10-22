@@ -806,3 +806,22 @@ Root and child mounting reject reference modules that cannot honor the selected
 read policy before model input. The same check runs in existing no-model runtime
 qualification. Dependency updates use the existing checked staging/activation
 path; no capability approval or automatic replay repairs a recorded old worker.
+
+
+### Explicit review of completion notifications — 2026-10-22
+
+A requester may acknowledge an exact outcome after reviewing it through
+`coordination.acknowledge`, using the current result's revision and review key.
+This is the caller's explicit disposition, not a claim that a passive read was
+consumed by a model. Reads, UI views and assistant prose do not acknowledge.
+
+The host retains the acknowledgement in the existing command journal, checks the
+current root, original requester/workspace, task continuation epoch, assignment
+and Stop boundary, and atomically suppresses only the matching still-queued
+notification. An already submitting, admitted or unknown notification is kept
+unchanged. If backpressure prevented enqueueing, the same reviewed outcome does
+not enqueue later. A changed outcome remains eligible for its own notification.
+Results, declarations, successful qualification, task status, budgets and
+permissions are unchanged; acknowledging never cancels work or permits replay.
+A stable command identity recovers a lost acknowledgement without repeating an
+effect. This action is available on the explicit recovery/report surface.

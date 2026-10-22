@@ -104,6 +104,7 @@ def definitions(schema, string):
         }, ["sessionId"])),
         "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
             **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
+        "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request. scope=all never widens request-participant/workspace authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
@@ -1135,6 +1136,9 @@ class Collaboration:
         if response is None:
             return
         revision = self.record_outcome(request, response)
+        from .outcome_acknowledgement import acknowledged
+        if versioned and acknowledged(request, response):
+            return
         if versioned and revision <= wait.get('lastClaimedRevision', 0):
             return
         if revision > MAX_RESPONSE_REVISIONS:
@@ -1326,6 +1330,9 @@ class Collaboration:
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
         source = self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None
+        if action == 'coordination.acknowledge':
+            from .outcome_acknowledgement import acknowledge
+            return await acknowledge(self, source, args, origin, command_id)
         if action == 'coordination.cancel':
             from .request_cancellation import cancel
             return await cancel(self, source, args, origin, command_id)
@@ -1422,8 +1429,10 @@ class Collaboration:
                 results.append({"messageId": response["terminalMessageId"], "sessionId": sid,
                                 "inputId": (initial or receipt)['requestId'], "declaration": response})
             from .request_cancellation import status as cancellation_status
+            from .outcome_acknowledgement import reference as notification_reference
             return {"accepted": True, "result": {"receipt": receipt, "results": results,
                 'cancellation': cancellation_status(report),
+                'notification': notification_reference(report),
                 'responseRevision': report.get('responseRevision', 1 if response else 0), 'revisions': revisions,
                 **({'initialRequest': initial} if initial is not None else {}),
                 "preparation": copy.deepcopy((target or {}).get("activity")),
