@@ -329,8 +329,9 @@ async def test_dismiss_releases_exact_native_waiter_without_a_note_or_another_tu
     row = (await agent(app, source, 'capability.request', {'sessionId':source['id'],
         'effects':['modules'], 'scopes':['session'], 'reason':'Waiting tool'}, 'native-dismiss',
         _configurationWait=True))['result']
-    future = asyncio.get_running_loop().create_future()
-    worker.approvals[row['id']] = (future, ['allow','deny'])
+    waiter = asyncio.create_task(worker.ask('Waiting tool', ['allow','deny'], identity=row['id']))
+    await asyncio.sleep(0)
+    future = worker.approvals[row['id']][0]
     count = []
     async def approval(sid, identity, decision, **kwargs):
         count.append(identity)
@@ -345,8 +346,9 @@ async def test_dismiss_releases_exact_native_waiter_without_a_note_or_another_tu
         'comment':'Retain this draft note only'}
     await app.dispatch('capability.revoke',args,command_id='native-dismiss-decision')
     await until(lambda: future.done())
-    assert future.result() == 'deny'
-    assert not getattr(future.result(),'comment',None)
+    decision = await waiter
+    assert decision == 'deny'
+    assert not getattr(decision,'comment',None)
     await app.dispatch('capability.revoke',args,command_id='native-dismiss-decision')
     await asyncio.sleep(.01)
     assert count == [row['id']] and not worker.approvals and not app.runtime.calls
