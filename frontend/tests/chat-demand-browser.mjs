@@ -98,8 +98,8 @@ try{
  await page.locator('#chat-provider').selectOption('two');await settle();
  await expect(model.locator('option[value="other-account"]')).toBeAttached();
  assert.equal(await model.locator('option[value="second"]').count(),0);
- await page.getByRole('button',{name:'Close model settings'}).click();
- await expect(page.locator('.a-model-popover')).toHaveCount(0);
+ await page.getByRole('button',{name:'Close chat options'}).click();
+ await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toHaveCount(0);
  // A different private client does not inherit this draft or picker demand.
  await action('view.update',{patch:{draft:'Target private draft'}});
  // Separate process also works on ARM containers requiring --single-process,
@@ -124,7 +124,7 @@ try{
  await action('session.select',{id:meta.ids[1]});await expect(composer).toHaveDraft('Target private draft');
  // Existing-conversation mobile embedded picker must also declare/retire demand.
  await page.setViewportSize({width:390,height:844});
- await page.getByRole('button',{name:'Chat options',exact:true}).click();
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Chat options'})).toBeVisible();
  await page.locator('#chat-provider').selectOption('one');await settle();
  await expect(page.locator('#chat-model option[value="second"]')).toBeAttached();
