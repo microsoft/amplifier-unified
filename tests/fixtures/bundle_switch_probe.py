@@ -33,12 +33,16 @@ async def main():
     workspace = root/'workspace'; workspace.mkdir(parents=True)
     home = root/'app'
     os.environ.update(AMPLIFIER_HOME=str(root/'shared'), AMPLIFIER_WEB_HOME=str(home),
-        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'))
+        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'),
+        AMPLIFIER_RUNTIME_IMMUTABLE='1')
+    import amplifier_module_loop_live
+    loop_source = str(Path(amplifier_module_loop_live.__file__).parent)
     from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
     settings = root/'shared/settings.yaml'; settings.parent.mkdir()
     # Exercise revision isolation using only the local modules defined below.
     # Ordinary defaults have their own installed-runtime acceptance coverage.
-    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
+    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
+        'sources': {'modules': {'loop-live': loop_source}}}))
     provider = root/'provider/amplifier_module_provider_fixture'; provider.mkdir(parents=True)
     calls = root/'model-calls'
     provider.joinpath('__init__.py').write_text('''from pathlib import Path
@@ -161,6 +165,13 @@ async def mount(coordinator, config=None):
             'old_budget_reset':True,'failed_mount_diagnostic':'provider_mount_failed',
             'failed_mount_rolled_back':True,'restored_worker_usable':True,
             'model_calls':0,'replayed_work':False,'mounts':mounts}))
+    except BaseException:
+        # Synthetic fixture diagnostics only; retain the underlying setup failure
+        # instead of leaving the public startup/preview summary as the sole clue.
+        print(json.dumps({'fixtureFailure': {key: source.get(key) for key in
+            ('failure', 'error', 'bundleChange')},
+            'workerStderr': [line for row in runtime.workers.values() for line in row.get('stderr', [])]}), flush=True)
+        raise
     finally:
         await app.close()
         asyncio.create_subprocess_exec = spawn
