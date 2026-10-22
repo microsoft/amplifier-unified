@@ -58,7 +58,10 @@ async def transport(tmp_path, monkeypatch):
     app.state["sessions"].append(root)
     app.state["selectedSessionId"] = root["id"]
     worker = runtime_worker.Worker()
-    worker.session = SimpleNamespace(coordinator=SimpleNamespace(session_id="native-root"))
+    capabilities = {}
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(
+        session_id="native-root", get_capability=capabilities.get,
+        register_capability=capabilities.__setitem__))
     wire = Transport(app, worker, root)
     monkeypatch.setattr(runtime_worker, "_PROTOCOL", wire)
     try:
