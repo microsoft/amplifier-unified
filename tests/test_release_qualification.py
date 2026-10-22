@@ -408,7 +408,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'remote-test-origins']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'remote-test-origins', 'shared-work-native']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
@@ -437,6 +437,19 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert '--junitxml=output/python-checks/junit.xml' in focused['run']
     assert 'tee output/python-checks/pytest.log' in focused['run']
     assert '${{' not in focused['run'] and '${{' not in steps[1]['run']
+    receipts = next(step for step in steps if step.get('name') == 'Prepare pinned native receipt dependencies')
+    installed = next(step for step in steps if step.get('name') == 'Verify installed native receipt boundary outside checkout')
+    assert receipts['if'] == installed['if'] == "${{ env.CHECK_SUITE == 'shared-work-native' }}"
+    assert '2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' in receipts['run']
+    assert 'NativeSendAdmission, NativeOutboundEnvelope' in receipts['run']
+    assert 'unset PYTHONPATH' in installed['run']
+    assert '--no-deps -r output/python-checks/installed-requirements.txt' in installed['run']
+    assert 'uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"' in installed['run']
+    assert 'assert not actual.is_relative_to(source)' in installed['run']
+    assert "('failure', 'error', 'skipped')" in installed['run']
+    assert installed['run'].index('uv pip check') < installed['run'].index(' -m pytest')
+    assert "result.returncode == 1 and len(cases) == 1" in installed['run']
+    assert 'negative-control.json' in installed['run']
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [
@@ -448,6 +461,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
     ('managed-removal-recovery', ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
     ('shared-work-continuity', ['tests/test_task_continuity.py', 'tests/test_coordination_delivery.py', 'tests/test_work_invocation.py', 'tests/test_schedules.py', 'tests/test_collaboration_input.py', 'tests/test_coordination_revisions.py', 'tests/test_release_qualification.py', 'tests/test_voice_visual.py', 'tests/test_surface_context.py', 'tests/test_output_image_pairs.py', 'tests/test_memory_personalization.py', 'tests/test_capacity.py']),
+    ('shared-work-native', ['tests/test_native_provider.py', 'tests/test_release_qualification.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
 def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):

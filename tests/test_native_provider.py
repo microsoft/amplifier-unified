@@ -112,6 +112,472 @@ async def test_durable_receipts_reconcile_restart_unknown_without_replay(tmp_pat
     assert NativeProviderHost(c,c.loop,tmp_path).state['outcome']=='completed'
 
 
+def send_record(operation='response.create', **changes):
+    return {'send_id': 'send-one', 'operation': operation, 'epoch': 'connection-one',
+            'response_id': 'parent' if operation == 'response.steer' else None,
+            'input_id': 'input-one' if operation == 'response.steer' else None,
+            'attempt_id': None, 'execution_replayed': False, **changes}
+
+
+@pytest.mark.parametrize('operation', ['response.create', 'response.steer'])
+@pytest.mark.parametrize('reason', ['cancelled', 'rejected'])
+async def test_bound_unsent_receipt_preserves_original_owner_and_parent(tmp_path, operation, reason):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    host.state.update(requestId='parent-attempt', outcome='running', responseId='parent')
+    callback = host.bind_send_lifecycle(
+        attempt_id='original-attempt', generation_id='generation-1',
+        admitted_call_id='original-budget-call')
+    record = send_record(operation)
+    await callback('native.submitting', record)
+    parent = copy.deepcopy({k: v for k, v in host.state.items() if k not in {'sends', 'receipts', 'updatedAt'}})
+    # A late terminal belongs to the captured owner, not a new generation.
+    c.caps['live.runtime'].generation = {'id': 'new-generation'}
+    await callback('native.not_sent', {**record, 'attempt_id': 'original-attempt',
+                                     'reason': reason, 'input': 'PRIVATE INPUT'})
+    row = host.state['sends'][0]
+    assert row['outcome'] == 'not_sent' and row['reason'] == reason
+    assert row['attemptId'] == 'original-attempt'
+    assert row['generationId'] == 'generation-1'
+    assert row['admittedCallId'] == 'original-budget-call'
+    if operation == 'response.steer':
+        assert {k: v for k, v in host.state.items() if k not in {'sends', 'receipts', 'updatedAt'}} == parent
+    else:
+        assert host.state['outcome'] == 'not_sent'
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert restored.state['sends'][0] == row
+    assert 'PRIVATE INPUT' not in host.path.read_text()
+    assert host.path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('fault', [
+    {'epoch': 'other'}, {'operation': 'response.steer'}, {'response_id': 'other'},
+    {'input_id': 'other'}, {'attempt_id': 'other'}, {'send_id': 'other'},
+])
+async def test_unsent_receipt_requires_exact_send_and_captured_binding(tmp_path, fault):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='original-attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    record = send_record()
+    await callback('native.submitting', record)
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError):
+        await callback('native.not_sent', {**record, 'reason': 'rejected', **fault})
+    assert host.path.read_bytes() == before
+    assert NativeProviderHost(c, c.loop, tmp_path).state['sends'][0]['outcome'] == 'unknown'
+
+
+@pytest.mark.parametrize('lost', ['ignored', 'failed'])
+async def test_unsent_missing_durable_terminal_remains_unknown(tmp_path, monkeypatch, lost):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    record = send_record()
+    await callback('native.submitting', record)
+    if lost == 'failed':
+        def fail():
+            raise OSError('Synthetic failed private persistence')
+        monkeypatch.setattr(host, 'save', fail)
+        with pytest.raises(OSError):
+            await callback('native.not_sent', {**record, 'reason': 'rejected'})
+        assert host.state['sends'][0]['outcome'] == 'submitting'
+    # Deliberately ignored terminal is the original bug's negative control.
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert restored.state['sends'][0]['outcome'] == 'unknown'
+    assert restored.state['outcome'] == 'unknown'
+
+
+@pytest.mark.parametrize('parent_outcome', ['running', 'completed', 'unknown'])
+async def test_unsent_steer_never_downgrades_parent_or_other_unknown_send(tmp_path, parent_outcome):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    first = host.bind_send_lifecycle(
+        attempt_id='first', generation_id='generation-1', admitted_call_id='first-budget')
+    await first('native.submitting', send_record(send_id='first-send'))
+    host.state.update(outcome=parent_outcome, responseId='parent')
+    second = host.bind_send_lifecycle(
+        attempt_id='second', generation_id='generation-1', admitted_call_id='second-budget')
+    steer = send_record('response.steer', send_id='second-send')
+    await second('native.submitting', steer)
+    await second('native.not_sent', {**steer, 'reason': 'cancelled'})
+    assert host.state['outcome'] == parent_outcome
+    assert host.state['requestId'] == 'first'
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert [row['outcome'] for row in restored.state['sends']] == ['unknown', 'not_sent']
+
+
+async def test_bound_send_rejects_new_submission_after_generation_change(tmp_path):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    c.caps['live.runtime'].generation = {'id': 'new-generation'}
+    with pytest.raises(ValueError, match='binding'):
+        await callback('native.submitting', send_record())
+    assert not host.path.exists()
+
+
+async def test_restart_after_send_before_response_is_unknown_and_blocks_transport(tmp_path, monkeypatch):
+    from amplifier_module_provider_openai import OpenAIProvider
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    c = Coordinator(OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'}))
+    host = NativeProviderHost(c, c.loop, tmp_path / 'sessions' / c.session_id)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget')
+    await callback('native.submitting', send_record())
+    await callback('native.request', {})
+    assert host.state['outcome'] == 'sent'
+    # Reinstall simulates a fresh host over exactly the same durable record.
+    c.caps.pop('web.native_provider')
+    await install_native(c.loop, c, c.providers)
+    restored = c.get_capability('web.native_provider')
+    assert restored.status()['receipt']['outcome'] == 'unknown'
+    assert restored.state['sends'][0]['outcome'] == 'unknown'
+    assert restored.provider.request_uncertain is True
+
+
+@pytest.mark.parametrize('operation', ['response.create', 'response.steer'])
+@pytest.mark.parametrize('ending', ['prepare_reject', 'final_reject', 'cancel', 'send_error', 'ignored_terminal'])
+async def test_real_native_unsent_callback_reaches_bound_host_disk(tmp_path, monkeypatch, operation, ending):
+    import asyncio
+    from amplifier_core.llm_errors import LLMError
+    from amplifier_module_provider_openai import OpenAIProvider
+    from amplifier_module_provider_openai.native import NativeSendAdmission
+    from websockets.protocol import State
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    c = Coordinator(OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'}))
+    await install_native(c.loop, c, c.providers)
+    host = c.get_capability('web.native_provider')
+    native = host.provider
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    observed = []
+
+    async def lifecycle(kind, data):
+        observed.append(kind)
+        if not (kind == 'native.not_sent' and ending == 'ignored_terminal'):
+            await callback(kind, data)
+
+    def admit(envelope):
+        assert envelope.attempt_id == 'attempt' and envelope.kind == operation
+        assert 'PRIVATE' in envelope.payload
+        return ending == 'send_error'
+
+    async def prepare(kind, *, input_id):
+        assert kind == operation
+        if ending == 'prepare_reject':
+            raise ValueError('PRIVATE callback failure')
+        if ending == 'cancel':
+            raise asyncio.CancelledError()
+        return NativeSendAdmission(attempt_id='attempt', admit=admit)
+
+    native.lifecycle = lifecycle
+    native.prepare_send = prepare
+    native.owner = SimpleNamespace(
+        config={}, runtime=SimpleNamespace(emit=AsyncMock()), _text=lambda command: 'PRIVATE steer')
+    native._connect = AsyncMock()
+    socket = SimpleNamespace(state=State.OPEN, send=AsyncMock(side_effect=OSError('Synthetic send failure')),
+                             close=AsyncMock(), recv=AsyncMock())
+    native.socket = socket
+    if operation == 'response.steer':
+        native.response_id = 'parent'
+        host.state.update(requestId='parent-attempt', outcome='running', responseId='parent')
+    failure = asyncio.CancelledError if ending == 'cancel' else (
+        OSError if ending == 'send_error' else LLMError)
+    with pytest.raises(failure):
+        if operation == 'response.create':
+            await native._native_response({'input': [{'role': 'user', 'content': 'PRIVATE create'}]})
+        else:
+            await native.steer_live(SimpleNamespace(id='input-one'))
+    if ending == 'send_error':
+        socket.send.assert_awaited_once()
+        assert 'native.not_sent' not in observed
+        if operation == 'response.steer':
+            assert 'native.outcome_unknown' in observed
+            assert native._observer_failure is None
+            assert host.state['sends'][0]['outcome'] == 'unknown'
+            assert host.state['sends'][0]['reason'] == 'steer_send'
+    else:
+        socket.send.assert_not_awaited()
+        assert observed.count('native.not_sent') == 1
+    restored = NativeProviderHost(c, c.loop, host.directory)
+    expected = 'unknown' if ending in {'send_error', 'ignored_terminal'} else 'not_sent'
+    assert restored.state['sends'][0]['outcome'] == expected
+    assert restored.state['sends'][0]['admittedCallId'] == 'budget-call'
+    assert restored.state['sends'][0]['attemptId'] == 'attempt'
+    assert 'PRIVATE' not in host.path.read_text()
+    if operation == 'response.steer' and ending not in {'send_error', 'ignored_terminal'}:
+        assert host.state['outcome'] == 'running' and host.state['requestId'] == 'parent-attempt'
+
+
+@pytest.mark.parametrize('phase', ['native.request', 'native.outcome_unknown', 'native.completed'])
+async def test_known_entered_or_terminal_send_cannot_be_relabelled_unsent(tmp_path, phase):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    record = send_record()
+    await callback('native.submitting', record)
+    if phase == 'native.completed':
+        await callback('native.response.created', {'response_id': 'reply'})
+    await callback(phase, {'response_id': 'reply'})
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError):
+        await callback('native.not_sent', {**record, 'reason': 'rejected'})
+    assert host.path.read_bytes() == before
+
+
+async def test_native_phase_cannot_cross_distinct_budget_bindings(tmp_path):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    first = host.bind_send_lifecycle(attempt_id='same-attempt', generation_id='generation-1',
+                                     admitted_call_id='first-budget')
+    second = host.bind_send_lifecycle(attempt_id='same-attempt', generation_id='generation-1',
+                                      admitted_call_id='second-budget')
+    await first('native.submitting', send_record(send_id='first-send'))
+    await second('native.submitting', send_record(send_id='second-send'))
+    await first('native.response.created', {'response_id': 'first-response'})
+    await first('native.completed', {'response_id': 'first-response'})
+    assert [row['outcome'] for row in host.state['sends']] == ['completed', 'submitting']
+    assert host.state['outcome'] == 'submitting' and host.state['admittedCallId'] == 'second-budget'
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError, match='already exists'):
+        await second('native.submitting', send_record(send_id='third-send'))
+    assert host.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('data', [{}, {'response_id': 'wrong'},
+                                  {'response_id': 'right', 'pending_steering': 'false'}])
+async def test_native_completion_requires_observed_response_and_typed_terminal(tmp_path, data):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget')
+    await callback('native.submitting', send_record())
+    await callback('native.response.created', {'response_id': 'right'})
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError):
+        await callback('native.completed', data)
+    assert host.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('resolution', ['applied', 'failed', 'accepted_failed'])
+async def test_sent_steering_resolution_survives_restart_without_changing_parent(tmp_path, resolution):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    host.state.update(requestId='parent-attempt', outcome='running', responseId='parent')
+    callback = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='budget')
+    record = send_record('response.steer')
+    await callback('native.submitting', record)
+    await callback('steering.sent', {'input_id': 'input-one', 'response_id': 'parent'})
+    if resolution in {'applied', 'accepted_failed'}:
+        await callback('steering.accepted', {
+            'input_id': 'input-one', 'response_id': 'parent', 'steer_id': 'steer-one'})
+    if resolution == 'applied':
+        await callback('steering.applied', {
+            'input_id': 'input-one', 'response_id': 'successor', 'steer_id': 'steer-one'})
+    else:
+        await callback('steering.failed', {'input_id': 'input-one'})
+    assert host.state['outcome'] == 'running' and host.state['requestId'] == 'parent-attempt'
+    expected = 'failed' if resolution == 'accepted_failed' else resolution
+    assert NativeProviderHost(c, c.loop, tmp_path).state['sends'][0]['outcome'] == expected
+
+
+async def test_completed_create_is_terminal_even_with_pending_steering(tmp_path):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget')
+    await callback('native.submitting', send_record())
+    await callback('native.response.created', {'response_id': 'parent'})
+    await callback('native.completed', {'response_id': 'parent', 'pending_steering': True})
+    assert host.state['outcome'] == 'pending'  # Logical continuation remains unresolved.
+    assert host.state['sends'][0]['outcome'] == 'completed'  # This create did finish.
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert restored.state['outcome'] == 'unknown'
+    assert restored.state['sends'][0]['outcome'] == 'completed'
+
+
+@pytest.mark.parametrize('input_id', [None, 'input-one'])
+async def test_parent_unknown_only_relabels_steer_when_its_input_was_sent(tmp_path, input_id):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    parent = host.bind_send_lifecycle(
+        attempt_id='parent-attempt', generation_id='generation-1', admitted_call_id='parent-budget')
+    steer = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='steer-budget')
+    await parent('native.submitting', send_record(send_id='parent-send'))
+    record = send_record('response.steer', send_id='steer-send')
+    await steer('native.submitting', record)
+    unknown = {'reason': 'steer_send' if input_id else 'connection_closed', 'input_id': input_id}
+    await steer('native.outcome_unknown', unknown)
+    await parent('native.outcome_unknown', unknown)
+    assert host.state['sends'][0]['outcome'] == 'unknown'
+    assert host.state['reason'] == unknown['reason']
+    if input_id is None:
+        assert host.state['sends'][1]['outcome'] == 'submitting'
+        await steer('native.not_sent', {**record, 'reason': 'rejected'})
+        assert host.state['sends'][1]['outcome'] == 'not_sent'
+    else:
+        assert host.state['sends'][1]['outcome'] == 'unknown'
+        before = host.path.read_bytes()
+        with pytest.raises(ValueError):
+            await steer('native.not_sent', {**record, 'reason': 'rejected'})
+        assert host.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('event', ['steering.pending', 'native.error', 'native.connection.renewed'])
+async def test_unhandled_observation_is_not_receipted_as_a_bound_send(tmp_path, event):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    parent = host.bind_send_lifecycle(
+        attempt_id='parent-attempt', generation_id='generation-1', admitted_call_id='parent-budget')
+    steer = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='steer-budget')
+    await parent('native.submitting', send_record(send_id='parent-send'))
+    await steer('native.submitting', send_record('response.steer', send_id='steer-send'))
+    before = host.path.read_bytes()
+    for callback in (parent, steer):
+        await callback(event, {'input_id': 'input-one', 'response_id': 'parent', 'code': 'PRIVATE'})
+    assert host.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('free_terminal', [False, True])
+async def test_receipt_capacity_never_evicts_unknown_sends(tmp_path, monkeypatch, free_terminal):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    monkeypatch.setattr(host, 'save', lambda: None)  # Exercise the in-memory bound without disk churn.
+    for index in range(128):
+        callback = host.bind_send_lifecycle(
+            attempt_id=f'attempt-{index}', generation_id='generation-1', admitted_call_id=f'budget-{index}')
+        await callback('native.submitting', send_record(send_id=f'send-{index}'))
+        if index == 0 and free_terminal:
+            await callback('native.response.created', {'response_id': 'parent'})
+            await callback('native.completed', {'response_id': 'parent', 'pending_steering': True})
+        else:
+            await callback('native.outcome_unknown', {'reason': 'connection_closed'})
+    before = copy.deepcopy(host.state)
+    callback = host.bind_send_lifecycle(
+        attempt_id='new-attempt', generation_id='generation-1', admitted_call_id='new-budget')
+    if not free_terminal:
+        with pytest.raises(ValueError, match='capacity'):
+            await callback('native.submitting', send_record(send_id='new-send'))
+        assert host.state == before
+    else:
+        await callback('native.submitting', send_record(send_id='new-send'))
+        assert len(host.state['sends']) == 128
+        assert host.state['sends'][:-1] == before['sends'][1:]
+        assert host.state['sends'][-1]['send_id'] == 'new-send'
+
+
+async def test_real_parent_completion_survives_overlapping_steer_preparation(tmp_path, monkeypatch):
+    await native_parent_overlap(tmp_path, monkeypatch, fail_parent=False)
+
+
+async def test_real_parent_failure_preserves_unsent_overlapping_steer(tmp_path, monkeypatch):
+    await native_parent_overlap(tmp_path, monkeypatch, fail_parent=True)
+
+
+async def native_parent_overlap(tmp_path, monkeypatch, *, fail_parent):
+    import asyncio
+    from amplifier_module_provider_openai import OpenAIProvider
+    from amplifier_module_provider_openai.native import NativeSendAdmission, NATIVE_REQUEST
+    from amplifier_core.llm_errors import LLMError
+    from websockets.protocol import State
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    c = Coordinator(OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'}))
+    await install_native(c.loop, c, c.providers)
+    host = c.get_capability('web.native_provider')
+    native = host.provider
+    parent = host.bind_send_lifecycle(
+        attempt_id='parent-attempt', generation_id='generation-1', admitted_call_id='parent-budget')
+    steer = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='steer-budget')
+    parent_created, preparing, resume = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def lifecycle(kind, data):
+        if kind in {'native.submitting', 'native.not_sent'}:
+            await (parent if data['operation'] == 'response.create' else steer)(kind, data)
+        else:
+            # Keep both original bindings: the steer must not replace the parent's sink.
+            await steer(kind, data)
+            await parent(kind, data)
+        if kind == 'native.response.created':
+            parent_created.set()
+
+    async def prepare(kind, *, input_id):
+        if kind == 'response.steer':
+            preparing.set()
+            await resume.wait()
+        return NativeSendAdmission(
+            attempt_id='parent-attempt' if kind == 'response.create' else 'steer-attempt',
+            admit=lambda envelope: True)
+
+    events = asyncio.Queue()
+    native.lifecycle, native.prepare_send = lifecycle, prepare
+    native.owner = SimpleNamespace(
+        config={}, runtime=SimpleNamespace(emit=AsyncMock()), _text=lambda command: 'Synthetic steer')
+    native._connect = AsyncMock()
+    native._guard_assembled_params_with_provider_count = AsyncMock()
+    socket = SimpleNamespace(state=State.OPEN, send=AsyncMock(), close=AsyncMock(), recv=events.get)
+    native.socket = socket
+    await events.put(json.dumps({'type': 'response.created', 'response': {'id': 'parent'}}))
+    async def run_parent():
+        token = NATIVE_REQUEST.set(native)
+        try:
+            return await native._create_response({'input': []})
+        finally:
+            NATIVE_REQUEST.reset(token)
+    parent_task = asyncio.create_task(run_parent())
+    steer_task = None
+    try:
+        await asyncio.wait_for(parent_created.wait(), 1)
+        steer_task = asyncio.create_task(native.steer_live(SimpleNamespace(id='input-one')))
+        await asyncio.wait_for(preparing.wait(), 1)
+        if fail_parent:
+            await events.put(json.dumps({'type': 'error', 'error': {'code': 'synthetic'}}))
+            with pytest.raises(LLMError):
+                await asyncio.wait_for(parent_task, 1)
+        else:
+            await events.put(json.dumps({'type': 'response.completed', 'response': {
+                'id': 'parent', 'status': 'completed', 'output': [], 'usage': {}}}))
+            await asyncio.wait_for(parent_task, 1)
+        expected = 'unknown' if fail_parent else 'completed'
+        assert host.state['outcome'] == expected
+        assert host.state['sends'][1]['outcome'] == 'submitting'
+        resume.set()
+        with pytest.raises(LLMError):
+            await asyncio.wait_for(steer_task, 1)  # Parent finished: the stale steer is not sent.
+        assert socket.send.await_count == 1
+        assert [row['outcome'] for row in host.state['sends']] == [expected, 'not_sent']
+        assert host.state['outcome'] == expected and native._observer_failure is None
+    finally:
+        for task in (parent_task, steer_task):
+            if task and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_shared_control_compacts_only_idle_and_never_returns_private_opaque(tmp_path,monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))
