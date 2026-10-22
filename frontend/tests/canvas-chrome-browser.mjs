@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-import {acceptedCanvasReceipt,settleCanvasReceipts} from './canvas-test-receipts.mjs';
+import {acceptedCanvasReceipt,settleCanvasReceipts,assertCanvasVisibility,acceptedCanvasVisibility} from './canvas-test-receipts.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const base=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-checks');
@@ -75,6 +75,52 @@ try{
  const section=id=>overview.locator(`details[data-overview-section="${id}"]`);
  const summary=id=>section(id).locator(':scope > summary');
  const documents=()=>panel.locator('button.a-open-documents');
+ const serverSnapshot=async clientId=>{
+  const response=await page.request.get(url+'/api/state?clientId='+encodeURIComponent(clientId),{timeout:8000});
+  assert.equal(response.status(),200,'Read the same client directly from the host');
+  return response.json();
+ };
+ const visibility=async(open,{holdBeforeAdmission=false}={})=>{
+  const before=await state(),expected={clientId:before.client.id,hostInstanceId:before.client.hostInstanceId,sessionId,canvasId:before.canvas.id,open};
+  assert.equal(before.canvas.open,!open);assert.notEqual(before.canvas.visibilityPending,true);
+  const matches=request=>{
+   if(!isAction(request))return false;
+   const command=unwrap(request.postDataJSON());
+   return command?.action==='canvas.visibility'&&command.args?.open===open
+    &&command.args.sessionId===sessionId&&command.args.canvasId===expected.canvasId
+    &&request.headers()['x-amplifier-client']===expected.clientId;
+  };
+  let heldRoute,release;
+  const gate=new Promise(resolve=>{release=resolve});
+  const hold=async route=>{if(matches(route.request())){heldRoute=route;await gate}await route.continue()};
+  if(holdBeforeAdmission)await page.route('**/api/actions',hold);
+  // Observe this click's request before it can finish; no synthetic dispatch or replay.
+  const responseReady=page.waitForResponse(response=>matches(response.request()),{timeout:8000})
+   .then(response=>({response}),error=>({error}));
+  try{
+   const [request]=await Promise.all([page.waitForRequest(matches,{timeout:8000}),toggle.click()]);
+   expected.commandId=unwrap(request.postDataJSON()).id;
+   if(holdBeforeAdmission){
+    await expect.poll(()=>heldRoute?.request()===request,{timeout:8000}).toBe(true);
+    await expect(overview).toBeVisible();
+    const optimistic=await state(),unaccepted=await serverSnapshot(expected.clientId);
+    assert.equal(optimistic.canvas.open,true);assert.equal(optimistic.canvas.visibilityPending,true);
+    assert.throws(()=>assertCanvasVisibility(optimistic,expected),/still awaits acceptance/);
+    assert.equal(unaccepted.canvas.open,false,'Held request has not changed server visibility');
+    assert.throws(()=>assertCanvasVisibility(unaccepted,expected),/Server visibility/);
+    assert.equal(observedReceipts.has(request),false,'No response has been supplied or fabricated');
+    report.visibilityNegative={commandId:expected.commandId,optimisticOpen:true,serverOpen:false,receiptAbsent:true};
+   }
+   release();
+   const result=await responseReady;if(result.error)throw result.error;
+   assert.equal(result.response.request(),request,'The receipt is for this exact click');
+   const accepted=await acceptedCanvasVisibility(observedReceipts.get(request),expected,()=>serverSnapshot(expected.clientId));
+   await page.waitForFunction(()=>window.amplifier.getState().canvas.visibilityPending!==true,{},{timeout:8000});
+   if(open)await expect(overview).toBeVisible();else await expect(panel).toBeHidden();
+   (report.visibilityReceipts??=[]).push({commandId:expected.commandId,open,accepted:accepted.row.body,serverRevision:accepted.snapshot.revision,serverOpen:accepted.snapshot.canvas.open});
+   return {expected,snapshot:accepted.snapshot};
+  }finally{release();if(holdBeforeAdmission)await page.unroute('**/api/actions',hold)}
+ };
  const artifacts=async()=>{const s=await state();return s.canvasArtifacts.filter(row=>row.sessionId===sessionId&&row.workspaceId===s.selectedWorkspaceId)};
  const counts=async(open)=>{
   await expect(documents()).toHaveAccessibleName(`Open documents, ${open} open`);
@@ -192,10 +238,16 @@ try{
    // Leave each closed, then verify the exact choices across hide and reload.
    await summary(id).click();await expect(section(id)).not.toHaveAttribute('open','');
   }
-  await toggle.click();await expect(panel).toBeHidden();await expect(toggle).toHaveAccessibleName('Open canvas');
-  await toggle.click();await expect(overview).toBeVisible();
+  await visibility(false);await expect(panel).toBeHidden();await expect(toggle).toHaveAccessibleName('Open canvas');
+  const reopened=await visibility(true,{holdBeforeAdmission:true});await expect(overview).toBeVisible();
   await settleCanvasReceipts(observedReceipts.values());
   await page.reload();await showFixtureConversation(page,{navPinned:false});await expect(overview).toBeVisible();
+  const reloaded=await serverSnapshot((await state()).client.id);
+  assertCanvasVisibility(reloaded,{...reopened.expected,clientId:reloaded.client.id},reopened.snapshot.revision);
+  assert.notEqual(reloaded.client.id,reopened.expected.clientId,'Reload resumes a new private client copy');
+  assert.equal(reloaded.canvas.selectedVersion,reopened.snapshot.canvas.selectedVersion);
+  assert.equal(reloaded.view.canvasDraft.library,true);assert.equal(reloaded.view.draft,'Retain the Canvas test draft');
+  report.visibilityReload={acceptedCommand:reopened.expected.commandId,beforeClient:reopened.expected.clientId,afterClient:reloaded.client.id,canvasId:reloaded.canvas.id,open:reloaded.canvas.open,revision:reloaded.revision};
   for(const id of sectionIds)await expect(section(id)).not.toHaveAttribute('open','');
   for(const id of sectionIds){await revealByWheel(summary(id));await summary(id).click();await expect(section(id)).toHaveAttribute('open','')}
   // The expensive lower panels were exercised; leave their compact defaults.
