@@ -89,11 +89,12 @@ def installed(source):
     env = {k: v for k, v in os.environ.items() if k not in ('PYTHONPATH', 'PYTHONHOME')}
     command(['uv', 'build', '--wheel', '--out-dir', str(wheels)], OUTPUT / 'wheel-build.log', env=env)
     wheel, = wheels.glob('*.whl')
+    shutil.copy2(wheel, OUTPUT / wheel.name)
     requirements = work / 'requirements.txt'
     command(['uv', 'export', '--locked', '--no-emit-project', '--no-dev', '--format', 'requirements-txt', '--output-file', str(requirements)], OUTPUT / 'wheel-export.log', env=env)
     command(['uv', 'venv', '--python', sys.executable, str(venv)], OUTPUT / 'wheel-venv.log', env=env)
     python = venv / 'bin/python'
-    command(['uv', 'pip', 'install', '--python', str(python), '--no-build-package', 'amplifier-core', '-r', str(requirements)], OUTPUT / 'wheel-dependencies.log', env=env)
+    command(['uv', 'pip', 'install', '--python', str(python), '--only-binary', 'amplifier-core', '-r', str(requirements)], OUTPUT / 'wheel-dependencies.log', env=env)
     command(['uv', 'pip', 'install', '--python', str(python), '--no-deps', str(wheel)], OUTPUT / 'wheel-install.log', env=env)
     actual = Path(subprocess.check_output([str(python), '-I', '-c', 'import amplifier_web;from pathlib import Path;print(Path(amplifier_web.__file__).resolve().parent)'], cwd=work, env=env, text=True).strip())
     assert actual.is_relative_to(venv) and not actual.is_relative_to(ROOT)
@@ -118,7 +119,6 @@ def installed(source):
         assert isinstance(served, dict) and served, 'Installed served-asset proof did not execute'
         assert all(expected.get(name) == value for name, value in served.items()), 'Served assets are not the installed bytes'
         write(OUTPUT / 'installed-served-proof.json', {'verified': True, 'assets': served})
-    shutil.copy2(wheel, OUTPUT / wheel.name)
     # Hosted job retires its workspace; retain explicit harness/process state, not an invented destroy receipt.
     write(OUTPUT / 'installed-layout.json', {'testOnlyHarness': True, 'sourceDirectoriesCopied': False,
           'harnessTests': manifest(harness / 'tests'), 'browserTests': manifest(harness / 'frontend/tests'),
