@@ -193,12 +193,14 @@ try {
   // earlier scene alone is only presentation proof; this is not cold placement.
   const instruction='OBSERVER REQUEST café\n'+('request body 日本語\n'.repeat(1200))+'REQUEST-END';
   const reply='OBSERVER REPLY\n'+('reply body café\n'.repeat(1500))+'REPLY-END';
-  await control({op:'delegate-observer',instruction,reply});
   const fieldRequests=[];
   page.on('request',request=>{
     if(request.url().includes('/api/conversation/detail?'))fieldRequests.push({
       query:new URL(request.url()).searchParams,client:request.headers()['x-amplifier-client']});
   });
+  // The already-open page can read published observer records before control
+  // returns; observe that boundary before triggering it, including warm reads.
+  await control({op:'delegate-observer',instruction,reply});
   await page.setViewportSize({width:1280,height:1000});
   await page.reload();
   await showFixtureConversation(page);
