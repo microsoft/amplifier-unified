@@ -309,7 +309,8 @@ async def test_agent_machine_policy_changes_require_global_authority(app, machin
 
 
 async def test_machine_reservation_is_retained_before_dependency_builder(app, native_backend, monkeypatch):
-    def prepare(config, root, snapshot, profile_id, request_id, *, resource_request, host_reservation, timing_request):
+    def prepare(config, root, snapshot, profile_id, request_id, *, resource_request, host_reservation, timing_request, dependency_store):
+        assert dependency_store == app.data_dir / 'test-dependency-layers'
         assert host_reservation['admitted'] and host_reservation['phase'] == 'preparing'
         assert host.snapshot()['reserved']['preparing'] == 1
         assert profiles.resources(profile_id, resource_request)['memoryMiB'] == 6144
