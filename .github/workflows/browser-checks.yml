@@ -23,6 +23,10 @@ on:
         description: Only attachment consumption, adjacent host contracts and the production build
         type: boolean
         default: false
+      compact_composer:
+        description: Fixed compact composer source and installed-wheel qualification
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -32,7 +36,7 @@ permissions:
   contents: read
 jobs:
   browser:
-    if: ${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -142,7 +146,7 @@ jobs:
             output/selected-context/
           if-no-files-found: warn
   mcp-boundary:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -284,8 +288,65 @@ jobs:
           record = json.loads(Path('output/browser-checks/mcp-boundary-public/retention.json').read_text())
           assert record['retained'] and not record['rejected'], 'MCP proof evidence incomplete'
           PY
+  compact-composer:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Reject mixed selections
+        if: ${{ inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
+        run: exit 1
+      - name: Record fixed coverage before setup
+        run: python scripts/compact_composer_checks.py --initialize
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev --group artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Build exact candidate
+        id: compact-build
+        run: npm run build --prefix frontend
+      - name: Retain exact built assets
+        if: ${{ steps.compact-build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: compact-static-${{ github.sha }}-${{ github.run_attempt }}
+          path: amplifier_web/static/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Install browser dependencies
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Check qualification selection and static identity contracts
+        run: >-
+          uv run --no-sync pytest -v --tb=short tests/test_compact_composer_checks.py
+          tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget
+          tests/test_release_qualification.py::test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
+          tests/test_browser_check_runner.py::test_attachment_focus_workflow_retains_failures_and_default_coverage
+          tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage
+          tests/test_mcp_boundary_checks.py::test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job
+          --junitxml=output/compact-composer/runner-contracts.xml
+      - name: Qualify fixed source and installed composer journeys
+        run: uv run --no-sync python scripts/compact_composer_checks.py
+      - name: Retain exact results and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compact-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/compact-composer/
+          if-no-files-found: error
   destination-history:
-    if: ${{ inputs.destination_history || inputs.settings_close_diagnostic }}
+    if: ${{ !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
