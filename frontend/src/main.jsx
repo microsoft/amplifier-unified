@@ -22,6 +22,7 @@ import {WorkNavigationContext,workSurface,browsePatch} from './work-navigation';
 import {WorkHeader,WorkSurface,AppFooter,ComposerWorkspace,WorkspaceCreation,LiveChatActivity} from './work-shell';
 import workShellCss from './work-shell.css?raw';
 import mainRefreshCss from './main-refresh.css?raw';
+import canvasExperienceCss from './canvas-experience.css?raw';
 import compactComposerCss from './compact-composer.css?raw';
 import {bindWindowControlsOverlay} from './window-controls-overlay';
 import windowControlsOverlayCss from './window-controls-overlay.css?raw';
@@ -675,7 +676,7 @@ function App(){
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
  return <PeerPresentation.Provider value={peerPresentation}><ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
   {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
-  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style><style>{compactComposerCss}</style>
+  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style><style>{canvasExperienceCss}</style><style>{compactComposerCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 
   <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>

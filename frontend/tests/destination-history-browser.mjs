@@ -70,7 +70,7 @@ function observeSettingsClose(page){
       const s=state||window.amplifier.getState(),canvas=s.canvas||{},view=s.view||{};
       const rows=(s.canvasArtifacts||[]).filter(row=>row.sessionId===s.selectedSessionId&&row.workspaceId===s.selectedWorkspaceId);
       const artifacts=rows.filter(row=>row.kind==='settings'||row.title==='Settings'||[binding.closedId,binding.successorId,canvas.id].includes(row.id));
-      const tabs=[...document.querySelectorAll('#workspace-canvas [role="tablist"][aria-label="Open canvas items"] > .a-canvas-tab')];
+      const tabs=[...document.querySelectorAll('#workspace-canvas .a-canvas-document-tabs > [role="tab"]')];
       const openRows=rows.filter(row=>row.tabOpen),currentUrl=new URL(location.href),container=document.querySelector('#workspace-canvas');
       const metadata=row=>({id:token(row.id),title:title(row.title),kind:token(row.kind),tabOpen:row.tabOpen===true});
       return {atMs:performance.now()-started,wallTimeMs:Date.now(),revision:s.revision,clientId:token(s.client?.id),hostInstanceId:token(s.client?.hostInstanceId),
@@ -299,7 +299,37 @@ try{
  await expect.poll(async()=>(await saved()).entries.at(-1).tab).toBe('files');
  await page.getByRole('button',{name:'preview.txt Open in “Alpha”',exact:true}).click();
  await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+ await expect.poll(async()=>{const trail=await saved();return trail.entries[trail.cursor]?.kind}).toBe('chat');
+ const beforeWorkspaceBack=await state(),beforeWorkspaceTrail=await saved(),workspaceIndex=beforeWorkspaceTrail.cursor-1;
+ assert.equal(beforeWorkspaceTrail.entries[workspaceIndex].kind,'workspace');
+ assert.equal(beforeWorkspaceTrail.entries[workspaceIndex].id,workspace.id);
+ const workspaceResponse=page.waitForResponse(response=>{
+  const request=response.request();if(request.method()!=='POST'||new URL(response.url()).pathname!=='/api/actions'||
+   request.headers()['x-amplifier-client']!==beforeWorkspaceBack.client.id)return false;
+  const command=request.postDataJSON(),patch=command.args?.patch;
+  return command.action==='view.update'&&patch?.workSurface==='workspace'&&patch.workWorkspaceId===workspace.id&&patch.workWorkspaceTab==='files';
+ });
  await back.click();await expect.poll(async()=>(await state()).view.workSurface).toBe('workspace');
+ const workspaceAccepted=await workspaceResponse,workspaceReceipt=await workspaceAccepted.json();
+ assert.ok(workspaceAccepted.request().postDataJSON().id);assert.equal(workspaceReceipt.accepted,true);
+ assert.equal(workspaceReceipt.hostInstanceId,beforeWorkspaceBack.client.hostInstanceId);
+ assert.ok(Number.isSafeInteger(workspaceReceipt.stateRevision));
+ // Optimistic workSurface is not a completed history visit. Keep the exact
+ // reload oracle, but capture its baseline after this original Back settles.
+ await expect.poll(async()=>(await saved()).cursor).toBe(workspaceIndex);
+ await expect(menu).toBeEnabled();
+ const serverWorkspace=await page.request.get(url+'/api/state?clientId='+encodeURIComponent(beforeWorkspaceBack.client.id));
+ assert.equal(serverWorkspace.status(),200);const authoritativeWorkspace=await serverWorkspace.json();
+ assert.equal(authoritativeWorkspace.client.id,beforeWorkspaceBack.client.id);
+ assert.equal(authoritativeWorkspace.client.hostInstanceId,workspaceReceipt.hostInstanceId);
+ assert.ok(authoritativeWorkspace.revision>=workspaceReceipt.stateRevision);
+ assert.equal(authoritativeWorkspace.view.workSurface,'workspace');
+ assert.equal(authoritativeWorkspace.view.workWorkspaceId,workspace.id);
+ assert.equal(authoritativeWorkspace.view.workWorkspaceTab,'files');
+ await writeFile(path.join(out,'workspace-back-before-reload.json'),JSON.stringify({
+  commandId:workspaceAccepted.request().postDataJSON().id,receipt:workspaceReceipt,
+  serverRevision:authoritativeWorkspace.revision,cursor:workspaceIndex,originalBackOnly:true
+ },null,2));
  assert.equal((await state()).view.workWorkspaceTab,'files');
  // The workspace paints optimistically; capture the trail only after this
  // exact accepted Back visit has committed, not while its receipt is pending.
@@ -435,7 +465,9 @@ try{
    request.headers()['x-amplifier-client']!==beforeClose.client.id)return false;
   const command=request.postDataJSON();return command.action==='canvas.tabClose'&&command.args.id===closingId;
  });
- await page.getByRole('button',{name:'Close tab Settings',exact:true}).click();
+ // Canvas now exposes close through its all-documents list and Delete on tabs.
+ // Use the actual keyboard control, keeping the exact close receipt/guard oracle.
+ await page.getByRole('tab',{name:'Settings',exact:true}).press('Delete');
  await page.getByRole('button',{name:'Discard changes',exact:true}).click();
  const closeResponse=await closedResponse,closeReceipt=await closeResponse.json();
  const closeCommandId=closeResponse.request().postDataJSON().id;
@@ -455,7 +487,7 @@ try{
  }).toBe(true);
  await settingsDiagnostic.mark('close-state-poll-completed');
  await expect(page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true})).toHaveCount(0);
- await expect(page.getByRole('button',{name:'Close tab Settings',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('tab',{name:'Settings',exact:true})).toHaveCount(0);
  await expect(settings).toHaveCount(0);assert.deepEqual(await saved(),settingsTrail);
  await settingsDiagnostic.mark('rendered-close-assertions-completed');
  await writeFile(path.join(out,'settings-close-boundary.json'),JSON.stringify({
@@ -468,11 +500,11 @@ try{
  // would hide the measured close race while breaking this separate user intent.
  assert.equal((await action('canvas.select',{id:closingId})).accepted,true);
  await expect.poll(async()=>(await state()).canvas.id).toBe(closingId);
- await expect(page.getByRole('button',{name:'Close tab Settings',exact:true})).toBeVisible();
+ await expect(page.getByRole('tab',{name:'Settings',exact:true})).toBeVisible();
  const reopened=await state();assert.equal(reopened.canvas.kind,'settings');
  assert.equal(reopened.canvasArtifacts.find(row=>row.id===closingId).tabOpen,true);
  assert.equal((await action('canvas.tabClose',{id:closingId})).accepted,true);
- await expect(page.getByRole('button',{name:'Close tab Settings',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('tab',{name:'Settings',exact:true})).toHaveCount(0);
  await expect.poll(async()=>(await state()).canvas.id).toBe(successor.id);
  assert.deepEqual(await saved(),settingsTrail);
  await action('canvas.visibility',{open:false});

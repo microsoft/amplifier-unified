@@ -10,6 +10,9 @@ export function navigationResources(state,sidebarVisible=true,supportsStatus=tru
  if(surface==='chats')resources.push('sidebarSearch');
  if(surface==='workspace'&&(view.workWorkspaceTab||'chats')==='chats')resources.push('sidebarWorkspace');
  if(surface==='workspaces')resources.push('workspaceExplorer');
+ // The visible overview reuses these bounded rows; a closed Canvas asks for none.
+ if(surface==='chat'&&state?.canvas?.open&&(view.canvasDraft?.library||state.canvas.placeholder||!state.canvasWorkspace?.views?.length)&&!view.settingsCanvas)
+  resources.push('recentNavigation','workspaceShortcuts');
  return [...new Set(resources)].sort();
 }
 

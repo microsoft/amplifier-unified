@@ -27,6 +27,10 @@ on:
         description: Only attachment consumption, adjacent host contracts and the production build
         type: boolean
         default: false
+      canvas_qualification:
+        description: Only fixed Canvas source and installed-wheel qualification
+        type: boolean
+        default: false
       compact_composer:
         description: Fixed compact composer source and installed-wheel qualification
         type: boolean
@@ -40,7 +44,7 @@ permissions:
   contents: read
 jobs:
   browser:
-    if: ${{ !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -150,7 +154,7 @@ jobs:
             output/selected-context/
           if-no-files-found: warn
   mcp-boundary:
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -292,6 +296,48 @@ jobs:
           record = json.loads(Path('output/browser-checks/mcp-boundary-public/retention.json').read_text())
           assert record['retained'] and not record['rejected'], 'MCP proof evidence incomplete'
           PY
+  canvas-qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Reject mixed selections and bind exact source
+        env:
+          MIXED: ${{ inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.destination_history || inputs.settings_close_diagnostic }}
+        run: |
+          test "$MIXED" != true
+          python scripts/canvas_qualification.py initialize
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev --group artifacts --no-build-package amplifier-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Install the locked browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run fixed source and installed Canvas checks
+        run: uv run --no-sync python scripts/canvas_qualification.py run
+      - name: Retain bounded evidence without runner identities
+        if: always()
+        id: retain
+        run: python scripts/canvas_qualification.py retain
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.retain.outcome == 'success'
+        with:
+          name: canvas-qualification-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/canvas-qualification-public/
+          include-hidden-files: true
+          if-no-files-found: error
   compact-composer:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}
     runs-on: ubuntu-latest
@@ -302,7 +348,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Reject mixed selections
-        if: ${{ inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
+        if: ${{ inputs.canvas_qualification || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}
         run: exit 1
       - name: Record fixed coverage before setup
         run: python scripts/compact_composer_checks.py --initialize
@@ -358,7 +404,7 @@ jobs:
         if: ${{ inputs.settings_close_diagnostic && !inputs.destination_history }}
         run: exit 1
       - name: Reject mixed navigation selections
-        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
+        if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification }}
         run: exit 1
       - uses: actions/checkout@v4
         with:
@@ -573,7 +619,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Reject incompatible peer selections
-        if: ${{ inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
+        if: ${{ inputs.canvas_qualification || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
         run: exit 1
       - uses: actions/checkout@v4
         with:

@@ -14,7 +14,7 @@ def test_peer_hosted_route_is_fixed_and_separate():
     assert workflow['on']['workflow_dispatch']['inputs']['peer_messages'] == {
         'description': 'Fixed peer groups, formatting negative control and installed-wheel browser proof',
         'type': 'boolean', 'default': 'false'}
-    assert set(workflow['jobs']) == {'browser', 'mcp-boundary', 'destination-history', 'peer-messages', 'compact-composer'}
+    assert set(workflow['jobs']) == {'browser', 'mcp-boundary', 'destination-history', 'peer-messages', 'compact-composer', 'canvas-qualification'}
     for name in ('browser', 'mcp-boundary', 'destination-history'):
         assert '!inputs.peer_messages' in workflow['jobs'][name]['if']
     job = workflow['jobs']['peer-messages']
@@ -23,7 +23,7 @@ def test_peer_hosted_route_is_fixed_and_separate():
     steps = job['steps']
     reject = steps[0]
     assert reject['run'] == 'exit 1'
-    for selection in ('compact_composer', 'destination_history', 'settings_close_diagnostic', 'mcp_boundary', 'app004_qualification', 'attachment_consumption'):
+    for selection in ('canvas_qualification', 'compact_composer', 'destination_history', 'settings_close_diagnostic', 'mcp_boundary', 'app004_qualification', 'attachment_consumption'):
         assert 'inputs.' + selection in reject['if']
     assert not any(step.get('continue-on-error') for step in steps)
     assert 'secrets.' not in json.dumps(job)

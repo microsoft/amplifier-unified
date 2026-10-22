@@ -6,7 +6,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {ChatDetails,WorkspaceManager}=await server.ssrLoadModule('/src/shell/navigation-components.jsx');
-const {WorkspaceRail:Rail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
+const {WorkspaceRail:Rail,ChatRename,AgentCanvas,CanvasToggle,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
 const {WorkHeader}=await server.ssrLoadModule('/src/work-shell.jsx');
 const {WorkNavigationContext}=await server.ssrLoadModule('/src/work-navigation.js');
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
@@ -179,16 +179,25 @@ test('A2UI button records exactly the declared action while text stays inert',as
  await renderAct(async()=>root.unmount());
 });
 
-test('canvas keyboard resize persists bounded width and closes through public action',async()=>{
- const calls=[],state={view:{canvasWidth:440},canvas:{open:true,kind:'text',content:'Document',title:'Preview'}},act=async(name,args)=>calls.push({name,args});let root;
- await renderAct(async()=>{root=create(React.createElement(AgentCanvas,{state,act}))});
+test('canvas keyboard resize persists bounded width and header toggle hides through public action',async()=>{
+ const previousDocument=globalThis.document;
+ globalThis.document={addEventListener(){},removeEventListener(){}};
+ const calls=[],state={selectedSessionId:'a',view:{canvasWidth:440},canvas:{open:true,kind:'text',content:'Document',title:'Preview'}},act=async(name,args)=>calls.push({name,args});let root;
+ try{
+ await renderAct(async()=>{root=create(React.createElement(React.Fragment,null,React.createElement(CanvasToggle,{state,act}),React.createElement(AgentCanvas,{state,act})))});
  await renderAct(async()=>root.root.findByProps({role:'separator'}).props.onKeyDown({key:'ArrowLeft',preventDefault(){}}));
  assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{canvasWidth:460}}});
  await renderAct(async()=>root.root.findByProps({role:'separator'}).props.onKeyDown({key:'End',preventDefault(){}}));
  assert.equal(calls.at(-1).args.patch.canvasWidth,root.root.findByProps({role:'separator'}).props['aria-valuemax']);
- await renderAct(async()=>root.root.findByProps({'aria-label':'Close canvas panel'}).props.onClick());
+ assert.equal(root.root.findAllByProps({'aria-label':'Close canvas panel'}).length,0);
+ const toggle=root.root.findByProps({'aria-label':'Hide canvas'});
+ assert.equal(toggle.props['aria-expanded'],true);
+ await renderAct(async()=>toggle.props.onClick());
  assert.deepEqual(calls.at(-1),{name:'canvas.visibility',args:{open:false}});
- await renderAct(async()=>root.unmount());
+ }finally{
+  if(root)await renderAct(async()=>root.unmount());
+  if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+ }
 });
 
 test('reopening the canvas keeps its saved snapshot without creating another artifact',async()=>{

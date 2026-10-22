@@ -538,12 +538,42 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
     assert browser_runner_commands([{'run': joined}]) == [joined]
 
 
+def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['canvas-qualification']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert 'secrets.' not in str(job)
+    assert job['steps'][0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    commands = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'uv sync --locked --group dev --group artifacts --no-build-package amplifier-core' in commands
+    assert 'npm ci --prefix frontend' in commands
+    assert 'npx playwright install --with-deps chromium' in commands
+    assert 'python scripts/canvas_qualification.py run' in commands
+    upload = next(step for step in job['steps'] if step.get('uses') == 'actions/upload-artifact@v4')
+    assert 'always()' in upload['if'] and upload['with']['if-no-files-found'] == 'error'
+    source = (ROOT / 'scripts/canvas_qualification.py').read_text()
+    assert 'from browser_check_runner import run_scenarios' in source
+    assert "BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs'," in source
+    assert "'destination-history-browser.mjs', 'automation-hub-browser.mjs'," in source
+    assert job['steps'][1]['env']['MIXED'] == (
+        '${{ inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption '
+        '|| inputs.destination_history || inputs.settings_close_diagnostic }}')
+    assert "raise ValueError('Qualification already started; no replay')" in source
+    assert "'installed-harness'" in source and "'installed-identity.json'" in source
+    assert "assert static == json.loads((OUT / 'static.json').read_text())" in source
+
+
 def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
-                           'destination_history', 'settings_close_diagnostic', 'compact_composer', 'peer_messages'}
+                           'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
+                           'compact_composer', 'peer_messages'}
+    assert inputs['canvas_qualification']['type'] == 'boolean'
+    assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['peer_messages']['type'] == 'boolean'
     assert inputs['peer_messages']['default'] == 'false'
     assert inputs['settings_close_diagnostic']['type'] == 'boolean'
@@ -561,10 +591,10 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
     assert history['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert history['steps'][0] == {
@@ -574,7 +604,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     }
     assert history['steps'][1] == {
         'name': 'Reject mixed navigation selections',
-        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}',
+        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification }}',
         'run': 'exit 1',
     }
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
@@ -644,7 +674,7 @@ def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
     assert steps[1] == {'name': 'Reject mixed selections',
-                       'if': '${{ inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}',
+                       'if': '${{ inputs.canvas_qualification || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}',
                        'run': 'exit 1'}
     assert steps[2]['run'] == 'python scripts/compact_composer_checks.py --initialize'
     commands = [step['run'] for step in steps if 'run' in step]

@@ -153,6 +153,8 @@ async def main(home):
             session = service._session(data['sessionId'])
             session['status'] = data.get('status', 'working')
             session['workers'] = data.get('workers', [])
+            if 'plan' in data:
+                session.setdefault('execution', {})['plan'] = data['plan']
             service._publish()
             return web.json_response({'ok': True})
 

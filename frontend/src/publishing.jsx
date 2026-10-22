@@ -1,5 +1,6 @@
 import React,{useEffect,useReducer,useRef,useState} from 'react';
 import './publishing.css';
+import {useCanvasSectionStatus} from './canvas-overview-state';
 
 // Only submitted requests survive closing this panel. They stay private to this
 // browser page and are never written into conversation drafts or shared views.
@@ -24,6 +25,7 @@ export function PublishingSettings({session,act}){
  const sites=data?.sites||[],releases=data?.releases||[],selected=sites.find(row=>row.id===siteId),release=releases.find(row=>row.id===releaseId&&row.siteId===siteId);
  const targets=registry?.targets||[],currentTarget=targets.find(row=>row.id===targetId);
  const busy=record.busy||reading,locked=busy||!!record.pending,siteReleases=releases.filter(row=>row.siteId===siteId);
+ useCanvasSectionStatus(error?'Needs attention':record.pending?'Outcome pending':busy?'Inspecting…':data?`${sites.length} sites`:'');
  const targetReady=registry?.selectedTargetId===targetId&&(currentTarget?.kind==='loopback'||currentTarget?.inspection?.revision===currentTarget?.revision&&registry.selectedTargetRevision===currentTarget.revision&&registry.selectedServiceId===currentTarget.inspection?.serviceId);
  const lifecycleLocked=locked||!targetReady,accessPolicy=data?.target?.accessPolicy||currentTarget?.inspection?.capabilities?.accessPolicy;
  function displayTarget(value){if(targetRef.current!==value){targetRef.current=value;update(()=>{setTargetId(value);setData(null);setSiteId('');setReleaseId('');setNote('');setInspection(null)})}}

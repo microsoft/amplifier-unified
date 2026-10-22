@@ -45,17 +45,37 @@ resized gets the remaining room. Keyboard users can focus a divider and use
 arrows (20 pixels), Home (minimum), or End (maximum). On narrow windows, the
 canvas covers the workspace instead of squeezing both panes.
 
-The canvas has a compact 36-pixel title row. Hover over it or open **Canvas
-controls** to reveal tabs, files, websites, source and viewer tools. Pin those
-controls to keep them visible. Rendering failures stay visible even when controls
-are collapsed. HTML, browser and MCP App views use the full content area without
-host padding. Documents retain readable internal margins.
+Canvas has one navigation row: **Overview** and the open documents. Overview
+stays at the leading edge while the document strip scrolls; its label contracts
+to an icon without resizing the strip. **Open documents** offers the same open
+items in a bounded, searchable list, with named close actions. Closing a tab
+keeps its saved output. Arrow keys move tab focus; Enter selects and Delete closes
+a focused document tab.
 
-**Focus canvas** fills the app frame; **Exit canvas focus** returns to the split
+The artifact's compact action row keeps version identity, Copy, Download and
+**Details** together. Details retains exact-version, renderer, source and
+format-specific controls. Images, PDFs and diagrams retain their dedicated tools.
+Rendering failures stay visible when Details is closed. HTML, browser and MCP
+App views retain their unpadded content area; documents retain readable margins.
+
+Every present Overview section is collapsible. Counts, status and attention
+remain in its heading. Section choices, output search and reading positions stay
+in the originating browser tab, scoped to the chat, across document visits and
+Canvas hide/reopen. The overview has one bounded scroll region through Publishing;
+Outputs is not a second nested scroller. The container-header Canvas button hides
+or shows the panel without closing the selected artifact or discarding edits.
+There is no separate Back to chat control inside Canvas.
+
+The short Overview-label transition respects `prefers-reduced-motion`, including
+runtime changes. This revision has no separate app-level Less motion setting.
+
+**Focus canvas** fills the space below the container header; **Exit canvas focus** returns to the split
 layout. Escape also exits when focus is in the host UI (embedded apps may consume
 keyboard events). Resizing and focusing keep the current viewer mounted; they do
 not reload its content or reconnect its tool server. Closing or changing tabs
-still follows the viewer's normal lifecycle.
+still follows the viewer's normal lifecycle. The container-header Canvas toggle
+remains reachable in focused and narrow views. A nested dialog handles Escape
+before the focused Canvas does.
 
 All layout controls use `view.update` and are available to agents:
 

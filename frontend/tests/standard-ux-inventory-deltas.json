@@ -2336,6 +2336,75 @@
         }
       ],
       "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.canvas-chrome",
+      "sourceCommit": "274c7dff01026478de685ced242aa5cf77c85cdf",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/991",
+      "reason": "Register the maintained Canvas overview and navigation journey once in automatic source coverage; preserve existing canvas-dirty ownership and the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "canvas.overview-navigation",
+          "family": "canvas",
+          "title": "Read the full chat overview and navigate open documents without losing state or focus",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Container-header Canvas toggle",
+            "Chat overview / open documents"
+          ],
+          "prerequisites": [
+            "Built production client and isolated production-service fixture with synthetic outputs and runtime",
+            "No personal data, live provider or production settings changes"
+          ],
+          "steps": [
+            "Scroll a long Outputs list to lower overview sections and collapse/reopen sections",
+            "Scroll open document tabs while keeping Overview reachable; use the bounded Open documents list",
+            "Read version and compact document controls at wide and narrow widths",
+            "Hide/reopen Canvas and reload only after exact visibility/details receipts settle",
+            "Close a document with a held response, move Home, and retain newer focus intent",
+            "Repeat ordinary close recovery, keyboard navigation and initial/live reduced-motion settings"
+          ],
+          "expectedResults": [
+            "The bounded overview scroll region reaches the lower sections without clipping or wheel forwarding.",
+            "Overview remains visible and clickable beside native horizontally scrolling tabs; Open documents lists every open tab.",
+            "Disclosure, search, reading position and selected document state survive overview/document and panel visibility transitions.",
+            "Compact navigation and document controls remain reachable at narrow widths and layout-zoom equivalence.",
+            "Delayed accepted close cannot steal newer keyboard focus; the owning close interaction still restores focus.",
+            "Exact accepted receipts precede reload and the final HTTP audit exposes failed or unsettled actions."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "reduced-motion",
+            "delayed-receipt",
+            "reload",
+            "zoom-equivalent"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/canvas-chrome-browser.mjs",
+              "relation": "Automatic source owner canvas-chrome; owned AMPLIFIER_TEST_ARTIFACTS under output/browser-checks/canvas-chrome"
+            },
+            {
+              "path": "frontend/tests/canvas-dirty-browser.mjs",
+              "relation": "Existing independent automatic canvas-dirty owner remains unchanged"
+            },
+            {
+              "path": "scripts/canvas_qualification.py",
+              "relation": "Separate fixed manual source/installed-package qualification retains adjacent journeys and negative-control evidence"
+            }
+          ],
+          "limits": [
+            "Registration is not a new browser execution or installed-package result; exact unchanged product proof remains separately attributed.",
+            "Synthetic browser input and geometry do not establish physical touch, screen-reader, native overlay or live-provider behavior.",
+            "The OS reduced-motion preference is exercised; no separate app-level Less motion preference is introduced."
+          ]
+        }
+      ],
+      "qualification": "https://github.com/microsoft/amplifier-unified/actions/runs/39749556899"
     }
   ]
 }
