@@ -54,7 +54,8 @@ jobs:
   browser:
     if: ${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Leave setup and evidence-upload time around the unchanged 25-minute runner budget.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
