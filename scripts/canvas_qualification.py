@@ -81,7 +81,9 @@ def prepare_installed():
     wheel, = sorted((OUT / 'dist').glob('*.whl'))
     venv = OUT / 'installed-venv'
     harness = OUT / 'installed-harness'
-    subprocess.run(['uv', 'export', '--locked', '--no-dev', '--no-emit-project',
+    # The relocated synthetic Automation fixture imports the existing locked
+    # test helpers (including pytest); keep test support out of product imports.
+    subprocess.run(['uv', 'export', '--locked', '--group', 'dev', '--no-emit-project',
                     '--format', 'requirements-txt', '--output-file', str(OUT / 'requirements.txt')], cwd=ROOT, check=True)
     subprocess.run(['uv', 'venv', '--python', sys.executable, str(venv)], check=True)
     # This is the complete uv.lock export, not a list of direct requirements.
@@ -91,7 +93,7 @@ def prepare_installed():
     subprocess.run(['uv', 'pip', 'install', '--python', str(venv / 'bin/python'), '--no-deps', str(wheel)], check=True)
     subprocess.run(['uv', 'pip', 'check', '--python', str(venv / 'bin/python')], check=True)
     (harness / 'frontend').mkdir(parents=True)
-    shutil.copytree(ROOT / 'tests/fixtures', harness / 'tests/fixtures')
+    shutil.copytree(ROOT / 'tests', harness / 'tests', ignore=shutil.ignore_patterns('__pycache__'))
     shutil.copytree(ROOT / 'frontend/tests', harness / 'frontend/tests')
     shutil.copy2(ROOT / 'frontend/package.json', harness / 'frontend/package.json')
     (harness / 'frontend/node_modules').symlink_to(ROOT / 'frontend/node_modules', target_is_directory=True)
@@ -166,11 +168,11 @@ def run():
         if not stage('browser-preflight', ['node', 'tests/canvas-readiness.mjs'], seconds=30):
             raise RuntimeError('Browser unavailable')
         stage('units', ['node', '--test', *['tests/' + name for name in UNITS]], seconds=120)
-        stage('selector-contracts', [python, '-m', 'pytest', '-q',
+        stage('selector-contracts', [python, '-m', 'pytest', '-q', *[str(ROOT / target) for target in (
               'tests/test_release_qualification.py::test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate',
               'tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget',
               'tests/test_browser_check_runner.py::test_attachment_focus_workflow_retains_failures_and_default_coverage',
-              'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage'],
+              'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage')]],
               seconds=120)
         if not stage('build', ['npm', 'run', 'build'], seconds=180):
             raise RuntimeError('Production build failed')

@@ -290,7 +290,37 @@ try{
  await expect.poll(async()=>(await saved()).entries.at(-1).tab).toBe('files');
  await page.getByRole('button',{name:'preview.txt Open in “Alpha”',exact:true}).click();
  await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+ await expect.poll(async()=>{const trail=await saved();return trail.entries[trail.cursor]?.kind}).toBe('chat');
+ const beforeWorkspaceBack=await state(),beforeWorkspaceTrail=await saved(),workspaceIndex=beforeWorkspaceTrail.cursor-1;
+ assert.equal(beforeWorkspaceTrail.entries[workspaceIndex].kind,'workspace');
+ assert.equal(beforeWorkspaceTrail.entries[workspaceIndex].id,workspace.id);
+ const workspaceResponse=page.waitForResponse(response=>{
+  const request=response.request();if(request.method()!=='POST'||new URL(response.url()).pathname!=='/api/actions'||
+   request.headers()['x-amplifier-client']!==beforeWorkspaceBack.client.id)return false;
+  const command=request.postDataJSON(),patch=command.args?.patch;
+  return command.action==='view.update'&&patch?.workSurface==='workspace'&&patch.workWorkspaceId===workspace.id&&patch.workWorkspaceTab==='files';
+ });
  await back.click();await expect.poll(async()=>(await state()).view.workSurface).toBe('workspace');
+ const workspaceAccepted=await workspaceResponse,workspaceReceipt=await workspaceAccepted.json();
+ assert.ok(workspaceAccepted.request().postDataJSON().id);assert.equal(workspaceReceipt.accepted,true);
+ assert.equal(workspaceReceipt.hostInstanceId,beforeWorkspaceBack.client.hostInstanceId);
+ assert.ok(Number.isSafeInteger(workspaceReceipt.stateRevision));
+ // Optimistic workSurface is not a completed history visit. Keep the exact
+ // reload oracle, but capture its baseline after this original Back settles.
+ await expect.poll(async()=>(await saved()).cursor).toBe(workspaceIndex);
+ await expect(menu).toBeEnabled();
+ const serverWorkspace=await page.request.get(url+'/api/state?clientId='+encodeURIComponent(beforeWorkspaceBack.client.id));
+ assert.equal(serverWorkspace.status(),200);const authoritativeWorkspace=await serverWorkspace.json();
+ assert.equal(authoritativeWorkspace.client.id,beforeWorkspaceBack.client.id);
+ assert.equal(authoritativeWorkspace.client.hostInstanceId,workspaceReceipt.hostInstanceId);
+ assert.ok(authoritativeWorkspace.revision>=workspaceReceipt.stateRevision);
+ assert.equal(authoritativeWorkspace.view.workSurface,'workspace');
+ assert.equal(authoritativeWorkspace.view.workWorkspaceId,workspace.id);
+ assert.equal(authoritativeWorkspace.view.workWorkspaceTab,'files');
+ await writeFile(path.join(out,'workspace-back-before-reload.json'),JSON.stringify({
+  commandId:workspaceAccepted.request().postDataJSON().id,receipt:workspaceReceipt,
+  serverRevision:authoritativeWorkspace.revision,cursor:workspaceIndex,originalBackOnly:true
+ },null,2));
  assert.equal((await state()).view.workWorkspaceTab,'files');
  // Reload retains the exact trail but does not navigate or append on bootstrap.
  const preReload=await saved();await page.reload();await expect(menu).toBeEnabled();
