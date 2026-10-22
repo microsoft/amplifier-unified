@@ -564,7 +564,7 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
 def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['canvas-qualification']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
+    assert job['if'] == "${{ !inputs.tool_details_diagnostic && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'secrets.' not in str(job)
@@ -594,7 +594,10 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     inputs = workflow['on']['workflow_dispatch']['inputs']
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
                            'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
-                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages'}
+                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages',
+                           'tool_details_diagnostic'}
+    assert inputs['tool_details_diagnostic']['type'] == 'boolean'
+    assert inputs['tool_details_diagnostic']['default'] == 'false'
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['multi_quote']['type'] == 'boolean'
@@ -618,13 +621,25 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert inputs['compact_composer']['default'] == 'false'
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    diagnostic = workflow['jobs']['tool-details-diagnostic']
+    assert diagnostic['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.tool_details_diagnostic }}"
+    for name, existing in workflow['jobs'].items():
+        if name != 'tool-details-diagnostic':
+            assert existing['if'].startswith('${{ !inputs.tool_details_diagnostic && ')
+    commands = '\n'.join(step.get('run', '') for step in diagnostic['steps'])
+    assert '--plan output/tool-window-diagnostic/plan.json' in commands
+    assert '--budget-seconds 1500' in commands
+    assert 'scripts/diagnostics/tool_window/run.py prepare' in commands
+    assert 'scripts/diagnostics/tool_window/run.py verify' in commands
+    assert 'npm run build' not in commands
+    assert 'secrets.' not in str(diagnostic)
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.tool_details_diagnostic && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '45'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
+    assert mcp['if'] == "${{ !inputs.tool_details_diagnostic && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
-    assert history['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
+    assert history['if'] == '${{ !inputs.tool_details_diagnostic && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert history['steps'][0] == {
         'name': 'Require the fixed navigation selection for diagnostic mode',
         'if': '${{ inputs.settings_close_diagnostic && !inputs.destination_history }}',
@@ -715,7 +730,7 @@ def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'compact_composer' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['compact-composer']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
+    assert job['if'] == "${{ !inputs.tool_details_diagnostic && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
     assert job['timeout-minutes'] == '30'
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}

@@ -43,6 +43,10 @@ on:
         description: Fixed compact composer source and installed-wheel qualification
         type: boolean
         default: false
+      tool_details_diagnostic:
+        description: One unchanged tool-details journey with passive signed-window diagnostics
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -52,7 +56,7 @@ permissions:
   contents: read
 jobs:
   browser:
-    if: ${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}
+    if: ${{ !inputs.tool_details_diagnostic && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}
     runs-on: ubuntu-latest
     # Leave setup and evidence-upload time around the unchanged 25-minute runner budget.
     timeout-minutes: 45
@@ -172,7 +176,7 @@ jobs:
             output/multi-quote/
           if-no-files-found: warn
   attachment-experience:
-    if: ${{ inputs.attachment_experience }}
+    if: ${{ !inputs.tool_details_diagnostic && inputs.attachment_experience }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -304,7 +308,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
   mcp-boundary:
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ !inputs.tool_details_diagnostic && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -447,7 +451,7 @@ jobs:
           assert record['retained'] and not record['rejected'], 'MCP proof evidence incomplete'
           PY
   canvas-qualification:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}
+    if: ${{ !inputs.tool_details_diagnostic && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -489,7 +493,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
   compact-composer:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}
+    if: ${{ !inputs.tool_details_diagnostic && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -546,7 +550,7 @@ jobs:
           path: output/compact-composer/
           if-no-files-found: error
   destination-history:
-    if: ${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}
+    if: ${{ !inputs.tool_details_diagnostic && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -764,7 +768,7 @@ jobs:
             output/browser-checks/
           if-no-files-found: error
   peer-messages:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.peer_messages }}
+    if: ${{ !inputs.tool_details_diagnostic && github.event_name == 'workflow_dispatch' && inputs.peer_messages }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -800,3 +804,53 @@ jobs:
           name: peer-messages-${{ github.sha }}-${{ github.run_attempt }}
           path: output/peer-messages/
           if-no-files-found: error
+  tool-details-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tool_details_diagnostic }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject other scenario selections
+        env:
+          DIAGNOSTIC_INPUTS: ${{ toJSON(inputs) }}
+        run: python scripts/diagnostics/tool_window/run.py prepare
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev --group artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Install the locked browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Record runtime identity
+        run: uv run --no-sync python scripts/diagnostics/tool_window/run.py identity
+      - name: Run one unchanged maintained tool-details journey
+        id: scenario
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts/diagnostics/tool_window:${{ github.workspace }}
+          UNIFIED_WINDOW_BOUNDARY_TRACE: ${{ github.workspace }}/output/tool-window-diagnostic/worker-trace
+        run: >-
+          uv run --no-sync python scripts/browser_check_runner.py
+          --plan output/tool-window-diagnostic/plan.json
+          --output output/tool-window-diagnostic/browser --budget-seconds 1500
+      - name: Verify immutable inputs and retained diagnostics
+        if: always()
+        run: python scripts/diagnostics/tool_window/run.py verify
+      - name: Retain the exact single-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tool-window-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/tool-window-diagnostic/
+          if-no-files-found: error
+          retention-days: 7
