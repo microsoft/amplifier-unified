@@ -93,6 +93,8 @@ async def test_manual_execute_schema_refuses_workload_policy_overrides(app, back
 
 
 async def test_one_environment_per_root_and_no_storage_retirement_bypass(app, backend):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxEnvironmentsPerChat':1}})
     row = (await start(app))['resource']
     with pytest.raises(AppError, match='already owns'):
         await start(app, 'competing')
@@ -105,6 +107,8 @@ async def test_one_environment_per_root_and_no_storage_retirement_bypass(app, ba
 
 
 async def test_artifact_recovery_is_separate_from_removal_and_never_replays(app, backend, monkeypatch):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxEnvironmentsPerChat':1}})
     row = (await start(app))['resource']
     row = (await act(app, 'stop', row, 'stop'))['resource']
     original = owner.invoke
@@ -229,6 +233,8 @@ async def test_timeout_is_retained_unknown_and_same_request_never_runs_again(app
 
 
 async def test_refused_command_preserves_existing_environment_ownership(app, backend, monkeypatch):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxEnvironmentsPerChat':1}})
     row = (await start(app))['resource']
     monkeypatch.setattr(owner, 'invoke', lambda *args: {
         'ok': False, 'effectAdmitted': False, 'status': 'unknown',
@@ -256,6 +262,8 @@ async def test_unready_source_observation_blocks_host_execution(app, backend, mo
 
 
 async def test_start_failure_and_cleanup_failure_keep_ownership(app, backend, monkeypatch):
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxEnvironmentsPerChat':1}})
     def fail(config, home, row, action, args):
         return {'ok': action == 'prepare', 'status': 'unknown', 'universeId': 'maybe-created', 'snapshot': {},
                 'backendIdentity': {'backend': 'docker', 'daemon': 'owned-daemon'}}

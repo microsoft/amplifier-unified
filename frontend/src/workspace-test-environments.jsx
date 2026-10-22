@@ -228,7 +228,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    <details><summary>Request details</summary><pre className="a-state-view">{JSON.stringify(last,null,2)}</pre></details>
   </div>}
   <button type="button" className="a-soft" disabled={busy||!active} onClick={()=>refresh()}>Refresh test environments</button>
-  {!readOnly&&capability?.status==='ready'&&!waiting&&(capability.ownedEnvironments??rows.filter(row=>row.status!=='removed').length)<(capability.maxEnvironmentsPerChat??1)&&<form aria-label="Start test environment" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.start',{profileId:profile?.id||draft.profileId})}}>
+  {!readOnly&&capability?.status==='ready'&&!waiting&&(capability.maxEnvironmentsPerChat===0||(capability.ownedEnvironments??rows.filter(row=>row.status!=='removed').length)<(capability.maxEnvironmentsPerChat??1))&&<form aria-label="Start test environment" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.start',{profileId:profile?.id||draft.profileId})}}>
    <label htmlFor={form+'-profile'}>Environment</label><select id={form+'-profile'} disabled={blocked} value={profile?.id||draft.profileId} onChange={event=>retain({...draft,profileId:event.target.value})}>{profiles.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}</select>
    <button type="submit" className="a-soft" disabled={blocked}>Start test environment</button>
   </form>}
