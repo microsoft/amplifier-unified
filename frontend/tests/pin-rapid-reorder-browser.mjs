@@ -10,6 +10,7 @@ import {chromium,expect} from '@playwright/test';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/recent_visibility_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-pin-rapid-reorder';
 const checks=[],commands=[],errors=[];
+const negative=process.argv.includes('--negative-control');
 let browser,page,releaseReceipt;
 try{
  const boot=await new Promise((resolve,reject)=>{
@@ -76,9 +77,40 @@ try{
   checks.push({gesture:'pointer',source,target,order:expected});
  }
  assert.equal(commands.length,4);
+ // A new canonical order from another client can arrive with the old page.
+ // Moving a different row against those mismatched inputs is the old race.
+ const raceBefore=expected,clientId=(await state()).client.id,raceCount=commands.length;
+ const concurrent=[raceBefore[2],raceBefore[0],raceBefore[1],...raceBefore.slice(3)];
+ await control({holdPinsFor:clientId});
+ await other.evaluate(ids=>window.amplifier.dispatch('navigation.pinOrder',{ids}),concurrent);
+ await expect.poll(async()=>(await shellPins()).ids).toEqual(concurrent);
+ await expect.poll(async()=>(await shellPins()).pending?.status).toBe('pending');
+ assert.deepEqual((await shellPins()).items,raceBefore);
+ const raceSource=raceBefore[0],raceTarget=raceBefore[1],raceFinal=expectedMove(concurrent,raceSource,raceTarget);
+ if(negative){
+  await expect(grip(page,raceSource)).not.toHaveAttribute('aria-disabled','true');
+  await grip(page,raceSource).focus();await page.keyboard.press('ArrowDown');
+  await expect.poll(()=>commands.length).toBe(raceCount+1);
+  await expect.poll(async()=>(await state()).pinnedItemIds).toEqual(raceFinal);
+  await control({holdPinsFor:null});
+  await expect.poll(shellPins).toEqual({ids:raceFinal,items:raceFinal,pending:null});
+  const reported='Pin order was saved, but its display has not arrived. Reconnect to read the current order.';
+  await expect(alerts()).toHaveText(reported,{timeout:15000});
+  assert.equal(commands.length,raceCount+1);await expect.poll(()=>order(other)).toEqual(raceFinal);
+  await mkdir(output,{recursive:true});await page.screenshot({path:output+'/pin-race-negative.png'});
+  const result={status:'negative-control-reproduced',error:reported,canonicalOrder:raceFinal,displayOrder:(await shellPins()).items,mutations:commands.length-raceCount,checks};
+  await writeFile(output+'/pin-rapid-result.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
+ }else{
+ await expect(grip(page,raceSource)).toHaveAttribute('aria-disabled','true');
+ await grip(page,raceSource).focus();await page.keyboard.press('ArrowDown');assert.equal(commands.length,raceCount);
+ await control({holdPinsFor:null});await expect(grip(page,raceSource)).not.toHaveAttribute('aria-disabled','true');
+ await expect.poll(()=>order(page)).toEqual(concurrent);
+ await grip(page,raceSource).focus();await page.keyboard.press('ArrowDown');
+ expected=raceFinal;await settled(expected,raceSource);
+ checks.push({gesture:'keyboard',concurrentOrder:true,stalePageBlocked:true,order:expected});
  // Hold only the projected page. Receipt/context can arrive with old rows;
  // releasing the page wakes the existing owner at the same app revision.
- const clientId=(await state()).client.id,heldPageOrder=expected;
+ const heldPageOrder=expected;
  await control({holdPinsFor:clientId});
  const heldSource=expected[1],heldTarget=expected[0],heldCount=commands.length;
  expected=expectedMove(expected,heldSource,heldTarget);
@@ -126,7 +158,8 @@ try{
  await mkdir(output,{recursive:true});await page.screenshot({path:output+'/pin-rapid-desktop.png'});
  await page.reload();await expect.poll(()=>order(page)).toEqual(expected);await expect.poll(()=>order(other)).toEqual(expected);
  await expect(composer).toHaveDraft('Keep this draft through adjacent pin moves');
- await page.setViewportSize({width:390,height:844});await action('view.update',{patch:{navExpanded:true}});
+ await page.setViewportSize({width:390,height:844});
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await expect(grip(page,expected[1])).toBeVisible();
  const narrowSource=expected[1],narrowTarget=expected[0];expected=expectedMove(expected,narrowSource,narrowTarget);
  await pointerMove(narrowSource,narrowTarget);await settled(expected,narrowSource);
@@ -135,6 +168,7 @@ try{
  assert.deepEqual((await metrics()).runtimeCalls,[]);assert.deepEqual(errors,[]);
  const result={status:'passed',applicationModule:boot.applicationModule,checks,order:expected,commandCount:commands.length,runtimeCalls:[],limits:'Synthetic source host; no inference or native desktop acceptance.'};
  await writeFile(output+'/pin-rapid-result.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
+ }
 }catch(error){
  await mkdir(output,{recursive:true});if(page)await page.screenshot({path:output+'/pin-rapid-failure.png'});
  await writeFile(output+'/pin-rapid-result.json',JSON.stringify({status:'failed',error:String(error),checks,commands,errors},null,2)+'\n');throw error;
