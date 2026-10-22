@@ -10,7 +10,8 @@ from test_service import Runtime
 
 
 @pytest.mark.parametrize('compact', [False, True])
-async def test_send_receipt_observes_consumption_after_admission(authenticated_client, tmp_path, compact):
+@pytest.mark.parametrize('peer_after_completion', [False, True])
+async def test_send_receipt_observes_consumption_after_admission(authenticated_client, tmp_path, compact, peer_after_completion, monkeypatch):
     import base64
 
     class ObservedRuntime(Runtime):
@@ -36,6 +37,9 @@ async def test_send_receipt_observes_consumption_after_admission(authenticated_c
         assert response.status == 200, await response.text()
         return await response.json()
 
+    await command('peer', 'session.create', {})
+    with service.clients.bind('sender'):
+        peer = service._session()
     await command('create', 'session.create', {})
     await command('file', 'attachment.add', {'name': 'sent.txt',
                   'base64': base64.b64encode(b'Exact uploaded bytes').decode()})
@@ -43,6 +47,26 @@ async def test_send_receipt_observes_consumption_after_admission(authenticated_c
         sid = service.state['selectedSessionId']
         attachment = deepcopy(service.clients.attachments(service._session(sid))[0])
         queue = service.subscribe()
+    if peer_after_completion:
+        create_task = service._task
+
+        def task_with_peer_publication(coro):
+            first = (coro.cr_code.co_name == 'dispatch'
+                     and coro.cr_frame.f_locals.get('command_id') == 'first')
+            task = create_task(coro)
+            if first:
+                # Registered before shield's callback: this real uninterested
+                # publication runs after dispatch completes but before HTTP resumes.
+                def publish_peer(completed):
+                    if completed.cancelled() or completed.exception():
+                        return
+                    assert not service.lock.locked()
+                    peer['streaming'] = 'Unrelated peer progress'
+                    service._publish_changes(sessions={peer['id']}, detail_only=True)
+                task.add_done_callback(publish_peer)
+            return task
+
+        monkeypatch.setattr(service, '_task', task_with_peer_publication)
     try:
         args = {'sessionId': sid, 'text': 'First', 'attachmentIds': [attachment['id']]}
         receipt = await command('first', 'conversation.send', args)
@@ -60,7 +84,10 @@ async def test_send_receipt_observes_consumption_after_admission(authenticated_c
         if compact:
             assert 'state' not in receipt
             assert receipt['stateRevision'] > receipt['revision']
+            assert receipt['stateRevision'] in {frame['revision'] for frame in frames}, 'Receipt must name a frame emitted to the sender, not unrelated peer progress'
             observed = next(frame for frame in frames if frame['revision'] == receipt['stateRevision'])
+            if peer_after_completion:
+                assert service._state['revision'] > receipt['stateRevision']
         else:
             assert 'stateRevision' not in receipt
             observed = receipt['state']
@@ -70,6 +97,9 @@ async def test_send_receipt_observes_consumption_after_admission(authenticated_c
         assert sent['delivery']['status'] == 'accepted' and sent['attachments'] == [attachment]
         duplicate = await command('first', 'conversation.send', args)
         assert duplicate['duplicate'] and duplicate['revision'] == receipt['revision']
+        if compact:
+            assert duplicate['stateRevision'] == receipt['stateRevision']
+        assert '_deliveryStateRevision' not in receipt and '_deliveryStateRevision' not in duplicate
         assert len(runtime.sent) == 1
         second = await command('second', 'conversation.send', {'sessionId': sid, 'text': 'Adjacent cycle'})
         assert second['delivery'] == 'accepted' and len(runtime.sent) == 2
@@ -80,6 +110,213 @@ async def test_send_receipt_observes_consumption_after_admission(authenticated_c
         assert (await rejected.json())['error'] == 'An attachment is no longer in this draft. Refresh and retry.'
         assert len(runtime.sent) == 2
     finally:
+        service.unsubscribe(queue)
+
+
+@pytest.mark.parametrize('evidence', ['runtime.delivery', 'input.delivered'])
+@pytest.mark.parametrize('rollback', [False, True])
+async def test_duplicate_send_keeps_early_consumption_revision(authenticated_client, tmp_path, evidence, rollback, monkeypatch):
+    import base64
+
+    class EarlyRuntime(Runtime):
+        def __init__(self):
+            super().__init__()
+            self.accepted, self.release = asyncio.Event(), asyncio.Event()
+
+        async def send(self, session, text, input_id, emit):
+            self.sent.append(input_id)
+            if evidence == 'runtime.delivery':
+                event = (evidence, {'sessionId': session['id'], 'inputId': input_id, 'delivery': 'accepted'})
+            else:
+                from amplifier_web.runtime import normalize_event
+                event = normalize_event({'type': evidence, 'input_id': input_id}, session['id'], input_id)
+            if rollback:
+                from amplifier_web import state_records
+                save = state_records.save_working
+                before = service._state['revision']
+
+                def fail_commit(*args, **kwargs):
+                    save(*args, **kwargs)
+                    raise OSError('Controlled publication failure')
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(state_records, 'save_working', fail_commit)
+                    with pytest.raises(OSError, match='Controlled publication failure'):
+                        await emit(*event)
+                durable = json.loads(service.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()[0])
+                assert durable['delivery'] == 'sending' and '_deliveryStateRevision' not in durable
+                assert service._state['revision'] == before
+            await emit(*event)
+            self.acceptance_revision = service._state['revision']
+            self.accepted.set()
+            await self.release.wait()
+
+        async def close(self):
+            self.release.set()
+
+    runtime = EarlyRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.history.close()
+    await service.event_log_view.close()
+    client = await authenticated_client(app)
+    await client.post('/api/clients/attach', json={'clientId': 'sender'})
+    headers = {'X-Amplifier-Client': 'sender', 'X-Amplifier-State-Transport': 'delta-v1'}
+
+    async def command(identity, action, args):
+        response = await client.post('/api/actions', headers=headers,
+                                     json={'id': identity, 'action': action, 'args': args})
+        assert response.status == 200, await response.text()
+        return await response.json()
+
+    await command('peer', 'session.create', {})
+    with service.clients.bind('sender'):
+        peer = service._session()
+    await command('create', 'session.create', {})
+    await command('file', 'attachment.add', {'name': 'sent.txt', 'base64': base64.b64encode(b'Exact').decode()})
+    with service.clients.bind('sender'):
+        sid = service.state['selectedSessionId']
+        file_id = service.clients.attachments(service._session(sid))[0]['id']
+        queue = service.subscribe()
+    args = {'sessionId': sid, 'text': 'First', 'attachmentIds': [file_id]}
+    pending = asyncio.create_task(command('first', 'conversation.send', args))
+    try:
+        await asyncio.wait_for(runtime.accepted.wait(), 5)
+        assert not pending.done(), 'Early acceptance must precede the original RPC response'
+        async with service.lock:
+            peer['streaming'] = 'Unrelated progress after acceptance'
+            service._publish_changes(sessions={peer['id']}, detail_only=True)
+        duplicate = await command('first', 'conversation.send', args)
+        assert duplicate['duplicate'] and duplicate['delivery'] == 'accepted'
+        assert duplicate['stateRevision'] == runtime.acceptance_revision
+        assert duplicate['revision'] < duplicate['stateRevision'] < service._state['revision']
+        assert runtime.sent == ['first'] and not pending.done()
+        frames = []
+        while not queue.empty():
+            frame = queue.get_nowait()
+            if 'shellClientId' not in frame:
+                frames.append(frame)
+        observed = next(frame for frame in frames if frame['revision'] == duplicate['stateRevision'])
+        row = next(row for row in observed['sessions'] if row['id'] == sid)
+        assert row['draftAttachments'] == []
+        assert next(row for row in row['messages'] if row.get('inputId') == 'first')['delivery']['status'] == 'accepted'
+        runtime.release.set()
+        original = await asyncio.wait_for(pending, 5)
+        assert original['stateRevision'] == duplicate['stateRevision']
+        assert original['revision'] == duplicate['revision'] and runtime.sent == ['first']
+        assert '_deliveryStateRevision' not in original and '_deliveryStateRevision' not in duplicate
+    finally:
+        runtime.release.set()
+        await asyncio.wait_for(pending, 5)
+        service.unsubscribe(queue)
+    await client.close()
+    restored_runtime = Runtime()
+    restored = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                                runtime=restored_runtime, voice=False, background_updates=False)
+    client = await authenticated_client(restored)
+    await client.post('/api/clients/attach', json={'clientId': 'sender'})
+    replay = await command('first', 'conversation.send', args)
+    assert replay['duplicate'] and replay['delivery'] == 'accepted'
+    assert replay['revision'] == original['revision'] and replay['stateRevision'] == original['stateRevision']
+    assert restored_runtime.sent == []
+
+
+@pytest.mark.parametrize('disposition', ['queued', 'applied', 'next_turn', 'early-applied', 'held', 'unknown'])
+async def test_steering_receipt_observes_exact_attachment_consumption(authenticated_client, tmp_path, disposition):
+    import base64
+    from amplifier_web.execution import ensure_turn
+
+    class SteeringRuntime(Runtime):
+        def __init__(self):
+            super().__init__()
+            self.observed, self.release = asyncio.Event(), asyncio.Event()
+
+        async def steer(self, session, text, input_id, emit):
+            self.sent.append(input_id)
+            if disposition == 'unknown':
+                raise TimeoutError('Controlled lost acknowledgement')
+            if disposition == 'early-applied':
+                await emit('runtime.steering', {'sessionId': session['id'], 'input_id': input_id,
+                    'target_generation_id': 'generation', 'event': 'steering.applied'})
+                self.acceptance_revision = service._state['revision']
+                self.observed.set()
+                await self.release.wait()
+                return {'accepted': True, 'disposition': 'queued'}
+            return {'accepted': disposition not in {'held', 'unknown'}, 'disposition': disposition}
+
+        async def close(self):
+            self.release.set()
+
+    runtime = SteeringRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.history.close()
+    await service.event_log_view.close()
+    client = await authenticated_client(app)
+    await client.post('/api/clients/attach', json={'clientId': 'sender'})
+    headers = {'X-Amplifier-Client': 'sender', 'X-Amplifier-State-Transport': 'delta-v1'}
+
+    async def command(identity, action, args):
+        response = await client.post('/api/actions', headers=headers,
+                                    json={'id': identity, 'action': action, 'args': args})
+        assert response.status == 200, await response.text()
+        return await response.json()
+
+    await command('create', 'session.create', {})
+    await command('file', 'attachment.add', {'name': 'steered.txt', 'base64': base64.b64encode(b'Exact').decode()})
+    with service.clients.bind('sender'):
+        session = service._session()
+        sid = session['id']
+        attachment = deepcopy(service.clients.attachments(session)[0])
+        session['status'] = 'working'
+        ensure_turn(session, 'original', 'Original task')
+    await service.on_runtime_event('runtime.generation', {'sessionId': sid,
+        'event': 'generation.started', 'generation_id': 'generation', 'initial_input_id': 'original'})
+    with service.clients.bind('sender'):
+        queue = service.subscribe()
+    args = {'sessionId': sid, 'text': 'Correction', 'expectedGenerationId': 'generation',
+            'allowNextTurn': True, 'attachmentIds': [attachment['id']]}
+    pending = asyncio.create_task(command('correction', 'conversation.send', args))
+    try:
+        if disposition == 'early-applied':
+            await asyncio.wait_for(runtime.observed.wait(), 5)
+            assert not pending.done()
+            receipt = await command('correction', 'conversation.send', args)
+            assert receipt['duplicate'] and receipt['stateRevision'] == runtime.acceptance_revision
+        else:
+            receipt = await asyncio.wait_for(asyncio.shield(pending), 5)
+        frames = []
+        while not queue.empty():
+            frame = queue.get_nowait()
+            if 'shellClientId' not in frame:
+                frames.append(frame)
+        positive = disposition not in {'held', 'unknown'}
+        durable = json.loads(service.db.execute('SELECT receipt FROM commands WHERE id=?', ('correction',)).fetchone()[0])
+        if positive:
+            assert receipt['delivery'] == 'accepted' and receipt['stateRevision'] > receipt['revision']
+            observed = next(frame for frame in frames if frame['revision'] == receipt['stateRevision'])
+            row = next(row for row in observed['sessions'] if row['id'] == sid)
+            assert row['draftAttachments'] == []
+            sent = next(row for row in row['messages'] if row.get('inputId') == 'correction')
+            assert sent['delivery']['status'] == 'accepted' and sent['attachments'] == [attachment]
+            assert durable['_deliveryStateRevision'] == receipt['stateRevision']
+        else:
+            assert receipt['delivery'] == ('failed' if disposition == 'held' else 'unknown')
+            assert '_deliveryStateRevision' not in durable
+            with service.clients.bind('sender'):
+                assert service.clients.attachments(session) == [attachment]
+        runtime.release.set()
+        original = await asyncio.wait_for(pending, 5)
+        duplicate = await command('correction', 'conversation.send', args)
+        assert original['stateRevision'] == duplicate['stateRevision'] == receipt['stateRevision']
+        assert original['steering']['disposition'] == ('applied' if disposition == 'early-applied' else disposition)
+        assert '_deliveryStateRevision' not in original and '_deliveryStateRevision' not in duplicate
+        assert runtime.sent == ['correction'] and session['execution']['currentTurnId'] == 'original'
+    finally:
+        runtime.release.set()
+        await asyncio.wait_for(pending, 5)
         service.unsubscribe(queue)
 
 
