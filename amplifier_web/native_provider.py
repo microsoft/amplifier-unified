@@ -30,7 +30,7 @@ class NativeProviderHost:
                     if row.get("outcome") in {"submitting", "sent", "running", "pending"}:
                         row["outcome"] = "unknown"
                         changed = True
-                if self.state.get("outcome") in {"submitting", "running", "pending"}:
+                if self.state.get("outcome") in {"submitting", "sent", "running", "pending"}:
                     self.state["outcome"] = "unknown"
                     self.state["reason"] = "Host restarted without a terminal provider receipt; no work was replayed."
                     changed = True
@@ -47,6 +47,9 @@ class NativeProviderHost:
         This consumes receipts, not Work applicability or effect permission.
         The caller supplies its actual host identities, never model arguments.
         Legacy installation stays unchanged until its admission owner opts in.
+        Route submitting/not_sent to their exact operation binding. Keep each
+        live binding for later phases; non-owned phases are observation no-ops,
+        not permission to replace a parent's sink with a steer's callback.
         """
         if any(not isinstance(value, str) or not value or len(value) > 200
                for value in (attempt_id, generation_id, admitted_call_id)):
@@ -124,6 +127,11 @@ class NativeProviderHost:
                           "native.outcome_unknown": "unknown", "steering.accepted": "pending",
                           "steering.applied": "applied", "steering.failed": "failed"}
                 if kind in phases:
+                    if not owned:
+                        # One provider emits interleaved create/steer phases.
+                        # A receipt consumer must not destroy another operation's
+                        # terminal response. Its original owner still observes it.
+                        return
                     if kind != "native.outcome_unknown" and len(owned) != 1:
                         raise ValueError("Native phase lacks an exact unresolved send")
                     response = data.get("response_id")
@@ -153,12 +161,22 @@ class NativeProviderHost:
                     for row in owned:
                         if kind == "native.response.created":
                             row["currentResponseId"] = response
-                        row["outcome"] = ("pending" if kind == "native.completed"
-                                          and data.get("pending_steering") else phases[kind])
+                        row["outcome"] = phases[kind]
+                        if kind == "native.outcome_unknown":
+                            reason = data.get("reason")
+                            # Upstream also supplies exception class names. Do
+                            # not publish arbitrary callback or exception text.
+                            row["reason"] = reason if reason in (
+                                "steer_send", "cancelled", "connection_closed",
+                                "pending_connection_closed") else "transport_unknown"
                         row["updatedAt"] = time.time()
                     if (kind.startswith("native.") and state.get("requestId") == attempt_id
                             and state.get("admittedCallId") == admitted_call_id and owned):
-                        state["outcome"] = owned[0]["outcome"]
+                        # The create operation is terminal even when a distinct
+                        # steer still needs a successor. Keep that uncertainty in
+                        # the logical summary and the steer's own receipt only.
+                        state["outcome"] = ("pending" if kind == "native.completed"
+                                            and data.get("pending_steering") else owned[0]["outcome"])
                         if kind in {"native.response.created", "native.completed"}:
                             state["responseId"] = data.get("response_id")
             # Only bounded identity/phase metadata; never payload or arbitrary

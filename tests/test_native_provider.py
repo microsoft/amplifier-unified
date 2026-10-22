@@ -224,6 +224,27 @@ async def test_bound_send_rejects_new_submission_after_generation_change(tmp_pat
     assert not host.path.exists()
 
 
+async def test_restart_after_send_before_response_is_unknown_and_blocks_transport(tmp_path, monkeypatch):
+    from amplifier_module_provider_openai import OpenAIProvider
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    c = Coordinator(OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'}))
+    host = NativeProviderHost(c, c.loop, tmp_path / 'sessions' / c.session_id)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget')
+    await callback('native.submitting', send_record())
+    await callback('native.request', {})
+    assert host.state['outcome'] == 'sent'
+    # Reinstall simulates a fresh host over exactly the same durable record.
+    c.caps.pop('web.native_provider')
+    await install_native(c.loop, c, c.providers)
+    restored = c.get_capability('web.native_provider')
+    assert restored.status()['receipt']['outcome'] == 'unknown'
+    assert restored.state['sends'][0]['outcome'] == 'unknown'
+    assert restored.provider.request_uncertain is True
+
+
 @pytest.mark.parametrize('operation', ['response.create', 'response.steer'])
 @pytest.mark.parametrize('ending', ['prepare_reject', 'final_reject', 'cancel', 'send_error', 'ignored_terminal'])
 async def test_real_native_unsent_callback_reaches_bound_host_disk(tmp_path, monkeypatch, operation, ending):
@@ -281,6 +302,11 @@ async def test_real_native_unsent_callback_reaches_bound_host_disk(tmp_path, mon
     if ending == 'send_error':
         socket.send.assert_awaited_once()
         assert 'native.not_sent' not in observed
+        if operation == 'response.steer':
+            assert 'native.outcome_unknown' in observed
+            assert native._observer_failure is None
+            assert host.state['sends'][0]['outcome'] == 'unknown'
+            assert host.state['sends'][0]['reason'] == 'steer_send'
     else:
         socket.send.assert_not_awaited()
         assert observed.count('native.not_sent') == 1
@@ -348,7 +374,7 @@ async def test_native_completion_requires_observed_response_and_typed_terminal(t
     assert host.path.read_bytes() == before
 
 
-@pytest.mark.parametrize('resolution', ['applied', 'failed'])
+@pytest.mark.parametrize('resolution', ['applied', 'failed', 'accepted_failed'])
 async def test_sent_steering_resolution_survives_restart_without_changing_parent(tmp_path, resolution):
     c = Coordinator(fake())
     host = NativeProviderHost(c, c.loop, tmp_path)
@@ -359,15 +385,129 @@ async def test_sent_steering_resolution_survives_restart_without_changing_parent
     record = send_record('response.steer')
     await callback('native.submitting', record)
     await callback('steering.sent', {'input_id': 'input-one', 'response_id': 'parent'})
-    if resolution == 'applied':
+    if resolution in {'applied', 'accepted_failed'}:
         await callback('steering.accepted', {
             'input_id': 'input-one', 'response_id': 'parent', 'steer_id': 'steer-one'})
+    if resolution == 'applied':
         await callback('steering.applied', {
             'input_id': 'input-one', 'response_id': 'successor', 'steer_id': 'steer-one'})
     else:
         await callback('steering.failed', {'input_id': 'input-one'})
     assert host.state['outcome'] == 'running' and host.state['requestId'] == 'parent-attempt'
-    assert NativeProviderHost(c, c.loop, tmp_path).state['sends'][0]['outcome'] == resolution
+    expected = 'failed' if resolution == 'accepted_failed' else resolution
+    assert NativeProviderHost(c, c.loop, tmp_path).state['sends'][0]['outcome'] == expected
+
+
+async def test_completed_create_is_terminal_even_with_pending_steering(tmp_path):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget')
+    await callback('native.submitting', send_record())
+    await callback('native.response.created', {'response_id': 'parent'})
+    await callback('native.completed', {'response_id': 'parent', 'pending_steering': True})
+    assert host.state['outcome'] == 'pending'  # Logical continuation remains unresolved.
+    assert host.state['sends'][0]['outcome'] == 'completed'  # This create did finish.
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert restored.state['outcome'] == 'unknown'
+    assert restored.state['sends'][0]['outcome'] == 'completed'
+
+
+@pytest.mark.parametrize('free_terminal', [False, True])
+async def test_receipt_capacity_never_evicts_unknown_sends(tmp_path, monkeypatch, free_terminal):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    monkeypatch.setattr(host, 'save', lambda: None)  # Exercise the in-memory bound without disk churn.
+    for index in range(128):
+        callback = host.bind_send_lifecycle(
+            attempt_id=f'attempt-{index}', generation_id='generation-1', admitted_call_id=f'budget-{index}')
+        await callback('native.submitting', send_record(send_id=f'send-{index}'))
+        if index == 0 and free_terminal:
+            await callback('native.response.created', {'response_id': 'parent'})
+            await callback('native.completed', {'response_id': 'parent', 'pending_steering': True})
+        else:
+            await callback('native.outcome_unknown', {'reason': 'connection_closed'})
+    before = copy.deepcopy(host.state)
+    callback = host.bind_send_lifecycle(
+        attempt_id='new-attempt', generation_id='generation-1', admitted_call_id='new-budget')
+    if not free_terminal:
+        with pytest.raises(ValueError, match='capacity'):
+            await callback('native.submitting', send_record(send_id='new-send'))
+        assert host.state == before
+    else:
+        await callback('native.submitting', send_record(send_id='new-send'))
+        assert len(host.state['sends']) == 128
+        assert host.state['sends'][:-1] == before['sends'][1:]
+        assert host.state['sends'][-1]['send_id'] == 'new-send'
+
+
+async def test_real_parent_completion_survives_overlapping_steer_preparation(tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_module_provider_openai import OpenAIProvider
+    from amplifier_module_provider_openai.native import NativeSendAdmission
+    from amplifier_core.llm_errors import LLMError
+    from websockets.protocol import State
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    c = Coordinator(OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'}))
+    await install_native(c.loop, c, c.providers)
+    host = c.get_capability('web.native_provider')
+    native = host.provider
+    parent = host.bind_send_lifecycle(
+        attempt_id='parent-attempt', generation_id='generation-1', admitted_call_id='parent-budget')
+    steer = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='steer-budget')
+    parent_created, preparing, resume = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def lifecycle(kind, data):
+        if kind in {'native.submitting', 'native.not_sent'}:
+            await (parent if data['operation'] == 'response.create' else steer)(kind, data)
+        else:
+            # Keep both original bindings: the steer must not replace the parent's sink.
+            await steer(kind, data)
+            await parent(kind, data)
+        if kind == 'native.response.created':
+            parent_created.set()
+
+    async def prepare(kind, *, input_id):
+        if kind == 'response.steer':
+            preparing.set()
+            await resume.wait()
+        return NativeSendAdmission(
+            attempt_id='parent-attempt' if kind == 'response.create' else 'steer-attempt',
+            admit=lambda envelope: True)
+
+    events = asyncio.Queue()
+    native.lifecycle, native.prepare_send = lifecycle, prepare
+    native.owner = SimpleNamespace(
+        config={}, runtime=SimpleNamespace(emit=AsyncMock()), _text=lambda command: 'Synthetic steer')
+    native._connect = AsyncMock()
+    socket = SimpleNamespace(state=State.OPEN, send=AsyncMock(), close=AsyncMock(), recv=events.get)
+    native.socket = socket
+    await events.put(json.dumps({'type': 'response.created', 'response': {'id': 'parent'}}))
+    parent_task = asyncio.create_task(native._native_response({'input': []}))
+    steer_task = None
+    try:
+        await asyncio.wait_for(parent_created.wait(), 1)
+        steer_task = asyncio.create_task(native.steer_live(SimpleNamespace(id='input-one')))
+        await asyncio.wait_for(preparing.wait(), 1)
+        await events.put(json.dumps({'type': 'response.completed', 'response': {
+            'id': 'parent', 'status': 'completed', 'output': [], 'usage': {}}}))
+        await asyncio.wait_for(parent_task, 1)
+        assert host.state['outcome'] == 'completed'
+        resume.set()
+        with pytest.raises(LLMError):
+            await asyncio.wait_for(steer_task, 1)  # Parent finished: the stale steer is not sent.
+        assert socket.send.await_count == 1
+        assert [row['outcome'] for row in host.state['sends']] == ['completed', 'not_sent']
+        assert host.state['outcome'] == 'completed' and native._observer_failure is None
+    finally:
+        for task in (parent_task, steer_task):
+            if task and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
