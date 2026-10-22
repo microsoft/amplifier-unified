@@ -63,7 +63,7 @@
 @media(pointer:coarse),(max-width:760px){
  #amp-one.a-approachable-shell .a-destination-history>.a-icon{width:44px;min-width:44px;height:44px}
  #amp-one.a-approachable-shell .a-work-header{gap:4px}
- #amp-one.a-approachable-shell .a-work-heading .a-work-crumb,#amp-one.a-approachable-shell .a-work-heading>.a-work-crumb+svg{display:none}
+ #amp-one.a-approachable-shell .a-work-heading .a-work-crumb:not(.a-work-home-crumb),#amp-one.a-approachable-shell .a-work-heading>.a-work-crumb+svg{display:none}
 }
 #amp-one.a-approachable-shell .a-work-menu-items{position:absolute;right:0;top:calc(100% + 8px);z-index:85;padding:7px;min-width:220px;border:1px solid var(--a-line);border-radius:12px;background:var(--a-surface);box-shadow:0 12px 36px #0003;color:var(--a-ink)}
 #amp-one.a-approachable-shell .a-work-menu-items>button{display:flex;align-items:center;justify-content:flex-start;gap:11px;width:100%;padding:11px 10px;text-align:left;background:none;border:0;border-radius:7px;font-size:14px;color:inherit}

@@ -10,7 +10,7 @@ const sameRoute=(a,b)=>a===null&&b===null||sameDestination(a,b)&&(a.tab||null)==
 export function destination(state){
   const view=state?.view||{},surface=view.workSurface||'chat';
   if(surface==='home')return {kind:'home',label:'Home'};
-  if(surface==='workspaces')return {kind:'workspaces',label:'All projects'};
+  if(surface==='workspaces')return {kind:'workspaces',label:'All workspaces'};
   if(surface==='chats')return {kind:'chats',label:'Search chats'};
   if(surface==='workspace'){
     const identity=id(view.workWorkspaceId);if(!identity)return null;

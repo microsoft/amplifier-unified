@@ -29,11 +29,12 @@ not a separate saved return target.
 ### Explicit Back/Forward history
 
 Header Back and Forward traverse this tab's last 30 visited destinations:
-Home, saved chats, workspace pages, All projects and Search chats. The History button
+Home, saved chats, workspace pages, All workspaces and Search chats. The History button
 opens one list; mouse/pen holding an arrow for 450 ms opens the same list without
 also navigating. Touch uses the visible 44 px button. Keyboard users can open
 the list with Enter or Arrow Down, move with arrows/Home/End, and dismiss with
-Escape. This is explicit navigation, not restoration of the removed remembered-
+Escape. Header Home remains available on wide touch screens as well as narrow
+screens and mouse/keyboard clients. This is explicit navigation, not restoration of the removed remembered-
 chat banner or Escape-to-chat behavior; native browser Back/Forward is unchanged.
 
 Entries contain only typed IDs, bounded labels, workspace tabs and visit keys.

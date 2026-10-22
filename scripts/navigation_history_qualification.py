@@ -133,6 +133,13 @@ def main():
             assert cases and all(not any(case.find(tag) is not None for tag in ("skipped", "failure", "error")) for case in cases)
             run("installed-browser", ["node", "tests/destination-history-browser.mjs"],
                 cwd=harness / "frontend", env=env)
+            for folder in (ROOT / "output/browser-checks/destination-history", OUTPUT / "installed-browser"):
+                touch = json.loads((folder / "wide-touch-home.json").read_text())
+                assert touch["passed"] and touch["input"] == {"width": 1024, "coarse": True}
+                assert all(touch[key] for key in ("oldSelectorRejected", "restoredVisible",
+                                                 "keyboardHome", "tapHome", "allWorkspacesLabel"))
+                assert touch["pageErrors"] == [] and touch["box"]["width"] >= 44 and touch["box"]["height"] >= 44
+            result["checks"]["wideTouchHome"] = "source and installed positive, old-selector rejection, keyboard and tap"
             verify()
             result["checks"]["installedWheel"] = {"payloadsVerifiedBeforeAfter": len(expected),
                 "staticFiles": sum(name.startswith("amplifier_web/static/") for name in expected),
