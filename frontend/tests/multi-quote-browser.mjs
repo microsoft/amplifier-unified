@@ -137,7 +137,7 @@ async function expectCompact(stage){
  if(proof)writeFileSync(join(proof,'compact-quote-geometry.json'),JSON.stringify(compactGeometry,null,2));
  assert.ok(geometry.quoteCount>=2,'Real immutable quotes belong inside the compact writing wrapper');
  assert.ok(geometry.editor.width>=geometry.surface.width-40,'Quotes use the full compact writing width');
- assert.ok(geometry.editor.height<=Math.min(400,geometry.viewportHeight*.45)+1,'Long quote drafts retain a viewport-bounded editor height');
+ assert.ok(geometry.editor.height<=Math.min(400,geometry.viewportHeight*.35)+1,'Long quote drafts retain a viewport-bounded editor height');
  if(geometry.editorScrollHeight>181)assert.ok(geometry.editor.height>181,'Overflowing quote drafts gain real reading space beyond the plain editor cap');
  assert.ok(geometry.messages.height>=80,'The conversation remains usable above the expanded quote editor');
  assert.equal(geometry.overflow,false,'Compact quote surface must not overflow');
@@ -504,7 +504,10 @@ try{
   referenceContext.setDefaultTimeout(10000);
   const referencePage=await referenceContext.newPage();
   await referencePage.route('**/*',route=>route.abort());
-  await referencePage.routeWebSocket('**/*',socket=>socket.close());
+  const blockedSockets=[];
+  // Routed sockets have no server connection unless connectToServer is called.
+  // Close every attempted socket, including the controlled probe below.
+  await referencePage.routeWebSocket('**/*',socket=>{blockedSockets.push(socket.url());socket.close();});
   stage('sandbox document');
   await referencePage.setContent(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src about: 'self'; base-uri 'none'; form-action 'none'"><iframe id="reference" sandbox="allow-scripts" style="border:0;width:100%;height:1200px"></iframe>`);
   await referencePage.locator('iframe').evaluate((node,html)=>{
@@ -524,8 +527,12 @@ try{
    try{const socket=new WebSocket(socketUrl);socket.onerror=()=>{};}
    catch(error){window.referenceSocketError=error.message;}
   },url.replace('http:','ws:')+'/blocked-reference-check');
-  await expect.poll(()=>reference.locator('#editor').evaluate(()=>window.referenceViolations)).toContain('connect-src');
-  writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify(await reference.locator('#editor').evaluate(()=>({violations:window.referenceViolations,error:window.referenceSocketError})),null,2));
+  // Routing can reject before CSP dispatches a violation event. Observe the
+  // effective blocker, not an assumed order between two independent guards.
+  const socketProbe=url.replace('http:','ws:')+'/blocked-reference-check';
+  await expect.poll(async()=>blockedSockets.includes(socketProbe)||(await reference.locator('#editor').evaluate(()=>window.referenceViolations)).includes('connect-src')).toBe(true);
+  writeFileSync(join(proof,'reference-sandbox.json'),JSON.stringify({blockedSockets,webSocketRoute:'closes without connectToServer; no forwarding configured',
+   ...await reference.locator('#editor').evaluate(()=>({violations:window.referenceViolations,error:window.referenceSocketError,policy:document.querySelector('meta[http-equiv="Content-Security-Policy"]').content}))},null,2));
   stage('sample sources');
   const specimen=await reference.locator('#editor').evaluate(()=>({sources:sources(),blocks:draft().blocks}));
   const seeded=await context.request.post(url+'/fixture/quote-comparison',{data:specimen.sources.map(source=>({role:source.role,text:source.text}))});

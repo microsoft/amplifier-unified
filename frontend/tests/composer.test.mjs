@@ -19,7 +19,7 @@ test('composer starts compact, expands with content, and scrolls only at its bou
 test('quote drafts have a viewport-bounded reading area without enlarging plain drafts',()=>{
  let quote=true;
  const element={style:{},hasAttribute:()=>true,querySelector:()=>quote?{}:null};
- resizeComposer(element);assert.equal(element.style.maxHeight,'min(400px, 45dvh)');assert.equal(element.style.overflowY,'auto');
+ resizeComposer(element);assert.equal(element.style.maxHeight,'min(400px, 35dvh)');assert.equal(element.style.overflowY,'auto');
  quote=false;resizeComposer(element);assert.equal(element.style.maxHeight,'180px');
 });
 
