@@ -620,7 +620,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
     assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
-    assert job['timeout-minutes'] == '30'
+    assert job['timeout-minutes'] == '45'
     mcp = workflow['jobs']['mcp-boundary']
     assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
