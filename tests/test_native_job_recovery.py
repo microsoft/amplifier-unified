@@ -56,11 +56,15 @@ async def native_host(tmp_path, monkeypatch):
     loop.tools = coordinator.get("tools")
     loop.hooks = coordinator.hooks
     loop.runtime = Runtime(session_id=coordinator.session_id)
+    loop.runtime.generation = {"id": "native-recovery-generation", "input_ids": ["native-recovery-input"]}
     coordinator.register_capability("live.runtime", loop.runtime)
     ledger = JobStore(tmp_path / "jobs")
     coordinator.register_capability("live.jobs", ledger)
     await install_native(loop, coordinator, coordinator.get("providers"))
     native = coordinator.get_capability("web.native_provider").provider
+    from amplifier_web.execution_events import ExecutionEvents
+    telemetry = ExecutionEvents(coordinator.session_id, lambda event: None)
+    selected.execution_adapter = lambda provider: telemetry.instrument_provider(coordinator.session_id, provider)
     # The real serializer and native frame processor run; no SDK/network call can.
     client = SimpleNamespace()
     client.with_options = lambda **kwargs: client
