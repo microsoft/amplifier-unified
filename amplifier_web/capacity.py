@@ -213,11 +213,13 @@ class CapacityController:
         if not result['allowed'] and result.get('state') == 'wait_expired':
             # No provider call was made. A bounded queue expiry is not a saved
             # cumulative budget pause and must not poison later continuation.
-            raise TimeoutError('; '.join(result['reasons']))
+            from .model_admission import ModelAdmissionWaitExpired
+            raise ModelAdmissionWaitExpired('; '.join(result['reasons']))
         if not result['allowed']:
             self.last_denial = {**result, 'at': time.time(), 'callId': row['id']}
             self.controls.persist(task_only=True)
-            raise ValueError('Task budget paused future model calls: ' + '; '.join(result['reasons']))
+            from .model_admission import ModelAdmissionPaused
+            raise ModelAdmissionPaused('Task budget paused future model calls: ' + '; '.join(result['reasons']))
 
     async def quota(self):
         rows = []
