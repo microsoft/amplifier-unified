@@ -5,11 +5,12 @@ import {DetailText,readDetail} from './conversation-detail';
 import {usePanelLayout,PaneResizer} from './panel-layout';
 import {useModalFocus} from './responsive-navigation';
 import {messageTime} from './message-time';
+import {Markdown} from './markdown';
 import './peer-preview.css';
 
 export function usePeerPreview(state,dispatch){
  const [active,setActive]=useState(null),intent=useRef(0),current=useRef(state);current.current=state;
- useEffect(()=>{intent.current++;setActive(null)},[state?.selectedSessionId]);
+ useEffect(()=>{intent.current++;setActive(null)},[state?.selectedSessionId,state?.canvas?.id,state?.canvas?.selectedVersion,state?.view?.workSurface]);
  const close=useCallback(()=>{intent.current++;setActive(null)},[]);
  const open=useCallback(async({peer,sourceSessionId,messageId})=>{
   const token=++intent.current,trigger=document.activeElement;
@@ -20,18 +21,25 @@ export function usePeerPreview(state,dispatch){
  },[dispatch]);
  return {active:active?.sourceSessionId===state?.selectedSessionId?active:null,open,close};
 }
-function PreviewMessage({message}){
- const [error,setError]=useState(''),[copied,setCopied]=useState(false),[copying,setCopying]=useState(false);
+function PreviewMessage({message,proof,onUnavailable}){
+ const [error,setError]=useState(''),[copied,setCopied]=useState(false),[copying,setCopying]=useState(false),[loaded,setLoaded]=useState(null),[loading,setLoading]=useState(false);
+ const contentKey=message.textDetail?.digest||message.text,current=useRef(contentKey);current.current=contentKey;
+ const full=loaded?.key===contentKey?loaded.value:null;
  const date=message.timestampKnown!==false&&Number.isFinite(message.createdAt)?messageTime(message.createdAt):null;
- async function copy(){setCopying(true);setError('');try{const text=message.textDetail?await readDetail(message.textDetail):message.text||'';await navigator.clipboard.writeText(text);setCopied(true)}catch(e){setError(e.message)}finally{setCopying(false)}}
+ async function text(){await request('/api/peer/preview?'+new URLSearchParams({proof,metadata:'true'}));return message.textDetail?await readDetail(message.textDetail):message.text||''}
+ function failed(e){setError(e.message);if([403,404].includes(e.status))onUnavailable(e)}
+ async function copy(){setCopying(true);setError('');try{await navigator.clipboard.writeText(await text());setCopied(true)}catch(e){failed(e)}finally{setCopying(false)}}
+ async function load(){const key=contentKey;setLoading(true);setError('');try{const value=await text();if(current.current===key)setLoaded({key,value})}catch(e){failed(e)}finally{setLoading(false)}}
  return <article data-preview-message-id={message.id} className="a-peer-preview-message"><header>{message.attribution?.caption||(message.role==='assistant'?'Amplifier':message.inputOrigin==='peer'?'Peer message':'User')} {date&&<time dateTime={date.iso} title={date.full}>{date.text}</time>}</header>
-  <DetailText text={message.text||''} reference={message.textDetail} markdown userContent/>
+  <Markdown text={full??message.text??''} userContent/>
+  {message.textDetail&&full===null&&<button type="button" className="a-link" disabled={loading} onClick={load}>{loading?'Loading full text…':'Show full text'}</button>}
   <div className="a-message-actions"><button className="a-icon" type="button" aria-label="Copy preview original as Markdown" disabled={copying} onClick={copy}><Copy/></button>{copied&&<span role="status">Copied Markdown</span>}</div>{error&&<p role="alert">{error}</p>}
  </article>;
 }
 export function PeerPreviewCanvas({active,onClose,state,dispatch}){
  const panel=useRef(null),scroll=useRef(null),read=useRef(null),version=useRef(0),selection=useRef(null),layout=usePanelLayout(state,dispatch);
  const [snapshot,setSnapshot]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[unavailable,setUnavailable]=useState(false),[opening,setOpening]=useState(false),[unknown,setUnknown]=useState(false);
+ const [metadata,setMetadata]=useState(active.source);
  const source=active.source,identity=source.sourceId,latest=useRef(active);latest.current=active;
  const close=useCallback(()=>{read.current?.abort();onClose();requestAnimationFrame(()=>active.trigger?.isConnected&&active.trigger.focus({preventScroll:true}))},[onClose,active.trigger]);
  useModalFocus(panel,layout.overlay,close);
@@ -49,29 +57,30 @@ export function PeerPreviewCanvas({active,onClose,state,dispatch}){
     // Same-ID bodies retain React identity and loaded detail state. Never reorder by sender/time.
     const messages=earlier?[...incoming,...(old?.messages||[])]:old?.messages?.length&&incoming.some(m=>old.messages.some(x=>x.id===m.id))?[...old.messages,...incoming]:incoming;
     const unique=new Map(messages.map(m=>[m.id,m]));
-    return {...result,messages:[...unique.values()],page:earlier?result.page:{...result.page,...(old?.page?.hasEarlier?{before:old.page.before,hasEarlier:true}:{})}};
+    return {...result,messages:[...unique.values()],page:result.page};
    });
   }catch(e){if(!controller.signal.aborted&&token===version.current){if([403,404].includes(e.status)){setUnavailable(true);setSnapshot(null)}setError(e.message)}}finally{if(token===version.current)setBusy(false)}
  }
  useEffect(()=>{setSnapshot(null);setUnavailable(false);setUnknown(false);load();return()=>{version.current++;read.current?.abort()}},[identity]);
  // Revalidate metadata when the host's catalog changes, never auto-follow bodies.
- const catalogRevision=state.directoryRevision;
+ const catalogRevision=state.chatNavigation,workspaces=state.workspaces;
+ const failClosed=useCallback(e=>{version.current++;read.current?.abort();setUnavailable(true);setSnapshot(null);setError(e.message)},[]);
  useEffect(()=>{
-  if(!catalogRevision)return;const controller=new AbortController();
-  request('/api/peer/preview?'+new URLSearchParams({proof:latest.current.proof,metadata:'true'}),{signal:controller.signal}).catch(e=>{if(!controller.signal.aborted&&[403,404].includes(e.status)){setUnavailable(true);setSnapshot(null);setError(e.message)}});
+  const controller=new AbortController();
+  request('/api/peer/preview?'+new URLSearchParams({proof:latest.current.proof,metadata:'true'}),{signal:controller.signal}).then(result=>{if(!controller.signal.aborted)setMetadata(result.source)}).catch(e=>{if(!controller.signal.aborted){if([403,404].includes(e.status))failClosed(e);else setError('Source access could not be rechecked. Refresh before opening the chat.')}});
   return()=>controller.abort();
- },[catalogRevision]);
+ },[catalogRevision,workspaces,failClosed]);
  async function engage(){if(opening||unknown||unavailable)return;setOpening(true);setError('');try{const receipt=await dispatch('session.select',{id:identity,peerPreview:{proof:latest.current.proof,sourceSessionId:active.sourceSessionId}},{id:crypto.randomUUID()});if(receipt?.accepted===true)onClose();else if(!receipt?.superseded)setError(receipt?.error||'The chat was not opened.')}catch(e){if(e.unconfirmed||!Number.isInteger(e.status))setUnknown(true);setError(e.message)}finally{setOpening(false)}}
  return <aside className="a-canvas-panel a-peer-preview-panel" data-part="canvas" data-mode="artifact" data-focused={false} ref={panel} role={layout.overlay?'dialog':'region'} aria-modal={layout.overlay||undefined} aria-label="Read-only source chat preview" onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();close()}}}>
   {!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
-  <header className="a-canvas-head"><div><strong>{unavailable?'Source chat unavailable':snapshot?.source.title||source.title}</strong><small>Read only{snapshot?.source.archived||source.archived?' · Archived':''}</small></div><button type="button" className="a-icon" aria-label="Close source preview" onClick={close}><X/></button></header>
+  <header className="a-canvas-head"><div><strong>{unavailable?'Source chat unavailable':metadata.title}</strong><small>Read only{!unavailable&&metadata.archived?' · Archived':''}</small></div><button type="button" className="a-icon" aria-label="Close source preview" onClick={close}><X/></button></header>
   <div className="a-peer-preview-toolbar"><button className="a-soft" type="button" disabled={busy||unavailable} onClick={()=>load()}><RefreshCw/>Refresh</button><button className="a-soft" type="button" disabled={!snapshot||opening||unavailable||unknown} onClick={engage}><ArrowUpRight/>{opening?'Opening…':'Open chat'}</button></div>
   <p className="a-caption a-peer-snapshot-status" role="status">{snapshot?`Snapshot · ${new Date(snapshot.capturedAt*1000).toLocaleString()} · ${snapshot.source.status} at capture · not following`:busy?'Loading bounded source history…':'No source snapshot available.'}</p>
   {error&&<p className="a-peer-preview-error" role="alert">{error}{snapshot?' Previous snapshot retained; currentness unknown.':''}{unknown?' Opening was not confirmed; no automatic retry will run.':''}</p>}
   <div className="a-peer-preview-scroll" ref={scroll} aria-busy={busy}>
    {snapshot?.page.hasEarlier&&<button type="button" className="a-link" disabled={busy} onClick={()=>load(true)}>Load earlier messages</button>}
    {!!snapshot?.page.unavailableRanges?.length&&<p role="status">Some source ranges are unavailable. Nothing was reconstructed.</p>}
-   {snapshot?.messages.map(m=><PreviewMessage key={m.id} message={m}/>)}
+   {snapshot?.messages.map(m=><PreviewMessage key={m.id} message={m} proof={active.proof} onUnavailable={failClosed}/>)}
   </div>
  </aside>;
 }

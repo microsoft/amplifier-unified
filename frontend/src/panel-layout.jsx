@@ -18,6 +18,7 @@ export function fitPanels({available=1200,gap=12,rail=0,navPinned=false,canvasOp
  return {overlay,docked,nav,canvas,navMax,canvasMax,expandedNav:docked?nav:Math.min(Math.max(NAV_MIN,navWidth),Math.max(NAV_MIN,available-rail))};
 }
 export function showingOverview(state){
+ if(state.peerPreview)return false;
  return !state.view?.settingsCanvas&&(!!state.view?.canvasDraft?.library||!state.canvasWorkspace?.views?.length||!!state.canvas?.placeholder);
 }
 const Layout=createContext(null);

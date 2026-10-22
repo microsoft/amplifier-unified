@@ -7,6 +7,7 @@ import time
 
 from amplifier_operations.coordination import fingerprint
 from .session_identity import reference
+from .transcript_window import _Invalid
 
 
 class PeerPreview:
@@ -42,6 +43,9 @@ class PeerPreview:
         """Called only after PeerAttribution proved the exact original binding."""
         if receipt.get('origin') == 'system':
             return None
+        client = self.service.clients.record()
+        if not client or client.get('kind') != 'web' or client.get('selectedSessionId') != parent['id']:
+            return None
         from .service import AppError
         try:
             parent = self.service._session(parent['id'], hydrate=False)
@@ -61,7 +65,7 @@ class PeerPreview:
         client = self.service.clients.record()
         try:
             value = self.windows.reader._parse(proof)
-        except (ValueError, TypeError):
+        except (_Invalid, ValueError, TypeError):
             raise AppError('This source preview expired. Reopen the original message.', 403) from None
         if (value.get('kind') != 'peer-preview' or not client or client.get('kind') != 'web'
                 or client.get('selectedSessionId') != value.get('sourceSessionId')
@@ -78,6 +82,12 @@ class PeerPreview:
                 or receipt.get('displayBinding') != value['binding']
                 or receipt.get('senderSessionId') != value['targetId']):
             raise AppError('This source message is no longer available.', 403)
+        # Reuse the attribution owner's exact-original checks. Do not hydrate a
+        # cold receiver merely to validate a preview link.
+        originals = dict.get(parent, 'messages', ())
+        original = next((m for m in originals if m.get('id') == value['messageId']), None)
+        if original is None or not self.service.peer_attribution.resolve(parent, [original])[0].get('attribution', {}).get('peer'):
+            raise AppError('The original source binding is unavailable. Reopen its message.', 403)
         target = self._target(value['targetId'], parent)
         if self._identity(target) != value['targetIdentity']:
             raise AppError('This source identity changed. No other chat was opened.', 403)
@@ -93,7 +103,7 @@ class PeerPreview:
         return {'accepted': True, 'result': self._descriptor(target), 'effects': []}
 
     async def read(self, args):
-        proof = args['proof']
+        proof = args.get('proof')
         async with self.service.lock:
             _, target = self.guard(proof)
             identity = target['id']
@@ -107,6 +117,10 @@ class PeerPreview:
             if current['id'] != identity:
                 raise ValueError('Preview source changed.')
         result = copy.deepcopy(page)
+        fields = {'id', 'role', 'text', 'textDetail', 'createdAt', 'timestampKnown', 'inputOrigin', 'via'}
+        result['items'] = [{key: value for key, value in m.items() if key in fields} |
+                           ({'attribution': {'caption': m['attribution']['caption']}}
+                            if m.get('attribution') else {}) for m in result['items']]
         for message in result['items']:
             # Preview bodies have no mutation actions or navigable file context.
             if message.get('textDetail'):

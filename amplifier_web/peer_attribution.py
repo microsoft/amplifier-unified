@@ -201,5 +201,7 @@ class PeerAttribution:
                 continue
             row["attribution"] = {"caption": SYSTEM_CAPTION if actor == "system" else AGENT_CAPTION if actor == "agent" else CHAT_CAPTION}
             if self.source_descriptor and actor != "system":
-                row["attribution"]["peer"] = self.source_descriptor(session, original, receipt)
+                descriptor = self.source_descriptor(session, original, receipt)
+                if descriptor is not None:
+                    row["attribution"]["peer"] = descriptor
         return result

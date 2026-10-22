@@ -13,7 +13,10 @@ function useDisclosure(key){
  return presentation?[!!presentation.open[key],value=>presentation.setOpen(old=>({...old,[key]:typeof value==='function'?value(!!old[key]):value}))]:[local,setLocal];
 }
 export function PeerRun({row,session,state,renderMessage}){
- const ids=row.rows.map(r=>r.message.id),key='run:'+session.id+':'+row.id,[open,setOpen]=useDisclosure(key),bodyId=useId();
+ const presentation=useContext(PeerPresentation),ids=row.rows.map(r=>r.message.id),bodyId=useId();
+ const known=ids.map(id=>presentation.open['group:'+session.id+':'+id]).filter(v=>v!==undefined);
+ const open=known.length?known.some(Boolean):ids.some(id=>presentation.open[session.id+':'+id]);
+ const setOpen=value=>presentation.setOpen(old=>({...old,...Object.fromEntries(ids.map(id=>['group:'+session.id+':'+id,typeof value==='function'?value(open):value]))}));
  const sources=new Map(row.rows.flatMap(r=>r.message.attribution?.peer?.available?[[r.message.attribution.peer.sourceId,r.message.attribution.peer.title]]:[]));
  const focus=state.view?.messageFocus;
  useEffect(()=>{if(focus?.sessionId===session.id&&row.rows.some(r=>[r.message.id,r.message.nativeMessageId].includes(focus.messageId)))setOpen(true)},[focus?.revision]);
