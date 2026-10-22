@@ -1,16 +1,16 @@
 // Local intent is not shared acceptance. One flight per emoji preserves click
 // order; different messages/emoji never wait for each other or a model turn.
 export function createReactionController({sessionId,messageId,clientId,send,read,notify=()=>{},save=()=>{},restored=[]}){
- let confirmed={revision:-1,reactions:[]},error='',checking=false;
+ let confirmed={revision:-1,reactions:[]},error='',checking=false,storageError=false;
  const listeners=new Set();
  const pending=new Map(restored.map(row=>[row.emoji,{...row,status:'unknown',restored:true}]));
- const changed=()=>{save([...pending.values()]);notify();for(const listener of listeners)listener()};
+ const changed=()=>{try{storageError=save([...pending.values()])===false}catch{storageError=true}notify();for(const listener of listeners)listener()};
  function observe(value){
   if(Number.isSafeInteger(value?.annotationRevision)&&value.annotationRevision>=confirmed.revision)
    confirmed={revision:value.annotationRevision,reactions:[...(value.reactions||[])]};
   else if(confirmed.revision<0)confirmed={revision:-1,reactions:[...(value?.reactions||[])]};
  }
- function view(){const selected=new Set(confirmed.reactions);for(const [emoji,row] of pending)(row.desired?selected.add:selected.delete).call(selected,emoji);return {reactions:[...selected],pending:[...pending.keys()],unknown:[...pending.values()].some(row=>row.status==='unknown'),error,checking}}
+ function view(){const selected=new Set(confirmed.reactions);for(const [emoji,row] of pending)(row.desired?selected.add:selected.delete).call(selected,emoji);return {reactions:[...selected],pending:[...pending.keys()],unknown:[...pending.values()].some(row=>row.status==='unknown'),error:error||(storageError?'This browser could not retain reaction recovery. Keep this page open until the save is confirmed.':''),checking}}
  function settle(row,receipt){
   const value=receipt?.result;
   if(receipt?.accepted!==true||value?.sessionId!==sessionId||value.messageId!==messageId||value.reactionActor!=='user'||!Array.isArray(value.reactions)||!Number.isSafeInteger(value.annotationRevision))throw Object.assign(Error('Reaction save could not be confirmed.'),{unconfirmed:true});

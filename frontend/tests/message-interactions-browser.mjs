@@ -55,10 +55,10 @@ try{
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  // Feedback is local: deliberately hold the write before it can reach the host.
  await page.setViewportSize({width:1280,height:900});
- let heldResolve,heldCommand;const held=new Promise(resolve=>heldResolve=resolve);
+ let heldResolve,heldCommand,holdNextReaction=true;const held=new Promise(resolve=>heldResolve=resolve);
  const holdReaction=route=>{
   if(route.request().postDataJSON()?.action==='session.rename'){pendingRoutes.add(route);heldCommand=route;return}
-  if(route.request().postDataJSON()?.action==='message.reaction'){pendingRoutes.add(route);heldResolve(route);return}
+  if(route.request().postDataJSON()?.action==='message.reaction'&&holdNextReaction){holdNextReaction=false;pendingRoutes.add(route);heldResolve(route);return}
   return route.continue();
  };
  await page.route('**/api/actions',holdReaction);
@@ -94,8 +94,9 @@ try{
  await assistant.getByRole('button',{name:'Remove Heart reaction',exact:true}).click();
  await expect(assistant.getByRole('button',{name:'Remove Heart reaction',exact:true})).toHaveCount(0);
  await expect(assistant.getByRole('button',{name:'Remove Celebrate reaction',exact:true})).toBeVisible();
- pendingRoutes.delete(heldRoute);await heldRoute.continue();await page.unroute('**/api/actions',holdReaction);
+ pendingRoutes.delete(heldRoute);await heldRoute.continue();
  pendingRoutes.delete(heldCommand);await heldCommand.continue();
+ await page.unroute('**/api/actions',holdReaction);
  await expect.poll(async()=>(await control('inspect')).admissions.filter(row=>row.args.messageId===nextFrame.messageId&&row.args.emoji==='❤️'&&row.settledAt).length).toBe(2);
  await expect.poll(async()=>(await control('inspect')).annotations[nextFrame.messageId]?.reactions||[]).not.toContain('❤️');
  // A definite rejection rolls back only this emoji, not another reaction/draft.

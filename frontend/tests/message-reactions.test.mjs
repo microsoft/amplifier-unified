@@ -52,3 +52,7 @@ test('lost definite rejection rolls back only the uncertain emoji by reading its
  await c.reconcile();assert.equal(writes.length,1);assert.equal(c.view().unknown,false);
  assert.deepEqual(c.view().reactions,['peer']);assert.match(c.view().error,/unavailable/);
 });
+test('unavailable browser storage does not silently promise reload recovery',()=>{
+ const {controller:c}=harness({save:()=>false});c.set('heart',true);
+ assert.deepEqual(c.view().reactions,['heart']);assert.match(c.view().error,/could not retain/);
+});

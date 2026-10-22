@@ -90,3 +90,11 @@ async def test_refresh_replaces_only_own_observation_and_auxiliary_calls_do_not_
         CALL_PURPOSE.reset(token)
     assert len(calls) == 1
     delivery.commit(fresh)
+
+
+async def test_legacy_saved_reaction_without_revision_is_still_visible():
+    async def bridge(operation, args):
+        return {'sessionId': 's', 'revision': 0, 'items': [{'messageId': 'm', 'reactions': ['check']}]}
+    fresh = await ReactionDelivery(Previous(), bridge).prepare(request(), None)
+    assert 'reactionObservation' in fresh.model_dump_json()
+    assert 'check' in fresh.model_dump_json()
