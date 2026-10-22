@@ -112,6 +112,118 @@ async def test_durable_receipts_reconcile_restart_unknown_without_replay(tmp_pat
     assert NativeProviderHost(c,c.loop,tmp_path).state['outcome']=='completed'
 
 
+def send_record(operation='response.create', **changes):
+    return {'send_id': 'send-one', 'operation': operation, 'epoch': 'connection-one',
+            'response_id': 'parent' if operation == 'response.steer' else None,
+            'input_id': 'input-one' if operation == 'response.steer' else None,
+            'attempt_id': None, 'execution_replayed': False, **changes}
+
+
+@pytest.mark.parametrize('operation', ['response.create', 'response.steer'])
+@pytest.mark.parametrize('reason', ['cancelled', 'rejected'])
+async def test_bound_unsent_receipt_preserves_original_owner_and_parent(tmp_path, operation, reason):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    host.state.update(requestId='parent-attempt', outcome='running', responseId='parent')
+    callback = host.bind_send_lifecycle(
+        attempt_id='original-attempt', generation_id='generation-1',
+        admitted_call_id='original-budget-call')
+    record = send_record(operation)
+    await callback('native.submitting', record)
+    parent = copy.deepcopy({k: v for k, v in host.state.items() if k not in {'sends', 'receipts', 'updatedAt'}})
+    # A late terminal belongs to the captured owner, not a new generation.
+    c.caps['live.runtime'].generation = {'id': 'new-generation'}
+    await callback('native.not_sent', {**record, 'attempt_id': 'original-attempt',
+                                     'reason': reason, 'input': 'PRIVATE INPUT'})
+    row = host.state['sends'][0]
+    assert row['outcome'] == 'not_sent' and row['reason'] == reason
+    assert row['attemptId'] == 'original-attempt'
+    assert row['generationId'] == 'generation-1'
+    assert row['admittedCallId'] == 'original-budget-call'
+    if operation == 'response.steer':
+        assert {k: v for k, v in host.state.items() if k not in {'sends', 'receipts', 'updatedAt'}} == parent
+    else:
+        assert host.state['outcome'] == 'not_sent'
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert restored.state['sends'][0] == row
+    assert 'PRIVATE INPUT' not in host.path.read_text()
+    assert host.path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('fault', [
+    {'epoch': 'other'}, {'operation': 'response.steer'}, {'response_id': 'other'},
+    {'input_id': 'other'}, {'attempt_id': 'other'}, {'send_id': 'other'},
+])
+async def test_unsent_receipt_requires_exact_send_and_captured_binding(tmp_path, fault):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='original-attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    record = send_record()
+    await callback('native.submitting', record)
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError):
+        await callback('native.not_sent', {**record, 'reason': 'rejected', **fault})
+    assert host.path.read_bytes() == before
+    assert NativeProviderHost(c, c.loop, tmp_path).state['sends'][0]['outcome'] == 'unknown'
+
+
+@pytest.mark.parametrize('lost', ['ignored', 'failed'])
+async def test_unsent_missing_durable_terminal_remains_unknown(tmp_path, monkeypatch, lost):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    record = send_record()
+    await callback('native.submitting', record)
+    if lost == 'failed':
+        def fail():
+            raise OSError('Synthetic failed private persistence')
+        monkeypatch.setattr(host, 'save', fail)
+        with pytest.raises(OSError):
+            await callback('native.not_sent', {**record, 'reason': 'rejected'})
+        assert host.state['sends'][0]['outcome'] == 'submitting'
+    # Deliberately ignored terminal is the original bug's negative control.
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert restored.state['sends'][0]['outcome'] == 'unknown'
+    assert restored.state['outcome'] == 'unknown'
+
+
+@pytest.mark.parametrize('parent_outcome', ['running', 'completed', 'unknown'])
+async def test_unsent_steer_never_downgrades_parent_or_other_unknown_send(tmp_path, parent_outcome):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    first = host.bind_send_lifecycle(
+        attempt_id='first', generation_id='generation-1', admitted_call_id='first-budget')
+    await first('native.submitting', send_record(send_id='first-send'))
+    host.state.update(outcome=parent_outcome, responseId='parent')
+    second = host.bind_send_lifecycle(
+        attempt_id='second', generation_id='generation-1', admitted_call_id='second-budget')
+    steer = send_record('response.steer', send_id='second-send')
+    await second('native.submitting', steer)
+    await second('native.not_sent', {**steer, 'reason': 'cancelled'})
+    assert host.state['outcome'] == parent_outcome
+    assert host.state['requestId'] == 'first'
+    restored = NativeProviderHost(c, c.loop, tmp_path)
+    assert [row['outcome'] for row in restored.state['sends']] == ['unknown', 'not_sent']
+
+
+async def test_bound_send_rejects_new_submission_after_generation_change(tmp_path):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
+    c.caps['live.runtime'].generation = {'id': 'new-generation'}
+    with pytest.raises(ValueError, match='binding'):
+        await callback('native.submitting', send_record())
+    assert not host.path.exists()
+
+
 @pytest.mark.asyncio
 async def test_shared_control_compacts_only_idle_and_never_returns_private_opaque(tmp_path,monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))
