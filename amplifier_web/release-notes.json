@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.214",
+      "title": "Keep parallel assignments responsive without unnecessary accounting",
+      "changes": [
+        "Avoid recalculating every member\u2019s historical model usage before each new call when an assignment has no call, token or cost limits. This removes a measured source of coordination delays while preserving Stop, membership checks, configured budgets and protection against replaying calls.",
+        "Keep the access-and-approvals browser smoke check working when Settings displays an unread-notice badge."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.213",
       "title": "Remove optional per-chat quotas and recover verified cleanup failures",
       "changes": [
