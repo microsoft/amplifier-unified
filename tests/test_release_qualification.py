@@ -543,7 +543,9 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
-                           'destination_history', 'settings_close_diagnostic'}
+                           'destination_history', 'settings_close_diagnostic', 'attachment_experience'}
+    assert inputs['attachment_experience']['type'] == 'boolean'
+    assert inputs['attachment_experience']['default'] == 'false'
     assert inputs['settings_close_diagnostic']['type'] == 'boolean'
     assert inputs['settings_close_diagnostic']['default'] == 'false'
     assert inputs['destination_history']['type'] == 'boolean'
@@ -557,7 +559,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
     assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
