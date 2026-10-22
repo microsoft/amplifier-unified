@@ -121,11 +121,18 @@ try {
       work.getByText('STREAM FIRST REPLY', {exact: true}), work.locator('[data-node-id="stream-main-model"]'),
       work.getByText('STREAM FOLLOW-UP', {exact: true}), work.locator('[data-node-id="stream-child-model"]'),
       work.getByText('STREAM SECOND REPLY', {exact: true})];
-    let bottom = -Infinity;
     for (const row of rows) {
       await expect(row).toHaveCount(1);
       await expect(row).toBeVisible();
-      const box = await row.boundingBox();
+    }
+    // Compare one layout frame: chat scroll restoration can move viewport
+    // coordinates between separate boundingBox requests without any overlap.
+    const handles = await Promise.all(rows.map(row => row.elementHandle()));
+    const boxes = await page.evaluate(elements => elements.map(element =>
+      element?.isConnected ? element.getBoundingClientRect().toJSON() : null), handles);
+    await Promise.all(handles.map(handle => handle?.dispose()));
+    let bottom = -Infinity;
+    for (const box of boxes) {
       assert.ok(box && box.y >= bottom - 1, 'Exchange and operations must be vertically ordered without overlap');
       bottom = box.y + box.height;
     }
