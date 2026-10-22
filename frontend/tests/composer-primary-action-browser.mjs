@@ -4,17 +4,18 @@ import {clearComposer} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/voice_visual_ui_server.py','--onboarding-complete'],{stdio:['ignore','pipe','inherit']});
-let browser,failure;
+let browser,page,failure;
+const calls=[],transitions=[];
 const output=process.env.AMPLIFIER_SCREENSHOT_DIR||'/tmp/amplifier-composer-primary-action';
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data.url)}}catch{}})});
  await mkdir(output,{recursive:true});browser=await chromium.launch({headless:true});
- const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[],calls=[];
+ page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')calls.push(request.postDataJSON())});
  await page.addInitScript(()=>{
   class Peer extends EventTarget{constructor(){super();this.connectionState='new'}createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){}}
@@ -26,6 +27,7 @@ try{
  const inspect=()=>page.request.get(url+'/fixture').then(response=>response.json());
  const matches=async(label,action,icon)=>{
   await expect(primary).toHaveCount(1);await expect(primary).toHaveAccessibleName(label);await expect(primary).toHaveAttribute('data-action',action);await expect(primary.locator('svg')).toHaveClass(new RegExp('lucide-'+icon));
+  transitions.push(await page.evaluate(label=>{const state=window.amplifier.getState();return {label,sessionId:state.selectedSessionId,panel:state.view.panel,voiceConfiguration:state.voiceConfiguration,voiceStatus:state.voice.status,settingsPage:document.querySelector('[data-part="settings-experience"]')?.getAttribute('data-settings-page'),focus:document.activeElement?.getAttribute('aria-label')}},label));
   // Shared tooltips remove native title on hover/focus; accessible action names
   // stay authoritative across voice transitions (tooltip behavior has its own test).
  };
@@ -52,8 +54,11 @@ try{
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('Attachment-only message')});await page.getByRole('button',{name:'Remove note.txt'}).waitFor();await matches('Send message','conversation.send','arrow-up');await expect(primary).toBeEnabled();
  await page.getByRole('button',{name:'Remove note.txt'}).click();await matches('End voice call','call.end','x');
  await activity('working');await matches('End voice call','call.end','x');await primary.click();await matches('Stop response','conversation.stop','x');assert.deepEqual((await inspect()).stopped,[],'Ending voice does not cancel background work');
- await composer.fill('A correction');await matches('Send message','conversation.send','arrow-up');await clearComposer(composer);await matches('Stop response','conversation.stop','x');
- await primary.focus();await page.keyboard.press('Space');await expect.poll(async()=>(await inspect()).stopped).toEqual([sid]);await matches('Start voice call','call.start','audio-lines');
+ await composer.fill('A correction');await matches('Send message','conversation.send','arrow-up');
+ const draftStop=page.getByRole('button',{name:'Stop response',exact:true});await expect(draftStop).toBeVisible();await expect(draftStop).toBeEnabled();
+ await draftStop.click();await expect(composer).toHaveDraft('A correction');await expect.poll(async()=>(await inspect()).stopped).toEqual([sid]);
+ await activity('working');await clearComposer(composer);await matches('Stop response','conversation.stop','x');
+ await primary.focus();await page.keyboard.press('Space');await expect.poll(async()=>(await inspect()).stopped).toEqual([sid,sid]);await matches('Start voice call','call.start','audio-lines');
  await activity('idle',[{id:'worker',status:'running',title:'Background worker'}]);await matches('Stop response','conversation.stop','x');await activity('stopping');await expect(primary).toBeDisabled();await activity('idle');await matches('Start voice call','call.start','audio-lines');
  await page.evaluate(()=>window.denyMicrophone=true);await primary.click();await expect(page.getByText(/Microphone access was declined/)).toBeVisible();await matches('Start voice call','call.start','audio-lines');await expect(primary).toBeEnabled();await page.evaluate(()=>window.denyMicrophone=false);
  await page.getByRole('button',{name:'Dismiss error',exact:true}).click();
@@ -63,8 +68,16 @@ try{
   await composer.fill('Ready to send');await matches('Send message','conversation.send','arrow-up');assert.deepEqual(await primary.boundingBox(),box);await page.screenshot({path:output+`/send-${width}.png`});
   await clearComposer(composer);await activity('working');await matches('Stop response','conversation.stop','x');assert.deepEqual(await primary.boundingBox(),box);await expect(primary).toBeInViewport();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:output+`/cancel-${width}.png`});
  }
- assert.deepEqual(errors,[]);assert.equal(calls.filter(row=>row.action==='conversation.send').length,1);console.log('Composer primary action passed: voice/send/cancel, connecting cancellation, text/attachments during voice, agent drafts, work versus call cancellation, keyboard, permission recovery, stable desktop/mobile geometry. Synthetic media only; no physical audio claim.');
-}catch(error){failure=error;throw error}
+ assert.deepEqual(errors,[]);assert.equal(calls.filter(row=>row.action==='conversation.send').length,1);
+ await writeFile(output+'/primary-action.json',JSON.stringify({passed:true,calls,transitions},null,2));
+ console.log('Composer primary action passed: voice/send/cancel, connecting cancellation, text/attachments during voice, agent drafts, work versus call cancellation, keyboard, permission recovery, stable desktop/mobile geometry. Synthetic media only; no physical audio claim.');
+}catch(error){
+ failure=error;
+ const state=page&&!page.isClosed()?await page.evaluate(()=>{const state=window.amplifier?.getState();return {sessionId:state?.selectedSessionId,view:state?.view,voice:state?.voice,voiceConfiguration:state?.voiceConfiguration}}).catch(()=>null):null;
+ await writeFile(output+'/primary-action.json',JSON.stringify({passed:false,error:String(error),calls,transitions,state},null,2));
+ if(page&&!page.isClosed())await page.screenshot({path:output+'/failure.png'}).catch(()=>{});
+ throw error;
+}
 finally{
  const cleanupErrors=[];
  try{await browser?.close()}catch(error){cleanupErrors.push(error)}
