@@ -186,8 +186,17 @@ jobs:
               assert matches[0]['command'] == ['node', f'tests/{name}-browser.mjs']
               selected.append(matches[0])
           Path('output/attachment-experience/plan.json').write_text(json.dumps({'schemaVersion': 1, 'scenarios': selected}))
+          intersections = ('pin-retention', 'pin-rapid-reorder', 'conversation-navigation')
+          selected_intersections = []
+          for name in intersections:
+              matches = [row for row in rows if row['id'] == name]
+              assert len(matches) == 1
+              assert matches[0]['command'] == ['node', f'tests/{name}-browser.mjs']
+              selected_intersections.append(matches[0])
+          Path('output/attachment-experience/intersections-plan.json').write_text(json.dumps({'schemaVersion': 1, 'scenarios': selected_intersections}))
           PY
           uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/plan.json --output output/browser-checks --initialize
+          uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/intersections-plan.json --output output/attachment-experience/intersections --initialize
       - run: npm run build --prefix frontend
       - name: Verify canonical attachment assets
         run: git diff --exit-code -- amplifier_web/static
@@ -197,17 +206,22 @@ jobs:
         run: |
           set -o pipefail
           uv run --no-sync pytest -q tests/test_attachments.py -k 'unnamed or accepted_attachments' --junitxml=output/attachment-experience/host.xml 2>&1 | tee output/attachment-experience/host.log
-          uv run --no-sync pytest -q tests/test_new_chat.py tests/test_message_delivery.py tests/test_live_clients.py tests/test_browser_check_runner.py tests/test_release_qualification.py --junitxml=output/attachment-experience/adjacent.xml 2>&1 | tee output/attachment-experience/adjacent.log
+          uv run --no-sync pytest -q tests/test_new_chat.py tests/test_message_delivery.py tests/test_live_clients.py tests/test_browser_check_runner.py tests/test_release_qualification.py tests/test_pinned_navigation.py --junitxml=output/attachment-experience/adjacent.xml 2>&1 | tee output/attachment-experience/adjacent.log
       - name: Attachment geometry and intake units
         id: units
         continue-on-error: true
         run: |
           set -o pipefail
           node --test frontend/tests/attachment-view.test.mjs frontend/tests/connection-notice.test.mjs 2>&1 | tee output/attachment-experience/units.tap
+          node --test frontend/tests/pin-order-settlement.test.mjs frontend/tests/work-shell.test.mjs 2>&1 | tee output/attachment-experience/intersections.tap
       - name: Source browser checks with owned cleanup
         id: source-browser
         continue-on-error: true
         run: uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/plan.json --output output/browser-checks --budget-seconds 600
+      - name: Pin and navigation integration owners with owned cleanup
+        id: intersections
+        continue-on-error: true
+        run: uv run --no-sync python scripts/browser_check_runner.py --plan output/attachment-experience/intersections-plan.json --output output/attachment-experience/intersections --budget-seconds 600
       - name: Build and install exact noneditable wheel
         id: wheel
         run: |
@@ -251,7 +265,7 @@ jobs:
           PYTHONPATH: ''
         run: .venv/bin/python scripts/browser_check_runner.py --plan output/attachment-experience/installed-plan.json --output output/attachment-experience/installed-runner --budget-seconds 600
       - name: Preserve every affected failure
-        if: ${{ always() && (steps.host.outcome != 'success' || steps.units.outcome != 'success' || steps.source-browser.outcome != 'success' || steps.wheel.outcome != 'success' || steps.installed-browser.outcome != 'success') }}
+        if: ${{ always() && (steps.host.outcome != 'success' || steps.units.outcome != 'success' || steps.source-browser.outcome != 'success' || steps.intersections.outcome != 'success' || steps.wheel.outcome != 'success' || steps.installed-browser.outcome != 'success') }}
         run: exit 1
       - uses: actions/upload-artifact@v4
         if: always()

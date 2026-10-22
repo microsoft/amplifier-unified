@@ -258,6 +258,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
+        'pin-rapid-reorder': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-rapid-reorder'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
         'destination-history': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/destination-history'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
@@ -293,7 +294,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 109
+    assert len(original) == 65 and len(rows) == 110
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -484,8 +485,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     attachment_experience = 'tests/attachment-experience-browser.mjs'
     assert attachment_experience in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', attachment_experience] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience}) == 146
-    assert len(readiness_scripts | extended_scripts) == 152
+    pin_reorder = 'tests/pin-rapid-reorder-browser.mjs'
+    assert pin_reorder in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', pin_reorder] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder}) == 146
+    assert len(readiness_scripts | extended_scripts) == 153
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
@@ -646,6 +650,7 @@ def test_attachment_experience_route_is_fixed_and_installs_the_exact_wheel():
     assert job['timeout-minutes'] == '30'
     runs = '\n'.join(step.get('run', '') for step in job['steps'])
     assert "wanted = ('attachment-experience', 'attachment-consumption')" in runs
+    assert "intersections = ('pin-retention', 'pin-rapid-reorder', 'conversation-navigation')" in runs
     assert "assert len(matches) == 1" in runs
     assert 'uv sync --locked --group dev' in runs
     assert 'uv pip install --python .venv/bin/python --no-deps --reinstall output/attachment-experience/wheels/*.whl' in runs
@@ -654,6 +659,7 @@ def test_attachment_experience_route_is_fixed_and_installs_the_exact_wheel():
     assert all(step.get('if') == 'always()' for step in job['steps']
                if step.get('uses') == 'actions/upload-artifact@v4')
     assert "steps.installed-browser.outcome != 'success'" in json.dumps(job)
+    assert "steps.intersections.outcome != 'success'" in json.dumps(job)
 
 
 # Independent literal identities: do not construct the positive TAP fixture from
