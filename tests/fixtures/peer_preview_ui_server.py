@@ -44,6 +44,9 @@ async def main():
     from amplifier_web.setup import SetupManager
     import amplifier_web.draft_defaults as defaults
     SetupManager.provider_rows = lambda self, workspace: []
+    async def fixture_routing(self, workspace):
+        pass
+    SetupManager.ensure_routing_catalog = fixture_routing
     async def fixture_defaults(home, workspace, bundle=None, app_bundle=None, **kwargs):
         return {'bundle':bundle or 'work', 'effective':{}, 'providers':[]}
     defaults.resolve_defaults = fixture_defaults

@@ -122,7 +122,7 @@ try{
  assert.equal((await page.evaluate(()=>window.peerGuardAttempt)).accepted,false);
  await expect(page.locator('#default-workspace-root')).toHaveValue('/synthetic-unsaved-folder');
  await expect(panel()).toHaveCount(0);
- await page.getByRole('button',{name:'Close settings',exact:true}).click();await settingsGuard.getByRole('button',{name:'Discard changes',exact:true}).click();
+ await page.getByRole('button',{name:/^Close (settings|panel)$/}).click();await settingsGuard.getByRole('button',{name:'Discard changes',exact:true}).click();
  // Exact existing Canvas dirty guard. The feature must not replace it.
  await page.evaluate(async()=>{await window.amplifier.dispatch('canvas.show',{kind:'html',content:'<input value="unfinished">'});const state=window.amplifier.getState(),v=state.canvasWorkspace.views.find(x=>x.viewId==='primary');await window.amplifier.dispatch('canvas.views.dirty',{viewId:v.viewId,resourceId:v.resourceId,resourceRevision:v.resourceRevision,generation:v.generation,dirty:true})});
  await link.click();await expect(panel()).toHaveCount(0);await expect(original.getByRole('alert')).toContainText('edit');
