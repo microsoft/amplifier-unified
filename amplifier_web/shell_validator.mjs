@@ -33,7 +33,10 @@ const server=createServer(async(req,res)=>{
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 let browser;
 try{
- browser=await chromium.launch({headless:true});
+ // Use the operator-selected DTU Chromium mode for the real validator too.
+ // The default host path and every packaging/render assertion stay unchanged.
+ const launchOptions={headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
+ browser=await chromium.launch(launchOptions);
  const page=await browser.newPage();
  const origin=`http://127.0.0.1:${server.address().port}`,errors=[];
  await page.route('**/*',route=>route.request().url().startsWith(origin+'/')?route.continue():route.abort());
@@ -42,7 +45,7 @@ try{
  await page.waitForFunction(()=>typeof window.validateShellModule==='function');
  const result=await page.evaluate(manifest=>window.validateShellModule(manifest),manifest);
  if(errors.length)throw Error(errors.join('\n'));
- process.stdout.write(JSON.stringify({...result,profile:manifest.profile}));
+ process.stdout.write(JSON.stringify({...result,profile:manifest.profile,launchOptions}));
 }finally{
  await browser?.close();
  await new Promise(resolve=>server.close(resolve));

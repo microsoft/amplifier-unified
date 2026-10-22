@@ -28,7 +28,8 @@ const fixturePath=process.env.AMPLIFIER_TEST_FIXTURE||root+'tests/fixtures/empty
 const python=process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python';
 if(installed)assert.ok(process.env.AMPLIFIER_TEST_PYTHON&&process.env.AMPLIFIER_TEST_FIXTURE&&!fixturePath.startsWith(root),'Installed qualification requires an external fixture and explicit interpreter');
 const home=await mkdtemp(path.join(output,'cold-home-'));
-const fixtureEnv={...process.env,AMPLIFIER_TEST_SHARED_WORK_HOME:home};
+const fixtureEnv={...process.env,AMPLIFIER_TEST_SHARED_WORK_HOME:home,
+ AMPLIFIER_SHELL_NODE_MODULES:process.env.AMPLIFIER_SHELL_NODE_MODULES||root+'frontend/node_modules'};
 if(installed){delete fixtureEnv.PYTHONPATH;delete fixtureEnv.PYTHONHOME}
 const fixtureArgs=[...(installed?['-I','-B']:[]),fixturePath,'--chat-controls','--shared-work'];
 const fixtureOptions={stdio:['ignore','pipe','inherit'],env:fixtureEnv,cwd:path.dirname(fixturePath)};
@@ -234,7 +235,10 @@ try {
  const rendererManifest={id:'example.work-dirty-editor',label:'Work guard editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
  const rendererSource='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());return React.createElement("label",null,"Work unsaved edit",React.createElement("input",{"data-mount":mount,value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
  const renderer=(await action('shell.packages.stage',{manifest:rendererManifest,source:rendererSource})).result.digest;
- assert.equal((await action('shell.packages.validate',{digest:renderer})).result.status,'passed');
+ const rendererValidation=(await action('shell.packages.validate',{digest:renderer})).result;
+ await writeFile(path.join(output,'renderer-validation.json'),JSON.stringify(rendererValidation,null,2)+'\n');
+ assert.equal(rendererValidation.status,'passed');
+ if(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1')assert.deepEqual(rendererValidation.launchOptions.args,launch.args);
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(renderer);
  const editor=page.locator('[data-canvas-view="primary"]').getByLabel('Work unsaved edit');
  await editor.fill('DIRTY WORK CANVAS');
@@ -302,6 +306,7 @@ try {
   dirtySettings:{keepRefusedNavigation:true,privateDraftPreserved:true,discardWithoutSave:true},
   acceptedItems:found.size,sourcePagesComplete:true,priorReturnRetained:true,currentUnknown:true,
   widths:[1440,390,320],clients:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
+  peerClient:{separateProcess:true},rendererValidation,
   runtimeCallbackCounts:observation.runtimeCallbackCounts,observationErrors:observer.errors,
   browserTimeouts:{actionTimeoutMs,navigationTimeoutMs},
   limits:['No live provider or private history','Synthetic runtime; installed identity requires explicit independently prepared wheel']};

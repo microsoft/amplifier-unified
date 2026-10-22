@@ -7,7 +7,7 @@ function currentSnapshot(published,observed){
  if(stamp(published)===observed.base)return observed.value;
  if(observed.value.committedUnavailable){
   const receipt=observed.value.receipt;
-  if(!receipt||published.task?.id!==receipt.taskId||!Number.isInteger(receipt.revision)||
+  if(!receipt||published.task?.id!==receipt.taskId||!Number.isInteger(receipt.revision)||!Number.isInteger(published.task.revision)||
    published.task.revision<receipt.revision)return observed.value;
   return published;
  }

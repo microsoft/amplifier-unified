@@ -221,6 +221,9 @@ test('committed unavailable state survives an older publication until its receip
   assert.equal(root.root.findAllByProps({'data-action':'task.resume'}).length,0);
   assert.equal(root.root.findAllByProps({'data-action':'task.create'}).length,0);
   assert.deepEqual(calls.map(([name])=>name),['task.get','task.resume']);
+  await act(async()=>root.update(render({runtimeControl:{owner:{'task.get':projection(undefined,{revision:undefined})}}},session,dispatch)));
+  assert.match(text(root),/change was recorded.*current state is unavailable/);
+  assert.equal(root.root.findAllByProps({'data-action':'task.resume'}).length,0);
   await act(async()=>root.update(render({runtimeControl:{owner:{'task.get':projection(4,{status:'active',appliedRevision:4})}}},session,dispatch)));
   assert.doesNotMatch(text(root),/change was recorded/);
   assert.match(text(root),/Task active · revision 4/);
