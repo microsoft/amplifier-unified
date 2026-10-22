@@ -112,6 +112,51 @@ async def test_reactions_use_desired_state_and_are_shared_without_a_turn(app):
     assert not app.runtime.sent
 
 
+async def test_reaction_commits_and_publishes_while_generation_is_blocked(app):
+    import asyncio
+    import json
+    from amplifier_web.session_projection import view_path
+
+    args = {**target(app, 1), 'emoji': '\u2764\ufe0f', 'present': True}
+    session = app._session()
+    originals = copy.deepcopy(session['messages'])
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_send = app.runtime.send
+
+    async def blocked(*values):
+        entered.set()
+        await release.wait()
+        return await original_send(*values)
+
+    app.runtime.send = blocked
+    send = asyncio.create_task(call(app, 'conversation.send',
+        {'sessionId': session['id'], 'text': 'Synthetic blocked generation'},
+        command_id='blocked-generation'))
+    subscriber = None
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        starts = list(app.runtime.started)
+        with app.clients.bind('two'):
+            subscriber = app.subscribe()
+        receipt = await asyncio.wait_for(call(app, 'message.reaction', args,
+            command_id='reaction-during-generation'), 3)
+        assert receipt['accepted'] and receipt['result']['sent'] is False
+        assert not send.done() and not release.is_set()
+        assert app.runtime.started == starts and app.runtime.sent == []
+        assert session['messages'][:len(originals)] == originals
+        saved = json.loads(view_path(app.data_dir, session).read_text())
+        assert saved['messageAnnotations'][args['messageId']]['reactions'] == ['\u2764\ufe0f']
+        snapshot = await asyncio.wait_for(subscriber.get(), 3)
+        owner = next(row for row in snapshot['sessions'] if row['id'] == session['id'])
+        message = next(row for row in owner['messages'] if row['id'] == args['messageId'])
+        assert message['reactions'] == ['\u2764\ufe0f']
+    finally:
+        if subscriber is not None:
+            app.unsubscribe(subscriber)
+        release.set()
+        await send
+
+
 async def test_restart_history_projection_and_client_selection_preserve_metadata(app):
     original = app._session()
     result = await quote(app)

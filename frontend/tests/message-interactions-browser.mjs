@@ -1,10 +1,10 @@
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
-import {mkdirSync} from 'node:fs';
+import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
 const url=`http://127.0.0.1:${port}`;
@@ -13,6 +13,8 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('..
 const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),page=await context.newPage(),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 const state=()=>page.evaluate(()=>window.amplifier.getState());
+const control=async(op)=>{const response=await page.request.post(url+'/fixture/reactions',{data:{op}});assert.equal(response.status(),200);return response.json()};
+const pendingRoutes=new Set(),measurements=[];
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  await page.goto(url);await page.waitForSelector('#amp-one');
@@ -50,5 +52,69 @@ try{
  await assistant.getByRole('button',{name:'React to message',exact:true}).click();await assistant.getByRole('button',{name:'Celebrate',exact:true}).click();await assistant.getByRole('button',{name:'Remove Celebrate reaction',exact:true}).waitFor();
  if(proof)await assistant.locator('.a-message-actions').screenshot({path:join(proof,'mobile-reactions.png')});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ // Feedback is local: deliberately hold the write before it can reach the host.
+ await page.setViewportSize({width:1280,height:900});
+ let heldResolve;const held=new Promise(resolve=>heldResolve=resolve);
+ const holdReaction=route=>{
+  if(route.request().postDataJSON()?.action==='message.reaction'){pendingRoutes.add(route);heldResolve(route);return}
+  return route.continue();
+ };
+ await page.route('**/api/actions',holdReaction);
+ await assistant.getByRole('button',{name:'React to message',exact:true}).click();
+ const heart=assistant.getByRole('button',{name:'Heart',exact:true});
+ await heart.evaluate(button=>{
+  window.reactionFrame=null;
+  button.addEventListener('click',()=>{
+   const message=button.closest('[data-message-id]'),pane=message.closest('.a-messages');
+   const body=message.querySelector('.a-message-body');
+   const original=body.textContent,top=message.getBoundingClientRect().top,scroll=pane.scrollTop,started=performance.now();
+   requestAnimationFrame(()=>window.reactionFrame={
+    messageId:message.dataset.messageId,
+    feedbackMs:performance.now()-started,selected:!!message.querySelector('[aria-label="Remove Heart reaction"][aria-pressed="true"]'),
+    messageStable:message.isConnected&&message.querySelector('.a-message-body')===body&&body.textContent===original,scrollDelta:pane.scrollTop-scroll,
+    topDelta:message.getBoundingClientRect().top-top
+   });
+  },{once:true,capture:true});
+ });
+ await heart.click();
+ await page.waitForFunction(()=>window.reactionFrame!==null);
+ const nextFrame=await page.evaluate(()=>window.reactionFrame);
+ measurements.push({check:'held-response-first-frame',...nextFrame});
+ assert.equal(nextFrame.selected,true,'The next animation frame must show the optimistic reaction before HTTP proceeds');
+ assert.equal(nextFrame.messageStable,true,'Local feedback must keep the original message body and its DOM node');
+ assert.equal(nextFrame.scrollDelta,0,'Reaction feedback must not move the reading position');
+ assert.equal(nextFrame.topDelta,0,'The original message must stay in place');
+ const heldRoute=await Promise.race([held,new Promise((_,reject)=>setTimeout(()=>reject(Error('Reaction request did not reach HTTP within 3 seconds')),3000))]);
+ if(proof)await assistant.screenshot({path:join(proof,'optimistic-reaction-held.png')});
+ pendingRoutes.delete(heldRoute);await heldRoute.continue();await page.unroute('**/api/actions',holdReaction);
+ await expect.poll(async()=>(await control('inspect')).annotations[nextFrame.messageId]?.reactions||[]).toContain('❤️');
+ // The real host must persist/broadcast a reaction while a synthetic send is
+ // blocked. The deliberately broken REACTION_TEST_TURN_GATE control fails here.
+ const before=await control('hold');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Synthetic response held for reaction test');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect.poll(async()=>(await control('inspect')).blocked).toBe(true);
+ const stable=page.locator('.a-message').filter({hasText:'Saved message 74:'});
+ const messageId=await stable.getAttribute('data-message-id');
+ await stable.getByRole('button',{name:'React to message',exact:true}).click();
+ const started=Date.now();
+ await stable.getByRole('button',{name:'Check',exact:true}).focus();
+ await page.keyboard.press('Enter');
+ await expect.poll(async()=>(await control('inspect')).annotations[messageId]?.reactions||[],{
+  timeout:3000,message:'Reaction must commit before the synthetic generation is released'
+ }).toContain('✅');
+ const admitted=await control('inspect'),admission=admitted.admissions.findLast(row=>row.args.messageId===messageId&&row.args.emoji==='✅');
+ assert.equal(admitted.blocked,true);assert.equal(admitted.sends,before.sends);
+ assert.equal(admission.generationBlocked,true);assert.ok(admission.settledAt);
+ measurements.push({check:'commit-during-blocked-generation',clickToHostArrivalMs:admission.arrivedAt*1000-started,hostDispatchMs:(admission.settledAt-admission.arrivedAt)*1000});
+ await second.reload();
+ await expect(second.locator(`[data-message-id="${messageId}"]`).getByRole('button',{name:'Remove Check reaction',exact:true})).toBeVisible();
+ await control('release');
+ await page.waitForFunction(()=>{const s=window.amplifier.getState();return s.sessions.find(row=>row.id===s.selectedSessionId)?.status==='idle'});
  assert.deepEqual(errors,[]);console.log('Verified: quoted draft preservation/reload/removal/send, source navigation, assistant replies, persistent cross-client emoji add/remove, mobile affordances.');
-}finally{await browser.close();fixture.kill();}
+}finally{
+ if(proof)writeFileSync(join(proof,'reaction-latency.json'),JSON.stringify(measurements,null,2));
+ for(const route of pendingRoutes)await route.abort().catch(()=>{});
+ await control('release').catch(()=>{});
+ await browser.close();fixture.kill();
+}

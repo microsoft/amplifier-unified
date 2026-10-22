@@ -13,6 +13,8 @@ test('exact accepted reaction overlays detached row; a newer canonical removal w
  try{
   await act(async()=>root=create(render()));await act(async()=>root.root.findByProps({'aria-label':'React to message'}).props.onClick(pointer));
   await act(async()=>{request=root.root.findByProps({'aria-label':'Heart'}).props.onClick()});
+  assert.equal(root.root.findAllByProps({'aria-label':'Remove Heart reaction'}).length,1,'Local feedback must render while the server response is deliberately held');
+  assert.notEqual(root.root.findByProps({'aria-label':'Remove Heart reaction'}).props.disabled,true,'Pending feedback must remain reversible');
   await act(async()=>{release({accepted:true,result:{sessionId:'one',messageId:'old',reactions:['❤️'],annotationRevision:2}});await request});
   assert.equal(root.root.findByProps({'aria-label':'Remove Heart reaction'}).props['aria-pressed'],'true');
   assert.deepEqual(message,{id:'old',text:'Canonical unchanged'});
