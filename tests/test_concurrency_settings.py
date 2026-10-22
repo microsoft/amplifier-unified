@@ -33,8 +33,8 @@ async def test_legacy_policy_default_and_current_settings_authority(app, queue):
             'concurrency': {'maxEnvironmentsPerChat': 3}}, 'not-authorized')
     assert path.read_bytes() == before
 
-@pytest.mark.parametrize('bad', [0, -1, True, 1.2, '2'])
-def test_invalid_concurrency_never_coerces_or_disables(bad):
+@pytest.mark.parametrize('bad', [-1, True, 1.2, '2'])
+def test_invalid_concurrency_never_coerces(bad):
     with pytest.raises(ValueError):
         settings.validate({'version': 1, 'queue': {}, 'profiles': {}, 'concurrency': {'maxEnvironmentsPerChat': bad}})
 
@@ -116,9 +116,10 @@ async def test_serial_barrier_blocks_later_independent_work(app,queue,backend):
     await drive(queue);await drive(queue);await drive(queue)
     assert all(record(queue,app,name)['job']['status']=='passed' for name in ('first','barrier','last'))
 
+@pytest.mark.parametrize('limit', [0, 2])
 @pytest.mark.parametrize('original_independent', [False, True])
-async def test_unknown_owner_counts_after_restart_without_replaying(app,queue,backend,monkeypatch,original_independent):
-    await configure(app,maxEnvironmentsPerChat=2)
+async def test_unknown_owner_counts_after_restart_without_replaying(app,queue,backend,monkeypatch,original_independent,limit):
+    await configure(app,maxEnvironmentsPerChat=limit)
     invoke=environments.invoke
     def uncertain(config,home,row,action,args):
         if action=='execute' and args['command']=='unknown':
@@ -175,3 +176,45 @@ async def test_environment_pages_and_cleanup_do_not_select_another_owner(app,que
     await act(app,'remove',stopped['resource'],'remove-selected')
     assert environments.get(app.data_dir,scope(app)['sessionId'],chosen['id'])['status']=='retired'
     assert all(environments.get(app.data_dir,scope(app)['sessionId'],row['id'])['status']!='retired' for row in rows if row['id']!=chosen['id'])
+
+
+@pytest.mark.parametrize('limit', [0, 6])
+async def test_environment_zero_count_keeps_atomic_retained_owner_bound(app, queue, limit):
+    await configure(app, maxEnvironmentsPerChat=limit, maxOwnedResourcesPerChat=3)
+    home=app.data_dir;sid=scope(app)['sessionId'];workspace=scope(app)['workspaceId']
+    barrier=threading.Barrier(6)
+    def reserve(index):
+        barrier.wait()
+        try:
+            return environments.prepare(home,sid,workspace,{'sessionId':sid},'/owned/source','backend',f'check-{index}')
+        except ValueError as error:
+            assert 'resource owner capacity' in str(error)
+            return None
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        rows=list(pool.map(reserve,range(6)))
+    assert len([row for row in rows if row])==3
+    with closing(environments.storage.connect(home)) as db:
+        assert db.execute("SELECT COUNT(*) FROM allocations WHERE status!='retired'").fetchone()[0]==3
+
+async def test_default_source_count_accepts_above_eight_without_rewriting_saved_policy(app,queue):
+    source=app.state['sessions'][0]
+    runtime=Transport();runtime.app=app;app.runtime=runtime;source_plan(app,source)
+    children=[]
+    for index in range(12):
+        child=app._new_session({'title':f'Active {index}'})
+        child.update(status='working',collaboration={'creatorSessionId':source['id']})
+        app.state['sessions'].append(child);children.append(child)
+    assert settings.concurrency(app)['maxTaskChatsPerSource']==0
+    receipt=await agent(app,source,'coordination.create',{'title':'Next','text':'Independent task'},'uncapped')
+    assert receipt['delivery']=='creation_pending'
+    await configure(app,maxTaskChatsPerSource=8)
+    saved=(app.data_dir/'test-execution.json').read_bytes()
+    with pytest.raises(AppError,match='8 outstanding'):
+        await agent(app,source,'coordination.create',{'title':'Limited','text':'Independent task'},'limited')
+    assert (app.data_dir/'test-execution.json').read_bytes()==saved
+    assert all(child['status']=='working' for child in children)
+
+@pytest.mark.parametrize('key', sorted(settings.CONCURRENCY_DEFAULTS.keys()-settings.OPTIONAL_CONCURRENCY_COUNTS))
+def test_retained_owner_and_reservation_bounds_cannot_be_disabled(key):
+    with pytest.raises(ValueError):
+        settings.validate({'version':1,'queue':{},'profiles':{},'concurrency':{key:0}})

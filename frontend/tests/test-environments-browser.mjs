@@ -52,6 +52,9 @@ try{
  await expect(panel.getByText('Environment: running',{exact:true})).toBeVisible();
  assert.equal(writes.length,2);assert.equal(writes[0].id,writes[1].id);assert.deepEqual(writes[0].args,writes[1].args);
  assert.equal((await facts()).callCounts.start,1,'Lost acknowledgement never starts a replacement');
+ await expect(panel.getByRole('form',{name:'Start test environment',exact:true})).toBeVisible();
+ const counts=(await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveConcurrency;
+ assert.equal(counts.maxEnvironmentsPerChat,0,'Retained owner does not hide Start when the count ceiling is disabled');
  await panel.locator('[data-test-environment]').getByLabel('Check command',{exact:true}).fill('python check.py');
  await panel.getByRole('button',{name:'Run check',exact:true}).click();
  await expect.poll(async()=>(await facts()).callCounts.execute).toBe(1);

@@ -22,7 +22,7 @@ async def save(app, queue=None, profiles=None):
 async def test_passive_private_global_policy_and_stale_writer(app, monkeypatch):
     monkeypatch.setattr(environments, 'capacity', lambda *a: pytest.fail('not an admission'))
     first = (await app.dispatch('testing.execution.read', {}))['result']
-    assert first['effectiveQueue'] == {'maxPending': 64, 'maxPendingPerChat': 1, 'defaultWaitSeconds': 3600}
+    assert first['effectiveQueue'] == {'maxPending': 64, 'maxPendingPerChat': 0, 'defaultWaitSeconds': 0}
     result = await save(app, {'maxPending': 100, 'defaultWaitSeconds': 0}, {'linux-python': {'cpus': 3}})
     assert result['effectiveProfiles'][0]['cpus'] == 3
     assert (app.data_dir / 'test-execution.json').stat().st_mode & 0o777 == 0o600
@@ -48,7 +48,7 @@ async def test_new_policy_and_existing_queued_budget_survive_settings_change(app
     await submit(app)
     accepted = copy.deepcopy(record(queue, app)['job'])
     assert accepted['expiresAt'] is None and accepted['timeoutSeconds'] == 3601
-    await save(app, {'maxPending': 1}, {'linux-python': {'cpus': 1, 'maxTimeoutSeconds': 300}})
+    await save(app, {'maxPending': 1, 'defaultWaitSeconds': 20}, {'linux-python': {'cpus': 1, 'maxTimeoutSeconds': 300}})
     assert record(queue, app)['job'] == accepted
     from amplifier_web.test_queue import TestQueue
     recovered = app.test_queue = TestQueue(app)
@@ -109,7 +109,7 @@ async def test_zero_wait_still_obeys_stop_and_explicit_wait_limit(app, queue, ba
     assert 0 < record(queue, app, 'bounded')['job']['expiresAt'] - time.time() <= 20
 
 @pytest.mark.parametrize('value', [
-    {'queue': {'maxPending': 0}}, {'queue': {'maxPendingPerChat': 0}}, {'queue': {'maxPendingPerChat': True}}, {'queue': {'defaultWaitSeconds': -1}},
+    {'queue': {'maxPending': 0}}, {'queue': {'maxPendingPerChat': -1}}, {'queue': {'maxPendingPerChat': True}}, {'queue': {'defaultWaitSeconds': -1}},
     {'profiles': {'linux-python': {'cpus': True}}}, {'profiles': {'browser-test': {'memoryMiB': 0}}},
     {'profiles': {'python-project': {'defaultTimeoutSeconds': 9000, 'maxTimeoutSeconds': 100}}},
 ])
@@ -160,3 +160,22 @@ async def test_historical_direct_environment_keeps_sixty_second_default(app, bac
     result = await act(app, 'execute', environments.public(app.data_dir, row), 'legacy-check', command='true')
     assert result['request']['state'] == 'completed'
     assert backend[-1][1]['timeoutSeconds'] == 60
+
+
+async def test_optional_zero_counts_are_public_and_saved_positive_settings_are_not_rewritten(app,queue):
+    from amplifier_web.service import ACTION_DEFINITIONS
+    schema=ACTION_DEFINITIONS['testing.execution.save'][1]['properties']
+    for key in settings.OPTIONAL_CONCURRENCY_COUNTS:
+        assert schema['concurrency']['properties'][key]['minimum']==0
+    assert schema['queue']['properties']['maxPendingPerChat']['minimum']==0
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    finite={'maxTaskChatsPerSource':8,'maxEnvironmentsPerChat':1}
+    await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{'maxPendingPerChat':1,'defaultWaitSeconds':3600},'profiles':{},'concurrency':finite})
+    path=app.data_dir/'test-execution.json';before=path.read_bytes()
+    current=(await app.dispatch('testing.execution.read',{}))['result']
+    assert current['concurrency']==finite and current['effectiveQueue']['defaultWaitSeconds']==3600
+    assert path.read_bytes()==before
+    zero=(await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{'maxPendingPerChat':0},'profiles':{},'concurrency':dict.fromkeys(finite,0)}))['result']
+    assert zero['effectiveQueue']=={'maxPending':64,'maxPendingPerChat':0,'defaultWaitSeconds':0}
+    assert zero['effectiveConcurrency']['maxOwnedResources']==512
+    assert zero['effectiveConcurrency']['maxOwnedResourcesPerChat']==32
