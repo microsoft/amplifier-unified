@@ -15,6 +15,13 @@ from amplifier_web import auth
 
 auth.authenticate_pam = lambda username, password: (username, password) == ('inline-fixture', 'fixture-password')
 
+async def main(home, port):
+    app = await chat_ui_server.fixture.main(home)
+    app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
+    return app
+
+
 if __name__ == '__main__':
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8958
     with tempfile.TemporaryDirectory(prefix='amplifier-inline-ui-') as temporary:
-        web.run_app(chat_ui_server.fixture.main(Path(temporary)), host='127.0.0.1', port=8958, print=None)
+        web.run_app(main(Path(temporary), port), host='127.0.0.1', port=port, print=None)

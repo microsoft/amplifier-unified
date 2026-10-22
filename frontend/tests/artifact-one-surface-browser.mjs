@@ -3,6 +3,7 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
+import {createServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
@@ -10,17 +11,21 @@ import {mkdir,writeFile} from 'node:fs/promises';
 
 const evidence=process.env.ARTIFACT_EVIDENCE_DIR||'/artifacts/one-surface';
 await mkdir(evidence,{recursive:true});
-const fixture=spawn(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.ARTIFACT_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url))],{stdio:'inherit'});
+const reservation=createServer();
+await new Promise((resolve,reject)=>{reservation.once('error',reject);reservation.listen(0,'127.0.0.1',resolve)});
+const port=reservation.address().port,base=`http://127.0.0.1:${port}`;
+await new Promise((resolve,reject)=>reservation.close(error=>error?reject(error):resolve()));
+const fixture=spawn(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.ARTIFACT_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url)),String(port)],{stdio:'inherit'});
 const stop=ownFixture(fixture,{label:'Artifact presentation fixture'});
 let browser,page,failure;const errors=[];
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 try{
- for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}if(fixture.exitCode!==null)throw Error('Fixture exited before readiness');await new Promise(resolve=>setTimeout(resolve,100));}
+ for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}catch{}if(fixture.exitCode!==null)throw Error('Fixture exited before readiness');await new Promise(resolve=>setTimeout(resolve,100));}
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS?['--single-process']:[]});
  const context=await browser.newContext({viewport:{width:1400,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto('http://127.0.0.1:8958/login');
+ await page.goto(base+'/login');
  await page.getByLabel('Username').fill('inline-fixture');await page.getByLabel('Password').fill('fixture-password');
  await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');await showFixtureConversation(page);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Review one saved artifact.');await page.getByRole('button',{name:'Send message',exact:true}).click();
@@ -93,7 +98,7 @@ try{
  await card.scrollIntoViewIfNeeded();await card.locator('iframe').waitFor();
  await expect(page.locator('.a-canvas-workspace iframe')).toHaveCount(0);
  // A separate client changes its own choice, not this page's.
- const other=await page.context().newPage();await other.goto('http://127.0.0.1:8958/');
+ const other=await page.context().newPage();await other.goto(base+'/');
  await other.waitForSelector('#amp-one');await showFixtureConversation(other);
  const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sid);
