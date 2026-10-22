@@ -471,6 +471,23 @@ try{
  await page.locator('.a-messages').evaluate((node,top)=>{node.scrollTop=top;node.dispatchEvent(new Event('scroll'));},readingTop);
  await expect(page.locator('.a-quote-selection')).toHaveCount(0);
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();
+ // A newer gesture can select the identical source interval while A is pending.
+ await c.locator('.a-detail-text p:nth-of-type(2)').dispatchEvent('pointerdown');
+ await selectContents('p:nth-of-type(2)');
+ let sameRelease,sameStarted,sameSettled;
+ const sameHold=new Promise(resolve=>sameRelease=resolve),sameWait=new Promise(resolve=>sameStarted=resolve),sameDone=new Promise(resolve=>sameSettled=resolve);
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();sameStarted();await sameHold;await route.fulfill({response});sameSettled();}else await route.continue();});
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();await sameWait;
+ await page.keyboard.press('Escape');await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ await c.locator('.a-detail-text p:nth-of-type(2)').dispatchEvent('pointerdown');await selectContents('p:nth-of-type(2)');
+ await expect(page.getByRole('button',{name:'Quote selection',exact:true})).toBeVisible();
+ sameRelease();await sameDone;await expect(quotes).toHaveCount(1);await page.unroute('**/api/actions');
+ await page.evaluate(()=>window.dispatchEvent(new Event('resize')));
+ await page.locator('.a-messages').evaluate(node=>node.dispatchEvent(new Event('scroll')));
+ await expect(page.getByRole('button',{name:'Quote selection',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();await expect(quotes).toHaveCount(2);
+ assert.equal(references(await documentValue())[0].quote.id,references(await documentValue())[1].quote.id);
+ for(let i=0;i<2;i++)await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();
  // Keep keyboard activation, but do not leave the action over unrelated text
  // after scrolling the selected source away.
  await selectContents('p:nth-of-type(2)');await page.getByRole('button',{name:'Quote selection',exact:true}).focus();

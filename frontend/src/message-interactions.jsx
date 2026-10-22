@@ -55,7 +55,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
  const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const owner=JSON.stringify([sessionId,message.id]),current=useRef(owner),controller=useRef(null),[,refresh]=useState(0);current.current=owner;
  const anchor=useRef(null),selectionTool=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
- const selectedRef=useRef(null),dismissedSelection=useRef(null);selectedRef.current=selected;
+ const selectedRef=useRef(null),activeSelection=useRef(null),dismissedSelection=useRef(null);selectedRef.current=selected;
  useEffect(()=>{
   if(typeof document==='undefined')return;
   const update=event=>{
@@ -64,21 +64,22 @@ export function MessageInteractions({message,sessionId,dispatch}){
     if(event?.type==='selectionchange')return;
     const range=selectedRef.current.range;selection={isCollapsed:range.collapsed,rangeCount:1,getRangeAt:()=>range};
    }
-   if(!selection||selection.isCollapsed||selection.rangeCount!==1){dismissedSelection.current=null;setSelected(null);return;}
+   if(!selection||selection.isCollapsed||selection.rangeCount!==1){activeSelection.current=null;dismissedSelection.current=null;setSelected(null);return;}
    const range=selection.getRangeAt(0);
    if(dismissedSelection.current&&!sameRange(dismissedSelection.current.range,range))dismissedSelection.current=null;
    const result=selectedQuote(article,selection);
-   if(!result){setSelected(null);return;}
+   if(!result){activeSelection.current=null;setSelected(null);return;}
+   const previous=activeSelection.current,same=previous&&previous.source===result.source&&sameRange(previous.range,range);
+   const intent={...result,token:same?previous.token:{},range:range.cloneRange()};activeSelection.current=intent;
    // A completed/dismissed action must not be revived by layout scroll events
    // while the unchanged source text is still selected in the browser.
    if(dismissedSelection.current&&dismissedSelection.current.source===result.source){setSelected(null);return;}
    const rect=range.getBoundingClientRect(),pane=article.closest('.a-messages')?.getBoundingClientRect();
    if(pane&&(rect.bottom<pane.top||rect.top>pane.bottom)){setSelected(null);return;}
-   const previous=selectedRef.current,same=previous&&previous.source===result.source&&sameRange(previous.range,range);
-   setSelected({...result,token:same?previous.token:{},range:range.cloneRange(),left:Math.max(8,Math.min(rect.left,window.innerWidth-224)),top:Math.max(8,Math.min(rect.bottom+8,window.innerHeight-56))});
+   setSelected({...intent,left:Math.max(8,Math.min(rect.left,window.innerWidth-224)),top:Math.max(8,Math.min(rect.bottom+8,window.innerHeight-56))});
   };
   const dismiss=event=>{if(event.key==='Escape'){if(selectedRef.current)dismissedSelection.current=selectedRef.current;setSelected(null);}};
-  const reselect=event=>{if(anchor.current?.closest('[data-message-id]')?.querySelector('.a-detail-text')?.contains(event.target))dismissedSelection.current=null;};
+  const reselect=event=>{if(anchor.current?.closest('[data-message-id]')?.querySelector('.a-detail-text')?.contains(event.target)){activeSelection.current=null;dismissedSelection.current=null;}};
   document.addEventListener('selectionchange',update);document.addEventListener('keydown',dismiss);document.addEventListener('pointerdown',reselect,true);window.addEventListener('scroll',update,true);window.addEventListener('resize',update);
   return()=>{document.removeEventListener('selectionchange',update);document.removeEventListener('keydown',dismiss);document.removeEventListener('pointerdown',reselect,true);window.removeEventListener('scroll',update,true);window.removeEventListener('resize',update);};
  },[owner,message.text]);
@@ -115,10 +116,10 @@ export function MessageInteractions({message,sessionId,dispatch}){
    const fresh=selectedQuote(article,{isCollapsed:range.collapsed,rangeCount:1,getRangeAt:()=>range});
    if(!fresh||fresh.error||fresh.source!==captured.source||JSON.stringify(fresh.spans)!==JSON.stringify(captured.spans))throw Error('The source or selection changed. Select the passage again.');
    await addPassage(fresh.source,{spans:fresh.spans});
-   const native=window.getSelection();
    // Visibility is not selection ownership: the toolbar may be offscreen while
-   // this exact range is still selected. Do not suppress a newer B selection.
-   if(native?.rangeCount===1&&sameRange(native.getRangeAt(0),captured.range))dismissedSelection.current=captured;
+   // this intent is still current. A new gesture selecting identical text is B,
+   // not permission for A's completion to dismiss it.
+   if(activeSelection.current?.token===captured.token)dismissedSelection.current=captured;
    setSelected(current=>current?.token===captured.token?null:current);
   }catch(error){setError(error.message);}
  };
