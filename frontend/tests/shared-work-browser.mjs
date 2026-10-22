@@ -24,6 +24,7 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
 await mkdir(output,{recursive:true});
 const installed=process.env.AMPLIFIER_TEST_INSTALLED==='1';
+const coldTaskRequested=process.env.AMPLIFIER_TEST_COLD_TASK==='1';
 const fixturePath=process.env.AMPLIFIER_TEST_FIXTURE||root+'tests/fixtures/empty_host_ui_server.py';
 const python=process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python';
 if(installed)assert.ok(process.env.AMPLIFIER_TEST_PYTHON&&process.env.AMPLIFIER_TEST_FIXTURE&&!fixturePath.startsWith(root),'Installed qualification requires an external fixture and explicit interpreter');
@@ -49,8 +50,8 @@ const fixture=spawn(python,fixtureArgs,fixtureOptions);
 const stop=ownFixture(fixture,{label:'Shared Work fixture',timeoutMs:40000});
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
-let browser,peerBrowser,originalError,result,page,fixtureUrl;
-const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,peerBrowserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null,workWaits:[],cleanupComplete:null,observationErrors:[]};
+let browser,peerBrowser,touchBrowser,originalError,result,page,fixtureUrl;
+const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,peerBrowserDisconnectedAt:null,touchBrowserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null,workWaits:[],cleanupComplete:null,observationErrors:[]};
 let observationBuffer='';
 fixture.stdout.on('data',chunk=>{
  observationBuffer+=String(chunk);
@@ -206,6 +207,21 @@ try {
   }
   await page.screenshot({path:path.join(output,`shared-work-${width}.png`)});
  }
+ // Real domain-produced decisions: absence of counterevidence is zero, while
+ // later counterevidence makes the same accepted decision historical.
+ const chooseWork=async item=>{
+  await work.getByRole('searchbox',{name:'Find work'}).fill(item.title);
+  await work.locator(`[data-work-id="${item.id}"]`).click();
+  await expect(detail.getByRole('heading',{name:item.title,exact:true})).toBeVisible();
+ };
+ const decisionValue=detail.locator('dt').filter({hasText:/^Human decision$/}).locator('xpath=following-sibling::*[1][self::dd]');
+ await chooseWork(manifest.decisions.fresh);
+ await expect(decisionValue).toHaveText('accepted');
+ await expect(detail.getByText(/Independent checks passed|Shipped/)).toHaveCount(0);
+ await chooseWork(manifest.decisions.later);
+ await expect(decisionValue).toHaveText('accepted — no longer current; later counterevidence retained.');
+ await expect(detail.getByText(/Independent checks passed|Shipped/)).toHaveCount(0);
+ await chooseWork(manifest.target);
  // A second browser client has independent presentation choices.
  // Chromium single-process mode cannot reliably host a second isolated context.
  // A second owned process preserves independent cookies/storage/client identity
@@ -286,11 +302,99 @@ try {
  await detail.getByRole('button',{name:'Open chat: '+manifest.ownerSessionId,exact:true}).click();
  await expect.poll(async()=>(await state()).selectedSessionId).toBe(manifest.ownerSessionId);
  await action('session.select',{id:draftOwner});
+ let coldTaskResult={status:'not_requested',reason:'Requires the combined canonical cold-task producer'};
+ if(coldTaskRequested){
+  const expected=manifest.coldTask;
+  assert.ok(expected,'Cold mode must seed its real persisted task');
+  await action('session.select',{id:expected.sessionId});
+  await action('view.update',{patch:{panel:'runtime',runtimeDraft:{tab:'direction'}}});
+  const saved=page.getByRole('region',{name:'Saved task',exact:true});
+  const load=saved.getByRole('button',{name:'Load saved task',exact:true});
+  await expect(load).toBeVisible();
+  const ordinary=async()=>{
+   const current=await state();
+   return {runtimeControl:current.runtimeControl?.[expected.sessionId]??null,
+    task:current.sessions.find(row=>row.id===expected.sessionId)?.task??null};
+  };
+  const ordinaryBefore=await ordinary();
+  const responsePromise=page.waitForResponse(response=>{
+   if(!response.url().endsWith('/api/actions')||response.request().method()!=='POST')return false;
+   const body=response.request().postDataJSON();
+   return body.action==='task.get'&&body.args.sessionId===expected.sessionId;
+  }).then(response=>({response}),error=>({error}));
+  await load.focus();await page.keyboard.press('Enter');
+  const observed=await responsePromise;if(observed.error)throw observed.error;
+  const response=observed.response,body=await response.json();
+  assert.equal(response.status(),200);assert.equal(body.accepted,true);
+  assert.equal(body.result.status,'available');assert.equal(body.result.task.id,expected.id);
+  assert.equal(body.result.task.revision,expected.revision);
+  assert.equal(body.result.continuity.status,'not_observed_cold');
+  assert.ok(!body.state,'A passive cold task response must not return broad app state');
+  assert.ok(Buffer.byteLength(JSON.stringify(body),'utf8')<=10240,'Bounded task response');
+  await expect(saved.getByText(expected.objective,{exact:true})).toBeVisible();
+  await expect(saved.getByRole('status').filter({hasText:`Task paused · revision ${expected.revision}`})).toBeVisible();
+  await expect(saved.getByText(/Some details are not loaded in this bounded view/)).toBeVisible();
+  await saved.getByText('Linked questions, operations, and artifacts',{exact:true}).click();
+  await expect(saved.getByText('Artifacts: Not loaded (80)',{exact:true})).toBeVisible();
+  assert.ok(!JSON.stringify(body).includes(expected.privateMarker));
+  assert.ok(!(await saved.innerText()).includes(expected.privateMarker));
+  assert.deepEqual(await ordinary(),ordinaryBefore,'Cold read cannot publish private task into ordinary state');
+  await saved.getByText('Record a blocker or completion',{exact:true}).click();
+  await saved.getByRole('textbox',{name:'Evidence that the objective is complete (one per line)'}).fill('Synthetic evidence, not permission to complete omitted details');
+  await expect(saved.getByRole('button',{name:'Complete task with evidence',exact:true})).toBeDisabled();
+  for(const width of [390,320,1440]){
+   await page.setViewportSize({width,height:900});
+   await load.scrollIntoViewIfNeeded();
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Cold task no overflow at '+width);
+   await page.screenshot({path:path.join(output,`cold-task-${width}.png`)});
+  }
+  // A narrow viewport is not a touch device. Exercise the real coarse-pointer
+  // stylesheet in a separately observed client rather than forcing its CSS.
+  touchBrowser=await chromium.launch(launch);
+  touchBrowser.on('disconnected',()=>{termination.touchBrowserDisconnectedAt=Date.now()});
+  const touch=await touchBrowser.newPage({hasTouch:true,viewport:{width:390,height:900},extraHTTPHeaders:headers});
+  observePage(touch,'touch');
+  await touch.goto(url);await touch.waitForFunction(()=>window.amplifier);
+  assert.equal(await touch.evaluate(()=>matchMedia('(pointer:coarse)').matches),true);
+  const touchAction=(name,args)=>bounded(touch.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),actionTimeoutMs,'Touch '+name);
+  await touchAction('session.select',{id:expected.sessionId});
+  await touchAction('view.update',{patch:{panel:'runtime',runtimeDraft:{tab:'direction'}}});
+  const touchSaved=touch.getByRole('region',{name:'Saved task',exact:true});
+  const touchLoad=touchSaved.getByRole('button',{name:'Load saved task',exact:true});
+  await touchLoad.tap();
+  await expect(touchSaved.getByText(expected.objective,{exact:true})).toBeVisible();
+  for(const width of [390,320]){
+   await touch.setViewportSize({width,height:900});await touchLoad.scrollIntoViewIfNeeded();
+   const box=await touchLoad.boundingBox();
+   assert.ok(box.height>=44&&box.width>=44,'44px coarse-pointer Load target at '+width);
+   assert.ok(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Touch task no overflow at '+width);
+   await touch.screenshot({path:path.join(output,`cold-task-touch-${width}.png`)});
+  }
+  await bounded(touch.close(),actionTimeoutMs,'Touch page close');
+  await action('session.select',{id:draftOwner});
+  await expect(saved.getByText(expected.objective,{exact:true})).toHaveCount(0);
+  await load.click();
+  await expect(saved.getByRole('alert')).toContainText('Saved task state is unavailable');
+  await expect(saved.getByText('No saved task is recorded.',{exact:true})).toHaveCount(0);
+  await expect(saved.getByRole('button',{name:'Save task',exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+  await expect(composer).toHaveDraft('Private draft remains unchanged.');
+  await expect(page.getByRole('button',{name:'Remove private-draft.txt',exact:true})).toBeVisible();
+  coldTaskResult={status:'passed',taskId:expected.id,revision:expected.revision,
+   responseBytes:Buffer.byteLength(JSON.stringify(body),'utf8'),ordinaryStateUnchanged:true,
+   missingDetailsVisible:true,completionDisabled:true,unavailableNotEmpty:true,
+   touch:{coarsePointer:true,separateProcess:true,widths:[390,320],minimumLoadTarget:44}};
+ }
  const observation=await (await page.request.get(url+'/fixture/shared-work',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(observation.forbiddenRuntimeCalls,[]);
  assert.deepEqual(observation.runtimeCallbackCounts,{start:0,send:0,prewarm:0});
  assert.equal(observation.pendingWarmups,0,'No scheduled warm callback may remain unobserved');
  assert.equal(observation.coldReopen,true);assert.deepEqual(observation.coldReadCalls,[]);
+ if(coldTaskRequested){
+  assert.deepEqual(observation.taskControlCalls,[]);
+  assert.deepEqual(observation.taskReadObservations.map(row=>row.status),['available','available','unavailable']);
+  assert.ok(observation.taskReadObservations.every(row=>row.accepted&&!row.broadStateReturned));
+ }
  const runtime=await (await page.request.get(url+'/fixture',{timeout:actionTimeoutMs})).json();
  assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);assert.equal(runtime.workerCount,0);
  // Close observed pages before the final awaited assertion: detached listener
@@ -304,8 +408,9 @@ try {
   coldServiceReopen:{seedPid:seed.pid,reopenedPid:fixture.pid,readHydrationCalls:observation.coldReadCalls},
   dirtyCanvas:{refusal:true,mountPreserved:true,draftAndAttachmentPreserved:true},
   dirtySettings:{keepRefusedNavigation:true,privateDraftPreserved:true,discardWithoutSave:true},
+  decisionCurrentness:{freshAccepted:true,laterCounterevidenceHistorical:true},coldTask:coldTaskResult,
   acceptedItems:found.size,sourcePagesComplete:true,priorReturnRetained:true,currentUnknown:true,
-  widths:[1440,390,320],clients:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
+  widths:[1440,390,320],clients:coldTaskRequested?3:2,forbiddenRuntimeCalls:observation.forbiddenRuntimeCalls,
   peerClient:{separateProcess:true},rendererValidation,
   runtimeCallbackCounts:observation.runtimeCallbackCounts,observationErrors:observer.errors,
   browserTimeouts:{actionTimeoutMs,navigationTimeoutMs},
@@ -325,7 +430,7 @@ try {
 finally {
  termination.closeRequestedAt=Date.now();
  try{
-  await finishFixture({label:'Shared Work fixture',close:[['peer browser',()=>peerBrowser?.close()],['browser',()=>browser?.close()]],stop,originalError});
+  await finishFixture({label:'Shared Work fixture',close:[['touch browser',()=>touchBrowser?.close()],['peer browser',()=>peerBrowser?.close()],['browser',()=>browser?.close()]],stop,originalError});
   try{
    assert.deepEqual(termination.observationErrors,[]);
    assert.ok(termination.cleanupComplete,'Real runner.cleanup must return');
