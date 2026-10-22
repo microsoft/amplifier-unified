@@ -10,6 +10,9 @@ _ENVIRONMENT = {
     'PYTHONPATH': '/workspace', 'PYTHONDONTWRITEBYTECODE': '1',
     'PLAYWRIGHT_BROWSERS_PATH': '/opt/unified-prepared/browsers',
     'HOME': '/artifacts/home', 'XDG_CACHE_HOME': '/artifacts/cache',
+    'AMPLIFIER_TEST_ARTIFACTS': '/artifacts',
+    'AMPLIFIER_TEST_PYTHON': '/opt/unified-prepared/venv/bin/python',
+    'AMPLIFIER_TEST_CONTRACT': '/opt/unified-prepared/execution-contract.json',
     'UV_OFFLINE': '1', 'PIP_NO_INDEX': '1', 'npm_config_offline': 'true',
 }
 _PROFILES = {
@@ -44,8 +47,22 @@ def get(profile_id='linux-python'):
         raise ValueError('Choose one of the supported test profiles.') from None
 
 
+def execution_contract(profile_id, source=None):
+    """Presentation/invocation contract, never a substitute for an owner receipt."""
+    if not get(profile_id)['preparationRequired']:
+        return None
+    return {
+        'version': 1, 'profileId': profile_id, 'workspace': '/workspace',
+        'artifacts': '/artifacts', 'python': '/opt/unified-prepared/venv/bin/python',
+        'manifest': '/opt/unified-prepared/execution-contract.json',
+        'source': {'gitMetadataAvailable': False, **(source or {})},
+        'pythonBuild': {'status': 'pending', 'command': '/opt/unified-prepared/build-venv/bin/python -m build --wheel --no-isolation --outdir /artifacts/dist /workspace'},
+        'retention': {'mode': 'archive-only', 'maxBytesPerSelection': 4 * 1024 ** 3},
+    }
+
+
 def catalog():
-    return [get(identity) for identity in _PROFILES]
+    return [{**get(identity), **({'executionContract': execution_contract(identity)} if get(identity)['preparationRequired'] else {})} for identity in _PROFILES]
 
 
 def validate_timeout(profile_id, seconds, timing_request=None):
@@ -58,10 +75,12 @@ def validate_timeout(profile_id, seconds, timing_request=None):
 
 RESOURCE_FIELDS = ('cpus', 'memoryMiB', 'pids', 'tmpMiB', 'shmMiB')
 
+
 def freeze(profile_id, overrides=None):
     profile = {**get(profile_id), **(overrides or {})}
     value = {'profileId': profile_id, **{key: profile[key] for key in RESOURCE_FIELDS}}
     return {**value, 'sha256': hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()}
+
 
 def resources(profile_id, request=None):
     profile = get(profile_id)

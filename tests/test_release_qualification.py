@@ -446,7 +446,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
     ('patch-placement-recovery', ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py']),
     ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
-    ('managed-removal-recovery', ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
+    ('managed-removal-recovery', ['tests/test_prepared_execution_contract.py', 'tests/test_environment_preparation.py', 'tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
 def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):
