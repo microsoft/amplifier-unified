@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.212",
+      "title": "Keep updates moving and let parallel work use available capacity",
+      "changes": [
+        "Keep test-runner update checks independent of ordinary environment-count quotas while retaining CPU, memory, disk and ownership checks. New managed local test setups use measured resource admission instead of fixed running and retained environment counts.",
+        "Allow assignment owners to remove the open-helper and concurrent-model-call ceilings. New assignments start without these count ceilings; existing saved limits, spending budgets, unknown outcomes and Stop remain respected.",
+        "Keep stopped-turn failure information available through worker preparation so an authorized recovery can identify the correct failed generation.",
+        "Preserve unsaved workspace resource and reservation edits when navigating between Home, chats and workspaces, without replaying pending saves.",
+        "Update release-notice and update-readiness smoke fixtures for current installed and pending-runner states."
+      ],
+      "notices": [
+        {
+          "id": "assignment-count-defaults-212",
+          "title": "New assignments can run more work in parallel",
+          "detail": "New assignments no longer default to eight open helpers or eight concurrent model calls. Existing assignments keep their saved limits. Set explicit assignment limits if you want to constrain concurrency or spending; blank execution-count fields mean no count ceiling. Test environments still use machine resource checks.",
+          "action": "Review assignment settings if you want explicit concurrency or spending limits. Existing saved limits are unchanged."
+        }
+      ]
+    },
+    {
       "version": "0.20.211",
       "title": "Wait safely for busy assignment capacity",
       "changes": [
