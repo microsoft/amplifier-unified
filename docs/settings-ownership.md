@@ -8,6 +8,13 @@ backup/repair, reset, and terminal/app installation help.
 
 Controls for an existing conversation are in Chat:
 
+The model chooser retains an explicit next-message choice ahead of discovered
+defaults. A fresh ready report may update those defaults after the chooser has
+already loaded, but only for the current worker and the settings revision from
+which it prepared. Older reports cannot overwrite a newer settings catalog;
+in-flight catalog reads recheck the current report before publishing. Background
+preparation follows the same rule without changing the last turn's outcome.
+
 | Controls | Destination |
 | --- | --- |
 | Name, identity, workspace, saved history | Chat info |
