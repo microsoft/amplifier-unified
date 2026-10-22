@@ -172,6 +172,32 @@ async def test_passive_reaction_receipt_is_exact_and_never_replays(app):
     for changed in [{'present': False}, {'messageId': 'other'}, {'clientId': 'two'}, {'emoji': '\u2705'}]:
         with pytest.raises(AppError, match='does not belong'):
             reaction_status(app, {**read, **changed})
+    unavailable = {**args, 'messageId': 'missing'}
+    with pytest.raises(AppError):
+        await call(app, 'message.reaction', unavailable, command_id='rejected-reaction')
+    rejected = reaction_status(app, {**unavailable, 'commandId': 'rejected-reaction', 'clientId': 'one'})
+    assert rejected['status'] == 'rejected' and rejected['receipt']['accepted'] is False
+    assert rejected['receipt']['status'] == 404
+    duplicate = await call(app, 'message.reaction', unavailable, command_id='rejected-reaction')
+    assert duplicate['duplicate'] and duplicate['accepted'] is False
+    assert not app.runtime.sent
+
+
+async def test_archived_stopped_message_reaction_does_not_resume_or_restore_chat(app):
+    args = {**target(app), 'emoji': '\u2705', 'present': True}
+    session = app._session()
+    await call(app, 'session.archive', {'id': session['id']})
+    session['interruptionRevision'] = 7
+    organization = copy.deepcopy(app._state['conversationOrganization'])
+    receipt = await call(app, 'message.reaction', args)
+    assert receipt['accepted'] and receipt['result']['sent'] is False
+    assert session['interruptionRevision'] == 7
+    assert app._state['conversationOrganization'] == organization
+    assert not app.runtime.sent and not app.runtime.started
+    session['messages'] = [row for row in session['messages'] if row['id'] != args['messageId']]
+    with pytest.raises(AppError, match='not available'):
+        await call(app, 'message.reaction', {**args, 'present': False})
+    assert session['messageAnnotations'][args['messageId']]['reactions'] == ['\u2705']
 
 
 async def test_reaction_context_is_caller_bound_bounded_and_passive(app):
@@ -191,6 +217,18 @@ async def test_reaction_context_is_caller_bound_bounded_and_passive(app):
     bounded = reaction_context(MetadataOnly(id='s', messageAnnotations={
         f'm{index}': {'reactions': ['\u2705']} for index in range(1000)}))
     assert len(bounded['items']) == 32 and bounded['omittedMessageCount'] == 968
+    session = app._session()
+    first = session['messages'][0]
+    for index in range(40):
+        row = app._message(session, 'assistant', f'Reaction target {index}')
+        await call(app, 'message.reaction', {'sessionId': session['id'], 'messageId': row['id'],
+                                           'emoji': '\u2705', 'present': True})
+    await call(app, 'message.reaction', {**target(app), 'emoji': '\u2764\ufe0f', 'present': True})
+    context = reaction_context(session)
+    assert context['items'][-1]['messageId'] == first['id']
+    assert '\u2764\ufe0f' in context['items'][-1]['reactions']
+    await call(app, 'message.reaction', {**target(app), 'emoji': '\u2764\ufe0f', 'present': False})
+    assert '\u2764\ufe0f' not in reaction_context(session)['items'][-1]['reactions']
 
 
 async def test_restart_history_projection_and_client_selection_preserve_metadata(app):

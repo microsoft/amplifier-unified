@@ -55,12 +55,15 @@ try{
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  // Feedback is local: deliberately hold the write before it can reach the host.
  await page.setViewportSize({width:1280,height:900});
- let heldResolve;const held=new Promise(resolve=>heldResolve=resolve);
+ let heldResolve,heldCommand;const held=new Promise(resolve=>heldResolve=resolve);
  const holdReaction=route=>{
+  if(route.request().postDataJSON()?.action==='session.rename'){pendingRoutes.add(route);heldCommand=route;return}
   if(route.request().postDataJSON()?.action==='message.reaction'){pendingRoutes.add(route);heldResolve(route);return}
   return route.continue();
  };
  await page.route('**/api/actions',holdReaction);
+ await page.evaluate(()=>{const s=window.amplifier.getState();window.heldRename=window.amplifier.dispatch('session.rename',{id:s.selectedSessionId,title:'Synthetic queue independence'}).catch(()=>{})});
+ await expect.poll(()=>!!heldCommand).toBe(true);
  await assistant.getByRole('button',{name:'React to message',exact:true}).click();
  const heart=assistant.getByRole('button',{name:'Heart',exact:true});
  await heart.evaluate(button=>{
@@ -86,11 +89,13 @@ try{
  assert.equal(nextFrame.scrollDelta,0,'Reaction feedback must not move the reading position');
  assert.equal(nextFrame.topDelta,0,'The original message must stay in place');
  const heldRoute=await Promise.race([held,new Promise((_,reject)=>setTimeout(()=>reject(Error('Reaction request did not reach HTTP within 3 seconds')),3000))]);
+ assert.ok(heldCommand,'Reaction reached HTTP independently of the held general command');
  if(proof)await assistant.screenshot({path:join(proof,'optimistic-reaction-held.png')});
  await assistant.getByRole('button',{name:'Remove Heart reaction',exact:true}).click();
  await expect(assistant.getByRole('button',{name:'Remove Heart reaction',exact:true})).toHaveCount(0);
  await expect(assistant.getByRole('button',{name:'Remove Celebrate reaction',exact:true})).toBeVisible();
  pendingRoutes.delete(heldRoute);await heldRoute.continue();await page.unroute('**/api/actions',holdReaction);
+ pendingRoutes.delete(heldCommand);await heldCommand.continue();
  await expect.poll(async()=>(await control('inspect')).admissions.filter(row=>row.args.messageId===nextFrame.messageId&&row.args.emoji==='❤️'&&row.settledAt).length).toBe(2);
  await expect.poll(async()=>(await control('inspect')).annotations[nextFrame.messageId]?.reactions||[]).not.toContain('❤️');
  // A definite rejection rolls back only this emoji, not another reaction/draft.
@@ -121,6 +126,41 @@ try{
  await expect(assistant.getByRole('button',{name:'Remove Thumbs up reaction',exact:true})).not.toHaveAttribute('data-pending','true');
  assert.equal((await control('inspect')).admissions.length,beforeLost+1,'Unknown recovery must not replay the write');
  assert.equal(await readComposerDraft(draft),'Draft survives reaction recovery');
+ // Navigation away/back reuses one in-page flight owner. A late response must
+ // not dispatch a superseded removal after the newer click.
+ let late;const holdAccepted=async route=>{
+  if(route.request().postDataJSON()?.action!=='message.reaction')return route.continue();
+  const response=await route.fetch();pendingRoutes.add(route);late={route,response};
+ };
+ await page.route('**/api/actions',holdAccepted);
+ await assistant.getByRole('button',{name:'React to message',exact:true}).click();
+ await assistant.getByRole('button',{name:'Heart',exact:true}).click();
+ await expect.poll(()=>!!late).toBe(true);
+ await assistant.getByRole('button',{name:'Remove Heart reaction',exact:true}).click();
+ await page.evaluate(async()=>{window.reactionSource=window.amplifier.getState().selectedSessionId;await window.amplifier.dispatch('session.draft',{})});
+ await expect(page.locator('.a-message')).toHaveCount(0);
+ await page.evaluate(()=>window.amplifier.dispatch('session.select',{id:window.reactionSource}));
+ await showFixtureConversation(page);
+ await assistant.getByRole('button',{name:'React to message',exact:true}).click();
+ await assistant.getByRole('button',{name:'Heart',exact:true}).click();
+ const beforeLate=(await control('inspect')).admissions.length;
+ pendingRoutes.delete(late.route);await late.route.fulfill({response:late.response});await page.unroute('**/api/actions',holdAccepted);
+ await expect(assistant.getByRole('button',{name:'Remove Heart reaction',exact:true})).not.toHaveAttribute('data-pending','true');
+ assert.equal((await control('inspect')).admissions.length,beforeLate,'Discarded row must not issue an old follow-up');
+ // A real transport outage is uncertain, not rejected, and reconnect never
+ // resubmits a write whose server outcome is unknown.
+ const beforeOffline=(await control('inspect')).admissions.length;
+ await context.setOffline(true);
+ await assistant.getByRole('button',{name:'React to message',exact:true}).click();
+ await assistant.getByRole('button',{name:'Sad',exact:true}).click();
+ await expect(assistant.getByRole('button',{name:'Check saved reaction',exact:true})).toBeVisible();
+ await assistant.getByRole('button',{name:'Remove Sad reaction',exact:true}).click();
+ await expect(assistant.getByRole('button',{name:'Check saved reaction',exact:true})).toBeVisible();
+ await context.setOffline(false);
+ await expect(assistant.getByRole('alert')).toContainText('unknown');
+ await page.reload();await showFixtureConversation(page);
+ await expect(assistant.getByRole('button',{name:'Check saved reaction',exact:true})).toBeVisible();
+ assert.equal((await control('inspect')).admissions.length,beforeOffline,'Reconnect/reload must not repeat uncertain writes');
  // The real host must persist/broadcast a reaction while a synthetic send is
  // blocked. The deliberately broken REACTION_TEST_TURN_GATE control fails here.
  const before=await control('hold');

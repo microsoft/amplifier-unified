@@ -82,6 +82,9 @@ def command(service, action, args, *, origin="ui"):
         updated = [emoji for emoji in REACTIONS if emoji in selected]
         if updated != annotations.get(key, []):
             session['messageAnnotationRevision'] = session.get('messageAnnotationRevision', 0) + 1
+            if actor == 'user':
+                session['messageReactionOrder'] = [identity for identity in session.get('messageReactionOrder', [])
+                    if identity != row['id']][-31:] + [row['id']]
         annotations[key] = updated
         return {'sessionId': session['id'], 'messageId': row['id'], **copy.deepcopy(annotations),
                 'annotationRevision': session.get('messageAnnotationRevision', 0), 'reactionActor': actor, 'sent': False}
@@ -146,6 +149,8 @@ def fork_annotations(source, target, target_id=None):
     kept = {row['id'] for row in target.get('messages', []) if row.get('id')}
     target['messageAnnotations'] = {identity: copy.deepcopy(value)
         for identity, value in source.get('messageAnnotations', {}).items() if identity in kept}
+    target['messageAnnotationRevision'] = source.get('messageAnnotationRevision', 0)
+    target['messageReactionOrder'] = [identity for identity in source.get('messageReactionOrder', []) if identity in kept]
     # Copied quote snapshots continue to reference their original chat. When
     # the source row also survives in this fork, navigation stays in this chat.
     for row in target.get('messages', []):
@@ -191,9 +196,10 @@ def reaction_status(service, args):
     result = {'sessionId': session['id'], 'messageId': args['messageId'], 'status': 'unknown'}
     if previous:
         receipt = json.loads(previous[1])
-        if receipt.get('accepted') is True and receipt.get('result', {}).get('reactionActor') == 'user':
+        if receipt.get('accepted') in (True, False) and receipt.get('result', {}).get('reactionActor') == 'user':
             current = read_annotations(session, [args['messageId']])
-            result.update(status='accepted', receipt=receipt, revision=current['revision'],
+            result.update(status='accepted' if receipt['accepted'] else 'rejected',
+                          receipt=receipt, revision=current['revision'],
                           current=current['items'][args['messageId']])
     return result
 
@@ -201,17 +207,18 @@ def reaction_status(service, args):
 def reaction_context(session):
     """Bounded passive metadata, not input admission or native history edits."""
     annotations = session.get('messageAnnotations', {})
-    identities = list(annotations)[-32:]
+    recent = session.get('messageReactionOrder', [])
+    identities = ([identity for identity, value in annotations.items()
+                   if value.get('reactions') and identity not in recent] + list(recent))[-32:]
     # Do not hydrate a cold transcript merely to enrich a reaction notice.
     visible = {row['id']: row for row in dict.get(session, 'messages', [])[-100:]
                if isinstance(row, dict) and row.get('id') in identities}
     items = []
     for identity in identities:
-        selected = [emoji for emoji in annotations[identity].get('reactions', []) if emoji in REACTIONS]
-        if selected:
-            row = visible.get(identity, {})
-            items.append({'messageId': identity, 'reactions': selected,
-                          **({'role': row.get('role'), 'excerpt': str(row.get('text', ''))[:160]} if row else {})})
+        selected = [emoji for emoji in annotations.get(identity, {}).get('reactions', []) if emoji in REACTIONS]
+        row = visible.get(identity, {})
+        items.append({'messageId': identity, 'reactions': selected,
+                      **({'role': row.get('role'), 'excerpt': str(row.get('text', ''))[:160]} if row else {})})
     return {'sessionId': session['id'], 'revision': session.get('messageAnnotationRevision', 0),
             'items': items, 'bounded': True, 'omittedMessageCount': max(0, len(annotations) - len(identities))}
 

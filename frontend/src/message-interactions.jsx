@@ -1,7 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {Reply,Smile,X} from 'lucide-react';
 import {clientId,request} from './api';
-import {createReactionController} from './message-reactions';
+import {createReactionController,reactionControllers} from './message-reactions';
 import './message-interactions.css';
 
 const reactions=[['👍','Thumbs up'],['❤️','Heart'],['😂','Laugh'],['🎉','Celebrate'],['😮','Surprised'],['😢','Sad'],['👎','Thumbs down'],['✅','Check']];
@@ -33,19 +33,19 @@ export function MessageInteractions({message,sessionId,dispatch}){
  if(controller.current?.owner!==owner){
   const key='amplifier.reactions.v1:'+owner;
   let restored=[];try{restored=JSON.parse(sessionStorage.getItem(key)||'[]').filter(row=>typeof row.id==='string'&&typeof row.clientId==='string'&&reactions.some(([emoji])=>emoji===row.emoji)&&typeof row.present==='boolean'&&typeof row.desired==='boolean').slice(0,8)}catch{}
-  controller.current={owner,value:createReactionController({sessionId,messageId:message.id,clientId,restored,
-   notify:()=>{if(current.current===owner)refresh(value=>value+1)},
+  controller.current={owner,value:reactionControllers.acquire(owner,()=>createReactionController({sessionId,messageId:message.id,clientId,restored,
    save:rows=>{try{if(rows.length)sessionStorage.setItem(key,JSON.stringify(rows));else sessionStorage.removeItem(key)}catch{}},
    send:row=>dispatch('message.reaction',{sessionId,messageId:message.id,emoji:row.emoji,present:row.present},{id:row.id,feedback:false,presentation:true}),
    read:row=>request('/api/conversation/reaction-status',{method:'POST',body:{sessionId,messageId:message.id,commandId:row.id,clientId:row.clientId,emoji:row.emoji,present:row.present}})
-  })};
+  }))};
  }
  const reaction=controller.current.value;reaction.observe(message);
  useEffect(()=>{current.current=owner;return()=>{if(current.current===owner)current.current=null}},[owner]);
  useEffect(()=>{
+  const unsubscribe=reaction.subscribe(()=>refresh(value=>value+1));
   if(reaction.view().unknown)void reaction.reconcile();
   const online=()=>{if(reaction.view().unknown)void reaction.reconcile()};
-  globalThis.addEventListener?.('online',online);return()=>globalThis.removeEventListener?.('online',online);
+  globalThis.addEventListener?.('online',online);return()=>{unsubscribe();globalThis.removeEventListener?.('online',online)};
  },[reaction]);
  const state=reaction.view(),chosen=state.reactions;
  async function action(name,args){
@@ -57,7 +57,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
  return <><button type="button" className="a-icon" aria-label="Reply to message" title="Reply to message" data-action="message.reply" disabled={busy} onClick={()=>action('message.reply',{})}><Reply/></button><div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
   <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={e=>{const pane=e.currentTarget.closest('.a-messages')?.getBoundingClientRect();setBelow(e.currentTarget.getBoundingClientRect().top-(pane?.top||0)<110);setOpen(!open)}}><Smile/></button>
   {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} data-action="message.reaction" onClick={e=>{reaction.set(emoji,!chosen.includes(emoji));setOpen(false);e.currentTarget.closest('.a-reaction-control')?.querySelector('button')?.focus({preventScroll:true})}}>{emoji}</button>)}</div>}
- </div>{chosen.map(emoji=><button key={emoji} type="button" className="a-reaction-chip" aria-label={`Remove ${reactions.find(r=>r[0]===emoji)?.[1]||emoji} reaction`} aria-pressed="true" title={state.pending.includes(emoji)?'Reaction not yet confirmed':'Remove reaction'} data-pending={state.pending.includes(emoji)||undefined} data-action="message.reaction" onClick={()=>reaction.set(emoji,false)}>{emoji}</button>)}<span className="a-sr-only" role="status">{state.unknown?'Reaction not confirmed':state.pending.length?'Saving reaction':''}</span>{(error||state.error)&&<span className="a-message-interaction-error" role="alert">{error||state.error}{state.unknown&&<button type="button" disabled={state.checking} onClick={()=>reaction.reconcile()}>Check saved reaction</button>}</span>}</>;
+ </div>{chosen.map(emoji=><button key={emoji} type="button" className="a-reaction-chip" aria-label={`Remove ${reactions.find(r=>r[0]===emoji)?.[1]||emoji} reaction`} aria-pressed="true" title={state.pending.includes(emoji)?'Reaction not yet confirmed':'Remove reaction'} data-pending={state.pending.includes(emoji)||undefined} data-action="message.reaction" onClick={()=>reaction.set(emoji,false)}>{emoji}</button>)}<span className="a-sr-only" role="status">{state.unknown?'Reaction not confirmed':state.pending.length?'Saving reaction':''}</span>{(error||state.error||state.unknown)&&<span className="a-message-interaction-error" role="alert">{error||state.error||'Reaction not confirmed.'}{state.unknown&&<button type="button" disabled={state.checking} onClick={()=>reaction.reconcile()}>Check saved reaction</button>}</span>}</>;
 }
 
 export function MessageFocus({session,focus,detail,ensureVisible}){

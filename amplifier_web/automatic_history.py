@@ -25,7 +25,7 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
-                'messageAnnotations', 'messageQuotes', 'nativeAvailable', 'collaboration', 'coordinationReference')
+                'messageAnnotations', 'messageAnnotationRevision', 'messageReactionOrder', 'messageQuotes', 'nativeAvailable', 'collaboration', 'coordinationReference')
 
 def workspace_inputs(state):
     # Discovery needs identity/availability, not arbitrary presentation bodies.
