@@ -204,6 +204,30 @@ test('late unavailable read keeps a newer task projection instead of erasing it'
  }finally{reply.resolve({accepted:false});await request;await close(root)}
 });
 
+test('committed unavailable state survives an older publication until its receipt revision is observed',async()=>{
+ const calls=[];let root;
+ const dispatch=async(action,args)=>{
+  calls.push([action,args]);
+  return accepted(action==='task.get'?projection(3):{
+   status:'unavailable',task:null,coverage:'unknown',detailRequired:true,
+   receipt:{taskId:'task-one',revision:4,commandId:'original'},currentRevision:null,snapshotIsCurrent:null,
+  });
+ };
+ try{
+  root=await open(dispatch);
+  await click(root,'task.get');await click(root,'task.resume');
+  await act(async()=>root.update(render({runtimeControl:{owner:{'task.get':projection(3,{appliedRevision:3})}}},session,dispatch)));
+  assert.match(text(root),/change was recorded.*current state is unavailable/);
+  assert.equal(root.root.findAllByProps({'data-action':'task.resume'}).length,0);
+  assert.equal(root.root.findAllByProps({'data-action':'task.create'}).length,0);
+  assert.deepEqual(calls.map(([name])=>name),['task.get','task.resume']);
+  await act(async()=>root.update(render({runtimeControl:{owner:{'task.get':projection(4,{status:'active',appliedRevision:4})}}},session,dispatch)));
+  assert.doesNotMatch(text(root),/change was recorded/);
+  assert.match(text(root),/Task active · revision 4/);
+  assert.equal(button(root,'task.pause').props.disabled,false);
+ }finally{await close(root)}
+});
+
 test('host restart invalidates an in-flight observation even when the chat id is unchanged',async()=>{
  const reply=deferred();let root,request;const dispatch=()=>reply.promise;
  try{

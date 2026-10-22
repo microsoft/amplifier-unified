@@ -48,8 +48,8 @@ const fixture=spawn(python,fixtureArgs,fixtureOptions);
 const stop=ownFixture(fixture,{label:'Shared Work fixture',timeoutMs:40000});
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
-let browser,originalError,result,page,fixtureUrl;
-const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null,workWaits:[],cleanupComplete:null,observationErrors:[]};
+let browser,peerBrowser,originalError,result,page,fixtureUrl;
+const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,peerBrowserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null,workWaits:[],cleanupComplete:null,observationErrors:[]};
 let observationBuffer='';
 fixture.stdout.on('data',chunk=>{
  observationBuffer+=String(chunk);
@@ -206,7 +206,12 @@ try {
   await page.screenshot({path:path.join(output,`shared-work-${width}.png`)});
  }
  // A second browser client has independent presentation choices.
- const peer=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
+ // Chromium single-process mode cannot reliably host a second isolated context.
+ // A second owned process preserves independent cookies/storage/client identity
+ // without weakening the actual two-client assertions.
+ peerBrowser=await chromium.launch(launch);
+ peerBrowser.on('disconnected',()=>{termination.peerBrowserDisconnectedAt=Date.now()});
+ const peer=await peerBrowser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
  observePage(peer,'peer');
  await peer.goto(url);await peer.waitForFunction(()=>window.amplifier);
  await bounded(peer.evaluate(id=>window.amplifier.dispatch('view.update',{patch:{workSurface:'workspace',workWorkspaceId:id,workWorkspaceTab:'work'}}),manifest.workspace.id),actionTimeoutMs,'Peer Work navigation');
@@ -315,7 +320,7 @@ try {
 finally {
  termination.closeRequestedAt=Date.now();
  try{
-  await finishFixture({label:'Shared Work fixture',close:[['browser',()=>browser?.close()]],stop,originalError});
+  await finishFixture({label:'Shared Work fixture',close:[['peer browser',()=>peerBrowser?.close()],['browser',()=>browser?.close()]],stop,originalError});
   try{
    assert.deepEqual(termination.observationErrors,[]);
    assert.ok(termination.cleanupComplete,'Real runner.cleanup must return');

@@ -5,6 +5,12 @@ const newer=(a,b)=>a&&b&&a.id===b.id&&(a.revision>b.revision||a.revision===b.rev
 function currentSnapshot(published,observed){
  if(!observed)return published;
  if(stamp(published)===observed.base)return observed.value;
+ if(observed.value.committedUnavailable){
+  const receipt=observed.value.receipt;
+  if(!receipt||published.task?.id!==receipt.taskId||!Number.isInteger(receipt.revision)||
+   published.task.revision<receipt.revision)return observed.value;
+  return published;
+ }
  if(published.task?.id!==observed.value.task?.id||newer(published.task,observed.value.task))return published;
  return observed.value;
 }
@@ -47,6 +53,7 @@ function TaskContinuityView({state,session,act}){
     status:value.status||'available',task:value.task,continuity:value.continuity,
     continuationSupported:value.continuationSupported,detailRequired:value.detailRequired,
     detailRefs:value.detailRefs,committedUnavailable:value.status==='unavailable'&&!!value.receipt,
+    receipt:value.receipt?{taskId:value.receipt.taskId,revision:value.receipt.revision}:null,
    }});
   }catch(e){if(alive.current)setError(String(e.message||e).slice(0,500))}
   finally{busy.current=false;if(alive.current)setPending(false)}
