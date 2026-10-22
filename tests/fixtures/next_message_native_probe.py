@@ -173,7 +173,8 @@ async def run(root, regression=False):
 
 async def main():
     if '--worker' in sys.argv:
-        from amplifier_web.runtime_worker import Worker
+        from amplifier_web.runtime_worker import Worker, configure_protocol
+        configure_protocol()
         await Worker().run()
     else:
         await run(Path(sys.argv[1]), '--stale-regression' in sys.argv)

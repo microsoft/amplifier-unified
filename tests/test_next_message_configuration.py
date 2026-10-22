@@ -286,3 +286,34 @@ async def test_incompatible_bundle_keeps_explicit_default_recovery(app, monkeypa
     await app.dispatch('conversation.configure', choices(app, 1, bundle='work', resetModel=True))
     assert 'nextMessageFailure' not in app._session()
     assert app._session()['pendingBundleSelection']['resetModel'] is True
+
+
+async def test_revoked_original_bundle_grant_is_not_renewed_by_later_send(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.next_message_configuration import save, prepare
+    from amplifier_web.runtime import RuntimeStartupError
+    session = app._session()
+    grant = (await app.dispatch('capability.grant', {'sessionId': session['id'],
+        'effects': ['bundles'], 'scopes': ['session'], 'reason': 'Synthetic deferred bundle'}))['result']
+    authority = {'grantId': grant['id'], 'grantRevision': grant['revision'],
+        'sessionId': session['id'], 'workspace': session['workspace'], 'interruptionRevision': 0,
+        'effect': 'bundles', 'scope': 'session'}
+    # Exercise the same retained authority payload used by delayed host actions.
+    save(app, choices(app, bundle='work'), authority)
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def resolve(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return {'bundle': 'work', 'modelCompatible': True}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    attempt = asyncio.create_task(prepare(app, deepcopy(session)))
+    await asyncio.wait_for(entered.wait(), 2)
+    await app.dispatch('capability.revoke', {'sessionId': session['id'], 'id': grant['id'],
+        'expectedRevision': grant['revision']})
+    release.set()
+    with pytest.raises(RuntimeStartupError):
+        await attempt
+    assert app.runtime is None
+    assert session['pendingBundleSelection']['authority'] == authority
+    assert session['pendingBundleSelection']['bundle'] == 'work'
+    assert session['nextMessageStatus'] == 'not-applied'

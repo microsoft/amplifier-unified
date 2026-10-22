@@ -43,8 +43,14 @@ try{
  assert.equal((await inspect()).session.bundle,'anchors');
  await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
+ // A new root with no pin has no proven provider default until discovery.
+ // Cached choices remain selectable; explicitly choose their connection.
+ await page.locator('#chat-provider').selectOption('one');
+ await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.instance).toBe('one');
  await expect(page.locator('#chat-model')).toBeEnabled();
  await page.locator('#chat-model').selectOption('second');
+ await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.model).toBe('second');
+ await expect(page.locator('#chat-effort')).toBeEnabled();
  await page.locator('#chat-effort').focus();await page.locator('#chat-effort').press('End');
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection).toEqual({instance:'one',model:'second',effort:'high'});
  // A held metadata resolver cannot hold rename, settings saves, or artifacts.
