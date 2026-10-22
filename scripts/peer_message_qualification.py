@@ -115,12 +115,14 @@ def main():
         run('python', [sys.executable, '-m', 'pytest', '-q', '-ra', '--tb=short',
             'tests/test_peer_preview.py', 'tests/test_peer_attribution.py',
             'tests/test_peer_qualification.py', 'tests/test_browser_check_runner.py',
+            'tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget',
             f'--junitxml={OUTPUT / "python.xml"}'])
         cases = ET.parse(OUTPUT / 'python.xml').getroot().findall('.//testcase')
         assert cases and all(not any(case.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for case in cases)
         return {'cases': len(cases), 'failed': 0, 'skipped': 0}
 
     def node_checks():
+        run('browser-syntax', ['node', '--check', 'frontend/tests/peer-preview-browser.mjs'])
         text = run('node', ['node', '--test', '--test-reporter=tap',
             'frontend/tests/peer-groups.test.mjs', 'frontend/tests/artifact-placement.test.mjs'])
         counts = dict(re.findall(r'^# (tests|pass|fail|cancelled|skipped|todo) (\d+)$', text, re.M))

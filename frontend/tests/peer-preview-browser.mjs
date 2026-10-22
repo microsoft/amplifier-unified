@@ -137,7 +137,7 @@ try{
  // surface. Arm it while visible, then release its event only after preview opens.
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const view=async()=>(await action('canvas.views.inspect')).result.views.find(v=>v.viewId==='primary');
- const target=v=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,v[key]]));
+ const viewTarget=v=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,v[key]]));
  const assertDraft=async()=>assert.deepEqual(await page.evaluate(()=>{
   const s=window.amplifier.getState();
   return {id:s.selectedSessionId,draft:s.view.draft,attachments:s.sessions.find(x=>x.id===s.selectedSessionId)?.draftAttachments||s.draftAttachments||[],document:window.peerDocument};
@@ -154,11 +154,11 @@ try{
  }`;
  const renderer=(await action('shell.packages.stage',{manifest,source:rendererSource})).result.digest;
  assert.equal((await action('shell.packages.validate',{digest:renderer})).result.status,'passed');
- await action('canvas.views.renderer',{...target(await view()),renderer});
+ await action('canvas.views.renderer',{...viewTarget(await view()),renderer});
  const editor=page.locator('[data-canvas-view="primary"]').getByLabel('Retained local edit');
  await expect(editor).toBeVisible();await page.getByRole('button',{name:'Queue late editor change',exact:true}).click();
  await expect(editor).toHaveAttribute('data-armed','true');
- const lease=target(await view()),editorMount=await editor.getAttribute('data-mount');
+ const lease=viewTarget(await view()),editorMount=await editor.getAttribute('data-mount');
  await link.click();await expect(panel()).toBeVisible();
  await expect(editor).toBeHidden();
  const previewMount=await panel().elementHandle();
@@ -166,7 +166,7 @@ try{
  await expect(editor).toHaveValue('LATE UNSAVED EDIT');await expect.poll(async()=>(await view()).dirty).toBe(true);
  await panel().getByRole('button',{name:'Open chat',exact:true}).click();
  await expect(panel().getByRole('alert')).toContainText('primary viewer edit');
- await assertDraft();assert.deepEqual(target(await view()),lease);
+ await assertDraft();assert.deepEqual(viewTarget(await view()),lease);
  await expect(editor).toHaveValue('LATE UNSAVED EDIT');await expect(editor).toHaveAttribute('data-mount',editorMount);
  assert.equal(await panel().evaluate((node,old)=>node===old,previewMount),true);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.content),'# Canonical source remains unchanged');
@@ -174,7 +174,7 @@ try{
  await panel().getByRole('button',{name:'Close source preview'}).click();await expect(editor).toBeVisible();
  await page.getByRole('button',{name:'Cancel local edit',exact:true}).click();
  await expect.poll(async()=>(await view()).dirty).toBe(false);await expect(editor).toHaveValue('');
- assert.deepEqual(target(await view()),lease);await expect(editor).toHaveAttribute('data-mount',editorMount);
+ assert.deepEqual(viewTarget(await view()),lease);await expect(editor).toHaveAttribute('data-mount',editorMount);
  await link.click();await expect(panel()).toBeVisible();
  // Settings edits now begin AFTER preview. A stale activation of the already
  // mounted Open chat control must still run its real Settings guard. Dispatching
@@ -187,7 +187,7 @@ try{
  await expect(settingsGuard).toBeVisible();await settingsGuard.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await expect(lateSettings).toHaveValue('/synthetic-late-unsaved-folder');
  assert.equal(await lateSettings.evaluate((node,old)=>node===old,lateSettingsNode),true);
- await assertDraft();assert.deepEqual(target(await view()),lease);
+ await assertDraft();assert.deepEqual(viewTarget(await view()),lease);
  await expect(editor).toHaveAttribute('data-mount',editorMount);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.content),'# Canonical source remains unchanged');
  await page.getByRole('button',{name:/^Close (settings|panel)$/}).click();
