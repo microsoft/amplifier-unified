@@ -446,3 +446,15 @@ def test_secret_metadata_omission_does_not_change_generic_tool_result_data():
     assert public_config(result)['output'] == payload
     assert public_config({'fields': [payload]}, metadata=True) == {
         'fields': [{'field_type': 'secret'}]}
+
+
+@pytest.mark.parametrize('agent_name', ['config', 'module', 'worker'])
+def test_agent_names_do_not_turn_nested_mounts_into_unbound_config_data(agent_name):
+    original = {'agents': {agent_name: {'providers': [{
+        'module': 'provider-fixture', 'instance_id': 'p', 'source': 'original-source',
+        'config': {'api_key': 'SYNTHETIC_AGENT_KEY'}}]}}}
+    visible = public_config(original)
+    assert restore_redactions(visible, original) == original
+    visible['agents'][agent_name]['providers'][0]['source'] = 'different-source'
+    with pytest.raises(ValueError, match='redacted value cannot be used'):
+        restore_redactions(visible, original)

@@ -64,7 +64,7 @@ def restore_redactions(value, old, *, _config=False):
             old = _MISSING_SETTING
         return {key:restore_redactions(item, old.get(key, _MISSING_SETTING)
                                       if isinstance(old, dict) else _MISSING_SETTING,
-                                      _config=_config or key == "config")
+                                      _config=_config or key == "config" and isinstance(value.get("module"), str))
                 for key,item in value.items()}
     if isinstance(value, list):
         # Only module collections can reorder by identity. Arrays inside a
