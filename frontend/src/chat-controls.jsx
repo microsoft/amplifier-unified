@@ -8,9 +8,14 @@ import {newChatSetup,draftDefaults,draftDefaultsKey} from './new-chat';
 import {useComposerPopover} from './composer-popover';
 import {providerOptions} from './provider-options';
 import {useDraftDiscovery} from './use-draft-discovery';
+import {AttachmentPreview} from './attachment-preview';
+import {imageAttachment} from './attachment-view.js';
 const EMPTY={};
 export function AttachmentStrip({items=[],remove,act,sessionId,privateDraft=false}){
- const [error,setError]=useState(''),[pending,setPending]=useState(null);
+ const [error,setError]=useState(''),[pending,setPending]=useState(null),[image,setImage]=useState(null);
+ useEffect(()=>{if(image&&(image.sessionId!==sessionId||!items.some(file=>file.id===image.file.id)))setImage(null)},[sessionId,items,image]);
+ const showImage=(file,event)=>setImage({file,sessionId,opener:event.currentTarget});
+ const imageVisible=image&&image.sessionId===sessionId&&items.some(file=>file.id===image.file.id);
  async function preview(file){
   if(pending)return;setPending(file.id);setError('');
   try{await act('canvas.openAttachment',{sessionId,id:file.id})}
@@ -18,7 +23,7 @@ export function AttachmentStrip({items=[],remove,act,sessionId,privateDraft=fals
   finally{setPending(null)}
  }
  if(!items.length)return null;
- return <div className="a-attachments" data-private={privateDraft||undefined}>{items.map(file=><div className="a-attachment" key={file.id}>{file.mime?.startsWith('image/')?<a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name}/></a>:<Paperclip/>}{act&&sessionId&&file.mime==='text/plain'&&file.size<=1000000?<button type="button" className="a-link" disabled={!!pending} data-action="canvas.openAttachment" onClick={()=>preview(file)}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>}{act&&sessionId&&<a href={file.url} download={file.name} aria-label={"Download "+file.name}><Download size={14}/></a>}{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}{error&&<span role="alert">{error}</span>}</div>;
+ return <div className="a-attachments" data-private={privateDraft||undefined}>{items.map(file=><div className="a-attachment" key={file.id} data-attachment-id={file.id}>{imageAttachment(file)?<button type="button" className="a-attachment-preview-button" aria-haspopup="dialog" aria-label={'Preview '+file.name} onClick={e=>showImage(file,e)}><img src={file.url} alt={file.name}/></button>:<Paperclip/>}{imageAttachment(file)?<button type="button" className="a-attachment-preview-button a-attachment-preview-name" aria-haspopup="dialog" aria-label={'Preview '+file.name} title={file.name} onClick={e=>showImage(file,e)}>{file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:act&&sessionId&&file.mime==='text/plain'&&file.size<=1000000?<button type="button" className="a-link" disabled={!!pending} data-action="canvas.openAttachment" onClick={()=>preview(file)}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>}{act&&sessionId&&<a href={file.url} download={file.name} aria-label={"Download "+file.name}><Download size={14}/></a>}{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}{error&&<span role="alert">{error}</span>}{imageVisible&&<AttachmentPreview key={image.file.id} {...image} privateDraft={privateDraft} onClose={()=>setImage(null)}/>}</div>;
 }
 function configuredEffort(row,model){
  const field=providerFields(row,{model,default_model:model}).find(field=>field.id==='reasoning_effort');
@@ -172,4 +177,4 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
   </section>)}
  </div>;
 }
-export function readAttachment(file){return new Promise((resolve,reject)=>{if(file.size>32*1024*1024||!file.size){reject(new Error('Choose a nonempty file up to 32 MB.'));return}const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('Could not read '+file.name));reader.readAsDataURL(file)})}
+export function readAttachment(file){return new Promise((resolve,reject)=>{if(file.size>32*1024*1024||!file.size){reject(new Error('Choose a nonempty file up to 32 MB.'));return}const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('Could not read '+file.name));reader.onabort=()=>reject(new Error('Reading '+file.name+' was cancelled. Nothing was uploaded.'));reader.readAsDataURL(file)})}

@@ -34,7 +34,7 @@ export function attachClient(signal){
       // Restore into this new private view before opening its state stream. No
       // message is submitted and no runtime/conversation action is replayed.
       for(const entry of draftJournal.entries()){
-        try{await request('/api/actions',{method:'POST',signal,body:{action:'view.update',args:{sessionId:entry.sessionId,patch:{draft:entry.text}}}})}
+        try{await request('/api/actions',{method:'POST',signal,body:{action:'view.update',args:{sessionId:entry.sessionId,patch:{draft:entry.text,draftDocument:entry.document??null}}}})}
         catch(error){if(error.status!==404)throw error;continue} // Keep missing-chat text locally; never block opening the app.
         draftJournal.acknowledge(entry);
       }

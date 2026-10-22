@@ -1,6 +1,9 @@
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
+import {mkdir,mkdtemp} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
 import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
 const full=Array.from({length:791},(_,i)=>({id:'m'+i,role:i%10===0?'user':'assistant',text:'Message '+i,createdAt:1000+i}));
@@ -9,6 +12,8 @@ let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},v
 const previews=[],indexes=[],windows=[],earlier=[];let restoring=false;
 let browser,vite,page;const errors=[],calls=[];
 const shell=createShellHttpFixture(()=>state);
+const evidence=process.env.AMPLIFIER_TEST_ARTIFACTS||await mkdtemp(join(tmpdir(),'conversation-navigation-'));
+await mkdir(evidence,{recursive:true});
 try{
  vite=await createServer({configFile:false,cacheDir:fileURLToPath(new URL('../.vite-legacy-mocks',import.meta.url)),root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});await vite.listen();
  browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.stack||e.message));
@@ -112,11 +117,11 @@ try{
   assert.ok(card.x-line.x-line.width>=6&&card.x-line.x-line.width<=10,'Preview should stay close to the expanded mark without overlapping it.');
  };
  await assertPreviewGap(marks.nth(4));
- await page.screenshot({path:'/tmp/conversation-navigation.png'});
+ await page.screenshot({path:join(evidence,'conversation-navigation.png')});
  await marks.last().hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 790');
  await expect.poll(()=>expandedWidth(marks.last())).toBeCloseTo(ordinaryWidth,1);
  await assertPreviewGap(marks.last());
- await page.screenshot({path:'/tmp/conversation-navigation-last.png'});
+ await page.screenshot({path:join(evidence,'conversation-navigation-last.png')});
  await marks.nth(4).hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 780');
  await page.emulateMedia({reducedMotion:'reduce'});
  assert.equal(await marks.nth(4).locator('span').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
@@ -137,26 +142,42 @@ try{
  await expect(rail).toBeHidden();
  await pane.evaluate(el=>{el.scrollTop=(el.scrollHeight-el.clientHeight)/2;el.dispatchEvent(new Event('scroll'))});
  const latest=page.getByRole('button',{name:'Jump to latest messages'});await expect(latest).toBeVisible();
- {
+ // Published compact composer puts both controls in one Chat options dialog.
+ // Reopen for each control. The compact layout need not overlap Latest;
+ // when it does, keep the original intersection hit test. Always hit-test
+ // Close and separated Latest as well, so visibility alone cannot pass.
+ for(const label of ['Conversation model','Registered root bundles']){
   await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click({timeout:8000});
   const popup=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(popup).toBeVisible();
-  await expect(popup.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
-  await expect(popup.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeVisible();
-  await expect.poll(()=>popup.evaluate((el,jump)=>{
+  await expect(popup.getByRole('combobox',{name:label,exact:true})).toBeVisible();
+  const unobscured=()=>popup.evaluate((el,jump)=>{
    const a=el.getBoundingClientRect(),b=document.querySelector(jump).getBoundingClientRect();
    const left=Math.max(a.left,b.left),right=Math.min(a.right,b.right),top=Math.max(a.top,b.top),bottom=Math.min(a.bottom,b.bottom);
-   // Compact placement need not overlap the jump control; when separate,
-   // both controls must remain hit-testable. When they overlap, options win.
-   if(right<=left||bottom<=top)return el.contains(document.elementFromPoint(a.x+a.width/2,a.y+a.height/2))&&document.querySelector(jump).contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2));
-   return el.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));
-  },'.a-chat-jump button')).toBe(true);
-  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
+   if(right>left&&bottom>top&&!el.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2)))return false;
+   // When separated, keep both the popup and Latest hit-testable.
+   if((right<=left||bottom<=top)&&(!el.contains(document.elementFromPoint(a.x+a.width/2,a.y+a.height/2))||!document.querySelector(jump).contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))))return false;
+   const close=el.querySelector('[aria-label="Close chat options"]'),rect=close.getBoundingClientRect();
+   return close.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2));
+  },'.a-chat-jump button');
+  await expect.poll(unobscured).toBe(true);
+  // Deliberate detector control, not product evidence: an intercepting layer
+  // must fail the same predicate even when Latest itself does not overlap.
+  await popup.evaluate(el=>{
+   const r=el.querySelector('[aria-label="Close chat options"]').getBoundingClientRect(),block=document.createElement('div');
+   block.id='navigation-obscuration-control';
+   Object.assign(block.style,{position:'fixed',left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px',zIndex:'2147483647',pointerEvents:'auto'});
+   document.body.append(block);
+  });
+  try{assert.equal(await unobscured(),false,'An obscured control must fail the hit test')}
+  finally{await page.evaluate(()=>document.getElementById('navigation-obscuration-control')?.remove())}
+  await expect.poll(unobscured).toBe(true);
+  await popup.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
- await page.screenshot({path:'/tmp/conversation-navigation-narrow.png'});
+ await page.screenshot({path:join(evidence,'conversation-navigation-narrow.png')});
  await page.setViewportSize({width:390,height:844});await expect(rail).toBeHidden();
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
- await expect(page.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
  await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
+ await expect(page.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
  await expect(page.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.setViewportSize({width:1440,height:900});await expect(rail).toBeVisible();

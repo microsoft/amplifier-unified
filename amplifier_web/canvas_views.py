@@ -14,6 +14,7 @@ from .shell_modules import IDENTITY, encoded, fail
 
 PROFILE = 'trusted-native-renderer-v1'
 KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'pdf', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']
+INLINE_KINDS = frozenset({'markdown', 'text', 'code', 'json', 'jsonl', 'image', 'html', 'babylon', 'mermaid', 'dot'})
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
           'image': 'Image', 'gif': 'Retained GIF', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
@@ -27,7 +28,7 @@ def definitions(schema, string):
     target = {'viewId': string(100), 'resourceId': IDENTITY,
               'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
     actions = {
-        'canvas.views.inline': ('Open a bounded, client-local preview of a version published in the selected chat.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY}, ['resourceId', 'version', 'messageId', 'previewId'])),
+        'canvas.views.inline': ('Allocate a bounded renderer lease for an exact published version. This does not expand a card; use canvas.select with presentation:inline for that. presentationRequest fences a card mount against its current choice.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY, 'presentationRequest': {'type': 'boolean'}}, ['resourceId', 'version', 'messageId', 'previewId'])),
         'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
         'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
         'canvas.views.reveal': ('Reveal the exact artifact file in the file manager on its named owning app host. It does not open the browser device file manager. Bind hostId and instanceId from fileReveal.', schema({**target,'hostId':string(200),'instanceId':string(100)}, [*target,'hostId','instanceId'])),
@@ -57,6 +58,86 @@ class CanvasViews:
         if client is None:
             fail('Attach a client before addressing canvas views.', 409)
         return client.setdefault('canvasViews', {'preferences': {}})
+
+    def presentation(self, identity, version):
+        client = self.service.clients.record()
+        return (client or {}).get('canvasViews', {}).get('presentations', {}).get(f'{identity}:{version}')
+
+    def select_presentation(self, args, origin):
+        """Validate the exact publication before changing client presentation."""
+        from .canvas_library import scope
+        from .canvas_versions import definition, latest
+        row = self.artifact(args['id'])
+        if not scope(self.service.state, row):
+            fail('This artifact belongs to another chat.', 409)
+        version = args.get('version') or latest(row)
+        row = definition(row, version, self.service.db)
+        destination = args.get('presentation', 'canvas')
+        message = args.get('messageId')
+        if destination == 'inline':
+            if 'version' not in args:
+                fail('Inline presentation needs an exact saved version.', 409)
+            self.validate_inline(row, version, message)
+        if args.get('resetPreview') and origin != 'ui':
+            fail('Only an explicit user control can reset an interactive preview.', 403)
+        self.choose(row, version, destination, message_id=message,
+                    reset=args.get('resetPreview', False), origin=origin)
+        return {'id': row['id'], 'version': version, 'presentation': destination}
+
+    @staticmethod
+    def validate_inline(row, version, message):
+        if row['kind'] not in INLINE_KINDS:
+            fail('This artifact opens in Canvas.', 409)
+        if {'messageId': message, 'version': version} not in row.get('publications', []):
+            fail('This version was not published in that message.', 409)
+
+    def choose(self, row, version, destination, *, message_id=None, reset=False, origin='agent'):
+        """One client/exact-version choice; dirty or stateful refusals are atomic.
+
+        Ordinary HTML has no state-transfer protocol. A deliberate UI reset is
+        required to move a mounted scriptable preview, never an agent assertion.
+        This does not clear a renderer's dirty flag or touch another artifact.
+        """
+        from .service import AppError
+        client = self.service.clients.record()
+        if client is None:
+            if destination == 'inline':
+                fail('Attach a client to preview this publication inline.', 409)
+            return
+        record = self.record()
+        primary = client.get('canvas', {})
+        same_primary = (primary.get('id') == row['id']
+                        and (primary.get('selectedVersion') or primary.get('revision', 1)) == version)
+        outgoing = [identity for identity, binding in record.get('inline', {}).items()
+                    if binding['resourceId'] == row['id'] and binding['selectedVersion'] == version
+                    and (destination != 'inline' or binding['messageId'] != message_id)]
+        if same_primary and destination != 'canvas' and (primary.get('open') or record.get('retained')):
+            outgoing.append('primary')
+        for identity in outgoing:
+            preference = record.get('preferences', {}).get(identity + ':' + row['id'], {})
+            if preference.get('dirty'):
+                raise AppError('Finish or cancel this preview edit before changing its presentation.',
+                               409, code='canvas_view_dirty')
+            # An open/retained primary or allocated inline lease may already
+            # execute before its asynchronous mount report reaches the server.
+            if row['kind'] in {'html', 'babylon'} and not (reset and origin == 'ui'):
+                raise AppError('This interactive preview has local state. Keep it here, or explicitly '
+                               'reset the preview to open its saved version in the other surface.',
+                               409, code='canvas_preview_reset_required')
+        # Validate every outgoing owner before releasing any view.
+        for identity in outgoing:
+            if identity != 'primary':
+                self.release_inline(identity)
+        if same_primary and destination != 'canvas':
+            primary['open'] = False
+            primary['_presentationDisposed'] = True
+            record.pop('retained', None)
+            client['view']['canvasFocused'] = False
+        elif same_primary:
+            primary.pop('_presentationDisposed', None)
+        record.setdefault('presentations', {})[f'{row["id"]}:{version}'] = {
+            'id': row['id'], 'version': version, 'sessionId': row['sessionId'],
+            'presentation': destination, **({'messageId': message_id} if message_id else {})}
 
     def guard_transition(self, action, args):
         """Reject parent actions before they can discard a mounted dirty view.
@@ -101,10 +182,10 @@ class CanvasViews:
         elif (action in {'session.draft', 'session.create', 'session.fork', 'message.edit',
                          'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
-              or action == 'canvas.select' and (args['id'] != client.get('canvas', {}).get('id') or args.get('version') != client.get('canvas', {}).get('selectedVersion'))
+              or action == 'canvas.select' and args.get('presentation', 'canvas') == 'canvas' and (args['id'] != client.get('canvas', {}).get('id') or args.get('version') != client.get('canvas', {}).get('selectedVersion'))
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
               or action == 'view.update' and args.get('patch', {}).get('settingsCanvas') is True
-              or action in {'canvas.show', 'canvas.openFile', 'canvas.openAttachment', 'canvas.openGif', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
+              or action in {'canvas.show', 'canvas.openFile', 'canvas.openAttachment', 'canvas.openGif', 'canvas.apps.create', 'smartTools.open'} and args.get('presentation', 'canvas') == 'canvas' and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
 
     def artifact(self, identity):
@@ -243,7 +324,9 @@ class CanvasViews:
                 views.append(self.summary(identity))
             except AppError:
                 pass
-        return {'views': views}
+        presentations = [copy.deepcopy(value) for value in self.record().get('presentations', {}).values()
+                         if value['sessionId'] == self.service.state.get('selectedSessionId')]
+        return {'views': views, 'presentations': presentations}
 
     def open_inline(self, args):
         from .canvas_versions import definition, latest
@@ -258,6 +341,10 @@ class CanvasViews:
         if saved['kind'] not in set(KINDS) - {'a2ui', 'browser'}:
             fail('This artifact opens in Canvas.', 409)
         record = self.record()
+        choice = self.presentation(row['id'], args['version'])
+        if args.get('presentationRequest') and (not choice or choice['presentation'] != 'inline'
+                                               or choice.get('messageId') != args['messageId']):
+            fail('This inline presentation changed. Use the current artifact card.', 409)
         inline = record.setdefault('inline', {})
         for identity, binding in list(inline.items()):
             if binding.get('sessionId') != self.service.state.get('selectedSessionId'):

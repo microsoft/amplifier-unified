@@ -11,7 +11,7 @@ export function createDraftJournal(owner,storage=()=>sessionStorage){
    persist();
   },
   entries:()=>[...rows.values()].map(row=>({...row})),
-  stage(sessionId,text){const entry={sessionId,text,revision:crypto.randomUUID()};rows.set(sessionId,entry);return {...entry,persisted:persist()}},
+  stage(sessionId,text,document=null){const entry={sessionId,text,document,revision:crypto.randomUUID()};rows.set(sessionId,entry);return {...entry,persisted:persist()}},
   acknowledge(entry){if(entry&&same(entry)){rows.delete(entry.sessionId);return persist()}return null},
   bind(entry,sessionId){if(!entry||entry.sessionId===sessionId)return true;const found=same(entry);if(found){rows.delete(entry.sessionId);rows.set(sessionId,{...entry,sessionId})}entry.sessionId=sessionId;return !found||persist()},
  };

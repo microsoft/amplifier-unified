@@ -22,12 +22,12 @@ try{
  const draft=page.getByRole('textbox',{name:'Message Amplifier'});await draft.fill('Preserve this draft');
  const original=page.locator('.a-message').filter({hasText:'Saved message 20:'});
  await original.getByRole('button',{name:'Reply to message',exact:true}).click();
- await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.equal(await readComposerDraft(draft),'Preserve this draft');
- await page.reload();await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.equal(await readComposerDraft(draft),'Preserve this draft');
- await page.getByRole('button',{name:'Remove quoted reply'}).click();await page.getByLabel('Quoted reply',{exact:true}).waitFor({state:'hidden'});assert.equal(await readComposerDraft(draft),'Preserve this draft');
+ await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.ok((await readComposerDraft(draft)).includes('Preserve this draft'));
+ await page.reload();await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.ok((await readComposerDraft(draft)).includes('Preserve this draft'));
+ await page.getByRole('button',{name:'Remove quote',exact:true}).click();await page.getByLabel('Quoted reply',{exact:true}).waitFor({state:'hidden'});assert.equal((await readComposerDraft(draft)).trim(),'Preserve this draft');
  await original.getByRole('button',{name:'Reply to message',exact:true}).click();
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await page.waitForFunction(()=>{const s=window.amplifier.getState(),c=s.sessions.find(x=>x.id===s.selectedSessionId);return c?.status==='idle'&&c.messages.some(m=>m.text==='Preserve this draft'&&m.replyTo)});
+ await page.waitForFunction(()=>{const s=window.amplifier.getState(),c=s.sessions.find(x=>x.id===s.selectedSessionId);return c?.status==='idle'&&c.messages.some(m=>m.text.includes('Preserve this draft')&&m.replyTo?.version===2)});
  const sent=page.locator('.a-message').filter({hasText:'Preserve this draft'});await sent.locator('.a-reply-quote').waitFor();
  if(proof)await sent.screenshot({path:join(proof,'desktop-reply.png')});
  await page.getByLabel('Quoted reply',{exact:true}).waitFor({state:'hidden'});
@@ -49,7 +49,7 @@ try{
  const assistant=page.locator('.a-assistant').last();
  await assistant.getByRole('button',{name:'Reply to message',exact:true}).click();await page.getByLabel('Quoted reply',{exact:true}).waitFor();
  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'mobile-reply-preview.png')});
- await page.getByRole('button',{name:'Remove quoted reply',exact:true}).click();
+ await page.getByRole('button',{name:'Remove quote',exact:true}).click();
  await assistant.getByRole('button',{name:'React to message',exact:true}).click();await assistant.getByRole('button',{name:'Celebrate',exact:true}).click();await assistant.getByRole('button',{name:'Remove Celebrate reaction',exact:true}).waitFor();
  if(proof)await assistant.locator('.a-message-actions').screenshot({path:join(proof,'mobile-reactions.png')});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

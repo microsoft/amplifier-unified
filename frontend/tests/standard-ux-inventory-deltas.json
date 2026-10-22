@@ -263,8 +263,8 @@
           "title": "Archive with truthful progress, guarded navigation, and Undo",
           "scope": "standard-path",
           "entryPath": [
-            "Chat \u2192 Archive",
-            "Row Details \u2192 Archive"
+            "Chat → Archive",
+            "Row Details → Archive"
           ],
           "prerequisites": [
             "Synthetic isolated archive fixture; no real user files or runtime execution"
@@ -284,7 +284,7 @@
             "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
             "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
             "Undo is available after archive confirmation even while the following navigation is stalled.",
-            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
+            "A newer navigation intention, including A→B→A, prevents the old archive from redirecting.",
             "Archiving a different row or invoking the raw public action does not navigate the current view.",
             "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
             "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
@@ -1563,7 +1563,7 @@
           "entryPath": [
             "Settings",
             "Testing & resources",
-            "This machine\u2019s test resources"
+            "This machine’s test resources"
           ],
           "prerequisites": [
             "Isolated synthetic machine authority; no production machine policy or runner effects"
@@ -2176,7 +2176,10 @@
           "family": "navigation",
           "title": "Reorder different sidebar pins while an earlier move settles",
           "scope": "standard-path",
-          "entryPath": ["Sidebar", "Pinned"],
+          "entryPath": [
+            "Sidebar",
+            "Pinned"
+          ],
           "prerequisites": [
             "Production bundled client with synthetic mixed session and workspace pins",
             "Two fixture clients and controlled receipt/projection delivery; no live pins or model calls"
@@ -2195,7 +2198,16 @@
             "One bounded read can recover cold display completion without reconnect, duplicate mutation or model startup.",
             "Externally stale pages block new moves; keyboard and narrow controls remain usable."
           ],
-          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "delayed-receipt", "delayed-projection", "unknown-outcome", "second-client", "reload"],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "delayed-projection",
+            "unknown-outcome",
+            "second-client",
+            "reload"
+          ],
           "existingTests": [
             {
               "path": "frontend/tests/pin-rapid-reorder-browser.mjs",
@@ -2217,6 +2229,58 @@
         }
       ],
       "qualification": "docs/navigation.md"
+    },
+    {
+      "id": "delta.approval-lifecycle",
+      "sourceCommit": "c275d53a0c67d320691a6c40704f21620b8c5043",
+      "reason": "Expired capability requests gain an additive maintained browser owner; preserve the frozen inventory, baseline hash and all existing scenario entries.",
+      "workflowsAdded": [
+        {
+          "id": "decisions.expired-request-review",
+          "family": "decisions",
+          "title": "Review and dismiss an obsolete configuration request without restarting work",
+          "scope": "standard-path",
+          "entryPath": ["Chat", "Previous permission requests"],
+          "prerequisites": [
+            "Authenticated production service and bundled client with synthetic saved old and current requests",
+            "Two clients, cold host records and a runtime that records any attempted startup or input; no live grants or provider calls"
+          ],
+          "steps": [
+            "Inspect the reason on a legacy pending request after Stop and open passive current-scope review",
+            "Dismiss only the old request with the keyboard while a newer request remains pending",
+            "Confirm history, second-client state, a late decision refusal and reload with the private draft intact",
+            "Change scope and expiry after review, then exercise the stale decision preflight",
+            "Read the narrow-layout reason, scroll to the hit-testable Dismiss control and complete the adjacent request"
+          ],
+          "expectedResults": [
+            "Stale requests have an evidenced reason and no Allow/Deny controls; unavailable scope remains unknown.",
+            "Scope review starts no worker, model, runtime control or input and does not grant, renew or request authority.",
+            "Exact dismissal retains history and notes, clears only that request's pending attention and leaves newer requests and active authority unchanged.",
+            "Late scope or expiry changes cannot be silently approved; a failed decision refreshes display without replay.",
+            "Both clients, reload and the adjacent cycle agree; private drafts remain intact and narrow controls are reachable."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-layout", "late-decision", "changed-scope", "expired-request", "second-client", "reload"],
+          "existingTests": [
+            {
+              "path": "frontend/tests/approval-lifecycle-browser.mjs",
+              "relation": "Registered additive owner approval-lifecycle; exact run report and screenshots under output/browser-checks/approval-lifecycle"
+            },
+            {
+              "path": "tests/test_capability_lifecycle.py",
+              "relation": "Canonical request/revision/hash, missing-record dismissal, live grant preservation, native Deny-once delivery and storage/await races"
+            },
+            {
+              "path": "frontend/tests/approval-layout-browser.mjs",
+              "relation": "Existing separate reading-column, keyboard visibility and light/dark/split/narrow layout owner"
+            }
+          ],
+          "limits": [
+            "Synthetic request records and runtime, not real-provider or live-user incident acceptance.",
+            "Registration is not a new passing check or a claim about the original UNKNOWN effect; current candidate qualification remains separate."
+          ]
+        }
+      ],
+      "qualification": "docs/workspaces/configuration-authority.md"
     },
     {
       "id": "delta.compact-composer",
@@ -2405,6 +2469,126 @@
         }
       ],
       "qualification": "https://github.com/microsoft/amplifier-unified/actions/runs/39749556899"
+    },
+    {
+      "id": "delta.multi-quote",
+      "sourceCommit": "063f6b6dc21d628d2fa3ebecfe8f21d6d9eb2ee4",
+      "reason": "Register the reviewed immutable-quote journey as an ordinary automatic source owner, integrated with compact writing; preserve every frozen and additive owner.",
+      "workflowsAdded": [
+        {
+          "id": "composer.immutable-multi-quote",
+          "family": "composer",
+          "title": "Collect exact references and interleave commentary in the compact composer",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Message actions",
+            "Choose passage or Reply to message"
+          ],
+          "prerequisites": [
+            "Synthetic current-chat messages and attachments; built client; no live history or provider"
+          ],
+          "steps": [
+            "Select two nonadjacent passages and quote a whole message while typing literal commentary before, between and after",
+            "Reload, keyboard-reorder and remove only a quote, preserving exact commentary and attachment",
+            "Hold an addition, move the caret and insertion mode, then verify the new instance at its captured target",
+            "Change commentary while a receipt is held; verify journal ownership and reject the late addition",
+            "Inspect narrow compact layout, send once, copy the exact saved message and repeat a plain cycle"
+          ],
+          "expectedResults": [
+            "Immutable blocks retain exact Unicode, whitespace, source spans and independent identity without replacing earlier content.",
+            "Independently authored DOM, editor and canonical-draft order survives quote manipulation and reload.",
+            "The compact writing wrapper retains full-width references, accessible controls and no horizontal overflow.",
+            "No collection, composition or quote-removal action sends; normal Send preserves exact interleaving and attachments.",
+            "Delayed additions retain their captured target or fail visibly; newer journaled commentary remains owned."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "light-dark",
+            "touch-emulated",
+            "reload",
+            "delayed-receipt"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/multi-quote-browser.mjs",
+              "relation": "Automatic multi-quote source owner; artifacts at output/browser-checks/multi-quote"
+            },
+            {
+              "path": "scripts/multi_quote_checks.py",
+              "relation": "Separate fixed focused source/installed qualification with both meaningful commentary mutants"
+            }
+          ],
+          "limits": [
+            "Registration is not a passing result; current raw run evidence must be inspected.",
+            "No physical device, real OS IME, live provider or screen-reader claim.",
+            "Lost Send acknowledgement and late quote across chat switch remain narrower host/model checks, not this browser journey."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/standard-ux-inventory-20261015.md"
+    },
+    {
+      "id": "delta.artifact-one-surface",
+      "sourcePullRequest": 1032,
+      "reason": "Give one-surface artifact presentation and late-hide focus preservation one automatic source smoke owner; keep the frozen inventory and all existing owners.",
+      "workflowsAdded": [
+        {
+          "id": "canvas.artifact-one-surface",
+          "family": "canvas",
+          "title": "Present one exact saved version in chat or Canvas without losing current work",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat",
+            "Saved artifact card",
+            "Preview in chat / Open in canvas"
+          ],
+          "prerequisites": [
+            "Built client with synthetic authored artifacts and controlled local fixture; no live history or provider calls"
+          ],
+          "steps": [
+            "Show HTML once and count actual mounted primary/inline frames and leases",
+            "Cancel a reset, then transition inline to Canvas and back, hide, reopen and reload",
+            "Use exact historical versions, another client and short Markdown/code/JSON cards",
+            "Hold an accepted Hide response while focusing the composer or an unrelated iframe",
+            "Toggle inline content while preserving unrelated dirty Canvas, unsent draft and Settings"
+          ],
+          "expectedResults": [
+            "One exact artifact version never automatically mounts two full renderers, even hidden ones.",
+            "Cancelled HTML reset retains the original frame and local input; completed transitions preserve exact saved identity.",
+            "Ordinary keyboard Hide returns focus to its disclosure; a newer composer or iframe focus choice wins over a late receipt.",
+            "Unrelated dirty Canvas and unsaved Settings remain mounted and unchanged; replacement still uses the existing guard.",
+            "Shared card controls remain labeled and usable at desktop and narrow widths; presentation creates no additional saved artifacts or messages."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-layout",
+            "delayed-receipt",
+            "dirty-settings",
+            "dirty-canvas",
+            "second-client",
+            "reload"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/artifact-one-surface-browser.mjs",
+              "relation": "Automatic artifact-one-surface owner; real mount counts, delayed focus, versions and draft guards; evidence in output/browser-checks/artifact-one-surface"
+            },
+            {
+              "path": "tests/test_artifact_presentation.py",
+              "relation": "Canonical exact-version ownership, reset refusal and dirty-view transitions"
+            }
+          ],
+          "limits": [
+            "Automatic source smoke, not installed-wheel, physical-device or assistive-screenreader acceptance.",
+            "Registration alone is not a pass. The separate historical negative duplicate-default and installed-boundary receipts remain exact-source evidence, not automatic assertions."
+          ]
+        }
+      ],
+      "qualification": "docs/canvas.md"
     }
   ]
 }

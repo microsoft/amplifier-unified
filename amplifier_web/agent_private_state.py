@@ -10,7 +10,7 @@ def session(row):
     # Keep dormant display fields lazy. Iterating ColdRecord.items() would load
     # every saved body even for an unrelated scalar read such as /revision.
     result = detached(row)
-    for key in ('draft', 'draftAttachments'):
+    for key in ('draft', 'draftDocument', 'draftAttachments'):
         result.pop(key, None)
     return result
 
@@ -33,7 +33,7 @@ def project(state, session_id, args):
         raise ValueError('Draft inspection requires an explicit clientId displaying the calling conversation. Use it only for user-requested draft work.')
     result = {key: value for key, value in state.items() if key != 'draftAttachments'}
     result['view'] = {key: value for key, value in state.get('view', {}).items()
-                      if key not in ('draft', 'newChatText', 'messageEdit') or key == requested and inspect}
+                      if key not in ('draft', 'draftDocument', 'newChatText', 'messageEdit') or key == requested and inspect}
     rows = state.get('sessions', [])
     result['sessions'] = ({key: session(row) for key, row in rows.items()} if isinstance(rows, dict)
                           else [session(row) for row in rows])

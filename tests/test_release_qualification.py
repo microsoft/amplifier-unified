@@ -558,7 +558,7 @@ def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate()
     assert "BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs'," in source
     assert "'destination-history-browser.mjs', 'automation-hub-browser.mjs'," in source
     assert job['steps'][1]['env']['MIXED'] == (
-        '${{ inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption '
+        '${{ inputs.attachment_experience || inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption '
         '|| inputs.destination_history || inputs.settings_close_diagnostic }}')
     assert "raise ValueError('Qualification already started; no replay')" in source
     assert "'installed-harness'" in source and "'installed-identity.json'" in source
@@ -571,9 +571,14 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     inputs = workflow['on']['workflow_dispatch']['inputs']
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
                            'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
-                           'compact_composer', 'peer_messages'}
+                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages'}
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
+    assert inputs['multi_quote']['type'] == 'boolean'
+    assert inputs['multi_quote']['default'] == 'false'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert inputs['attachment_experience']['type'] == 'boolean'
+    assert inputs['attachment_experience']['default'] == 'false'
     assert inputs['peer_messages']['type'] == 'boolean'
     assert inputs['peer_messages']['default'] == 'false'
     assert inputs['settings_close_diagnostic']['type'] == 'boolean'
@@ -591,7 +596,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
     assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
@@ -604,7 +609,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     }
     assert history['steps'][1] == {
         'name': 'Reject mixed navigation selections',
-        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification }}',
+        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience }}',
         'run': 'exit 1',
     }
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
@@ -616,6 +621,16 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
         'exit 1',
     ]
     steps = job['steps']
+    assert next(s for s in steps if s.get('name') == 'Reject mixed multi-quote selections') == {
+        'name': 'Reject mixed multi-quote selections',
+        'if': '${{ inputs.multi_quote && (inputs.attachment_consumption || inputs.app004_qualification || inputs.mcp_boundary) }}',
+        'run': 'exit 1',
+    }
+    assert next(s for s in mcp['steps'] if s.get('name') == 'Reject mixed MCP and attachment selection') == {
+        'name': 'Reject mixed MCP and attachment selection',
+        'if': '${{ inputs.attachment_consumption || inputs.multi_quote || inputs.attachment_experience }}',
+        'run': 'exit 1',
+    }
     commands = browser_runner_commands(steps)
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
@@ -651,7 +666,15 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
              if step.get('if') != '${{ inputs.attachment_consumption }}']
     next_step = after[0]
     assert next_step['name'] == 'Run all extended browser scenarios serially'
-    assert 'if' not in next_step  # Implicit success gate leaves initialized rows unrun on failure.
+    # Multi-quote replaces only this explicitly selected run; default/APP004
+    # retain the existing plan and implicit success gate on earlier failures.
+    assert next_step['if'] == '${{ !inputs.multi_quote }}'
+    assert next(s for s in steps if '--initialize' in s.get('run', ''))['if'] == '${{ !inputs.multi_quote }}'
+    assert next(s for s in steps if s.get('name') == 'Run fixed multi-quote source and installed proof') == {
+        'name': 'Run fixed multi-quote source and installed proof',
+        'if': '${{ inputs.multi_quote }}',
+        'run': 'uv run --no-sync python scripts/multi_quote_checks.py --output output/multi-quote --installed',
+    }
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
     continued = [step for step in steps if 'continue-on-error' in step]
     assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts'}
@@ -674,7 +697,7 @@ def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
     assert steps[1] == {'name': 'Reject mixed selections',
-                       'if': '${{ inputs.canvas_qualification || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}',
+                       'if': '${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}',
                        'run': 'exit 1'}
     assert steps[2]['run'] == 'python scripts/compact_composer_checks.py --initialize'
     commands = [step['run'] for step in steps if 'run' in step]

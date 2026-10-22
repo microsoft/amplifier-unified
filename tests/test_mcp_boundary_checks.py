@@ -266,7 +266,7 @@ def test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job():
     assert inputs['mcp_boundary']['type'] == 'boolean' and inputs['mcp_boundary']['default'] == 'false'
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     normal = workflow['jobs']['browser']
-    assert normal['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
+    assert normal['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert normal['timeout-minutes'] == '30'
     normal_runs = '\n'.join(step.get('run', '') for step in normal['steps'])
     assert '--budget-seconds 1500' in normal_runs and 'mcp_boundary_checks' not in normal_runs

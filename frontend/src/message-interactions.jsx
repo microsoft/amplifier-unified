@@ -1,5 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {Reply,Smile,X} from 'lucide-react';
+import {readDetail} from './detail-read';
+import {Markdown} from './markdown';
 import {clientId,request} from './api';
 import {createReactionController,reactionControllers} from './message-reactions';
 import './message-interactions.css';
@@ -12,13 +14,31 @@ export function AssistantReactions({message}){
  return <div className="a-assistant-reactions" aria-label="Amplifier reactions">{selected.map(([emoji,label])=><span key={emoji} className="a-assistant-reaction" aria-label={`Amplifier reacted: ${label}`} title={`Amplifier reacted: ${label}`}><span aria-hidden="true">{emoji}</span><small>Amplifier</small></span>)}</div>;
 }
 
-const author=quote=>quote.role==='user'?'You':'Amplifier';
+const author=quote=>quote.speaker||(quote.role==='user'?'You':'Amplifier');
+
+export function QuotedDocument({document,sessionId,dispatch}){
+ return <div className="a-quoted-document">{document.segments.map((part,index)=>part.type==='quote'?
+  <section key={part.instanceId} data-sent-quote={part.instanceId} className="a-composer-quote"><QuoteCard quote={part.quote} sessionId={sessionId} dispatch={dispatch}/><pre className="a-composer-quote-text">{part.quote.excerpt}</pre><small>Historical reference · Full saved text</small></section>:
+  <Markdown key={index} text={part.text} userContent/>)}</div>;
+}
+
+function PassagePicker({text,onAdd,onClose}){
+ const dialog=useRef(null),area=useRef(null),[range,setRange]=useState([0,0]),[error,setError]=useState('');
+ useEffect(()=>{const previous=document.activeElement;dialog.current.showModal();area.current.focus();return()=>{if(previous?.isConnected)previous.focus({preventScroll:true});};},[]);
+ const select=()=>setRange([area.current.selectionStart,area.current.selectionEnd]);
+ return <dialog ref={dialog} className="a-quote-picker" onCancel={onClose} onClick={event=>{if(event.target===dialog.current)onClose();}}>
+  <h3>Choose exact source passage</h3><p>Select only the text to quote. Markdown source, whitespace and Unicode are kept exactly.</p>
+  <textarea ref={area} readOnly aria-label="Message source for quotation" value={text} onSelect={select} onKeyUp={select}/>
+  <small>{[...text.slice(...range)].length} characters selected</small>
+  <div><button type="button" onClick={onClose}>Cancel</button><button type="button" disabled={range[0]===range[1]} onClick={async()=>{try{await onAdd(...range);onClose();}catch(error){setError(error.message);}}}>Add selected passage</button></div>{error&&<p role="alert">{error}</p>}
+ </dialog>;
+}
 
 export function QuoteCard({quote,sessionId,dispatch}){
  const [error,setError]=useState('');
  if(!quote)return null;
  const here=(quote.navigationSessionId||quote.sessionId)===sessionId;
- return <blockquote className="a-reply-quote"><button type="button" className="a-quoted-source" data-action="message.reveal" title={here?'Go to original message':'Open the original message in its conversation'} onClick={async()=>{setError('');try{const target=quote.navigationSessionId||quote.sessionId;await dispatch('message.reveal',{sessionId:target,messageId:quote.messageId})}catch(e){setError(e.message)}}}><strong>{author(quote)}</strong><span>{quote.excerpt}{quote.truncated?'…':''}</span></button>{!here&&<small>Quoted from the original conversation</small>}{error&&<small role="status">{error}</small>}</blockquote>;
+ return <blockquote className="a-reply-quote"><button type="button" className="a-quoted-source" data-action="message.reveal" title={here?'Go to original message':'Open the original message in its conversation'} onClick={async()=>{setError('');try{const target=quote.navigationSessionId||quote.sessionId;await dispatch('message.reveal',{sessionId:target,messageId:quote.messageId,...(quote.kind?{loadedOnly:true}:{})})}catch(e){setError(e.message)}}}><strong>{author(quote)}</strong>{!quote.kind&&<span>{quote.excerpt}{quote.truncated?'…':''}</span>}</button>{!here&&<small>Quoted from the original conversation</small>}{error&&<small role="status">{error}</small>}</blockquote>;
 }
 
 export function ReplyPreview({quote,sessionId,dispatch}){
@@ -30,6 +50,23 @@ export function ReplyPreview({quote,sessionId,dispatch}){
 export function MessageInteractions({message,sessionId,dispatch}){
  const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const owner=JSON.stringify([sessionId,message.id]),current=useRef(owner),controller=useRef(null),[,refresh]=useState(0);current.current=owner;
+ const anchor=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
+ useEffect(()=>{
+  if(typeof document==='undefined')return;
+  const update=()=>{
+   const selection=window.getSelection(),article=anchor.current?.closest('[data-message-id]');
+   if(!selection||selection.isCollapsed||selection.rangeCount!==1){setSelected(null);return;}
+   const range=selection.getRangeAt(0),start=range.startContainer,end=range.endContainer;
+   if(!article?.contains(start)||!article.contains(end)||!start.parentElement?.closest('.a-detail-text')){setSelected(null);return;}
+   const a=start.parentElement?.closest('[data-canvas-source-start]'),b=end.parentElement?.closest('[data-canvas-source-start]');
+   if(start.nodeType!==3||end.nodeType!==3||!a||!b){setSelected({error:true});return;}
+   const from=Number(a.dataset.canvasSourceStart)+range.startOffset,to=Number(b.dataset.canvasSourceStart)+range.endOffset;
+   // Formatting/escape transformations cannot silently broaden a selection.
+   const source=message.text||'',excerpt=range.toString();
+   setSelected(source.slice(from,to)===excerpt&&excerpt?{start:[...source.slice(0,from)].length,end:[...source.slice(0,to)].length,source}:{error:true});
+  };
+  document.addEventListener('selectionchange',update);return()=>document.removeEventListener('selectionchange',update);
+ },[owner,message.text]);
  if(controller.current?.owner!==owner){
   const key='amplifier.reactions.v1:'+owner;
   let restored=[];try{restored=JSON.parse(sessionStorage.getItem(key)||'[]').filter(row=>typeof row.id==='string'&&typeof row.clientId==='string'&&reactions.some(([emoji])=>emoji===row.emoji)&&typeof row.present==='boolean'&&typeof row.desired==='boolean').slice(0,8)}catch{}
@@ -50,11 +87,15 @@ export function MessageInteractions({message,sessionId,dispatch}){
  const state=reaction.view(),chosen=state.reactions;
  async function action(name,args){
   if(busy)return;setBusy(true);setError('');
-  try{await dispatch(name,{sessionId,messageId:message.id,...args});
-   if(name==='message.reply'&&current.current===owner)document.querySelector('[aria-label="Message Amplifier"]')?.focus();}
+  try{await dispatch(name,{sessionId,messageId:message.id,...args},name==='message.reply'?{quoteSource:message.text,quoteDetail:message.textDetail}:{});}
   catch(e){if(current.current===owner)setError(e.message)}finally{if(current.current===owner)setBusy(false)}
  }
- return <><button type="button" className="a-icon" aria-label="Reply to message" title="Reply to message" data-action="message.reply" disabled={busy} onClick={()=>action('message.reply',{})}><Reply/></button><div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
+ const addPassage=(source,start,end)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection:{start,end}},{quoteSource:source});};
+ return <><button ref={anchor} type="button" className="a-icon" aria-label="Reply to message" title="Quote whole message" data-action="message.reply" disabled={busy} onMouseDown={event=>{if(event.button===0)event.preventDefault();}} onClick={()=>action('message.reply',{})}><Reply/></button>
+ <button type="button" className="a-link" disabled={busy} onClick={async()=>{try{setError('');const text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner)setPicker(text);}catch(error){setError(error.message);}}}>Choose passage</button>
+ {selected&&<button type="button" className="a-link" onMouseDown={event=>event.preventDefault()} onClick={async()=>{try{if(selected.error)throw Error('Use Choose passage for an exact source selection across formatting or blocks. Nothing was added.');await addPassage(selected.source,selected.start,selected.end);setSelected(null);}catch(error){setError(error.message);}}}>Quote selection</button>}
+ {picker!==null&&<PassagePicker text={picker} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker,[...picker.slice(0,start)].length,[...picker.slice(0,end)].length)}/>}
+ <div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
   <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={e=>{const pane=e.currentTarget.closest('.a-messages')?.getBoundingClientRect();setBelow(e.currentTarget.getBoundingClientRect().top-(pane?.top||0)<110);setOpen(!open)}}><Smile/></button>
   {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} data-action="message.reaction" onClick={e=>{reaction.set(emoji,!chosen.includes(emoji));setOpen(false);e.currentTarget.closest('.a-reaction-control')?.querySelector('button')?.focus({preventScroll:true})}}>{emoji}</button>)}</div>}
  </div>{chosen.map(emoji=><button key={emoji} type="button" className="a-reaction-chip" aria-label={`Remove ${reactions.find(r=>r[0]===emoji)?.[1]||emoji} reaction`} aria-pressed="true" title={state.pending.includes(emoji)?'Reaction not yet confirmed':'Remove reaction'} data-pending={state.pending.includes(emoji)||undefined} data-action="message.reaction" onClick={()=>reaction.set(emoji,false)}>{emoji}</button>)}<span className="a-sr-only" role="status">{state.unknown?'Reaction not confirmed':state.pending.length?'Saving reaction':''}</span>{(error||state.error||state.unknown)&&<span className="a-message-interaction-error" role="alert">{error||state.error||'Reaction not confirmed.'}{state.unknown&&<button type="button" disabled={state.checking} onClick={()=>reaction.reconcile()}>Check saved reaction</button>}</span>}</>;

@@ -64,7 +64,7 @@ try{
  await page.setViewportSize({width:1440,height:1000});
  await page.getByRole('button',{name:'Preview in chat',exact:true}).click();
  await expect(page.locator('.a-inline-artifact').getByRole('heading',{name:'A clearer first impression',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Close preview of Website refresh brief',exact:true}).click();
- await expect(page.getByRole('button',{name:'Show preview',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Hide preview',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Preview in chat',exact:true})).toBeVisible();
  assert.deepEqual(errors,[]);console.log('PASS: conversation, compact overview, artifact selection, separate durable widths, focus, Activity, Settings, Options, and five light/dark viewport sizes.');
 }finally{await browser?.close();fixture.kill()}

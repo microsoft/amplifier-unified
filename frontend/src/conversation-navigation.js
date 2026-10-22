@@ -42,7 +42,7 @@ export function createConversationNavigation(limit=32){
   const session={...metadata,draft:saved?.session.draft??summary.draft,historyLoading:true,messages:[],workers:[],approvals:[]};
   return {...state,selectedSessionId:id,selectedWorkspaceId:session.workspaceId??state.selectedWorkspaceId,navigationPending:true,
    sessions:[...(state.sessions||[]).filter(row=>row.id!==id),session],
-   view:{...state.view,workSurface:'chat',draft:session.draft||''},
+   view:{...state.view,workSurface:'chat',draft:session.draft||'',draftDocument:null},
    canvas:{open:false},canvasWorkspace:{views:[]},canvasArtifacts:[]};
  }
  return {remember,begin,apply,settle:token=>pending.delete(token)};
