@@ -81,6 +81,7 @@ def browser(root, name, python, *, installed=False):
     assert all(proof[key] is True for key in ('semanticMarkdown', 'exactCopy', 'noReload', 'noRuntime'))
     assert proof['draftAttachmentsRetained'] == 1
     assert proof['draftTextAfterReturn'] is True
+    assert proof['refreshEarlierOrder'] is True
     assert proof['lateDirtyPreservation'] == {
         'canvasRefused': True, 'rendererMountAndLeaseRetained': True,
         'settingsCancelled': True, 'settingsEditorRetained': True,
@@ -125,9 +126,10 @@ def main():
     def node_checks():
         run('browser-syntax', ['node', '--check', 'frontend/tests/peer-preview-browser.mjs'])
         text = run('node', ['node', '--test', '--test-reporter=tap',
-            'frontend/tests/peer-groups.test.mjs', 'frontend/tests/artifact-placement.test.mjs'])
+            'frontend/tests/peer-groups.test.mjs', 'frontend/tests/artifact-placement.test.mjs',
+            'frontend/tests/peer-preview-pages.test.mjs'])
         counts = dict(re.findall(r'^# (tests|pass|fail|cancelled|skipped|todo) (\d+)$', text, re.M))
-        assert counts == {'tests': '7', 'pass': '7', 'fail': '0', 'cancelled': '0', 'skipped': '0', 'todo': '0'}
+        assert counts == {'tests': '10', 'pass': '10', 'fail': '0', 'cancelled': '0', 'skipped': '0', 'todo': '0'}
         return counts
 
     def build():

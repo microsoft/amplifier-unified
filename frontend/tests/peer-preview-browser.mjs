@@ -79,7 +79,18 @@ try{
  const sourceLong=panel().locator(`[data-preview-message-id="${facts.sourceLong}"]`);await sourceLong.getByRole('button',{name:'Show full text',exact:true}).click();
  await expect(sourceLong.locator('h2').last()).toHaveText('Beyond compact boundary');
  await sourceLong.getByRole('button',{name:'Copy preview original as Markdown'}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(facts.long);
+ const previewIds=()=>panel().locator('[data-preview-message-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.previewMessageId));
+ assert.equal(facts.sourceIds.length,80);
+ assert.deepEqual(await previewIds(),facts.sourceIds.slice(-20));
+ for(const length of [40,60]){
+  await panel().getByRole('button',{name:'Load earlier messages',exact:true}).click();
+  await expect.poll(previewIds).toEqual(facts.sourceIds.slice(-length));
+ }
+ await panel().getByRole('button',{name:'Refresh',exact:true}).click();
+ await expect(panel().getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
+ assert.deepEqual(await previewIds(),facts.sourceIds.slice(-60));
  await panel().getByRole('button',{name:'Load earlier messages',exact:true}).click();
+ await expect.poll(previewIds).toEqual(facts.sourceIds);
  await formatted(panel().locator(`[data-preview-message-id="${facts.older}"] .a-markdown`));
  const longNode=await sourceLong.elementHandle();
  const readAnchor=()=>panel().locator('.a-peer-preview-scroll').evaluate(pane=>{
@@ -94,6 +105,8 @@ try{
  assert.equal(await sourceLong.evaluate((node,old)=>node===old,longNode),true);
  const afterAnchor=await readAnchor();assert.equal(afterAnchor.id,anchor.id);assert.ok(Math.abs(afterAnchor.offset-anchor.offset)<2);
  await expect(sourceLong.locator('h2').last()).toHaveText('Beyond compact boundary');
+ const arrived=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();
+ assert.deepEqual(await previewIds(),arrived.sourceIds);
  // Confirm no reload/current draft mutation through preview and an adjacent close/reopen cycle.
  assert.deepEqual(await page.evaluate(()=>{const s=window.amplifier.getState();return {id:s.selectedSessionId,draft:s.view.draft,attachments:s.sessions.find(x=>x.id===s.selectedSessionId)?.draftAttachments||s.draftAttachments||[],document:window.peerDocument}}),before);
  await panel().getByRole('button',{name:'Close source preview'}).click();await expect(link).toBeFocused();
@@ -212,7 +225,7 @@ try{
  const final=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();assert.deepEqual(final.effects,[]);assert.deepEqual(final.subprocesses,[]);assert.deepEqual(errors,[]);
  assert.equal(final.rendererValidations.length,1);
  assert.ok(!commands.some(x=>['conversation.send','worker.spawn','session.warm','approval.respond'].includes(x)));
- results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,draftTextAfterReturn:true,draftAttachmentsRetained:before.attachments.length,lateDirtyPreservation:{canvasRefused:true,rendererMountAndLeaseRetained:true,settingsCancelled:true,settingsEditorRetained:true,canonicalSourceRetained:true,cleanOpenAccepted:true},narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
+ results.push({mode:installed?'installed-static':'built-static',semanticMarkdown:true,exactCopy:true,refreshEarlierOrder:true,draftTextAfterReturn:true,draftAttachmentsRetained:before.attachments.length,lateDirtyPreservation:{canvasRefused:true,rendererMountAndLeaseRetained:true,settingsCancelled:true,settingsEditorRetained:true,canonicalSourceRetained:true,cleanOpenAccepted:true},narrow:[320,390],noReload:true,noRuntime:true,negativeControl:'separate PEER_NEGATIVE_FLATTEN=1 run required',backend:final.backend});
  if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-browser-result.json'),JSON.stringify(results,null,2));
  console.log(JSON.stringify(results));
 }catch(error){

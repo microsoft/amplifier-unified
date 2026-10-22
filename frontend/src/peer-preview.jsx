@@ -6,6 +6,7 @@ import {usePanelLayout,PaneResizer} from './panel-layout';
 import {useModalFocus} from './responsive-navigation';
 import {messageTime} from './message-time';
 import {Markdown} from './markdown';
+import {prependPeerPage,refreshPeerPages} from './peer-preview-pages.js';
 import './peer-preview.css';
 
 export function usePeerPreview(state,dispatch){
@@ -48,17 +49,11 @@ export function PeerPreviewCanvas({active,onClose,state,dispatch}){
  useLayoutEffect(()=>{const saved=selection.current,pane=scroll.current;if(saved&&pane){const node=[...pane.querySelectorAll('[data-preview-message-id]')].find(n=>n.dataset.previewMessageId===saved.id);if(node)pane.scrollTop+=node.getBoundingClientRect().top-pane.getBoundingClientRect().top-saved.offset;selection.current=null}},[snapshot]);
  async function load(earlier=false){
   read.current?.abort();const controller=new AbortController(),token=++version.current;read.current=controller;setBusy(true);setError('');
-  try{const result=await request('/api/peer/preview?'+new URLSearchParams({proof:latest.current.proof,...(earlier?{before:snapshot.page.before}:{})}),{signal:controller.signal});
+  try{const fetchPage=before=>request('/api/peer/preview?'+new URLSearchParams({proof:latest.current.proof,...(before?{before}:{})}),{signal:controller.signal});
+   const result=earlier?prependPeerPage(snapshot,await fetchPage(snapshot.page.before)):await refreshPeerPages(snapshot,fetchPage);
    if(controller.signal.aborted||token!==version.current)return;
-   if(!Array.isArray(result?.page?.items)||!result.source?.available)throw Error('Invalid source snapshot.');
    selection.current=anchor();setUnavailable(false);
-   setSnapshot(old=>{
-    const incoming=result.page.items;
-    // Same-ID bodies retain React identity and loaded detail state. Never reorder by sender/time.
-    const messages=earlier?[...incoming,...(old?.messages||[])]:old?.messages?.length&&incoming.some(m=>old.messages.some(x=>x.id===m.id))?[...old.messages,...incoming]:incoming;
-    const unique=new Map(messages.map(m=>[m.id,m]));
-    return {...result,messages:[...unique.values()],page:result.page};
-   });
+   setSnapshot(result);
   }catch(e){if(!controller.signal.aborted&&token===version.current){if([403,404].includes(e.status)){setUnavailable(true);setSnapshot(null)}setError(e.message)}}finally{if(token===version.current)setBusy(false)}
  }
  useEffect(()=>{setSnapshot(null);setUnavailable(false);setUnknown(false);load();return()=>{version.current++;read.current?.abort()}},[identity]);

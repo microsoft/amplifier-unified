@@ -89,7 +89,7 @@ async def main():
         for source in (a,b):
             await generation(service,source,'g-'+source['id'],['human-'+source['id']])
         older = service._message(a,'assistant',TEXT)
-        for i in range(24): service._message(a,'assistant','Earlier synthetic answer %d' % i)
+        for i in range(77): service._message(a,'assistant','Earlier synthetic answer %d' % i)
         source_text = service._message(a,'assistant',TEXT)
         source_long = service._message(a,'assistant',LONG)
         service._message(b,'assistant',CRLF)
@@ -101,6 +101,7 @@ async def main():
         async def facts(request):
             return web.json_response({'sourceA':a['id'],'sourceB':b['id'],'receiving':recipient['id'],
                 'originals':[x['messageId'] for x in sent], 'older':older['id'],'sourceText':source_text['id'],'sourceLong':source_long['id'],
+                'sourceIds':[message['id'] for message in a['messages']],
                 'text':TEXT,'long':LONG,'crlf':CRLF,'textSha256':hashlib.sha256(TEXT.encode()).hexdigest(),
                 'effects':runtime.effects,'subprocesses':attempts,'installed':INSTALLED,
                 'rendererValidations':renderer_validations,
