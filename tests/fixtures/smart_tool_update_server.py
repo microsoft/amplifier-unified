@@ -33,7 +33,8 @@ async def serve():
                              for name in ('unavailable', 'healthy')]
         await manager.installSmartTools()
         async def inspect(request):
-            return web.json_response({'calls': calls, 'pending': service.state['updates'].get('pendingSmartTools', [])})
+            return web.json_response({'calls': calls, 'pending': service.state['updates'].get('pendingSmartTools', []),
+                                      'pendingApp': service.state['updates'].get('pendingApp')})
         async def failed(request):
             await manager.publish(phase='error', error='One tool needs attention.', pendingSmartTools=[{
                 'previous': 'skip-example', 'revision': 'c' * 40, 'component': 'skip-example',
@@ -41,6 +42,27 @@ async def serve():
             return web.json_response({'ok': True})
         app.router.add_get('/fixture/tool-updates', inspect)
         app.router.add_post('/fixture/tool-updates', failed)
+        async def runner_wait(request):
+            # The real dispatcher/update coordinator sees an independent runner
+            # receipt plus a newer app. Only app preparation is synthetic: never
+            # replace or restart the fixture's installation.
+            async def stage_app():
+                calls.setdefault('application', []).append('stage')
+                await manager.publish(phase='app-staged', pendingApp={'latest': 'v9.9.9'},
+                                      detail='Waiting for work to finish.')
+            manager.app = stage_app
+            manager.inventory = []
+            service.state['settings']['updates']['autoInstall'] = False
+            await manager.publish(phase='available', error=None, appAvailable=True, available=1,
+                runnerAvailabilityCheck=True, sequence={'stage': 'application', 'install': False},
+                application={'id': 'application', 'status': 'update', 'current': amplifier_web.__version__,
+                             'latest': 'v9.9.9', 'releaseNotes': [{'version': '9.9.9', 'title': 'Fixture release',
+                             'changes': ['New app remains available while the runner waits.'], 'notices': []}]},
+                items=[], pendingSmartTools=[{'previous': 'a' * 24, 'target': 'b' * 24,
+                    'runnerUpdate': 'c' * 32, 'runnerWaiting': 'unknown',
+                    'runnerSource': {'runnerKind': 'managed-dtu-core'}}])
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/runner-update', runner_wait)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, '127.0.0.1', 0)
