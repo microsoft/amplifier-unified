@@ -98,7 +98,7 @@ def main():
             outside = output / 'installed'; outside.mkdir()
             python = outside / 'venv/bin/python'
             run('installed-venv', ['uv', 'venv', '--python', sys.executable, '--system-site-packages', str(outside / 'venv')])
-            install, _ = run('wheel-install', ['uv', 'pip', 'install', '--python', str(python), '--no-deps', str(wheel)])
+            install, _ = run('wheel-install', ['uv', 'pip', 'install', '--python', str(python), '--no-deps', '--reinstall-package', 'amplifier-unified', str(wheel)])
             if install == 0:
                 expected = {}
                 with zipfile.ZipFile(wheel) as archive:
@@ -110,7 +110,7 @@ def main():
                                 assert not path.exists() or sha(path.read_bytes()) == expected[name], name
                 (output / 'wheel-identity.json').write_text(json.dumps({'wheelSha256': sha(wheel.read_bytes()), 'files': expected}, indent=2))
                 env = dict(os.environ); env.pop('PYTHONPATH', None)
-                probe = "import amplifier_web,json,hashlib; from pathlib import Path; root=Path(amplifier_web.__file__).parent; assert str(root).startswith(" + repr(str(outside)) + "); expected=json.loads(" + repr(json.dumps(expected)) + "); assert all(hashlib.sha256((root.parent/name).read_bytes()).hexdigest()==digest for name,digest in expected.items()); print(root); print(len(expected),'package/static hashes match')"
+                probe = "import amplifier_web,json,hashlib; from pathlib import Path; root=Path(amplifier_web.__file__).parent; assert str(root).startswith(" + repr(str(outside)) + "); expected=json.loads(Path(" + repr(str(output / 'wheel-identity.json')) + ").read_text())['files']; assert all(hashlib.sha256((root.parent/name).read_bytes()).hexdigest()==digest for name,digest in expected.items()); print(root); print(len(expected),'package/static hashes match')"
                 run('installed-identity', [str(python), '-c', probe], cwd=outside, env=env)
                 fixtures = outside / 'tests/fixtures'; fixtures.mkdir(parents=True)
                 for name in ('message_interactions_ui_server.py', 'chat_ui_server.py', 'settings_ui_server.py'):

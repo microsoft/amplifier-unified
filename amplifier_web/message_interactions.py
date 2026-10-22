@@ -213,14 +213,19 @@ def resolve_document(session, document):
             or document['version'] != 1 or not isinstance(document['segments'], list)
             or not 1 <= len(document['segments']) <= 1000):
         raise AppError('Invalid quoted document.')
-    result, instances, total, text_size = [], set(), 0, 0
+    result, instances, total, text_size, content_size = [], set(), 0, 0, 0
     for segment in document['segments']:
         if not isinstance(segment, dict):
             raise AppError('Invalid quoted document segment.')
         if segment.get('type') == 'text' and isinstance(segment.get('text'), str):
             text_size += len(segment['text'])
-            result.append({'type': 'text', 'text': segment['text'],
-                           **({'content': _commentary_content(segment['content'])} if 'content' in segment else {})})
+            editor = {}
+            if 'content' in segment:
+                editor = {'content': _commentary_content(segment['content'])}
+                content_size += len(json.dumps(editor['content'], ensure_ascii=False))
+                if content_size > 400000:
+                    raise AppError('Commentary editor content is too long.')
+            result.append({'type': 'text', 'text': segment['text'], **editor})
         elif segment.get('type') == 'quote':
             identity = segment.get('instanceId')
             if (not isinstance(identity, str) or not 1 <= len(identity) <= 100

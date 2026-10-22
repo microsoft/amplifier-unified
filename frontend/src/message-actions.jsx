@@ -50,7 +50,8 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const blocked=working||session.configurationBusy||session.workspaceAvailable===false||!!session.historyReadOnlyReason;
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
  const localDelivery=m.localDelivery,delivery=localDelivery||(m.delivery?.status&&m.delivery.status!=='accepted'?m.delivery:null);
- const editLocked=saving||blocked||!!delivery&&delivery.status!=='failed';
+ const quoted=m.replyTo?.version===2;
+ const editLocked=saving||blocked||quoted||!!delivery&&delivery.status!=='failed';
  const external=m.role==='user'&&!!(m.attribution?.caption||['agent','peer','scheduler'].includes(m.inputOrigin)||m.via==='peer'||m.via==='schedule');
  const attribution=m.attribution?.caption||(m.inputOrigin==='agent'?'Sent by Amplifier':m.inputOrigin==='scheduler'?'Scheduled message':null);
  const label=m.role==='user'?(attribution||(external||m.nativeInputId?'Message':'Your message')):'Amplifier message';
@@ -80,7 +81,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery&&!m.displayOnly){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.textDetail?await readDetail(m.textDetail):m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {!localDelivery&&!m.displayOnly&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}
-   {m.role==='user'&&!external&&!m.displayOnly&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={editLocked} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
+   {m.role==='user'&&!external&&!m.displayOnly&&<button type="button" className="a-icon" title={quoted?'Quoted messages retain exact references. Send a correction instead.':session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={editLocked} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
    {forkTurn&&!m.displayOnly&&<ForkTurn session={session} turn={forkTurn} act={act} working={working}/>}
    <MessageDelivery message={m} session={session} delivery={delivery} localDelivery={localDelivery} dispatch={dispatch} retry={retry} discard={discard}/>
 
