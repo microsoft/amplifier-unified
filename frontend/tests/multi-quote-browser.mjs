@@ -37,7 +37,7 @@ async function enteredCommentary(text){
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
  assert.ok(observed.paragraphs.some(value=>value.includes(text)),`Typed commentary missing from DOM immediately: ${text}`);
  assert.ok(commentary(observed.document).some(value=>value.includes(text)),`Typed commentary missing from editor draft: ${text}`);
- await expect.poll(async()=>commentary((await canonicalDraft()).document||{segments:[]})).toContain(text);
+ await expect.poll(async()=>commentary((await canonicalDraft()).document||{segments:[]}).some(value=>value.includes(text))).toBe(true);
 }
 async function expectLayout(stage,expected){
  const dom=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>[...editor.children].map(node=>node.hasAttribute('data-quote-instance')?
@@ -133,6 +133,7 @@ try{
  assert.equal((await observe()).sends.length,0,'Collecting must not send');
  await editor.dispatchEvent('keydown',{key:'Enter',code:'Enter',isComposing:true,keyCode:229});
  assert.equal((await observe()).sends.length,0,'IME Enter must not send');
+ await expectLayout('IME key leaves exact document unchanged',expected);
  let doc=await documentValue(),initial=[firstQuote,secondQuote,wholeQuote],comments=[BEFORE,BETWEEN,BEFORE_WHOLE,AFTER+UNICODE];
  assert.equal(initial[0].quote.excerpt,first.text);assert.equal(initial[1].quote.excerpt,second.text);
  assert.deepEqual(initial[0].quote.spans,[{start:first.start,end:first.end}]);assert.deepEqual(initial[1].quote.spans,[{start:second.start,end:second.end}]);

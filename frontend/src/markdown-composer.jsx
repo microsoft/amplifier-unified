@@ -49,6 +49,10 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
     return false;
    },
    handleDOMEvents:{
+    // Let the browser/IME commit composition, but do not run later editor
+    // keymaps (whose Enter binding would otherwise split a paragraph).
+    // DOM handlers do not prevent the native default merely by returning true.
+    keydown(view,event){return view.composing||event.isComposing||event.keyCode===229;},
     beforeinput(view,event){
      // Virtual keyboards may emit beforeinput without a usable keydown.
      if(editable()&&!view.composing&&!event.isComposing&&event.inputType==='insertParagraph'){
