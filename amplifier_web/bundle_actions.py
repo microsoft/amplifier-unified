@@ -106,7 +106,7 @@ async def perform(management, action, args):
             if replacement is None:
                 check_current()
                 switch_args = args
-                if args.get('previewId'):
+                if args.get('previewId') and source.get('bundlePreview', {}).get('baseline') == 'saved':
                     expected = source.get('bundlePreview', {})
                     if expected.get('previewId') != args['previewId'] or expected.get('bundle') != args['bundle']:
                         raise ValueError('The configuration changed. Preview the selected bundle again.')

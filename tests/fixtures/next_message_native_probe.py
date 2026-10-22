@@ -24,7 +24,7 @@ class FixtureProvider:
     def get_info(self):
         return ProviderInfo(id="fixture", display_name="Offline fixture", defaults={"model":"first"})
     def get_config_schema(self):
-        return {"fields":[{"id":"reasoning_effort","choices":["low","high"]}]}
+        return {"fields":[{"id":"reasoning_effort","field_type":"choice","required":False,"choices":["low","high"]}]}
     async def list_models(self):
         return [{"id":"first"},{"id":"second"}]
     def parse_tool_calls(self, response): return []
@@ -158,6 +158,9 @@ async def run(root, regression=False):
         report.update(passed=True, calls=observed, inputsExactlyOnce=True, adjacentCycle=True)
     except BaseException as exc:
         report.update(passed=False, error=type(exc).__name__+': '+str(exc))
+        if 'current' in locals():
+            report['applicationFailure'] = {key: current.get(key) for key in
+                ('nextMessageError', 'nextMessageFailure', 'error', 'failure')}
         raise
     finally:
         processes = [row['process'] for row in runtime.workers.values()]

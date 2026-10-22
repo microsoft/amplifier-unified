@@ -123,7 +123,7 @@ async def main(root):
     site = web.TCPSite(runner, '127.0.0.1', 0)
     await site.start()
     port = site._server.sockets[0].getsockname()[1]
-    app['allowed_origins'].add(f'http://127.0.0.1:{port}')
+    app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
     print(json.dumps({'url': f'http://127.0.0.1:{port}', 'id': sid, 'artifactId': artifact_id}), flush=True)
     done = asyncio.Event()
     loop = asyncio.get_running_loop()
