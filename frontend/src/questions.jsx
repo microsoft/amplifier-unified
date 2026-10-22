@@ -40,7 +40,7 @@ function ReviewArtifact({reference,question,state,dispatch,onExpandedChange}){
   finally{pending.current=false;if(alive.current)setBusy(false)}
  }
  async function escape(event){
-  if(event.key!=='Escape'||!expanded||pending.current)return;
+  if(event.defaultPrevented||event.key!=='Escape'||!expanded||pending.current)return;
   event.preventDefault();
   if(await controls.current?.close())trigger.current?.focus({preventScroll:true});
  }
@@ -126,17 +126,22 @@ export function QuestionNotice({session,paneRef}){
  return <div className="a-question-notice" role="status"><span>{pending?`${pending===1?'A question needs':pending+' questions need'} your answer`:'An answer needs delivery confirmation'}</span><button type="button" className="a-link" onClick={()=>{const target=paneRef.current?.querySelector('[data-part="questions"]');if(target){target.scrollIntoView({block:'start'});target.focus({preventScroll:true})}}}>Review {pending?'questions':'answer'}</button></div>;
 }
 
-export function Questions({session,state={},dispatch,history=false}){
- const [previews,setPreviews]=useState({});
- const onPreviewChange=(questionId,reference,expanded)=>setPreviews(current=>({
-  ...current,[questionId]:{...current[questionId],[reference]:expanded},
- }));
+export function Questions({session,state={},dispatch,history=false,reviewState}){
+ const localReviews=useState({}),[previews,setPreviews]=reviewState||localReviews,owner=useId();
+ useEffect(()=>()=>setPreviews(current=>Object.fromEntries(Object.entries(current).filter(([,entry])=>entry.owner!==owner))),[setPreviews,owner]);
+ const onPreviewChange=(questionId,reference,expanded)=>setPreviews(current=>{
+  const references={...current[questionId]?.references,[reference]:expanded},next={...current};
+  if(Object.values(references).some(Boolean))next[questionId]={owner,references};
+  else delete next[questionId];
+  return next;
+ });
  const active=activeQuestions(session);
  // Preserve a mounted review through answer/delivery/status updates. A late
  // renderer dirty report still has its editor; closing the review lets the
  // completed card leave the active surface. Status is not content identity.
- const questions=(session?.questions||[]).filter(q=>(history?!active.includes(q):active.includes(q))
-  ||Object.values(previews[q.id]||{}).some(Boolean));
+ const questions=(session?.questions||[]).filter(q=>previews[q.id]
+  ?previews[q.id].owner===owner
+  :history?!active.includes(q):active.includes(q));
  if(!questions.length)return null;
  const cards=questions.map(q=><QuestionCard key={`${q.id}:${q.contentRevision||1}`} question={q} sessionId={session.id} state={state} dispatch={dispatch} onPreviewChange={onPreviewChange}/>);
  return history?<details className="a-question-history"><summary>Answers and closed questions ({questions.length})</summary><div className="a-questions">{cards}</div></details>:<section tabIndex={-1} className="a-questions" data-part="questions" aria-label="Questions for you">{cards}</section>;

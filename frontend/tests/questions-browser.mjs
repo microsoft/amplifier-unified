@@ -255,6 +255,10 @@ try{
  assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Status revision and delivery updates preserve the open review');
  await expect(frame.locator('#value')).toHaveText('1');
  assert.equal((await check()).sent.length,4);
+ await history();await expect(q).toHaveCount(1);
+ await expect(page.locator('.a-question-history').locator(`[data-question-id="${review.question.id}"]`)).toHaveCount(0);
+ await close();
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'History inspection does not duplicate or replace the review');
  await second.getByRole('button',{name:/^Hide preview:/}).click();
  await expect(q).toHaveCount(0);
  await mountedFrame.dispose();
