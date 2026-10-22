@@ -831,3 +831,17 @@ def test_coordination_prepares_real_loop_before_first_contract_suite():
     assert steps[-1]['if'] == 'always()'
     assert '${{ runner.temp }}/test-environments' in steps[-1]['with']['path']
     assert 'output/coordination-runtime-readiness.json' in steps[-1]['with']['path']
+
+
+def test_remote_machine_queue_routing_has_a_focused_ci_owner():
+    workflow = yaml.load((ROOT / '.github/workflows/remote-test-origins.yml').read_text(), Loader=yaml.BaseLoader)
+    paths = workflow['on']['pull_request']['paths']
+    assert all(path in paths for path in (
+        'amplifier_web/registered_test_runners.py', 'amplifier_web/test_runner_routing.py',
+        'amplifier_web/test_queue.py', 'tests/test_runner_routing.py',
+        'tests/test_registered_test_runner_queue.py'))
+    steps = workflow['jobs']['queue-routing']['steps']
+    run = next(step['run'] for step in steps if step.get('name') == 'Check queued routing across approved machines')
+    assert run == ('uv run --no-sync pytest -q tests/test_runner_routing.py '
+                   'tests/test_registered_test_runner_queue.py --junitxml=routing-results.xml')
+    assert any(step.get('if') == 'always()' and step.get('with', {}).get('path') == 'routing-results.xml' for step in steps)
