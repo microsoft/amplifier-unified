@@ -2263,7 +2263,7 @@
             },
             {
               "path": "frontend/tests/composer-options-browser.mjs",
-              "relation": "Automatic composer-options owner; choices, invalid controls and keyboard/focus continuity"
+              "relation": "Existing automatic Public readiness composer-options owner; choices, invalid controls and keyboard/focus continuity"
             },
             {
               "path": "scripts/compact_composer_checks.py",

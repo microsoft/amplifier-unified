@@ -998,8 +998,9 @@ No new broad test lane or publication gate is added.
 
 ## Compact composer and peer preview integration (October 22)
 
-The additive `compact-composer`, `composer-options`, and `peer-preview` browser
-scenarios run in the automatic extended source smoke plan. They cover the
+The additive `compact-composer` and `peer-preview` browser scenarios run in the
+automatic extended source smoke plan. The existing `composer-options` owner
+remains in Public readiness without duplication. Together they cover the
 ordinary writing/options controls and grouped incoming-message source preview;
 the existing composer primary-action and peer-attribution journeys retain their
 separate assertions. The frozen original inventory and 65-scenario hash remain
