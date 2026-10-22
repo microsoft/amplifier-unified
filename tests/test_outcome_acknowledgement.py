@@ -183,7 +183,8 @@ def test_review_is_explicit_recovery_report_not_work_permission():
         'args': {'action': 'coordination.acknowledge', 'args': {'requestId': 'exact'}}})
 
 
-async def test_reviewed_backpressured_outcome_never_enqueues_later(app, monkeypatch):
+@pytest.mark.parametrize('restart', [False, True])
+async def test_reviewed_backpressured_outcome_never_enqueues_later(app, monkeypatch, restart):
     source, target = app.state['sessions'][:2]
     await declared_result(app)
     wait = await agent_action(app, source, 'coordination.subscribe',
@@ -203,3 +204,37 @@ async def test_reviewed_backpressured_outcome_never_enqueues_later(app, monkeypa
     assert not app.db.execute('SELECT 1 FROM commands WHERE id=?',
         (wait['result']['continuationId'],)).fetchone()
     assert app.collaboration.receipt('result-request')['subscription']['open'] is False
+    assert app.collaboration.receipt('result-request')['subscription']['status'] == 'claimed'
+    # Exercise actual admission: a final reviewed backpressured result must
+    # release its reservation rather than permanently occupying this inbox.
+    with monkeypatch.context() as bounded:
+        bounded.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+        original(source['id'])
+    if restart:
+        await app.close()
+        reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+        reopened.runtime.app = reopened
+        try:
+            # Durable acknowledgment frees the slot and prevents automatic
+            # replay after a restart, not just in the original process.
+            with monkeypatch.context() as bounded:
+                bounded.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+                reopened.collaboration.require_inbox_slot(source['id'])
+            reopened.collaboration.resume_outcomes(source['id'])
+            assert not reopened.runtime.inputs
+            assert not reopened.db.execute('SELECT 1 FROM commands WHERE id=?',
+                (wait['result']['continuationId'],)).fetchone()
+        finally:
+            await reopened.close()
+        return
+    # Retiring this notification must not close later changed reports.
+    source['status'] = 'working'
+    await generation(app, target, 'later-backpressured-report', ['result-request'])
+    await agent_action(app, target, 'coordination.reply', {
+        'requestId': 'result-request', 'expectedResponseRevision': 1,
+        'kind': 'question', 'outcome': 'question',
+        'text': 'New evidence needs a decision.'}, 'later-backpressured-report')
+    updated = app.collaboration.receipt('result-request')
+    next_identity = app.collaboration.continuation_identity(updated['subscription'], updated['outcomeRevision'])
+    assert app.collaboration.receipt(next_identity)['delivery'] == 'queued'
+    assert updated['subscription']['open'] is True

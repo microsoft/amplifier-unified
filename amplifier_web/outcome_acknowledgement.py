@@ -84,7 +84,13 @@ async def acknowledge(owner, source, args, origin, command_id):
             wait['acknowledgedOutcome'] = acknowledgement
             # An interim report remains subscribed to later revisions. A final
             # report already reviewed needs no reserved inbox slot.
-            wait['open'] = outcome.get('outcome') in {'deferred', 'question', 'conflict'}
+            # The review itself claims this outcome even when an inbox-full
+            # attempt never created its notification. Keeping backpressured or
+            # waiting would retain a slot despite open=False. Claimed remains
+            # eligible for changed later outcomes, with interim slots retained.
+            wait.update(status='claimed',
+                open=outcome.get('outcome') in {'deferred', 'question', 'conflict'})
+            wait.pop('detail', None)
             retired = notification is not None and notification.get('delivery') == 'queued'
             if retired:
                 notification.update(delivery='suppressed', acknowledgementId=identity,

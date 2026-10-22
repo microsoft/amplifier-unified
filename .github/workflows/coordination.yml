@@ -5,6 +5,7 @@ on:
       - 'amplifier_operations/coordination.py'
       - 'amplifier_web/coordination.py'
       - 'amplifier_web/request_cancellation.py'
+      - 'amplifier_web/outcome_acknowledgement.py'
       - 'tests/test_request_cancellation.py'
       - 'tests/test_outcome_acknowledgement.py'
       - 'frontend/tests/request-cancellation-browser.mjs'
