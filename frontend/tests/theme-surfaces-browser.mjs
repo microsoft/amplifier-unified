@@ -52,7 +52,7 @@ try{
  for(const selector of ['#amp-one',chat,nav,'.a-canvas-chrome'])assert.equal((await style(selector)).art,'none');
  assert.equal((await style('.a-layout')).gap,'10px');
  await presentation({decorations:true,layout:'balanced'});assert.notEqual((await style(nav)).art,'none');
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();assert.equal((await style(chat)).tr,'0px');
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();assert.equal((await style(chat)).tr,'0px');
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});await expect(page.locator(nav)).toBeHidden();assert.equal((await style(chat)).tl,'0px');
  // At this boundary, a 16px gap must remeasure fitPanels without a viewport resize.
  await page.setViewportSize({width:904,height:960});await action('view.update',{patch:{navPinned:true,navWidth:216}});
@@ -80,7 +80,7 @@ try{
  await page.reload();await expect.poll(async()=>(await style('.a-layout')).gap).toBe('13px');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  for(const width of [760,390,320]){
   await page.setViewportSize({width,height:900});await expect.poll(async()=>(await style('.a-layout')).gap).toBe('0px');await assertFits();
-  if(await page.locator(canvas).isVisible())await page.getByRole('button',{name:'Back to chat',exact:true}).click();
+  if(await page.locator(canvas).isVisible())await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
   assert.equal((await style(chat)).tl,'0px');assert.equal((await style(chat)).tr,'0px');
   if(width<520){await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Done',exact:true}).click();}
