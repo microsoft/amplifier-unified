@@ -110,12 +110,29 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
     identity = session['id']
     expected = recorded_delegate(session, path, monkeypatch, trailing_tools=trailing_tools)
     source_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    placement_keys = ('id', 'turnId', 'sessionId', 'rootSessionId',
+                      'toolCallId', 'toolObservationId')
+    expected_placements = [tuple(row[key] for key in placement_keys)
+                           for row in session['execution']['nodes'] if row.get('kind') == 'tool']
+    assert len(expected_placements) == trailing_tools + 1
+
+    def assert_saved_placement():
+        # Cold history now retains host-proven placement, but never the saved
+        # canonical request/reply bodies. Reopen must preserve exact bindings.
+        rows = session['execution']['nodes']
+        assert len(rows) == trailing_tools + 1
+        assert [tuple(row[key] for key in placement_keys) for row in rows] == expected_placements
+        assert all(row.get('liveObservation') is True for row in rows)
+        allowed = {*placement_keys, 'parentId', 'kind', 'phase', 'label', 'tool',
+                   'revision', 'startedAt', 'endedAt', 'runId', 'lifecycle', 'liveObservation'}
+        assert all(set(row) <= allowed for row in rows)
+        assert all(not set(row) & {'input', 'output', 'exchange', 'delegate'} for row in rows)
 
     if mode == 'persisted-projection':
         # Exercise the real persistence projection and a fresh window cache.
         # This is not yet the separate process-restart/large-history acceptance.
         session['execution'] = json.loads(json.dumps(stored_execution(session['execution'])))
-        assert session['execution']['nodes'] == []
+        assert_saved_placement()
         await service.event_log_view.windows.close()
         service.event_log_view.windows = WorkWindows(service)
     elif mode == 'service-reopen':
@@ -132,7 +149,7 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
         assert service is not previous
         session = service._session(identity, hydrate=False)
         assert session['nativeIdentity'] == source['nativeIdentity']
-        assert session['execution']['nodes'] == []
+        assert_saved_placement()
 
     windows = service.event_log_view.windows
     windows.projector = FakeProjector(service.data_dir)
