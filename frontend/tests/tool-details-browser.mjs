@@ -27,9 +27,20 @@ try{
  const row=id=>turn.locator(`[data-node-id$=":${id}"]`);
  const open=async id=>{const node=row(id),button=node.locator(':scope > button.a-execution-action-line');await button.waitFor();if(await button.getAttribute('aria-expanded')==='false')await button.click();return node};
  await expect(row('older-exact').locator(':scope > button')).toContainText('older-exact-command');
- assert.equal(reads.length,0,'Collapsed host hints do not fetch saved payloads');
+ const source=before.sessions.find(session=>session.execution?.turns?.some(turn=>turn.id==='tool-details'));
+ const delegateId=source.execution.nodes.find(node=>node.toolCallId==='older-delegate').id;
+ const olderId=source.execution.nodes.find(node=>node.toolCallId==='older-exact').id;
+ const delegateRequest=turn.locator(`[data-work-entry="${delegateId}:delegateRequest"]`);
+ const delegateReply=turn.locator(`[data-work-entry="${delegateId}:delegateResponse"]`);
+ await expect(delegateRequest).toBeVisible();
+ // Opening Work admits the visible delegate preview. Collapsed operations and
+ // full fields still must not fetch; no unrelated or duplicate read is allowed.
+ const visibleDelegateRead=url=>url.searchParams.get('part')==='tool'&&url.searchParams.get('sessionId')===source.id&&
+  url.searchParams.get('group')==='tool-details@tool-detail-question'&&url.searchParams.get('id')===delegateId;
+ assert.equal(reads.filter(url=>!visibleDelegateRead(url)).length,0,'Collapsed host hints and full fields do not fetch saved payloads');
+ assert.ok(reads.length<=1,'The one visible delegate preview shares one bounded lookup');
  let failNext=true;
- await page.route('**/api/conversation/detail?**',async route=>{if(new URL(route.request().url()).searchParams.get('part')==='tool'&&failNext){failNext=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Saved details temporarily unavailable'})})}return route.continue()});
+ await page.route('**/api/conversation/detail?**',async route=>{if(new URL(route.request().url()).searchParams.get('part')==='tool'&&new URL(route.request().url()).searchParams.get('id')===olderId&&failNext){failNext=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Saved details temporarily unavailable'})})}return route.continue()});
  const older=await open('older-exact');
  await expect(older.getByRole('button',{name:'Retry saved details'})).toBeVisible();
  await expect(older.locator(':scope > button')).toContainText('older-exact-command');
@@ -40,14 +51,14 @@ try{
  await older.getByRole('button',{name:/Show all .* lines/}).first().click();
  await expect(older).toContainText('OLDER-EXACT-INPUT-END');
  assert.equal(await older.locator('.a-related-saved-records').count(),0,'Exact observation has directly associated fields');
- const delegate=await open('older-delegate');
- await expect.poll(async()=>await delegate.getByRole('button',{name:'Search older saved details'}).count()>0||(await delegate.innerText()).includes('Review retained request')).toBe(true);
- assert.ok(!(await delegate.innerText()).includes('Response not recorded'),'Unavailable loaded page is not proof of an absent recording');
- if(await delegate.getByRole('button',{name:'Search older saved details'}).count())await delegate.getByRole('button',{name:'Search older saved details'}).click();
- await expect(delegate).toContainText('Review retained request.');
- for(const label of ['Show full request','Show full response']){const button=delegate.getByRole('button',{name:label,exact:true});if(await button.count())await button.click()}
- await expect(delegate).toContainText('DELEGATE-REQUEST-END');await expect(delegate).toContainText('DELEGATE-RESPONSE-END');
- const activity=delegate.getByRole('button',{name:/^Worker activity/});if(await activity.count())await activity.click();
+ await expect.poll(async()=>await delegateRequest.getByRole('button',{name:'Search older saved details'}).count()>0||(await delegateRequest.innerText()).includes('Review retained request')).toBe(true);
+ assert.ok(!(await delegateReply.innerText()).includes('Response not recorded'),'Unavailable loaded page is not proof of an absent recording');
+ if(await delegateRequest.getByRole('button',{name:'Search older saved details'}).count())await delegateRequest.getByRole('button',{name:'Search older saved details'}).click();
+ await expect(delegateRequest).toContainText('Review retained request.');
+ for(const [entry,label] of [[delegateRequest,'Show full request'],[delegateReply,'Show full response']]){const button=entry.getByRole('button',{name:label,exact:true});if(await button.count())await button.click()}
+ await expect(delegateRequest).toContainText('DELEGATE-REQUEST-END');await expect(delegateReply).toContainText('DELEGATE-RESPONSE-END');
+ // Child operations are now directly interleaved with the exchange.
+ await expect(turn.getByRole('button',{name:/^Worker activity/})).toHaveCount(0);
  const child=await open('child-exact');
  await expect(child.locator(':scope > button')).toContainText('Child validation failed');
  await expect(child.locator(':scope > button')).toContainText('Exit 2');
