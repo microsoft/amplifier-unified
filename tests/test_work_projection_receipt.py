@@ -317,7 +317,14 @@ async def test_status_only_same_revision_stream_is_private_immutable_and_does_no
                 assert service.browser_state() == prior['other-owner']
             assert service.state['revision'] == revision and service.db.total_changes == writes
         assert issued == prior, 'Issued baselines must not be mutated in place'
-        assert original == prior['one']
+        # Authentication decorates each transport response with its opaque
+        # history partition; the service-issued baseline stays undecorated.
+        from amplifier_web.auth import history_scope
+        expected_original = copy.deepcopy(prior['one'])
+        assert 'historyScope' not in expected_original['client']
+        expected_original['client']['historyScope'] = history_scope(
+            app['session_secret'], app['control_token'], service.data_dir)
+        assert original == expected_original
         original_selected = next(row for row in original['sessions'] if row['id'] == target['id'])
         assert original_selected['workProjection'] == {'status': 'loading', 'current': False, 'receipt': accepted}
         assert 'workProjection' not in target, 'Display receipt must not become canonical saved state'

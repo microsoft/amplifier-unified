@@ -34,9 +34,23 @@ try{
  const choose=mode=>landing.getByRole('group',{name:'Work view',exact:true}).getByRole('button',{name:mode,exact:true}).click();
  const settled=()=>expect.poll(async()=>Object.keys((await shell()).navigationResourcePending||{}).length).toBe(0);
  const openSidebar=async()=>{if(!await sidebar.isVisible())await page.locator('#navigation-toggle').click()};
- const home=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Home',exact:true}).click();await expect(landing).toHaveAttribute('data-landing','home');await settled()};
- const allChats=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Search chats',exact:true}).click();await expect(landing.getByRole('heading',{level:1})).toHaveText('All chats');await settled()};
- const allWorkspaces=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Browse',exact:true}).click();await sidebar.getByRole('button',{name:'All workspaces',exact:true}).click();await expect(landing).toHaveAttribute('data-landing','workspaces');await settled()};
+ const destinationCommands=new Set();
+ const acceptedDestination=async(surface,click)=>{
+  // Each helper waits for its click before another destination helper begins.
+  // Visible rows can be optimistic or retained while this command is queued.
+  const requested=page.waitForRequest(request=>{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return false;
+   const command=request.postDataJSON();return command?.action==='view.update'&&command.args?.patch?.workSurface===surface;
+  });
+  await click();const request=await requested,command=request.postDataJSON();
+  assert.equal(typeof command.id,'string');assert.ok(command.id);assert.ok(!destinationCommands.has(command.id));destinationCommands.add(command.id);
+  const response=await request.response();assert.ok(response);assert.equal(response.request(),request);
+  const receipt=await response.json();assert.equal(receipt.accepted,true);
+  await expect.poll(async()=>{const current=await state();return current.client.hostInstanceId===receipt.hostInstanceId&&current.revision>=receipt.stateRevision}).toBe(true);
+ };
+ const home=async()=>{await openSidebar();await acceptedDestination('home',()=>sidebar.getByRole('button',{name:'Home',exact:true}).click());await expect(landing).toHaveAttribute('data-landing','home');await settled()};
+ const allChats=async()=>{await openSidebar();await acceptedDestination('chats',()=>sidebar.getByRole('button',{name:'Search chats',exact:true}).click());await expect(landing.getByRole('heading',{level:1})).toHaveText('All chats');await settled()};
+ const allWorkspaces=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Browse',exact:true}).click();await acceptedDestination('workspaces',()=>sidebar.getByRole('button',{name:'All workspaces',exact:true}).click());await expect(landing).toHaveAttribute('data-landing','workspaces');await settled()};
  const focusRow=()=>landing.locator('.a-landing-chat[data-session-id]');
  const pickUpAgain=()=>landing.getByRole('group',{name:'Filter work'}).getByRole('button',{name:/^Pick up again/});
  const checkIdle=async(section,filter='')=>{
@@ -175,6 +189,17 @@ try{
  await landing.getByRole('button',{name:'Clear status filter'}).click();await settled();
  report.checks.push('Pick up again is accepted through All chats and workspace controls, returns only quiet read chats, survives navigation/reload, and clears without losing search');
 
+ // A user can choose a destination from the optimistic drawer before its open
+ // request arrives. That older request must not reopen the drawer afterward.
+ let delayedDrawerOpen=false;
+ const delayDrawerOpen=async route=>{
+  const command=route.request().postDataJSON(),patch=command?.args?.patch;
+  if(!delayedDrawerOpen&&page.viewportSize().width<=900&&command?.action==='view.update'&&patch?.navExpanded===true&&!patch.workSurface){
+   delayedDrawerOpen=true;await new Promise(resolve=>setTimeout(resolve,800));
+  }
+  await route.continue();
+ };
+ await page.route('**/api/actions',delayDrawerOpen);
  for(const destination of [home,allChats,allWorkspaces]){
   await destination();await choose('Brief');
   if(await sidebar.isVisible())await page.locator('#navigation-toggle').click();
@@ -185,6 +210,7 @@ try{
    await expect(landing.getByRole('group',{name:'Work view',exact:true})).toBeVisible();
   }
  }
+ assert.equal(delayedDrawerOpen,true);await expect(sidebar).toBeHidden();
  await page.setViewportSize({width:320,height:900});
  await page.locator('#amp-one').evaluate(node=>{node.style.setProperty('--a-text-base','20px');node.style.setProperty('--a-text-sm','18px');node.style.setProperty('--a-text-xs','16px')});
  await choose('Focus');assert.ok(await landing.evaluate(node=>node.scrollWidth<=node.clientWidth+1),'Enlarged text fits');
@@ -203,7 +229,7 @@ try{
  const linked=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  await linked.goto(`http://127.0.0.1:${port}/?chat=${encodeURIComponent(initial.initialSession)}`);await expect(linked.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();assert.equal(await linked.evaluate(()=>window.amplifier.getState().selectedSessionId),initial.initialSession);await linked.close();
  const after=await info();assert.deepEqual(after.runtimeStarts,initial.runtimeStarts);assert.deepEqual(after.runtimeSends,initial.runtimeSends);
- report.checks.push('320px, tablet, phone and enlarged text fit; keyboard Home and forced colors work; fresh windows start Home, refresh restores the destination and direct chat links open the chat; browsing starts no runtimes or model calls');
+ report.checks.push('320px, tablet, phone and enlarged text fit; a delayed mobile drawer open cannot overtake destination selection; keyboard Home and forced colors work; fresh windows start Home, refresh restores the destination and direct chat links open the chat; browsing starts no runtimes or model calls');
  assert.deepEqual(report.errors,[]);
  report.build=JSON.parse(await readFile(join(root,'amplifier_web/static/build.json'),'utf8'));report.passed=true;
 }catch(error){failure=error;report.passed=false;report.failure=error.stack;report.fixtureLog=logs;report.diagnostics=await page?.evaluate(async()=>(await fetch('/api/diagnostics/performance')).json()).catch(()=>null);await page?.screenshot({path:join(output,'failure.png')}).catch(()=>{});report.text=await page?.locator('body').innerText().catch(()=>null)}

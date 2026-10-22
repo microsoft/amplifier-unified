@@ -4,12 +4,14 @@ import {mkdir} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {openSettingsPage,settingsButton} from './browser-settings.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/archive-feedback';
 await mkdir(output,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'/.venv/bin/python',[root+'/tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,release,releaseNavigation;
+const stopFixture=ownFixture(fixture,{label:'Archive feedback fixture'});
+let browser,release,releaseNavigation,failure;
 try{
  const url=await new Promise((resolve,reject)=>{
   let text='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
@@ -179,4 +181,8 @@ try{
  assert.deepEqual(after.started,before.started);assert.deepEqual(after.stopped,before.stopped);assert.deepEqual(after.sent,before.sent);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,http200Rejection:true,unknownOutcome:true,roundtripRace:true,queuedNavigationRace:true,stalledNavigationUndo:true,unsavedCanvasRetained:true,unsavedSettingsRetained:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
-}finally{release?.();releaseNavigation?.();await browser?.close();fixture.kill()}
+}catch(error){failure=error;throw error}
+finally{
+ release?.();releaseNavigation?.();
+ await finishFixture({label:'Archive feedback fixture',close:[['Archive feedback browser',()=>browser?.close()]],stop:stopFixture,originalError:failure});
+}

@@ -2,6 +2,8 @@ import React,{useEffect,useRef,useState} from 'react';
 import {Reply,Smile,X} from 'lucide-react';
 import {readDetail} from './detail-read';
 import {Markdown} from './markdown';
+import {clientId,request} from './api';
+import {createReactionController,reactionControllers} from './message-reactions';
 import './message-interactions.css';
 
 const reactions=[['👍','Thumbs up'],['❤️','Heart'],['😂','Laugh'],['🎉','Celebrate'],['😮','Surprised'],['😢','Sad'],['👎','Thumbs down'],['✅','Check']];
@@ -47,7 +49,7 @@ export function ReplyPreview({quote,sessionId,dispatch}){
 
 export function MessageInteractions({message,sessionId,dispatch}){
  const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const owner=sessionId+':'+message.id,current=useRef(owner),[receipt,setReceipt]=useState(null);current.current=owner;
+ const owner=JSON.stringify([sessionId,message.id]),current=useRef(owner),controller=useRef(null),[,refresh]=useState(0);current.current=owner;
  const anchor=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
  useEffect(()=>{
   if(typeof document==='undefined')return;
@@ -65,15 +67,28 @@ export function MessageInteractions({message,sessionId,dispatch}){
   };
   document.addEventListener('selectionchange',update);return()=>document.removeEventListener('selectionchange',update);
  },[owner,message.text]);
- useEffect(()=>()=>{current.current=null},[]);
- const chosen=receipt?.owner===owner&&receipt.revision>(message.annotationRevision??-1)?receipt.reactions:message.reactions||[];
+ if(controller.current?.owner!==owner){
+  const key='amplifier.reactions.v1:'+owner;
+  let restored=[];try{restored=JSON.parse(sessionStorage.getItem(key)||'[]').filter(row=>typeof row.id==='string'&&typeof row.clientId==='string'&&reactions.some(([emoji])=>emoji===row.emoji)&&typeof row.present==='boolean'&&typeof row.desired==='boolean').slice(0,8)}catch{}
+  controller.current={owner,value:reactionControllers.acquire(owner,()=>createReactionController({sessionId,messageId:message.id,clientId,restored,
+   save:rows=>{try{if(rows.length)sessionStorage.setItem(key,JSON.stringify(rows));else sessionStorage.removeItem(key);return true}catch{return false}},
+   send:row=>dispatch('message.reaction',{sessionId,messageId:message.id,emoji:row.emoji,present:row.present},{id:row.id,feedback:false,presentation:true}),
+   read:row=>request('/api/conversation/reaction-status',{method:'POST',body:{sessionId,messageId:message.id,commandId:row.id,clientId:row.clientId,emoji:row.emoji,present:row.present}})
+  }))};
+ }
+ const reaction=controller.current.value;reaction.observe(message);
+ useEffect(()=>{current.current=owner;return()=>{if(current.current===owner)current.current=null}},[owner]);
+ useEffect(()=>{
+  const unsubscribe=reaction.subscribe(()=>refresh(value=>value+1));
+  if(reaction.view().unknown)void reaction.reconcile();
+  const online=()=>{if(reaction.view().unknown)void reaction.reconcile()};
+  globalThis.addEventListener?.('online',online);return()=>{unsubscribe();globalThis.removeEventListener?.('online',online)};
+ },[reaction]);
+ const state=reaction.view(),chosen=state.reactions;
  async function action(name,args){
   if(busy)return;setBusy(true);setError('');
-  try{const result=await dispatch(name,{sessionId,messageId:message.id,...args},name==='message.reply'?{quoteSource:message.text,quoteDetail:message.textDetail}:{});
-   const value=result?.result;
-   if(name==='message.reaction'&&current.current===owner&&result?.accepted===true&&value?.sessionId===sessionId&&value.messageId===message.id&&Array.isArray(value.reactions)&&Number.isSafeInteger(value.annotationRevision))setReceipt({owner,reactions:[...value.reactions],revision:value.annotationRevision});
-  }
-  catch(e){setError(e.message)}finally{setBusy(false)}
+  try{await dispatch(name,{sessionId,messageId:message.id,...args},name==='message.reply'?{quoteSource:message.text,quoteDetail:message.textDetail}:{});}
+  catch(e){if(current.current===owner)setError(e.message)}finally{if(current.current===owner)setBusy(false)}
  }
  const addPassage=(source,start,end)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection:{start,end}},{quoteSource:source});};
  return <><button ref={anchor} type="button" className="a-icon" aria-label="Reply to message" title="Quote whole message" data-action="message.reply" disabled={busy} onMouseDown={event=>{if(event.button===0)event.preventDefault();}} onClick={()=>action('message.reply',{})}><Reply/></button>
@@ -82,8 +97,8 @@ export function MessageInteractions({message,sessionId,dispatch}){
  {picker!==null&&<PassagePicker text={picker} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker,[...picker.slice(0,start)].length,[...picker.slice(0,end)].length)}/>}
  <div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
   <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={e=>{const pane=e.currentTarget.closest('.a-messages')?.getBoundingClientRect();setBelow(e.currentTarget.getBoundingClientRect().top-(pane?.top||0)<110);setOpen(!open)}}><Smile/></button>
-  {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} disabled={busy} data-action="message.reaction" onClick={async()=>{await action('message.reaction',{emoji,present:!chosen.includes(emoji)});setOpen(false)}}>{emoji}</button>)}</div>}
- </div>{chosen.map(emoji=><button key={emoji} type="button" className="a-reaction-chip" aria-label={`Remove ${reactions.find(r=>r[0]===emoji)?.[1]||emoji} reaction`} aria-pressed="true" disabled={busy} data-action="message.reaction" onClick={()=>action('message.reaction',{emoji,present:false})}>{emoji}</button>)}{error&&<span className="a-message-interaction-error" role="alert">{error}</span>}</>;
+  {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} data-action="message.reaction" onClick={e=>{reaction.set(emoji,!chosen.includes(emoji));setOpen(false);e.currentTarget.closest('.a-reaction-control')?.querySelector('button')?.focus({preventScroll:true})}}>{emoji}</button>)}</div>}
+ </div>{chosen.map(emoji=><button key={emoji} type="button" className="a-reaction-chip" aria-label={`Remove ${reactions.find(r=>r[0]===emoji)?.[1]||emoji} reaction`} aria-pressed="true" title={state.pending.includes(emoji)?'Reaction not yet confirmed':'Remove reaction'} data-pending={state.pending.includes(emoji)||undefined} data-action="message.reaction" onClick={()=>reaction.set(emoji,false)}>{emoji}</button>)}<span className="a-sr-only" role="status">{state.unknown?'Reaction not confirmed':state.pending.length?'Saving reaction':''}</span>{(error||state.error||state.unknown)&&<span className="a-message-interaction-error" role="alert">{error||state.error||'Reaction not confirmed.'}{state.unknown&&<button type="button" disabled={state.checking} onClick={()=>reaction.reconcile()}>Check saved reaction</button>}</span>}</>;
 }
 
 export function MessageFocus({session,focus,detail,ensureVisible}){

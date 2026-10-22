@@ -561,6 +561,8 @@ class HistoryDirectory:
         scoped = any(value is not None for value in (identity, public_ids, children_of, exact_parent))
         if scoped and native_root_workspace is not None:
             raise ValueError('Workspace candidates cannot replace an exact source scope.')
+        # Materialize this query's receipts so SQLite can index their keys;
+        # joining json_each directly rescans every receipt for every notice.
         local = prefix + f'''live_rows AS (SELECT {live_columns} FROM json_each(?)), stored_local_rows AS (
             SELECT {columns} FROM live_rows {'WHERE ' + live_lookup if scoped else ''} UNION ALL
             SELECT {columns} FROM history_local_rows l
@@ -571,9 +573,10 @@ class HistoryDirectory:
                 FROM json_each(?) UNION ALL
                 SELECT owner,key,fingerprint,is_error FROM history_directory_notices n
                 WHERE {'n.owner IN (SELECT id FROM stored_local_rows) AND ' if scoped else ''}n.owner NOT IN (SELECT id FROM live_rows)),
+            read_receipts AS MATERIALIZED (SELECT key,value FROM json_each(?)),
             notice_status AS (SELECT owner,MAX(COALESCE(r.value != n.fingerprint,1)) AS unread,
                 MAX(n.is_error AND r.value=n.fingerprint) AS error_reviewed
-                FROM directory_notices n LEFT JOIN json_each(?) r ON r.key=n.key GROUP BY owner)'''
+                FROM directory_notices n LEFT JOIN read_receipts r ON r.key=n.key GROUP BY owner)'''
         if self._native_path:
             parent = '''COALESCE((SELECT p.id FROM live_rows p WHERE p.native_project=n.project AND p.native_id=n.parent_id LIMIT 1),
                 (SELECT p.id FROM history_local_rows p WHERE p.native_project=n.project AND p.native_id=n.parent_id LIMIT 1),
