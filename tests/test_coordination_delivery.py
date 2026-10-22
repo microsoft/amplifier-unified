@@ -508,6 +508,7 @@ class InstalledWorkAdapter:
             cancellation=SimpleNamespace(is_immediate=False, register_tool_start=lambda *a: None,
                                          register_tool_complete=lambda *a: None))
         self.coordinator = coordinator
+        self.dispatch_bridge = None
         from amplifier_web.execution_events import ExecutionEvents
         self.telemetry = ExecutionEvents(child['id'], lambda event: None)
         self.admissions = []
@@ -527,6 +528,8 @@ class InstalledWorkAdapter:
             return self.telemetry.instrument_provider(child['id'], provider)
         self.capabilities['web.provider_observe'] = observe
         async def bridge(operation, args):
+            if operation == 'dispatch' and self.dispatch_bridge is not None:
+                return await self.dispatch_bridge(operation, args)
             if operation == 'context.manifest':
                 return {'surfaces': [], 'inputIds': child['collaborationGeneration']['inputIds']}
             if operation == 'memory.context':
@@ -810,7 +813,7 @@ async def programmatic_origin_probe(app, fault, *, guarded=False):
     from amplifier_core.message_models import ToolCall
     from amplifier_module_tool_exec import ProgrammaticTool
     adapter, _, required = await installed_work_adapter(app)
-    if fault not in {'uncovered', 'same_batch_read'}:
+    if fault not in {'uncovered', 'same_batch_read', 'app_control_uncovered'}:
         await adapter.fill(required)
     c = adapter.coordinator
     if guarded:
@@ -820,15 +823,20 @@ async def programmatic_origin_probe(app, fault, *, guarded=False):
         worker.runtime = SimpleNamespace(generation={'id': adapter.scope['generationId'],
             'input_ids': list(adapter.scope['inputIds'])}, closed=False, stop_requested=False)
         worker.activation_gate = SimpleNamespace(current_valid=True)
-        worker.app_access_bridge(c)
+        assigned_bridge = worker.app_access_bridge(c)
         adapter.delivery.begin_work.__self__.origin_scope = c.get_capability('web.work_origin_scope')
         async def service(operation, args):
+            if operation == 'dispatch':
+                assert args['action'] == 'synthetic.effect'
+                proofs.append(copy.deepcopy(args['_workOrigin']))
+                return {'accepted': True, 'result': 'fixture'}
             assert operation == 'work.effect.check'
             # Controlled service policy only; real classifier belongs to the
             # backend integration. Container execution is not its nested effect.
             return {'applicable': True, 'allowed': args['toolName'] == 'tool_exec'
                     or args['_workOrigin'].get('complete') is True, 'effectAuthorized': False}
         worker.bridge = service
+        adapter.dispatch_bridge = assigned_bridge
     adapter.loop.config['programmatic_dispatch'] = True
     c.register_capability('tools.dispatch', adapter.loop.approved_dispatch)
     adapter.delivery.install_dispatch(c)
@@ -853,6 +861,8 @@ async def programmatic_origin_probe(app, fault, *, guarded=False):
         prefix = 'await tools.app_control(' + json.dumps({
             'operation': 'dispatch', 'args': ref}) + '); '
     code = prefix + 'text(await Promise.all([tools.probe({n:1}), tools.probe({n:2})]));'
+    if fault in {'app_control', 'app_control_uncovered'}:
+        code = 'text(await tools.app_control({operation:"dispatch",args:{action:"synthetic.effect",args:{value:1}}}));'
     class Provider:
         async def complete(self, value, **kwargs):
             return SimpleNamespace(model_dump=lambda: {'content': [{
@@ -866,8 +876,10 @@ async def programmatic_origin_probe(app, fault, *, guarded=False):
                 ToolCall(id='parent-program', name='tool_exec', arguments=args),
                 adapter.tools, adapter.hooks, None, c)
     first = await execute()
-    assert len(proofs) == 2, first
-    assert all(p['complete'] is (fault in {'none', 'reused_parent'}) for p in proofs), proofs
+    assert len(proofs) == (1 if fault.startswith('app_control') else 2), first
+    assert all(p['complete'] is (fault in {'none', 'reused_parent', 'app_control'}) for p in proofs), proofs
+    if fault == 'app_control':
+        assert proofs[0]['parentToolCallId'] == 'parent-program'
     if fault == 'none':
         assert len({p['toolCallId'] for p in proofs}) == 2
         assert {p['parentToolCallId'] for p in proofs} == {'parent-program'}

@@ -690,10 +690,12 @@ class CoordinationDelivery:
                                   'name': name, 'arguments': copy.deepcopy(arguments),
                                   'active': True, 'verified': False, 'callId': None}
                         token = WORK_NESTED.set(nested)
+                        execution_token = WORK_EXECUTION.set(None)
                         try:
                             return await lease.call(name, arguments, request_id=request_id)
                         finally:
                             nested['active'] = False
+                            WORK_EXECUTION.reset(execution_token)
                             WORK_NESTED.reset(token)
                 return BoundLease()
         coordinator.register_capability('tools.dispatch', BoundDispatch())

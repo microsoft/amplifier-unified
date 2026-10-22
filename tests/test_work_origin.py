@@ -23,7 +23,7 @@ async def test_real_programmatic_dispatch_inherits_only_generating_request(app, 
     await programmatic_origin_probe(app, fault)
 
 
-@pytest.mark.parametrize('fault', ['none', 'reused_parent'])
+@pytest.mark.parametrize('fault', ['none', 'reused_parent', 'app_control', 'app_control_uncovered'])
 async def test_real_nested_dispatch_and_final_guard_share_one_parent_execution(app, fault):
     await programmatic_origin_probe(app, fault, guarded=True)
 
@@ -105,8 +105,8 @@ def test_child_assignment_retains_full_inputs_and_expires_with_parent_generation
     assert caps['web.work_origin_scope']() is None
 
 
-@pytest.mark.parametrize('fault', ['none', 'work_deny', 'stop_after_await', 'changed_arguments', 'late_mount'])
-async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, fault):
+@pytest.mark.parametrize('fault', ['none', 'work_deny', 'stop_after_await', 'changed_arguments', 'late_mount', 'timeout', 'check_replaced'])
+async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, monkeypatch, fault):
     from amplifier_core import ToolResult, HookResult
     from amplifier_core.message_models import ToolCall
     adapter, child, required = await installed_work_adapter(app)
@@ -131,6 +131,8 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
         assert operation == 'work.effect.check'
         stages.append('service')
         witnesses.append(copy.deepcopy(args))
+        if fault == 'timeout':
+            await asyncio.Event().wait()
         await asyncio.sleep(0)
         if fault == 'stop_after_await':
             worker.stop_revision += 1
@@ -139,6 +141,8 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
         return {'applicable': True, 'allowed': fault != 'work_deny',
                 'reason': None, 'requiredVersion': required['version'], 'effectAuthorized': False}
     worker.bridge = service
+    if fault == 'timeout':
+        monkeypatch.setattr('amplifier_web.runtime_worker.WORK_EFFECT_TIMEOUT', .01)
     class Probe:
         name = 'probe'
         async def execute(self, value):
@@ -158,12 +162,19 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
                 'type': 'tool_call', 'id': 'final-call', 'name': 'probe', 'input': arguments}]})
     wrapped = adapter.capabilities['web.provider_transform'](Provider())
     await wrapped.complete(adapter.request())
+    if fault == 'check_replaced':
+        original = adapter.tools['probe']
+        async def replacement(name, value):
+            return await checked(name, value)
+        c.register_capability('web.work_effect_check', replacement)
+        c.get_capability('web.work_guard_tools')()
+        assert adapter.tools['probe'] is original
     if fault == 'late_mount':
         await c.mount('tools', Probe(), name='probe')
     await adapter.loop._execute_tool_only(ToolCall(id='final-call', name='probe', arguments=arguments),
                                          adapter.tools, adapter.hooks, None, c)
     assert stages[:2] == ['policy', 'service']
-    assert bool(effects) is (fault in {'none', 'late_mount'})
+    assert bool(effects) is (fault in {'none', 'late_mount', 'check_replaced'})
     witness = witnesses[0]['_workOrigin']
     assert witness['complete'] is True and witness['effectAuthorized'] is False
     assert witness['toolCallId'] == witnesses[0]['toolCallId'] == 'final-call'

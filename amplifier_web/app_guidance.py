@@ -136,6 +136,9 @@ async def install_app_access(coordinator, bridge):
             def __init__(self, original, name):
                 self.original, self.mounted_name = original, name
                 self._work_check = check
+                self._work_delivery_guard = delivery
+            def refresh_work_check(self, value):
+                self._work_check = value
             def __getattr__(self, name):
                 return getattr(self.original, name)
             async def execute(self, arguments):
@@ -159,7 +162,7 @@ async def install_app_access(coordinator, bridge):
                              'active': True, 'leaseIssued': False, 'programmaticGuarded': guarded_program}
                 token = WORK_EXECUTION.set(execution)
                 try:
-                    result = await check(self.mounted_name, arguments)
+                    result = await self._work_check(self.mounted_name, arguments)
                     if not isinstance(result, dict) or result.get('allowed') is not True:
                         return ToolResult(success=False, error={
                             'code': 'work_precondition_unavailable',
@@ -169,6 +172,9 @@ async def install_app_access(coordinator, bridge):
                     execution['active'] = False
                     WORK_EXECUTION.reset(token)
         def wrapped(name, tool):
+            if getattr(tool, '_work_delivery_guard', None) is delivery:
+                tool.refresh_work_check(check)
+                return tool
             return (WorkCheckedTool(tool, name)
                     if name != 'app_control' and getattr(tool, '_work_check', None) is not check else tool)
         if incoming:

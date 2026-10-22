@@ -20,6 +20,7 @@ except ImportError:  # Executed directly inside the isolated runtime.
 # Reserve a dedicated protocol descriptor before module imports. CLI displays and
 # provider logs are routed to stderr, never mistaken for model/app events.
 _PROTOCOL = None
+WORK_EFFECT_TIMEOUT = 1.5
 
 
 def configure_protocol():
@@ -279,8 +280,11 @@ class Worker:
                         or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled):
                     return {'allowed': False, 'effectAuthorized': False}
                 identity = dispatch.get('tool_call_id')
-                result = await bridge('work.effect.check', {
-                    'toolName': name, 'toolInput': before, 'toolCallId': identity})
+                try:
+                    result = await asyncio.wait_for(bridge('work.effect.check', {
+                        'toolName': name, 'toolInput': before, 'toolCallId': identity}), WORK_EFFECT_TIMEOUT)
+                except (TimeoutError, ConnectionError):
+                    return {'allowed': False, 'effectAuthorized': False}
                 if (self.runtime is not runtime or runtime.generation is not generation
                         or not gate.current_valid or self.stop_revision != epoch
                         or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled
