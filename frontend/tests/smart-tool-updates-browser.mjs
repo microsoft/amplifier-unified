@@ -57,8 +57,19 @@ try{
  assert.deepEqual((await evidence()).calls.application,['stage']);
  assert.deepEqual((await evidence()).pending,runnerAttempt);
  assert.equal((await evidence()).pendingApp.latest,'v9.9.9');
+ // A click during the runner's observation queues instead of disappearing.
+ assert.ok((await page.request.post(boot.url+'/fixture/runner-observation/hold')).ok());
+ await updates.locator('[data-action="updates.check"]').click();
+ await expect.poll(async()=>(await evidence()).checkQueued).toBe(true);
+ assert.deepEqual((await evidence()).calls.checks,undefined);
+ assert.ok((await page.request.post(boot.url+'/fixture/runner-observation/release')).ok());
+ await writeFile(out+'/released-observation.json',JSON.stringify(await evidence(),null,2));
+ await expect(updates.getByRole('heading',{name:'Updates available',exact:true})).toBeVisible();
+ await expect(install).toBeEnabled();
+ assert.deepEqual((await evidence()).calls.checks,['available']);
+ assert.deepEqual((await evidence()).pending,runnerAttempt);
  assert.deepEqual(errors,[]);
- result.status='passed';result.checks={partialSuccess:true,namedFailure:true,noSecretOutput:true,reloadRetainsFailure:true,retryOnlyFailed:true,skipNoInstall:true,desktopAndNarrow:true,runnerWaitAllowsApp:true,runnerReceiptRetained:true,appIdleWaitRetained:true};
+ result.status='passed';result.checks={partialSuccess:true,namedFailure:true,noSecretOutput:true,reloadRetainsFailure:true,retryOnlyFailed:true,skipNoInstall:true,desktopAndNarrow:true,runnerWaitAllowsApp:true,runnerReceiptRetained:true,appIdleWaitRetained:true,refreshQueuesDuringObservation:true};
 }catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:out+'/failed.png'});throw error}
 finally{
  await browser?.close();fixture.kill('SIGTERM');

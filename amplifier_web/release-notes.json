@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.209",
+      "title": "Keep update checks responsive during runner checks",
+      "changes": [
+        "Keep a requested update check queued while the test runner briefly checks capacity, then recheck safely and show available app or component updates.",
+        "Avoid repeatedly polling a capacity-blocked runner merely because chats are idle. Its pending qualification and normal periodic checks are preserved."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.208",
       "title": "Keep updates moving while the test runner waits",
       "changes": [

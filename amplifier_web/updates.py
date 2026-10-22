@@ -513,7 +513,7 @@ class UpdateManager:
     def notify_idle(self):
         state = self.service.state['updates']
         if (not self.closed and not self.lock.locked() and state.get('phase') in {'staged', 'app-staged'}
-                and any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools'))
+                and self.requires_idle(state)
                 and not self.busy()):
             # Work finishing is an event too. Do not add another timer wait
             # after the user has already waited for the idle safety gate.
@@ -690,10 +690,15 @@ class UpdateManager:
         return await asyncio.shield(self.check_task)
 
     async def _check(self, *, tier='application', install=False):
-        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingRelease') or (self.service.state['updates'].get('pendingSmartTools') and not self.runners_only(self.service.state['updates'])): return
         from .update_sequence import summary
         async with self.lock:
             state = self.service.state['updates']
+            # A capacity observation can own this lock when a refresh arrives.
+            # Queue that refresh, then recheck admission against current state.
+            if (self.closed or self.awaiting_restart() or state.get('pendingRelease')
+                    or (state.get('pendingApp') or {}).get('featureSelection')
+                    or (state.get('pendingSmartTools') and not self.runners_only(state))):
+                return
             if self.runners_only(state):
                 # The runner owns its retained qualification independently.
                 # A new check/sequence must keep its own install intent.
