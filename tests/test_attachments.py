@@ -380,3 +380,48 @@ async def test_replaced_unnamed_location_rejects_late_upload_without_losing_new_
         assert not (tmp_path / 'attachments').exists()
     finally:
         await asyncio.wait_for(app.close(), 5)
+
+
+async def test_slow_creation_cannot_bind_a_newer_unnamed_draft(tmp_path, monkeypatch):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    started, release = asyncio.Event(), asyncio.Event()
+    pending = None
+    original_thread = app.worktrees.finish_thread
+
+    async def hold_creation(function, *args):
+        if function.__name__ == '_create_workspace_folder':
+            started.set()
+            await asyncio.wait_for(release.wait(), 5)
+        return await original_thread(function, *args)
+
+    monkeypatch.setattr(app.worktrees, 'finish_thread', hold_creation)
+    try:
+        app.clients.attach('upload-owner')
+        with app.clients.bind('upload-owner'):
+            await app.dispatch('session.draft', {'workspace': str(tmp_path)})
+            identity = app.clients.attachment_draft_id()
+            pending = asyncio.create_task(app.dispatch('session.create', {
+                'workspace': str(tmp_path), 'fromDraft': True, 'expectedDraftId': identity,
+            }))
+            await asyncio.wait_for(started.wait(), 3)
+            await app.dispatch('session.draft', {'location': {'kind': 'managed'}})
+            newer_id = app.clients.attachment_draft_id()
+            await app.dispatch('view.update', {'patch': {'draft': 'Keep newer draft'}})
+            await app.dispatch('attachment.add', {
+                'sessionId': None, 'expectedDraftId': newer_id, 'name': 'newer.png',
+                'base64': base64.b64encode(PNG).decode(),
+            })
+            newer = list(app.clients.attachments(None))
+            release.set()
+            with pytest.raises(AppError, match='original new-chat draft changed'):
+                await asyncio.wait_for(pending, 5)
+            assert app.state['selectedSessionId'] is None
+            assert app.state['view']['draft'] == 'Keep newer draft'
+            assert app.clients.attachments(None) == newer
+            assert app.clients.attachment_target(None, newer_id) is None
+            assert not app.state['sessions']
+    finally:
+        release.set()
+        if pending is not None:
+            await asyncio.wait_for(asyncio.gather(pending, return_exceptions=True), 5)
+        await asyncio.wait_for(app.close(), 5)
