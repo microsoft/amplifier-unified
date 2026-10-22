@@ -110,9 +110,9 @@ try{
  await page.keyboard.press('Escape');await expect(longTitleLink).toBeFocused();
  await page.setViewportSize({width:1280,height:1000});
  // Existing Settings cancellation must prevent the exact preview request.
- await openSettingsPage(page,'notifications');
- if(!await page.locator('#notify-topic').isVisible())await page.getByText(/^(Set up|Manage) phone notifications$/).click();
- await page.locator('#notify-topic').fill('synthetic-unsaved-topic');
+ await openSettingsPage(page,'workspaces');
+ await page.locator('#default-workspace-root').fill('/synthetic-unsaved-folder');
+ await expect(page.getByText('You have unsaved settings changes. They are kept while Settings stays open.',{exact:true})).toBeVisible();
  await page.evaluate(mid=>{
   const s=window.amplifier.getState(),peer=s.sessions.find(x=>x.id===s.selectedSessionId).messages.find(m=>m.id===mid).attribution.peer;
   window.peerGuardAttempt=window.amplifier.dispatch('peer.preview',{proof:peer.proof,sourceSessionId:s.selectedSessionId});
@@ -120,7 +120,7 @@ try{
  const settingsGuard=page.getByRole('alertdialog',{name:'Unsaved settings changes'});
  await expect(settingsGuard).toBeVisible();await settingsGuard.getByRole('button',{name:'Keep settings open'}).click();
  assert.equal((await page.evaluate(()=>window.peerGuardAttempt)).accepted,false);
- await expect(page.locator('#notify-topic')).toHaveValue('synthetic-unsaved-topic');
+ await expect(page.locator('#default-workspace-root')).toHaveValue('/synthetic-unsaved-folder');
  await expect(panel()).toHaveCount(0);
  await page.getByRole('button',{name:'Close settings',exact:true}).click();await settingsGuard.getByRole('button',{name:'Discard changes',exact:true}).click();
  // Exact existing Canvas dirty guard. The feature must not replace it.
