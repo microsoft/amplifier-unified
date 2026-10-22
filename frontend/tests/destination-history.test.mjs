@@ -58,6 +58,14 @@ test('Home is one reloadable destination; filters and reading state do not becom
  assert.ok(reloaded.snapshot().forwardKey);assert.doesNotMatch(store.getItem(STORAGE),/PRIVATE QUERY|workHome/);
 });
 
+test('workspace browser destinations retain the canonical All workspaces label',()=>{
+ const state=frame('a',2,{surface:'workspaces'}),{history}=harness();
+ assert.deepEqual(destination(state),{kind:'workspaces',label:'All workspaces'});
+ history.observe(state);
+ assert.equal(history.snapshot().entries[0].label,'All workspaces');
+ assert.deepEqual(destinationCommand(history.snapshot().entries[0]),['view.update',{patch:{workSurface:'workspaces',navExpanded:false}}]);
+});
+
 test('cursor commits only for accepted receipt plus matching host, revision and destination',()=>{
  for(const failure of ['rejected','old-revision','wrong-host','wrong-route','unknown']){
   const {history}=trail();const target=history.begin(history.snapshot().backKey);

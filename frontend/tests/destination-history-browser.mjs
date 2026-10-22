@@ -140,6 +140,44 @@ function observeSettingsClose(page){
  };
 }
 const pendingGates=new Set();
+async function wideTouchHome(browser,url,sessionId){
+ const context=await browser.newContext({viewport:{width:1024,height:900},hasTouch:true,
+  extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+ try{
+  await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
+  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+  const state=()=>page.evaluate(()=>window.amplifier.getState());
+  await action('session.select',{id:sessionId});
+  const input=await page.evaluate(()=>({width:innerWidth,coarse:matchMedia('(pointer:coarse)').matches}));
+  assert.equal(input.width,1024);assert.equal(input.coarse,true,'Use a real coarse-pointer context, not a resized mouse context');
+  const home=page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true});
+  await expect(home).toBeVisible();await expect(home).toBeEnabled();
+  const visible=async()=>assert.equal(await home.isVisible(),true,'Wide-touch header Home must remain visible');
+  await visible();
+  const box=await home.boundingBox();assert.ok(box.width>=44&&box.height>=44);
+  // Reintroduce the exact old coarse-pointer hiding rule in this synthetic page.
+  // The same visibility assertion must reject it; removing it must restore Home.
+  const regression=await page.addStyleTag({content:'@media(pointer:coarse),(max-width:760px){#amp-one.a-approachable-shell .a-work-heading .a-work-crumb,#amp-one.a-approachable-shell .a-work-heading>.a-work-crumb+svg{display:none}}'});
+  try{await assert.rejects(visible,/Wide-touch header Home must remain visible/)}
+  finally{await regression.evaluate(node=>node.remove())}
+  await expect(home).toBeVisible();await visible();
+  await home.focus();await expect(home).toBeFocused();await page.keyboard.press('Enter');
+  await expect.poll(async()=>(await state()).view.workSurface).toBe('home');
+  await action('session.select',{id:sessionId});await home.tap();
+  await expect.poll(async()=>(await state()).view.workSurface).toBe('home');
+  await action('view.update',{patch:{workSurface:'workspaces'}});
+  await page.getByRole('button',{name:'Navigation history',exact:true}).click();
+  await expect(page.getByRole('menuitem').filter({hasText:'All workspaces'})).toHaveCount(1);
+  await expect(page.getByRole('menuitem').filter({hasText:'All projects'})).toHaveCount(0);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.screenshot({path:path.join(out,'history-wide-touch.png')});
+  assert.deepEqual(errors,[]);
+  await writeFile(path.join(out,'wide-touch-home.json'),JSON.stringify({passed:true,input,box,
+   oldSelectorRejected:true,restoredVisible:true,keyboardHome:true,tapHome:true,
+   allWorkspacesLabel:true,pageErrors:errors},null,2));
+ }finally{await context.close()}
+}
 function gate(){
  let resolve;const wait=new Promise(done=>{resolve=done});
  const release=()=>{pendingGates.delete(release);resolve()};
@@ -415,6 +453,7 @@ try{
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   if(width<=390){
    for(const control of [back,forward,menu]){const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44)}
+   await expect(page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true})).toBeVisible();
    const heading=await page.locator('[data-part="header"] .a-work-heading>strong').boundingBox();
    assert.ok(heading.width>=100,'History controls must leave a readable chat title');
    const popup=await page.locator('.a-destination-menu').boundingBox();
@@ -434,11 +473,14 @@ try{
  await expect(page.locator('.a-work-live-controls .a-call-strip[role="status"]')).toHaveCount(0);
  await expect(page.locator('[data-part="work-browser"]').getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
  const captured=await state();assert.equal(Object.hasOwn(captured,'destinationHistory'),false);
+ const originalTrail=await saved();await wideTouchHome(browser,url,b);
+ assert.equal((await state()).selectedSessionId,captured.selectedSessionId);
+ assert.deepEqual(await saved(),originalTrail,'A separate touch client must not change this tab history');
  const runtime=await (await page.request.get(url+'/fixture')).json();
  assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);
  const serialized=JSON.stringify(await saved());assert.doesNotMatch(serialized,/Unsent Alpha draft|Synthetic preview|cHJlc2VydmU=/);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','Home filters','canonical card acceptance and rejection','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390/360 layout','no runtime start or input'],pageErrors:errors}));
+ console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','Home filters','canonical card acceptance and rejection','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390/360 layout','1024 coarse-pointer Home and old-selector negative','All workspaces label','no runtime start or input'],pageErrors:errors}));
 }catch(error){scenarioFailure=error;throw error}finally{
  if(settingsDiagnostic)try{await settingsDiagnostic.save(scenarioFailure?'failure-before-teardown':'completed-before-teardown')}
  catch(error){console.error('Settings diagnostic retention failed:',error.name)}
