@@ -13,7 +13,7 @@ from test_coordination_delivery import installed_work_adapter
 
 @pytest.mark.parametrize('fault', ['none', 'opaque_only', 'changed_plaintext', 'oversized', 'new_input', 'wrong_response',
                                  'overflow_scope', 'missing_scope', 'no_event_response', 'retention', 'live_retention',
-                                 'full_provider', 'ambiguous_response'])
+                                 'full_provider', 'ambiguous_response', 'activation_changed'])
 async def test_installed_native_callbacks_bind_early_tool_to_exact_outbound(app, tmp_path, monkeypatch, fault):
     await native_outbound_probe(app, tmp_path, monkeypatch, fault)
 
@@ -105,7 +105,8 @@ def test_child_assignment_retains_full_inputs_and_expires_with_parent_generation
     assert caps['web.work_origin_scope']() is None
 
 
-@pytest.mark.parametrize('fault', ['none', 'work_deny', 'stop_after_await', 'changed_arguments', 'late_mount', 'timeout', 'check_replaced'])
+@pytest.mark.parametrize('fault', ['none', 'work_deny', 'stop_after_await', 'new_input_after_await',
+                                 'changed_arguments', 'late_mount', 'timeout', 'check_replaced'])
 async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, monkeypatch, fault):
     from amplifier_core import ToolResult, HookResult
     from amplifier_core.message_models import ToolCall
@@ -136,6 +137,8 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
         await asyncio.sleep(0)
         if fault == 'stop_after_await':
             worker.stop_revision += 1
+        if fault == 'new_input_after_await':
+            worker.runtime.generation['input_ids'].append('late-input')
         if fault == 'changed_arguments':
             actual_arguments[0]['path'] = 'changed'
         return {'applicable': True, 'allowed': fault != 'work_deny',

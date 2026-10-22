@@ -151,8 +151,10 @@ class NativeProviderHost:
             runtime = self.coordinator.get_capability('live.runtime')
             generation = getattr(runtime, 'generation', None) or {}
             cancellation = getattr(self.coordinator, 'cancellation', None)
+            activation = self.coordinator.get_capability('live.activation')
             if (self.selected_identity() != self.identity or generation.get('id') != binding['generationId']
                     or getattr(runtime, 'stop_requested', False) or getattr(runtime, 'closed', False)
+                    or activation is not None and not activation.current_valid
                     or getattr(cancellation, 'is_cancelled', False)):
                 return False
             if not attempt:

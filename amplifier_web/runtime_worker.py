@@ -276,6 +276,7 @@ class Worker:
                 runtime, gate = self.runtime, self.activation_gate
                 generation = getattr(runtime, 'generation', None)
                 epoch, before = self.stop_revision, copy.deepcopy(arguments)
+                inputs = copy.deepcopy((generation or {}).get('input_ids'))
                 if (not dispatch or not gate or not gate.current_valid or not generation
                         or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled):
                     return {'allowed': False, 'effectAuthorized': False}
@@ -286,6 +287,7 @@ class Worker:
                 except (TimeoutError, ConnectionError):
                     return {'allowed': False, 'effectAuthorized': False}
                 if (self.runtime is not runtime or runtime.generation is not generation
+                        or generation.get('input_ids') != inputs
                         or not gate.current_valid or self.stop_revision != epoch
                         or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled
                         or getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task()) is not dispatch

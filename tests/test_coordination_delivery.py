@@ -771,6 +771,8 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
                       'tools': [{'type': 'function', 'name': 'delegate', 'parameters': {'type': 'object'}}]}
             if fault == 'new_input':
                 adapter.scope['inputIds'].append('new-input')
+            if fault == 'activation_changed':
+                adapter.capabilities['live.activation'] = SimpleNamespace(current_valid=False)
             token = NATIVE_REQUEST.set(native)
             try:
                 await native._create_response(params)
@@ -783,10 +785,12 @@ async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
         original = original.model_copy(update={'tools': [*original.tools,
             ToolSpec(name='delegate', parameters={'type': 'object', 'properties': {'instruction': {'type': 'string'}}})]})
     await wrapped.request_budget(original)
-    if fault == 'new_input':
+    if fault in {'new_input', 'activation_changed'}:
         with pytest.raises(Exception):
             await wrapped.complete(original)
         assert sent == [] and proofs == []
+        if fault == 'activation_changed':
+            assert host.state['sends'][-1]['outcome'] == 'not_sent'
     elif fault == 'ambiguous_response':
         from amplifier_core.llm_errors import LLMError
         with pytest.raises(LLMError, match='outcome unknown'):
