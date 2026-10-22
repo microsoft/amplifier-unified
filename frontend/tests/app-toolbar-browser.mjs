@@ -28,7 +28,7 @@ try{
  const more=page.getByRole('button',{name:'App options',exact:true}),menu=page.getByRole('group',{name:'App options',exact:true});
  const footer=async(target=page)=>{if(!await target.getByRole('button',{name:'App options',exact:true}).isVisible())await target.getByRole('button',{name:'Open navigation',exact:true}).click();await expect(target.getByRole('button',{name:'App options',exact:true})).toBeVisible()};
  const closeNavigation=async()=>{const close=page.getByRole('button',{name:'Close navigation',exact:true});if(await close.isVisible()){await close.click();await expect(close).toBeHidden()}};
- const toggle=page.locator('.a-work-header .a-canvas-toggle'),canvas=page.getByRole('complementary',{name:'Agent canvas'});
+ const toggle=page.locator('.a-work-header .a-canvas-toggle'),canvas=page.getByRole('region',{name:'Canvas',exact:true});
  await expect(page.getByRole('button',{name:'Open workspace canvas'})).toHaveCount(0);
  // The current WorkHeader omits chat-only controls before creation; the retired
  // app toolbar kept a disabled Canvas button. Both prevent an ownerless Canvas.
@@ -36,9 +36,9 @@ try{
  await expect(toggle).toHaveAccessibleName('Open canvas');await expect(toggle).toHaveText('');await expect(toggle).toHaveAttribute('aria-pressed','false');
  const initialBox=await toggle.boundingBox();await toggle.click();await expect(canvas).toBeVisible();
  // Empty Canvas now owns the selected chat overview, not the retired launcher.
- await expect(canvas).toHaveAttribute('data-mode','overview');await expect(canvas.getByRole('button',{name:'Chat overview',exact:true})).toBeVisible();await expect(canvas.getByRole('searchbox')).toHaveCount(0);await expect(canvas.getByRole('button',{name:/Saved artifacts/})).toHaveCount(0);await page.screenshot({path:out+'/canvas-empty.png'});
- await expect(toggle).toHaveAccessibleName('Close canvas');await expect(toggle).toHaveAttribute('aria-pressed','true');assert.deepEqual(await toggle.boundingBox(),initialBox);
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await expect(page.locator('#workspace-canvas')).toBeHidden();await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),initialBox);
+ await expect(canvas).toHaveAttribute('data-mode','overview');await expect(canvas.getByRole('tab',{name:'Chat overview',exact:true})).toBeVisible();await expect(canvas.getByRole('searchbox')).toHaveCount(0);await expect(canvas.getByRole('button',{name:/Saved artifacts/})).toHaveCount(0);await page.screenshot({path:out+'/canvas-empty.png'});
+ await expect(toggle).toHaveAccessibleName('Hide canvas');await expect(toggle).toHaveAttribute('aria-pressed','true');assert.deepEqual(await toggle.boundingBox(),initialBox);
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();await expect(page.locator('#workspace-canvas')).toBeHidden();await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),initialBox);
  await action('session.create');const session=(await state()).selectedSessionId;
  await action('view.update',{patch:{draft:'Keep this unsent message',navPinned:true}});
  await action('canvas.show',{kind:'markdown',title:'Workspace notes',content:'# Workspace notes\n\nA saved artifact beside the conversation.'});
@@ -65,7 +65,7 @@ try{
   for(const width of [1280,800,600,390,320]){
    await page.setViewportSize({width,height:900});await closeNavigation();await expect(toggle).toBeVisible();
    const before=await toggle.boundingBox();const headerActions=await page.locator('.a-work-header-actions > button,.a-work-header-actions > .a-work-menu > button').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).map(node=>({label:node.getAttribute('aria-label'),right:node.getBoundingClientRect().right})));
-   assert.equal(headerActions.at(-1).label,'Close canvas');assert.ok(headerActions.every(row=>row.right<=before.x+before.width+1),'Canvas remains the rightmost WorkHeader action');assert.ok(before.x>=0&&before.x+before.width<=width);
+   assert.equal(headerActions.at(-1).label,'Hide canvas');assert.ok(headerActions.every(row=>row.right<=before.x+before.width+1),'Canvas remains the rightmost WorkHeader action');assert.ok(before.x>=0&&before.x+before.width<=width);
    await footer();await more.click();await expect(menu).toBeVisible();const rect=await menu.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width&&rect.y>=0&&rect.y+rect.height<=900,'Footer menu fits viewport '+JSON.stringify({scheme,width,rect}));
    await page.screenshot({path:out+`/toolbar-${scheme}-${width}.png`});await page.keyboard.press('Escape');await closeNavigation();
    await toggle.click();await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),before);

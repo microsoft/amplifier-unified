@@ -112,7 +112,7 @@ try{
  await page.route('**/api/actions',holdVisibility);
  await frame.getByRole('textbox',{name:'Unsaved tool draft'}).fill('Keep this unsaved');
  await frame.locator('body').evaluate(()=>window.enableFixtureResumeReads(true));
- const hideRequest=waitVisibility();await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();const hideRoute=await hideRequest;
+ const hideRequest=waitVisibility();await page.getByRole('button',{name:'Hide canvas',exact:true}).click();const hideRoute=await hideRequest;
  await page.locator('#workspace-canvas').waitFor({state:'hidden'});
  await frame.locator('body[data-visible="false"]').waitFor({state:'attached'});
  await hideRoute.continue();await page.waitForFunction(()=>!window.amplifier.getState().canvas.visibilityPending&&!window.amplifier.getState().canvas.open);
