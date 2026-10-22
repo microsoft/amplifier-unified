@@ -24,8 +24,8 @@ try{
  await check('composer');
  const placement=async value=>{await openSettingsPage(page,'appearance');await page.getByLabel('Plan location',{exact:true}).selectOption(value);await expect(page.getByLabel('Plan location',{exact:true})).toBeEnabled();await page.getByRole('button',{name:'Close panel',exact:true}).click()};
  await placement('inline');await check('inline');
- await placement('overview');await expect(plan).toHaveCount(0);await page.getByRole('button',{name:'Open canvas',exact:true}).click();const canvas=page.locator('#workspace-canvas');await canvas.getByRole('button',{name:'Chat overview',exact:true}).click();await check('overview');
- await canvas.getByRole('button',{name:'Close canvas panel',exact:true}).click();await placement('composer');await check('composer');
+ await placement('overview');await expect(plan).toHaveCount(0);await page.getByRole('button',{name:'Open canvas',exact:true}).click();const canvas=page.locator('#workspace-canvas');await canvas.getByRole('tab',{name:'Chat overview',exact:true}).click();await check('overview');
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();await placement('composer');await check('composer');
  await control({op:'patch',sessions:{[alpha]:{execution:{...original.execution,plan:{...original.execution.plan,items:[],unavailable:true}}}}});
  await expect(plan).toContainText('Details unavailable');await expect(plan).toContainText('The latest plan could not be read.');await expect(plan).not.toContainText('1 of 3 done');await expect(plan).not.toContainText('completed');await expect(plan.locator('input,textarea,select,button,[contenteditable=true]')).toHaveCount(0);
  const after=await control({op:'inspect'});assert.deepEqual(after.state.sessions.find(row=>row.id===alpha).messages,original.messages);assert.equal(after.runtimeStarts,before.runtimeStarts);assert.equal(after.runtimeSends,0);assert.deepEqual(after.runtimeControls,[]);await expect(composer).toHaveDraft('Keep the private plan draft');assert.deepEqual(errors,[]);
