@@ -12,6 +12,8 @@ import os
 import shutil
 import subprocess
 import tarfile
+import tomllib
+import time
 import urllib.request
 from pathlib import Path
 
@@ -22,6 +24,79 @@ NODE_VERSION = '22.16.0'
 
 def run(*args, cwd=None, capture=False):
     return subprocess.check_output(args, cwd=cwd, text=True) if capture else subprocess.run(args, cwd=cwd, check=True)
+
+
+def build_requirements(value):
+    if (not isinstance(value, list) or len(value) > 64
+            or any(not isinstance(item, str) or not item.strip() or len(item) > 2048
+                   or item.startswith('-') or '\x00' in item for item in value)
+            or sum(map(len, value)) > 16384):
+        raise ValueError('Python build requirements must be a bounded list of package requirements.')
+    return value
+
+
+def prepare_build(uv, python, project, prefix):
+    """Resolve packaging separately; never add build dependencies to locked tests."""
+    project, prefix = Path(project), Path(prefix)
+    settings = tomllib.loads((project / 'pyproject.toml').read_text())
+    backend = settings.get('build-system')
+    if backend is None:
+        return {'available': False, 'reason': 'This source declares no Python build backend.'}
+    requires = build_requirements(backend.get('requires'))
+    if not isinstance(backend.get('build-backend'), str) or len(backend['build-backend']) > 512:
+        raise ValueError('The Python project must declare its build backend.')
+    environment = prefix / 'build-venv'
+    run(uv, 'venv', '--python', str(python), str(environment))
+    executable = str(environment / 'bin/python')
+    run(uv, 'pip', 'install', '--python', executable, '--', 'build', *requires)
+    # Backend-declared dynamic wheel requirements are prefetched in the owned
+    # networked builder. This is prerequisite discovery, not a second wheel build.
+    requirements_file = prefix / 'build-requirements.json'
+    probe = ("import build,json,sys; "
+             "builder=build.ProjectBuilder(sys.argv[1]); "
+             "json.dump(sorted(builder.get_requires_for_build('wheel')),open(sys.argv[2],'w'))")
+    run(executable, '-c', probe, str(project), str(requirements_file))
+    if requirements_file.stat().st_size > 32768:
+        raise ValueError('Python build requirements exceed their observation bound.')
+    dynamic = build_requirements(json.loads(requirements_file.read_text()))
+    if dynamic:
+        run(uv, 'pip', 'install', '--python', executable, '--', *dynamic)
+    run(executable, '-c', "import build,sys; missing=build.ProjectBuilder(sys.argv[1]).check_dependencies('wheel'); assert not missing, missing", str(project))
+    return {'available': True, 'python': executable, 'backend': backend['build-backend'],
+            'command': executable + ' -m build --wheel --no-isolation --outdir /artifacts/dist /workspace',
+            'requirements': requires, 'dynamicRequirements': dynamic,
+            'packages': run(uv, 'pip', 'freeze', '--python', executable, capture=True).splitlines()}
+
+
+def optional_build(uv, python, project, prefix):
+    """Packaging failure does not remove a successfully prepared test capability."""
+    started = time.monotonic()
+    try:
+        result = prepare_build(uv, python, project, prefix)
+    except (subprocess.CalledProcessError, ValueError) as error:
+        if isinstance(error, subprocess.CalledProcessError) and error.returncode < 0:
+            raise  # A signalled helper is not an ordinary packaging rejection.
+        # Full bounded subprocess diagnostics remain in the retained builder log.
+        # Cancellation, timeout, helper loss and filesystem failures still escape.
+        result = {'available': False,
+                  'reason': 'Python packaging prerequisites are unavailable. Source checks can run; inspect the retained preparation log before building.'}
+    diagnostic = {'status': 'ready' if result['available'] else 'unavailable',
+                  'elapsedSeconds': time.monotonic() - started,
+                  **({'reason': result['reason']} if 'reason' in result else {})}
+    (Path(prefix) / 'build-preparation.json').write_text(json.dumps(diagnostic, sort_keys=True))
+    return result
+
+
+def verify_contract(contract):
+    """Cheap checks fail before publishing an unusable prepared image."""
+    python = contract['python']
+    run(python, '-c', 'import sys; assert sys.version_info >= (3, 13)')
+    if contract.get('pythonBuild', {}).get('available'):
+        run(contract['pythonBuild']['python'], '-c', 'import build')
+    if contract['profileId'] == 'browser-test':
+        run(str(PREFIX / 'node-runtime/bin/node'), '--version')
+        if not (PREFIX / 'node').is_dir() or not (PREFIX / 'browsers').is_dir():
+            raise ValueError('The prepared browser dependencies are incomplete.')
 
 
 def main():
@@ -57,6 +132,13 @@ def main():
                  'sourceSha256': plan['sourceSha256'], 'lockfiles': plan['lockfiles'],
                  'uv': run(uv, '--version', capture=True).strip(),
                  'python': run(str(PREFIX / 'venv/bin/python'), '--version', capture=True).strip()}
+    contract = dict(plan['executionContract'])
+    contract['pythonBuild'] = {'available': False, 'reason': 'This source declares no Python build backend.'}
+    if plan['pythonProject']:
+        build = optional_build(uv, PREFIX / 'venv/bin/python', '/workspace', PREFIX)
+        inventory['pythonBuild'] = build
+        contract['pythonBuild'] = {key: build[key] for key in ('available', 'reason', 'python', 'backend', 'command') if key in build}
+    inventory['executionContract'] = contract
     if plan['profileId'] == 'browser-test':
         architecture = {'aarch64': 'arm64', 'x86_64': 'x64'}.get(os.uname().machine)
         if not architecture:
@@ -114,7 +196,7 @@ def main():
     inventory['pythonPackages'] = run(uv, 'pip', 'freeze', '--python', str(PREFIX / 'venv/bin/python'), capture=True).splitlines()
     inventory['systemPackages'] = run('dpkg-query', '-W', '-f=${Package}=${Version}\n', capture=True).splitlines()
     inventory['preparedFiles'] = {}
-    for directory in ('browsers', 'node'):
+    for directory in ('browsers', 'node', 'build-venv'):
         digest = hashlib.sha256()
         for path in sorted((PREFIX / directory).rglob('*')) if (PREFIX / directory).exists() else []:
             digest.update(str(path.relative_to(PREFIX)).encode())
@@ -125,6 +207,8 @@ def main():
                     for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                         digest.update(chunk)
         inventory['preparedFiles'][directory] = digest.hexdigest()
+    verify_contract(contract)
+    (PREFIX / 'execution-contract.json').write_text(json.dumps(contract, sort_keys=True))
     (PREFIX / 'inventory.json').write_text(json.dumps(inventory, sort_keys=True))
     shutil.copyfile('/prepare/initialize.py', PREFIX / 'initialize.py')
     (PREFIX / 'plan.json').write_text(json.dumps(plan, sort_keys=True))

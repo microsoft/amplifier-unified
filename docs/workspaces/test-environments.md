@@ -224,3 +224,39 @@ identified manual environments. Physical backend and machine admission still app
 All retained unknown owners count against capacity until exact cleanup or
 reconciliation confirms release. Environment reads support offset/limit paging;
 cleanup always names one exact resource and revision.
+
+
+### Prepared execution contract
+
+New prepared environments publish `executionContract` in the owned environment
+result and in `/opt/unified-prepared/execution-contract.json`. Read it before
+constructing a check. Python is on `PATH` and `AMPLIFIER_TEST_PYTHON` names the
+actual interpreter; `AMPLIFIER_TEST_ARTIFACTS` is `/artifacts`. Do not assume a
+`/workspace/.venv`. The copied source intentionally has no `.git`: the contract
+records the original source HEAD, snapshot commit/tree and archive SHA-256 when
+available. These identify the admitted snapshot, not later changes in the guest.
+
+For a source with an explicit Python build backend, preparation resolves its
+declared and dynamic wheel-build requirements in a separate build environment,
+records the exact inventory, and checks prerequisites. It does not install them
+into the locked test environment or perform an additional wheel build. The
+advertised `pythonBuild.command` builds the current source offline with
+`--no-isolation`, writing wheels under `/artifacts/dist`. Virtual Python projects
+and Node-only projects explicitly report no Python build backend. A packaging
+prerequisite rejection reports packaging unavailable with retained diagnostics;
+the already prepared source-test environment remains usable. Cancellation,
+timeouts and filesystem/helper failures are not converted into readiness.
+The build environment has its own package and byte inventory. Changing build
+requirements requires a new preparation; execution never fetches missing packages.
+Git-dependent scripts must use the saved snapshot identity or a separately
+approved repository-capable route; preparation does not fabricate Git history.
+
+New prepared receipts also select complete archive-only custody on the first
+ordinary removal. Both `/workspace` and `/artifacts` are bounded to 4 GiB per
+selection and 300 seconds per export on Docker; the existing Incus input-stream
+bound remains. This includes dependencies and unknown or modified files, rather
+than discarding them to fit the library's smaller default export limit. Archives
+are byte-verified, never extracted on the host, and ownership/stopped state is
+rechecked before deletion. Insufficient disk space, invalid archives or an
+uncertain removal retain the environment. Older receipts retain their original
+policy and existing `finishCleanup` recovery path.

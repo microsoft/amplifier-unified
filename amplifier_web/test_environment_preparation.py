@@ -106,7 +106,14 @@ def plan(archive, snapshot, profile_id):
                 files[name] = stream.extractfile(item).read()
     python_project = profile_id == 'python-project' or bool({'pyproject.toml', 'uv.lock'} & files.keys())
     required = {'pyproject.toml', 'uv.lock'} if python_project else set()
-    value = {'version': 1, 'profileId': profile_id, 'sourceSha256': source_hash, 'pythonProject': python_project}
+    source = {'archiveSha256': source_hash}
+    for key, target in (('source_head', 'sourceHead'), ('snapshot_commit', 'snapshotCommit'), ('snapshot_tree', 'snapshotTree')):
+        if key in snapshot:
+            if not re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}', str(snapshot[key])):
+                raise ValueError('The source snapshot identity is invalid.')
+            source[target] = snapshot[key]
+    value = {'version': 1, 'profileId': profile_id, 'sourceSha256': source_hash, 'pythonProject': python_project,
+             'executionContract': profiles.execution_contract(profile_id, source)}
     if profile_id == 'browser-test':
         directory = 'frontend' if 'frontend/package-lock.json' in files else ''
         prefix = directory + '/' if directory else ''
@@ -129,6 +136,28 @@ def plan(archive, snapshot, profile_id):
     recipe.update(Path(__file__).read_bytes())
     value['recipeSha256'] = recipe.hexdigest()
     value['preparationId'] = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return value
+
+
+def validate_execution_contract(value, expected):
+    """Guest inventory cannot substitute arbitrary paths or commands."""
+    if (not isinstance(value, dict)
+            or {key: item for key, item in value.items() if key != 'pythonBuild'}
+               != {key: item for key, item in expected.items() if key != 'pythonBuild'}):
+        raise ValueError('The prepared execution contract does not match its admitted source.')
+    build = value.get('pythonBuild')
+    if not isinstance(build, dict) or type(build.get('available')) is not bool:
+        raise ValueError('Python build readiness was not confirmed.')
+    if build['available']:
+        if (set(build) != {'available', 'python', 'backend', 'command'}
+                or build['python'] != '/opt/unified-prepared/build-venv/bin/python'
+                or build['command'] != expected['pythonBuild']['command']
+                or not isinstance(build['backend'], str) or not 1 <= len(build['backend']) <= 512):
+            raise ValueError('The prepared build invocation changed.')
+    elif set(build) != {'available', 'reason'} or build['reason'] not in {
+            'This source declares no Python build backend.',
+            'Python packaging prerequisites are unavailable. Source checks can run; inspect the retained preparation log before building.'}:
+        raise ValueError('The unavailable build contract changed.')
     return value
 
 
@@ -341,11 +370,13 @@ def prepare(config, root, snapshot, profile_id, request_id, *, resource_request=
         inventory_value = json.loads(inventory)
         if inventory_value.get('preparationId') != expected['preparationId'] or inventory_value.get('sourceSha256') != expected['sourceSha256']:
             raise ValueError('The built dependency inventory does not match its frozen source.')
+        validate_execution_contract(inventory_value.get('executionContract'), expected['executionContract'])
         write(folder / 'inventory.json', inventory_value)
         receipt = {'version': 1, 'status': 'ready', 'intent': expected, 'profileId': profile_id,
                    'sourceSha256': expected['sourceSha256'], 'recipeSha256': expected['recipeSha256'],
                    'lockfiles': expected['lockfiles'], 'image': image, 'backend': expected['backend'],
-                   'inventorySha256': digest(folder / 'inventory.json'), 'preparedAt': time.time()}
+                   'inventorySha256': digest(folder / 'inventory.json'), 'preparedAt': time.time(),
+                   **({'executionContract': inventory_value['executionContract']} if inventory_value.get('executionContract') else {})}
         write(receipt_path, receipt)
         write(folder / 'status.json', {'status': 'ready', 'profileId': profile_id, 'image': image})
         return receipt
