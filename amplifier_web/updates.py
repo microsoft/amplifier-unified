@@ -695,9 +695,8 @@ class UpdateManager:
         async with self.lock:
             state = self.service.state['updates']
             if self.runners_only(state):
-                # Availability stays observable while a runner waits. This
-                # never stages/activates an app or changes its retained attempt.
-                install = False
+                # The runner owns its retained qualification independently.
+                # A new check/sequence must keep its own install intent.
                 await self.publish(runnerAvailabilityCheck=True)
             if state.get('pendingApp'):
                 if not state['pendingApp'].get('featureSelection'):
@@ -741,6 +740,13 @@ class UpdateManager:
                     tier = 'included'
                 started = time.monotonic()
                 rows = await self.inventory_sources(indexed=True)
+                # Retained runner attempts already own these selections. Do not
+                # rediscover them as installable work or stage a duplicate while
+                # checking the app and its remaining component tiers.
+                from .managed_runner_backend import skip_key
+                retained = {skip_key(row['runnerSource']) for row in state.get('pendingSmartTools', [])
+                            if row.get('runnerSource')}
+                rows = [row for row in rows if not (row.get('runnerKind') and skip_key(row) in retained)]
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
                 remote_tasks = {}
                 from .update_checks import git_revision, ref_policy
@@ -876,7 +882,7 @@ class UpdateManager:
             return
         if state.get('sequence'):
             await self.publish(sequence={**state['sequence'], 'install': True})
-        if self.service.state['updates'].get('pendingSmartTools'):
+        if state.get('pendingSmartTools') and not self.runners_only(state):
             pending = list(self.service.state['updates']['pendingSmartTools'])
             if all(item.get('failure') for item in pending):
                 for item in pending:
@@ -884,6 +890,8 @@ class UpdateManager:
             else:
                 await self.activateSmartTools()
             return
+        if self.runners_only(state) and any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'appAvailable')):
+            await self.publish(runnerAvailabilityCheck=True)
         if self.service.state['updates'].get('pendingApp'):
             await self.app()
             return
@@ -897,6 +905,17 @@ class UpdateManager:
         if not self.inventory:
             path=self.directory/'inventory.json'
             self.inventory=json.loads(path.read_text()) if path.exists() else []
+        if self.runners_only(state) and not any(row.get('kind') != 'smart tool' and
+                row.get('status') == 'update' and row.get('eligible') for row in self.inventory):
+            pending = list(state['pendingSmartTools'])
+            if all(item.get('failure') for item in pending):
+                for item in pending:
+                    await self.smartToolRetry(item.get('resultId', item['previous']))
+            else:
+                await self.activateSmartTools()
+            return
+        if self.runners_only(state):
+            await self.publish(runnerAvailabilityCheck=True)
         if any(row.get('kind')=='smart tool' and row.get('status')=='update' and row.get('eligible') for row in self.inventory) and not any(row.get('kind')!='smart tool' and row.get('status')=='update' and row.get('eligible') for row in self.inventory):
             await self.installSmartTools()
             return
@@ -1334,14 +1353,10 @@ class UpdateManager:
         blockers = self.blockers() if self.requires_idle(state) else []
         if state.get('blockers', []) != blockers:
             await self.publish(blockers=blockers)
-        if state.get('pendingSmartTools'):
+        if state.get('pendingSmartTools') and not self.runners_only(state):
             if (state.get('phase') not in {'error', 'interrupted'} or any(
                     row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):
                 await self.activateSmartTools()
-            if (self.runners_only(state) and settings.get('autoCheck', True)
-                    and time.time() - max(state.get('lastCheck') or 0, state.get('lastAttempt') or 0)
-                    >= settings.get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600):
-                await self.check(fresh=False)
             return
         if state.get('pendingApp'):
             if state.get('phase') in {'error', 'interrupted'}:return
@@ -1369,6 +1384,10 @@ class UpdateManager:
         managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
         if not managed_preview and (settings.get('autoInstall',True) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
             await self.install()
+            return
+        if self.runners_only(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
+                row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):
+            await self.activateSmartTools()
 
     async def wait_for_work(self, delay):
         try:

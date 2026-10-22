@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.208",
+      "title": "Keep updates moving while the test runner waits",
+      "changes": [
+        "Allow app and component updates to proceed while an updated test runner waits for capacity or confirmation of its isolated check. The runner retains its original work and evidence; normal app restart and component safety checks still apply.",
+        "Keep the newer app release summary and Update Amplifier button available alongside the waiting runner. Preserve component update progress and results when the runner later completes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.207",
       "title": "Reliable Linux setup and conversation settings",
       "changes": [

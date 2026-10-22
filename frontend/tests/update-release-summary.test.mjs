@@ -34,10 +34,10 @@ test('unknown pending identity never claims installed or borrows latest notes',(
   const result=summary(patch);assert.equal(result.version,null);assert.equal(result.notes,null);assert.equal(result.url,null);assert.equal(result.stage,'during');
  }
 });
-test('confirmed app notes remain during component wait even if a newer app is offered',()=>{
+test('runner wait shows newer offered notes, while confirmed installed identity stays separate',()=>{
  const updates={applicationResult:{attemptId:'a'.repeat(32),phase:'restart-ack',version:app.current,revision:app.runningRevision,verifiedAt:10},pendingSmartTools:[{runnerSource:true}],phase:'staged'};
- assert.equal(summary(updates).stage,'after');assert.equal(summary(updates).notes.version,app.current);
- assert.equal(summary({...updates,applicationResult:{...updates.applicationResult,revision:'c'.repeat(40)}}).stage,'installed');
+ assert.equal(summary(updates).stage,'before');assert.equal(summary(updates).notes.version,'0.20.206');
+ assert.equal(summary({...updates,pendingSmartTools:[{previous:'ordinary-tool'}]}).stage,'after');
  assert.equal(summary({...updates,pendingSmartTools:[],application:{...app,status:'current'}}).stage,'after');
  assert.equal(summary({...updates,pendingSmartTools:[]}).stage,'before');
 });
