@@ -146,32 +146,71 @@ async def main():
                 for sid,patch in args.get('sessions',{}).items(): service._session(sid).update(patch)
             elif op=='interim-start':
                 row=service._session(aid);now=time.time()-10
+                removed = {message['id'] for message in row['messages']}
+                # This fixture replaces the conversation, unlike a real next
+                # turn. Retire only reveal requests for those removed messages.
+                # Otherwise reconnect replays the earlier test's stale reveal.
+                for client_id, client in service.clients.records.items():
+                    focus = client.get('view', {}).get('messageFocus') or {}
+                    if focus.get('sessionId') == aid and focus.get('messageId') in removed:
+                        client['view'].pop('messageFocus', None)
+                        service.clients.dirty.add(client_id)
                 row.update(status='working',messages=[],execution={'nodes':[],'turns':[]},generations=[],workers=[])
                 generation=row['fixtureGeneration']=f'interim-{time.time_ns()}'
-                service._message(row,'user','Investigate the synthetic issue.','chat',inputId='interim-input')
+                detailed = args.get('details') is True
+                input_id = row['fixtureInputId'] = generation if detailed else 'interim-input'
+                service._message(row,'user','Investigate the synthetic issue.','chat',inputId=input_id)
                 from amplifier_web.execution import ensure_turn
-                ensure_turn(row,'interim-input')
+                ensure_turn(row,input_id)
+                if detailed:
+                    from amplifier_web.execution_events import ExecutionEvents
+                    from amplifier_web.session_files import append_event
+                    observed=[]
+                    observer=ExecutionEvents(aid,observed.append)
+                    observer.lifecycle({'type':'input.delivered','input_id':input_id,'source':'user'})
                 await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
                     'event':'generation.started','generation_id':generation})
                 for index,text in enumerate(['Checking the first detail.','Checking the second detail.'],1):
-                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':'interim-input',
+                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':input_id,
                         'generationId':generation,'text':text,'runtimeMessage':{'sequence':index},
-                        'createdAt':now+index*2,'timestampKnown':True})
-                    await service.on_runtime_event('execution.event',{'sessionId':aid,'rootSessionId':aid,
-                        'id':f'interim-call-{index}','turnId':'interim-input','kind':'tool','label':'read_file','phase':'completed',
-                        'startedAt':now+index*2+.1,'endedAt':now+index*2+1,'input':{'file_path':'sample.txt'},'output':'Checked.'})
+                        'createdAt':time.time() if detailed else now+index*2,'timestampKnown':True})
+                    if detailed:
+                        for event in ('tool:pre','tool:post'):
+                            data={'session_id':aid,'tool_call_id':f'{generation}-call-{index}',
+                                  'tool_name':'read_file','timestamp':time.time(),
+                                  'tool_input':{'file_path':f'sample-{index}.txt','note':'界𝄞'*10000+f':INPUT-{index}'}}
+                            if event=='tool:post':data['result']='雪𝄞'*10000+f':OUTPUT-{index}'
+                            canonical=observer.hook(aid,event,data)
+                            append_event(row['workspace'],aid,event,canonical)
+                            await service.on_runtime_event('execution.event',observed[-1]['event'])
+                        at=time.time()
+                        await service.on_runtime_event('execution.event',{'sessionId':aid,'rootSessionId':aid,
+                            'id':f'{generation}-model-{index}','turnId':input_id,'kind':'llm',
+                            'label':f'Model step {index}','provider':'fixture','model':f'fixture-{index}',
+                            'producerId':'fixture-producer','revision':1,'liveObservation':True,
+                            'phase':'completed','startedAt':at,'endedAt':at,'usage':{'inputTokens':1,'outputTokens':1}})
+                    else:
+                        await service.on_runtime_event('execution.event',{'sessionId':aid,'rootSessionId':aid,
+                            'id':f'interim-call-{index}','turnId':input_id,'kind':'tool','label':'read_file','phase':'completed',
+                            'startedAt':now+index*2+.1,'endedAt':now+index*2+1,'input':{'file_path':'sample.txt'},'output':'Checked.'})
                 if args.get('long'):
                     row['messages'][1]['text'] += '\n\n' + ('A retained progress paragraph.\n\n'*100)
             elif op=='interim-finish':
-                row=service._session(aid);generation=row['fixtureGeneration']
+                row=service._session(aid);generation=row['fixtureGeneration'];input_id=row['fixtureInputId']
                 for index,text in enumerate(['The final conclusion.','The final next step.'],10):
-                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':'interim-input',
+                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':input_id,
                         'generationId':generation,'text':text,'runtimeMessage':{'sequence':index}})
                 await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
-                    'event':'generation.finished','generation_id':generation,'input_ids':['interim-input'],
+                    'event':'generation.finished','generation_id':generation,'input_ids':[input_id],
                     'text':'The final conclusion.The final next step.','active_job_ids':[],
                     'finalMessageRefs':{'version':1,'generationId':generation,'sequences':[10,11]}})
                 await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
+            elif op=='interim-saved-view':
+                from amplifier_web.session_projection import stored_execution
+                row=service._session(aid)
+                # Presentation-only persistence transform; the backend test
+                # separately exercises actual service recreation and cold reads.
+                row['execution']=json.loads(json.dumps(stored_execution(row['execution'])))
             elif op=='interim-error':
                 await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
                     'event':'generation.failed','generation_id':service._session(aid)['fixtureGeneration'],'input_ids':['interim-input']})

@@ -25,9 +25,8 @@ class OpenWorkFields:
         self.resident = resident
 
     def _node(self, session, entry, identity):
-        from .cold_display import raw
         position = entry['positions'].get(identity)
-        nodes = raw(session).get('execution', {}).get('nodes', [])
+        nodes = self.resident.windows.resident_tree(session).get('nodes', [])
         node = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
         if node is None or node.get('id') != identity:
             raise ValueError('This saved detail moved. Reopen its Work steps.')

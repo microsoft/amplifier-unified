@@ -17,13 +17,23 @@ def append(path, count, start=0):
                 'data': {'tool_call_id': f'new-{i}', 'tool_name': 'other', 'result': 'newer work'}}) + '\n')
 
 
-async def opened(tmp_path, monkeypatch):
+async def opened(tmp_path, monkeypatch, *, cold_db=None, source_alias="native"):
     windows, session, path, _ = fixture(tmp_path, monkeypatch, count=0)
+    if source_alias != 'native':
+        session.pop('nativeIdentity')
+        if source_alias == 'runtime':
+            session['runtimeSessionId'] = 's'
     native = tool_records()
     tool = live_tool(session, events=native)
     live_call(session)
     session['execution']['nodes'].insert(0, tool)
     path.write_text(''.join(json.dumps(row) + '\n' for row in native + recorded_call()))
+    if cold_db is not None:
+        from amplifier_web.cold_display import execution_reference
+        windows.service.db = cold_db
+        # The retired LLM row must carry its host-owned accounting receipt.
+        next(row for row in session['execution']['nodes'] if row['kind'] == 'llm')['producerId'] = 'host-producer'
+        session['_coldFields'] = {'execution': execution_reference(cold_db, session.pop('execution'))}
     await windows.read('s')
     page = windows.live_pages.read(session, 't@user')
     return windows, session, path, {row['id']: row for row in page['items']}
@@ -195,3 +205,64 @@ async def test_more_than_200_fields_keep_stable_leases_without_revision_thrash(t
         assert (await windows.read_text('s',ref))['value']==f'Answer {index}'
     assert all(key[0] in entry['ids'] for key in entry['fields'])
     await windows.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source_alias', ['native', 'runtime', 'implicit'])
+async def test_cold_open_fields_survive_window_turnover_without_hydration(tmp_path, monkeypatch, source_alias):
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(tmp_path / 'cold.db')) as db:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        windows, session, path, rows = await opened(tmp_path, monkeypatch, cold_db=db, source_alias=source_alias)
+        try:
+            refs = [rows['tool:s:call'][field + 'Detail'] for field in ('input', 'output')]
+            refs += [rows['llm:host'][field + 'Detail'] for field in ('request', 'response')]
+            assert all(ref['windowKey'].startswith('open-work:') for ref in refs)
+            expected = [await windows.read_text('s', ref) for ref in refs]
+            tool = await windows.read_tool('s', rows['tool:s:call']['toolDetail'])
+            assert tool['item']['inputDetail'] == refs[0]
+            assert tool['item']['outputDetail'] == refs[1]
+            original = copy.deepcopy(session)
+            for index in range(10):
+                append(path, 101 if index == 0 else 1, start=index * 1000)
+                await windows.read('s')
+                result = windows.live_pages.sync(session, 't@user',
+                    {key: row['detailVersion'] for key, row in rows.items()})
+                rows.update((row['id'], row) for row in result['items'])
+            assert rows['tool:s:call']['inputDetail'] == refs[0]
+            assert rows['tool:s:call']['outputDetail'] == refs[1]
+            assert rows['llm:host']['requestDetail'] == refs[2]
+            assert rows['llm:host']['responseDetail'] == refs[3]
+            monkeypatch.setattr('amplifier_web.resource_files.read_detached',
+                                lambda *args, **kwargs: pytest.fail('Field read reloaded saved placement'))
+            assert [await windows.read_text('s', ref) for ref in refs] == expected
+            assert session == original and 'execution' not in session
+            assert len(windows.pages) <= 8
+        finally:
+            await windows.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['reference', 'epoch', 'page'])
+async def test_cold_open_fields_refuse_invalidated_placement(tmp_path, monkeypatch, change):
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(tmp_path / 'cold.db')) as db:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        windows, session, path, rows = await opened(tmp_path, monkeypatch, cold_db=db)
+        try:
+            ref = rows['tool:s:call']['outputDetail']
+            assert ref['windowKey'].startswith('open-work:')
+            assert (await windows.read_text('s', ref))['value']
+            if change == 'reference':
+                session['_coldFields']['execution'] = {'$resource': 'other'}
+            elif change == 'epoch':
+                windows.epochs['s'] += 1
+            else:
+                windows.pages.pop(windows.current['s'])
+            with pytest.raises(ValueError):
+                await windows.read_text('s', ref)
+            assert 'execution' not in session
+        finally:
+            await windows.close()

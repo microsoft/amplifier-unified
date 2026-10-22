@@ -35,7 +35,7 @@ class ResidentWorkPages:
 
     def _source(self, session, start, end):
         source = self.windows.live_view(session)
-        nodes = raw(session).get('execution', {}).get('nodes', [])
+        nodes = self.windows.resident_tree(session).get('nodes', [])
         source['execution']['nodes'] = [self.windows.live_node(session, row) for row in nodes[start:end]
             if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory')]
         return source
@@ -44,7 +44,7 @@ class ResidentWorkPages:
         from .work_windows import source_identity
         source = self.windows.live_view(session)
         # Stable resident positions and bounded grouping facts, never node bodies.
-        facts = [id(session), id(raw(session).get('execution', {}).get('nodes')),
+        facts = [id(session), id(self.windows.resident_tree(session).get('nodes')),
             source_identity(session),
             [{key: row.get(key) for key in ('id', 'createdAt', 'timestampKnown')}
              for row in source['messages']],
@@ -109,7 +109,7 @@ class ResidentWorkPages:
                         item.pop(field + suffix, None)
             item.update(recordings)
             item['detailVersion'] = str(detail_version([row, recordings]))
-        nodes = raw(session).get('execution', {}).get('nodes', [])
+        nodes = self.windows.resident_tree(session).get('nodes', [])
         def reference(identity):
             position = entry['positions'].get(identity)
             original = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
@@ -139,7 +139,7 @@ class ResidentWorkPages:
     def read(self, session, group, before=None, revision=None):
         if not isinstance(group, str) or not 0 < len(group) <= 1024:
             raise ValueError('Choose a current Work group.')
-        nodes = raw(session).get('execution', {}).get('nodes', [])
+        nodes = self.windows.resident_tree(session, touch=True).get('nodes', [])
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         if before is None:
             start, end, within = max(0, len(nodes) - NODE_LIMIT), len(nodes), None
@@ -214,7 +214,7 @@ class ResidentWorkPages:
         entry = self._entry(session, group, reconcile=True)
         if not set(known) <= entry['ids'].keys():
             raise ValueError('This Work window expired. Close and reopen its steps.')
-        nodes = raw(session).get('execution', {}).get('nodes', [])
+        nodes = self.windows.resident_tree(session, touch=True).get('nodes', [])
         tail_scope = (max(0, len(nodes) - NODE_LIMIT), len(nodes))
         scopes = set(entry['ids'][key] for key in known) | {tail_scope}
         source = self.windows.live_view(session)
@@ -291,7 +291,7 @@ class ResidentWorkPages:
         entry = self._field_entry(session, args)
         position = entry['positions'][args['id']]
         start, end = entry['ids'][args['id']]
-        nodes = raw(session).get('execution', {}).get('nodes', [])
+        nodes = self.windows.resident_tree(session).get('nodes', [])
         row = nodes[position] if start <= position < min(end, len(nodes)) else None
         if (row is None or row.get('id') != args['id'] or row.get('kind') != 'llm'
                 or not (row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory'))):
