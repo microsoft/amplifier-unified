@@ -129,7 +129,8 @@ try{
   await expect(copyInput).toBeEnabled();await copyInput.click();
   assert.deepEqual(JSON.parse(await page.evaluate(()=>navigator.clipboard.readText())),
    {note:'界𝄞'.repeat(10000)+`:INPUT-${index}`});
-  const contents=node.locator('.a-execution-payload').filter({has:copyOutput});
+  const contents=node.locator('.a-execution-payload').filter({has:page.getByRole('button',{name:'Copy file content',exact:true})});
+  await expect(contents).toHaveCount(1);
   await contents.getByRole('button',{name:/^Show all /}).click();
   await expect(contents.locator('pre code')).toHaveText(output);
   await expect(node.locator('.a-execution-load-error')).toHaveCount(0);
