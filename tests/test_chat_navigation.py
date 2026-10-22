@@ -248,21 +248,34 @@ async def test_rejected_send_does_not_make_chat_recent(app_factory,monkeypatch):
     assert session['recentActivityAt']==10 and not session['messages']
 
 
-async def test_native_recency_uses_transcript_not_rename_and_refresh_keeps_web_activity(tmp_path,app_factory):
+@pytest.mark.parametrize('bounded', [False, True])
+async def test_native_recency_uses_transcript_not_rename_and_refresh_keeps_web_activity(tmp_path,app_factory,monkeypatch,bounded):
     directory=native_session(tmp_path/'native','root')
     transcript=directory/'transcript.jsonl'
     os.utime(transcript,(100,100))
-    app=app_factory();await app.history.refresh()
+    app=app_factory()
+    if bounded:
+        # A delayed watcher still discovers canonical changes in bounded slices.
+        monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, set()))
+        app.history.index._recovery_budget=1
+    async def refresh():
+        for _ in range(16):
+            await app.history.refresh()
+            assert app.state['sharedHistory']['error'] is None
+            if app.state['sharedHistory']['reconciliation']['phase']=='complete':
+                return
+        pytest.fail('The small native fixture did not finish bounded reconciliation')
+    await refresh()
     row=app._session(native_rows(app)[0]['id']);assert row['recentActivityAt']==100
     metadata=json.loads((directory/'metadata.json').read_text())
     metadata.update(name='Renamed externally',updated_at=9999999999)
     (directory/'metadata.json').write_text(json.dumps(metadata))
-    await app.history.refresh()
+    await refresh()
     assert row['recentActivityAt']==100
-    os.utime(transcript,(200,200));await app.history.refresh()
+    os.utime(transcript,(200,200));await refresh()
     assert row['recentActivityAt']==200
     row.update(historyManaged=False,recentActivityAt=300)
-    await app.history.refresh()
+    await refresh()
     assert row['recentActivityAt']==300
 
 

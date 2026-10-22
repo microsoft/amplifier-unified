@@ -27,12 +27,6 @@ published tag, and records the bump type and reason in the release PR.
   public-contract changes require a major. Bundled client/server edits still
   ship together; independently released clients retain their own contracts.
 
-The `0.20` line accumulated the new Home/workspace views and host controls in
-patch releases. Use **0.21.0 for the next planned feature release** to establish
-this policy; an urgent repair can still ship as a `0.20` patch first. Do not
-renumber or republish historical releases. Remove this transition note once
-0.21.0 has shipped.
-
 For **every release**, including fixes-only, dependency, packaging and test-only
 maintenance releases:
 

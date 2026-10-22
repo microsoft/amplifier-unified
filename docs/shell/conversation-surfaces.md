@@ -353,3 +353,17 @@ Assistant reactions are labeled Amplifier and never shown as user-removal button
 They may acknowledge a simple request without an extra written acknowledgment;
 they do not mean the requested work completed and never start a new turn.
 Existing unattributed reactions are not retroactively assigned an actor.
+
+Interactive reaction clicks show pending local intent immediately. Their
+authenticated metadata write does not wait for a conversational step, start or
+steer a model turn, or change Stop or approval authority. A confirmed receipt
+settles only its exact actor/message/reaction; a rejection rolls back that local
+change without clearing newer intent. A lost response remains **unknown** until
+an exact fingerprint-bound receipt read reconciles it. Absence of a receipt is
+not rejection, and reconnect or reload never automatically replays the write.
+
+Later genuine provider requests receive a bounded snapshot of committed user
+reaction changes as untrusted reference data, not instructions or completion
+evidence. Budget measurement and transport use the same frozen snapshot; an
+already prepared or in-flight request is not retrofitted. Persistence failure
+makes the snapshot unavailable rather than presenting unsaved state as accepted.
