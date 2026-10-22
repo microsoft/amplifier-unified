@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {settingsButton} from './browser-settings.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
@@ -48,7 +49,7 @@ try{
  const secondGrant=(await response.json()).result;
  const secondApproval=page.locator(`[data-approval-id="${secondGrant.id}"]`);
  await expect(secondApproval).toBeVisible();
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await settingsButton(page).click();
  await page.getByRole('button',{name:'Privacy & files',exact:true}).click();
  await page.getByRole('button',{name:/Access & approvals/}).click();
  const controls=page.getByRole('region',{name:'Access and approvals'});
