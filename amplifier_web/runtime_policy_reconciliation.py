@@ -14,7 +14,7 @@ import re
 import tomllib
 
 VERSION = 1
-SELECTION_VERSION = 2
+SELECTION_VERSION = 3
 RECEIPT = 'runtime-policy-reconciliation.json'
 
 

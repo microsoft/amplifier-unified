@@ -4300,11 +4300,15 @@ class AppService:
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
                 if session["status"] == "ready":
-                    if session.get('failure', {}).get('category') != 'execution_interrupted':
+                    from .session_health import current_terminal_failure
+                    retained_failure = current_terminal_failure(session)
+                    if (session.get('failure', {}).get('category') != 'execution_interrupted'
+                            and not retained_failure):
                         session.pop("error", None)
                         session.pop("failure", None)
-                    session.pop("errorType", None)
-                    session.pop("turnErrorType", None)
+                    if not retained_failure:
+                        session.pop("errorType", None)
+                        session.pop("turnErrorType", None)
                     session.pop("moduleFailures", None)
                     if isinstance(session.get("health"), dict):
                         session["health"].pop("moduleFailures", None)
@@ -4345,7 +4349,7 @@ class AppService:
                     detail=str(failure)
                 startup = payload.get('errorType') == 'RuntimeStartupError' or payload.get('phase') == 'worker_startup'
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
-                from .session_health import failure_details
+                from .session_health import current_terminal_failure, failure_details
                 projected = failure_details(detail, error_type)
                 existing = session.get('failure')
                 if startup and projected['category'] == 'unknown':
@@ -4353,7 +4357,8 @@ class AppService:
                     projected = failure_details(detail, error_type)
                 current_input = session.get('execution', {}).get('currentTurnId')
                 failure_inputs = (existing.get('inputIds') or [existing.get('inputId')]) if isinstance(existing, dict) else []
-                same_input = not current_input or not any(failure_inputs) or current_input in failure_inputs
+                same_input = (current_terminal_failure(session) or not current_input
+                    or not any(failure_inputs) or current_input in failure_inputs)
                 if (not startup and same_input and isinstance(existing, dict)
                         and (existing.get('stage') or projected['category'] == 'unknown'
                              and existing.get('category') != 'unknown')):
