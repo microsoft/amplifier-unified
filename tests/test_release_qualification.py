@@ -439,7 +439,8 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert '${{' not in focused['run'] and '${{' not in steps[1]['run']
     receipts = next(step for step in steps if step.get('name') == 'Prepare pinned native receipt dependencies')
     installed = next(step for step in steps if step.get('name') == 'Verify installed native receipt boundary outside checkout')
-    assert receipts['if'] == installed['if'] == "${{ env.CHECK_SUITE == 'shared-work-native' }}"
+    assert receipts['if'] == "${{ env.CHECK_SUITE == 'full' || env.CHECK_SUITE == 'shared-work-native' }}"
+    assert installed['if'] == "${{ env.CHECK_SUITE == 'shared-work-native' }}"
     assert '2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' in receipts['run']
     assert 'NativeSendAdmission, NativeOutboundEnvelope' in receipts['run']
     assert 'unset PYTHONPATH' in installed['run']
@@ -467,7 +468,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
     ('managed-removal-recovery', ['tests/test_dependency_layers.py', 'tests/test_stopped_reservation_recovery.py', 'tests/test_prepared_execution_contract.py', 'tests/test_environment_preparation.py', 'tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
     ('shared-work-continuity', ['tests/test_task_continuity.py', 'tests/test_coordination_delivery.py', 'tests/test_work_invocation.py', 'tests/test_schedules.py', 'tests/test_collaboration_input.py', 'tests/test_coordination_revisions.py', 'tests/test_release_qualification.py', 'tests/test_voice_visual.py', 'tests/test_surface_context.py', 'tests/test_output_image_pairs.py', 'tests/test_memory_personalization.py', 'tests/test_capacity.py']),
-    ('shared-work-native', ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py']),
+    ('shared-work-native', ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_native_effects.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py']),
     ('manager-exception-boundary', ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
