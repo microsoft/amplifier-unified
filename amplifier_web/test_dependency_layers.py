@@ -181,29 +181,43 @@ def native(config, folder, receipt, *, unused=False, deadline=None):
         if remaining <= 0:
             raise TimeoutError('Dependency inspection reached its time limit.')
         return preparation.run(args, env, folder / 'inspection.log', timeout=remaining, watch_cancel=False, require_complete=True)
+    def objects(args):
+        rows = json.loads(call(args))
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError('The native dependency observation is malformed.')
+        return rows
     if receipt['backend'] == 'docker':
-        rows = json.loads(call(['docker', '--host', config['dockerHost'], 'image', 'inspect', image]))
+        rows = objects(['docker', '--host', config['dockerHost'], 'image', 'inspect', image])
         if (len(rows) != 1 or rows[0].get('Id') != image
-                or rows[0].get('Config', {}).get('Labels', {}).get('io.amplifier.preparation') != name
-                or set(rows[0].get('RepoTags') or []) != {name + ':latest'}):
+                or not isinstance(rows[0].get('Config'), dict)
+                or not isinstance(rows[0]['Config'].get('Labels'), dict)
+                or rows[0]['Config']['Labels'].get('io.amplifier.preparation') != name
+                or not isinstance(rows[0].get('RepoTags'), list)
+                or any(not isinstance(tag, str) for tag in rows[0]['RepoTags'])
+                or set(rows[0]['RepoTags']) != {name + ':latest'}):
             raise ValueError('The reusable image identity or owner changed.')
         if unused and call(['docker', '--host', config['dockerHost'], 'ps', '-a', '--filter', 'ancestor=' + image, '--format', '{{.ID}}']).strip():
             raise ValueError('A native container still references this dependency layer.')
         # Docker reports cumulative content including the immutable base. Only
         # this image's added content participates in the unused-layer budget.
-        base = json.loads(call(['docker', '--host', config['dockerHost'], 'image', 'inspect', receipt['intent']['baseImage']]))
+        base = objects(['docker', '--host', config['dockerHost'], 'image', 'inspect', receipt['intent']['baseImage']])
         if len(base) != 1 or type(base[0].get('Size')) is not int or type(rows[0].get('Size')) is not int:
             raise ValueError('The reusable image size is unavailable.')
         return max(0, rows[0]['Size'] - base[0]['Size'])
     settings = config['incus']
-    rows = json.loads(call([settings['incusExecutable'], '--project', settings['project'], 'image', 'list', image, '--format', 'json']))
+    rows = objects([settings['incusExecutable'], '--project', settings['project'], 'image', 'list', image, '--format', 'json'])
     if (len(rows) != 1 or rows[0].get('fingerprint') != image
-            or rows[0].get('properties', {}).get('user.amplifier.preparation') != name
-            or {row.get('name') for row in rows[0].get('aliases', [])} != {name}):
+            or not isinstance(rows[0].get('properties'), dict)
+            or rows[0]['properties'].get('user.amplifier.preparation') != name
+            or not isinstance(rows[0].get('aliases'), list)
+            or any(not isinstance(row, dict) or not isinstance(row.get('name'), str) for row in rows[0]['aliases'])
+            or {row['name'] for row in rows[0]['aliases']} != {name}):
         raise ValueError('The reusable image identity or owner changed.')
     if unused:
-        instances = json.loads(call([settings['incusExecutable'], '--project', settings['project'], 'list', '--format', 'json']))
-        if any(row.get('config', {}).get('volatile.base_image') == image for row in instances):
+        instances = objects([settings['incusExecutable'], '--project', settings['project'], 'list', '--format', 'json'])
+        if any(not isinstance(row.get('config'), dict) for row in instances):
+            raise ValueError('The native dependency observation is malformed.')
+        if any(row['config'].get('volatile.base_image') == image for row in instances):
             raise ValueError('A native instance still references this dependency layer.')
     return int(rows[0]['size'])
 

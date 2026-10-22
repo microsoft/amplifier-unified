@@ -219,11 +219,14 @@ def backend_identity(config, folder, env, *, timeout=30):
     log = folder / 'inspection.log'
     if config.get('backend', 'docker') == 'docker':
         value = json.loads(run(['docker', '--host', config['dockerHost'], 'info', '--format', '{{json .}}'], env, log, timeout=timeout, watch_cancel=False, require_complete=True))
-        if not value.get('ID'):
+        if not isinstance(value, dict) or not isinstance(value.get('ID'), str) or not value['ID']:
             raise ValueError('The Docker daemon identity is unavailable.')
         return {'backend': 'docker', 'daemon': value['ID']}
     settings = config['incus']
-    value = json.loads(run(_incus_query(settings, '/1.0'), env, log, timeout=timeout, watch_cancel=False, require_complete=True))['environment']
+    reply = json.loads(run(_incus_query(settings, '/1.0'), env, log, timeout=timeout, watch_cancel=False, require_complete=True))
+    if not isinstance(reply, dict) or not isinstance(reply.get('environment'), dict):
+        raise ValueError('The Incus preparation daemon identity is unavailable.')
+    value = reply['environment']
     if value.get('project') != settings['project'] or (settings.get('daemonFingerprint') and value.get('certificate_fingerprint') != settings['daemonFingerprint']):
         raise ValueError('The Incus preparation daemon or project changed.')
     return {'backend': 'incus', 'daemon': value['certificate_fingerprint'], 'project': value['project']}

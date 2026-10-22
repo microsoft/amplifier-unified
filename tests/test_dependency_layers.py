@@ -13,6 +13,7 @@ from amplifier_web import test_dependency_layers as layers
 from amplifier_web import test_environment_preparation as preparation
 
 NATIVE_OBSERVATION = layers.native  # Exercise the real reader with fake engine bytes.
+BACKEND_IDENTITY = preparation.backend_identity
 
 PROJECT = '[project]\nname="fixture"\nversion="1"\ndependencies=["third-party==1"]\n'
 LOCK = '''version=1
@@ -410,3 +411,74 @@ def test_actual_native_reader_malformed_json_shape_falls_back(prepared, monkeypa
     assert [row['mode'] for row in calls] == ['layer', 'finalize', None]
     assert not (second / 'preparation/dependency-borrow.json').exists()
     assert not (second / 'preparation/dependency-seed.json').exists()
+
+
+@pytest.mark.parametrize('malformed', ['image-null', 'image-row-null', 'config-null', 'labels-null', 'tag-null', 'base-row-null', 'daemon-null', 'daemon-row-null'])
+def test_actual_malformed_native_observation_stays_protected_in_storage(prepared, tmp_path, monkeypatch, malformed):
+    run, _, _ = prepared
+    first, _ = run('first')
+    settle(first)
+    row = layers.inspect(tmp_path)['candidates'][0]
+    entry = layers.store(tmp_path) / row['id']
+    value = layers.receipt(entry)
+    image, name = value['image'], value['intent']['resourceName']
+    reply = [{'Id': image, 'Config': {'Labels': {'io.amplifier.preparation': name}},
+              'RepoTags': [name + ':latest'], 'Size': 1000}]
+    if malformed == 'image-null':
+        reply = None
+    elif malformed == 'image-row-null':
+        reply = [None]
+    elif malformed == 'config-null':
+        reply[0]['Config'] = None
+    elif malformed == 'labels-null':
+        reply[0]['Config']['Labels'] = None
+    elif malformed == 'tag-null':
+        reply[0]['RepoTags'] = [None]
+    before = {str(path.relative_to(entry)): path.read_bytes() for path in entry.rglob('*') if path.is_file()}
+    task_before = {str(path.relative_to(first)): path.read_bytes() for path in first.rglob('*') if path.is_file()}
+    commands, removals = [], []
+    def observe(args, *unused, **kwargs):
+        commands.append(args)
+        if 'info' in args:
+            return json.dumps(None if malformed == 'daemon-null' else [None] if malformed == 'daemon-row-null' else {'ID': 'fixture'})
+        if 'ps' in args:
+            return ''
+        assert args[-2] == 'inspect'
+        return json.dumps(reply if args[-1] == image else [None] if malformed == 'base-row-null' else [{'Size': 800}])
+    monkeypatch.setattr(layers, 'native', NATIVE_OBSERVATION)
+    monkeypatch.setattr(preparation, 'backend_identity', BACKEND_IDENTITY)
+    monkeypatch.setattr(preparation, 'run', observe)
+    monkeypatch.setattr(preparation, 'cleanup', lambda *args, **kwargs: removals.append(args))
+    report = layers.inspect(tmp_path)
+    assert report == {'candidates': [], 'protectedIds': [entry.name], 'complete': True}
+    layers.retire(tmp_path, {row['id']: row}, lambda *args: removals.append(args))
+    assert sum('info' in args for args in commands) == 2  # Both callers reach the actual native reader.
+    assert removals == []
+    assert before == {str(path.relative_to(entry)): path.read_bytes() for path in entry.rglob('*') if path.is_file()}
+    assert task_before == {str(path.relative_to(first)): path.read_bytes() for path in first.rglob('*') if path.is_file()}
+    assert list((entry / 'borrowers').iterdir()) == []
+
+
+@pytest.mark.parametrize('malformed', ['image-row-null', 'properties-null', 'alias-null', 'instance-row-null', 'instance-config-null', 'daemon-environment-null'])
+def test_actual_incus_nested_observations_raise_validation_error(tmp_path, monkeypatch, malformed):
+    image, name = 'a' * 64, 'au-deps-fixture'
+    backend = {'backend': 'incus', 'daemon': 'fixture', 'project': 'owned'}
+    config = {'backend': 'incus', 'incus': {'incusExecutable': 'incus', 'project': 'owned', 'configDir': str(tmp_path)}}
+    receipt = {'backend': 'incus', 'image': image, 'intent': {'resourceName': name, 'backendIdentity': backend}}
+    reply = [{'fingerprint': image, 'properties': {'user.amplifier.preparation': name}, 'aliases': [{'name': name}], 'size': 200}]
+    if malformed == 'image-row-null':
+        reply = [None]
+    elif malformed == 'properties-null':
+        reply[0]['properties'] = None
+    elif malformed == 'alias-null':
+        reply[0]['aliases'] = [None]
+    def observe(args, *unused, **kwargs):
+        if 'query' in args:
+            return json.dumps({'environment': None if malformed == 'daemon-environment-null' else {'project': 'owned', 'certificate_fingerprint': 'fixture'}})
+        if 'image' in args:
+            return json.dumps(reply)
+        return json.dumps([None] if malformed == 'instance-row-null' else [{'config': None}])
+    monkeypatch.setattr(preparation, 'backend_identity', BACKEND_IDENTITY)
+    monkeypatch.setattr(preparation, 'run', observe)
+    with pytest.raises(ValueError):
+        NATIVE_OBSERVATION(config, tmp_path, receipt, unused=True)
