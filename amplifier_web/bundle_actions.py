@@ -12,11 +12,14 @@ async def preview_saved(management, args):
     app, sid = management.service, args['sessionId']
     token = str(uuid.uuid4())
     async with app.lock:
-        source = copy.deepcopy(app._session(sid, hydrate=False))
+        current = app._session(sid, hydrate=False)
+        source = copy.deepcopy({key: current[key] for key in (
+            'workspace', 'workingDirectory', 'runtimeSessionId', 'nativeIdentity',
+            'selection', 'nextMessageRevision', 'interruptionRevision') if key in current})
         revision = (app.state.get('configurationRevision', 0), source.get('nextMessageRevision', 0),
                     source.get('interruptionRevision', 0))
-        app._session(sid)['bundlePreviewRequest'] = token
-        app._session(sid)['bundleChange'] = {'phase': 'working', 'action': 'bundle.preview', 'bundle': args['bundle']}
+        current['bundlePreviewRequest'] = token
+        current['bundleChange'] = {'phase': 'working', 'action': 'bundle.preview', 'bundle': args['bundle']}
         app._publish_changes(sessions={sid})
     try:
         checked = await resolve_defaults(app.data_dir, source['workspace'], args['bundle'],

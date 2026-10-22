@@ -81,6 +81,97 @@ async def test_retired_save_and_preview_never_load_cold_bodies(app, monkeypatch,
         assert app.runtime is None
 
 
+@pytest.mark.parametrize('state', ['starting', 'ready', 'idle'])
+@pytest.mark.parametrize('evidence', ['generation', 'turn', 'receipt', 'peer', 'stopping'])
+async def test_retired_configuration_preserves_hot_admission_fences(app, monkeypatch, state, evidence):
+    import json
+    from amplifier_web import cold_display
+    from amplifier_web.next_message_configuration import save
+    row = retired_configuration(app, monkeypatch)
+    row['status'] = state
+    if evidence == 'generation':
+        row['collaborationGeneration'] = {'id': 'new-run', 'inputIds': [], 'terminal': False}
+    elif evidence == 'turn':
+        dict.get(row, '_coldFields')['execution']['pendingWork'] = True
+    elif evidence == 'receipt':
+        app.db.execute('INSERT INTO commands VALUES (?,?,?)', ('pending-input', '{}',
+            json.dumps({'sessionId': row['id'], 'inputId': 'input', 'delivery': 'sending'})))
+    elif evidence == 'peer':
+        app.db.execute('INSERT INTO commands VALUES (?,?,?)', ('pending-peer', '{}',
+            json.dumps({'commandAction': 'coordination.send', 'target': {'sessionId': row['id']},
+                        'delivery': 'submitting'})))
+    else:
+        row['status'] = 'stopping'
+    with monkeypatch.context() as guard:
+        guard.setattr(cold_display, 'load', lambda *a: pytest.fail('Cold display body hydration'))
+        with pytest.raises(AppError, match='active work'):
+            save(app, {'sessionId': row['id'], 'expectedRevision': 0, 'bundle': 'work'})
+        assert row.get('nextMessageRevision', 0) == 0
+
+
+async def test_retired_preparation_only_save_is_revisioned_and_keeps_status(app, monkeypatch):
+    from amplifier_web import cold_display
+    from amplifier_web.next_message_configuration import save
+    row = retired_configuration(app, monkeypatch)
+    row.update(status='starting', preparation={'status': 'preparing'},
+               collaborationGeneration={'id': 'prior-run', 'terminal': True})
+    with monkeypatch.context() as guard:
+        guard.setattr(cold_display, 'load', lambda *a: pytest.fail('Cold display body hydration'))
+        save(app, {'sessionId': row['id'], 'expectedRevision': 0, 'bundle': 'work'})
+        assert row['status'] == 'starting' and row['nextMessageRevision'] == 1
+        with pytest.raises(AppError, match='changed'):
+            save(app, {'sessionId': row['id'], 'expectedRevision': 0, 'bundle': 'anchors'})
+        assert row['pendingBundleSelection']['bundle'] == 'work'
+
+
+async def test_real_no_command_id_input_blocks_choices_during_ready_boundary(app):
+    from amplifier_web.runtime import RuntimeStartupError
+    entered, release = asyncio.Event(), asyncio.Event()
+    class HeldInput:
+        async def send(self, session, text, input_id, emit):
+            await emit('runtime.status', {'sessionId': session['id'], 'status': 'ready'})
+            entered.set()
+            await release.wait()
+            raise RuntimeStartupError('Synthetic input never admitted')
+        async def close(self):
+            pass
+    app.runtime = HeldInput()
+    pending = asyncio.create_task(app.dispatch('conversation.send', {'text': 'Held actual input'},
+                                               include_state=False))
+    await asyncio.wait_for(entered.wait(), 2)
+    try:
+        assert app._session()['status'] == 'ready'
+        assert app._session()['execution']['turns'][-1]['phase'] == 'running'
+        with pytest.raises(AppError, match='active work'):
+            await app.dispatch('conversation.configure', choices(app, bundle='work'), include_state=False)
+    finally:
+        release.set()
+        with pytest.raises(AppError, match='never admitted'):
+            await pending
+
+
+@pytest.mark.parametrize('change', ['stop', 'revision'])
+async def test_retired_preview_discards_late_results_without_loading_history(app, monkeypatch, change):
+    from amplifier_web import cold_display, draft_defaults
+    from amplifier_web.bundle_actions import preview_saved
+    row = retired_configuration(app, monkeypatch)
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def resolve(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return {'bundle': 'work', 'modelCompatible': True}
+    with monkeypatch.context() as guard:
+        guard.setattr(cold_display, 'load', lambda *a: pytest.fail('Cold display body hydration'))
+        guard.setattr(draft_defaults, 'resolve_defaults', resolve)
+        pending = asyncio.create_task(preview_saved(app.management, {'sessionId': row['id'], 'bundle': 'work'}))
+        await entered.wait()
+        row['interruptionRevision' if change == 'stop' else 'nextMessageRevision'] = 1
+        release.set()
+        await pending
+        assert 'bundlePreview' not in row
+        assert row['bundleChange']['phase'] == 'stale'
+
+
 async def test_saved_choices_do_not_hydrate_prepare_or_mount(app, monkeypatch):
     monkeypatch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('canonical hydration')))
     monkeypatch.setattr(app, 'refresh_configuration', AsyncMock(side_effect=AssertionError('runtime refresh')))

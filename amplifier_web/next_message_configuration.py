@@ -18,6 +18,30 @@ def target(session):
     return {key: session.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision')}
 
 
+def pending_input(service, session):
+    """Use existing admission evidence, never load retired display payloads."""
+    from .execution import LIVE_PHASES
+    generation = session.get('collaborationGeneration') or {}
+    if generation.get('id') and not generation.get('terminal'):
+        return True
+    # Ordinary, voice, question and scheduled input create an execution turn
+    # before any preparation await, including sends without a command id.
+    # ColdDisplay retains the same pending-work fact with its exact body ref.
+    reference = dict.get(session, '_coldFields', {}).get('execution')
+    if not dict.__contains__(session, 'execution') and reference is not None:
+        if reference.get('pendingWork') is not False:
+            return True  # Legacy/unknown is not proof that input has settled.
+    elif any(turn.get('phase') in LIVE_PHASES
+             for turn in dict.get(session, 'execution', {}).get('turns', [])):
+        return True
+    # Keep original admission receipts authoritative even if presentation
+    # status has become ready before delivery is acknowledged.
+    return service.db.execute("""SELECT 1 FROM commands
+        WHERE json_extract(receipt,'$.sessionId')=?
+        AND json_extract(receipt,'$.inputId') IS NOT NULL
+        AND json_extract(receipt,'$.delivery')='sending' LIMIT 1""", (session['id'],)).fetchone() is not None
+
+
 def save(service, args, authority=None):
     """Under the normal host commit lock and command dedup, with no await."""
     from .service import AppError
@@ -33,10 +57,14 @@ def save(service, args, authority=None):
         raise AppError('Resolve the existing configuration operation before changing Next message settings.', 409)
     # Preparing without accepted input is not a live turn. Never relabel actual
     # work or clear its ownership/fences merely to make a setting editable.
-    generation = session.get('collaborationGeneration') or {}
-    live = generation.get('id') and not generation.get('terminal')
-    sending = any(row.get('delivery', {}).get('status') == 'sending' for row in session.get('messages', []))
-    presentation = {**session, 'status': 'idle'} if session.get('status') == 'starting' and not live and not sending else session
+    if pending_input(service, session):
+        raise AppError('Finish active work before changing Next message settings.', 409)
+    # A ColdRecord copy/deepcopy intentionally materializes every cold field.
+    # configuration_idle needs only these hot fields plus its peer-input claim.
+    presentation = {key: session[key] for key in
+        ('id', 'status', 'configurationBusy', 'pendingConfiguration', 'workers') if key in session}
+    if presentation['status'] == 'starting':
+        presentation['status'] = 'idle'
     if not manager.configuration_idle(presentation):
         raise AppError('Finish active work before changing Next message settings.', 409)
     if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
