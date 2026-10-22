@@ -45,6 +45,11 @@ def schema(properties=None, required=None):
     return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
 
 
+def command_fingerprint(action, args, origin, client_id):
+    # One ledger identity for admission and passive receipt retrieval.
+    return hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+
+
 ACTION_DEFINITIONS = {
     "desktop.readiness": ("Inspect the serving host's native observation preflight and already-mounted conversation tools. No activation, capture, permission prompt, worker startup or provider change. Browser account/tab context is reported only when the owning transport exposes it.", schema({"sessionId": string(200)}, [])),
     "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Set verifyImports to probe the six public authoring libraries in isolated child processes. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200), "verifyImports": {"type": "boolean"}}, [])),
@@ -99,7 +104,11 @@ ACTION_DEFINITIONS = {
     "session.draft": ("Open configurable new-chat setup without creating a conversation or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. The user must submit the first message to create this chat; an agent cannot finish this through raw session.create. For an authorized task in the caller's inherited workspace, use coordination.create instead. For an explicitly user-requested independent chat and opening brief in another existing folder, use session.handoff.start without a second confirmation; use session.handoff.propose for suggestions.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
     "session.create": ("Create a conversation through the human UI or host-managed creation flow. Direct agent calls are refused, including after session.draft; coordination.create commissions a task in the caller's inherited workspace, not an independent chat in another folder. session.handoff.start creates and delivers an explicitly user-requested independent chat directly; session.handoff.propose reserves human review for suggestions; session.handoff.read inspects its durable outcome without replay. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Reviewed inheritance does not copy history, tasks or running work; select:false preserves the view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.plans": ("Read current plan progress and recorded trajectory for up to 50 chats without selecting them. Include items for at most one chat to inspect its todo list.", schema({"ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":True,"items":string(200)},"includeItems":{"type":"boolean"}},["ids"])),
-    "session.select": ("Select a conversation without preparing a runtime", schema({"id": string(100)})),
+    "session.select": ("Select a conversation without preparing a runtime. A saved chatReference proof is UI-only and revalidated before the ordinary navigation guards.", schema({"id": string(100), "chatReference": schema({
+        "id": string(100), "version": {"type": "integer", "minimum": 1},
+        "sourceSessionId": string(200), "messageId": string(200),
+        "expectedRevision": {"type": "integer", "minimum": 1}},
+        ["id", "version", "sourceSessionId", "messageId", "expectedRevision"])}, ["id"])),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count and lifetime", schema({"patch": {
         "type": "object", "properties": {
@@ -132,7 +141,7 @@ ACTION_DEFINITIONS = {
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
-    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
+    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "comment": string(4000)}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat shows the selected conversation. Use session.select with an explicit id to open a particular chat. workWorkspaceTab=chats/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
@@ -207,8 +216,8 @@ ACTION_DEFINITIONS = {
     "updates.app": ("Stage a published application release and restart when idle",schema()),
     "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
-    "updates.smartToolRetry": ("Retry one failed Smart Tool update by its current installation ID. Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
-    "updates.smartToolSkip": ("Skip one failed Smart Tool revision and retain its current installation. Newer revisions remain eligible.", schema({"id":string(200)},["id"])),
+    "updates.smartToolRetry": ("Retry one failed Smart Tool update using its current update resultId (or previous installation ID when no resultId is present). Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
+    "updates.smartToolSkip": ("Skip one failed Smart Tool revision using its current update resultId (or previous installation ID when no resultId is present). Retain the current installation; newer revisions remain eligible.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
@@ -231,6 +240,9 @@ ACTION_DEFINITIONS = {
 from .voice_settings import definitions as voice_settings_definitions
 ACTION_DEFINITIONS.update(voice_settings_definitions(schema, string))
 
+from .storage_cleanup import definitions as storage_cleanup_definitions
+ACTION_DEFINITIONS.update(storage_cleanup_definitions(schema, string))
+
 from .storage_usage import definitions as storage_definitions
 ACTION_DEFINITIONS.update(storage_definitions(schema, string))
 from .operations import definitions as operation_definitions
@@ -240,8 +252,12 @@ ACTION_DEFINITIONS.update(computation_definitions())
 
 from .capacity import definitions as capacity_definitions
 ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
+from .model_capacity_settings import definitions as model_capacity_definitions
+ACTION_DEFINITIONS.update(model_capacity_definitions(schema, string))
 from .configuration_authority import definitions as configuration_authority_definitions
 ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
+from .access_mode import definitions as access_mode_definitions
+ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
 
 
 class AppError(Exception):
@@ -348,6 +364,12 @@ from .workspace_resources import definitions as resource_reservation_definitions
 ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
 ACTION_DEFINITIONS.update(environment_definitions(schema, string))
+from .test_capacity_settings import definitions as test_capacity_definitions
+ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+from .registered_test_runners import definitions as test_runner_definitions
+ACTION_DEFINITIONS.update(test_runner_definitions(schema, string))
+from .test_execution_settings import definitions as test_execution_definitions
+ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
 ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
@@ -370,6 +392,10 @@ for theme_action in ('theme.apply', 'theme.preview'):
 
 from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
 ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
+from .configuration_recovery import definitions as configuration_recovery_definitions
+ACTION_DEFINITIONS.update(configuration_recovery_definitions(schema, string))
+from .patch_placement import definitions as patch_placement_definitions
+ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -380,13 +406,15 @@ for _access, _actions in {
         "conversation.send", "conversation.stop", "conversation.retry", "worker.spawn",
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
+        *configuration_recovery_definitions(schema, string),
+        *patch_placement_definitions(schema, string),
         "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
         "call.start", "permissions.save", "permissions.reset", "providers.save", "providers.finishSetup", "providers.configureImages",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
-        "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile",
+        "worktree.remove", "worktree.archive", "worktree.restore", "worktree.reconcile",
         "coordination.intent",
     },
     "presentation": {
@@ -398,12 +426,13 @@ for _access, _actions in {
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
-        "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
+        "diagnostics.records", "task.get", "capacity.read", "modelCapacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        "worktree.create", "worktree.attach", "worktree.handoff",
         "coordination.review",
         *integration_definitions(schema, string),
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
@@ -417,6 +446,8 @@ for _access, _actions in {
         *resource_reservation_definitions(schema, string),
         *environment_definitions(schema, string),
         *test_queue_definitions(schema, string),
+        *test_capacity_definitions(schema, string),
+        *test_runner_definitions(schema, string),
         *assignment_definitions(schema, string),
         *handoff_definitions(schema, string),
     },
@@ -453,7 +484,8 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
             schema({'kind': {'const': 'workspace'}, 'workspaceId': string(200)}, ['kind', 'workspaceId']),
         ]}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
-    if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
+    if (_action not in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}
+            and ('sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS)):
         _spec['properties']['nativeProject'] = string(4000)
 
 
@@ -694,6 +726,8 @@ class AppService:
         self.collaboration = Collaboration(self)
         from .configuration_authority import ConfigurationAuthority
         self.configuration_authority = ConfigurationAuthority(self)
+        from .access_mode import AccessMode
+        self.access_mode = AccessMode(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
         from .test_queue import TestQueue
@@ -876,11 +910,7 @@ class AppService:
                     # including the first frame after a host restart. Clients
                     # can then discard the previous host's resources and load
                     # its new descriptors without an ambiguous missing key.
-                    cached['shellBootstrapKey'] = self.shell.resources.bootstrap_key(client_id)
-                    if self.shell.resources.registered(client_id):
-                        resources = self.shell.resources.snapshot(client_id)
-                        if resources is not None:
-                            cached['shellResources'] = resources
+                    cached.update(self.shell.resources.browser_projection(client_id))
                 else:
                     cached['shellDataKey'] = self.projections.shell_key(self.state)
                     cached['shellChangeToken'] = self.shell.change_token(client_id)
@@ -1043,6 +1073,11 @@ class AppService:
         changed_clients = {identity for identity, value in pending_clients.items()
                            if self.clients.saved.get(identity) != value}
         self.clients.acknowledge(pending_clients)
+        if 'workspaces' in changed_global_keys:
+            # Native reconciliation may replace registrations without changing
+            # their count. Refresh the admitted index on committed registry
+            # changes, while retaining it during ordinary streaming updates.
+            self.projections.values.pop(('session-index',), None)
         self.shell.resources.invalidate(changed_global_keys)
         self._view_cache = pending_views
         self._session_projection_refs = pending_references
@@ -1186,6 +1221,11 @@ class AppService:
         if task and task is not asyncio.current_task():
             task.cancel()
             self._progress_publish_task = None
+        authority = getattr(self, 'configuration_authority', None)
+        if authority is not None:
+            for owner in self.state['sessions']:
+                if session_ids is None or owner['id'] in session_ids:
+                    authority.reconcile(owner)
         previous = self.state["revision"]
         self.state["revision"] = previous + 1
         self._publish_save_scope = session_ids
@@ -1442,7 +1482,8 @@ class AppService:
                 restore(session)
                 settle_stream(session)
                 interrupt_unfinished(session)
-                session['configurationBusy'] = False
+                from .management import Management
+                session['configurationBusy'] = Management.unresolved_configuration(session)
                 if session.get('status') in {'working', 'starting', 'ready', 'stopping'}:
                     session['status'] = 'interrupted'
                     session['activity'] = {'phase': 'interrupted', 'label': 'Previous work was interrupted; it has not been replayed.',
@@ -1469,6 +1510,9 @@ class AppService:
                                                     'messages': [], 'workers': [], 'approvals': []})
             from .collaboration import restore_owner
             restore_owner(session, self.instance_id)
+            authority = getattr(self, 'configuration_authority', None)
+            if authority is not None:
+                compacted = authority.reconcile(session) or compacted
             self._state['sessions'].append(session)
             self.cold_display.touch(identity)
             self.projections.invalidate(state=self._state, session_ids={identity})
@@ -1732,6 +1776,15 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
+        if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
+            # Exact retained IDs only. General alias resolution can refresh
+            # history and admit a dormant owner before the passive read runs.
+            try:
+                validate(args, ACTION_DEFINITIONS[action][1])
+            except ValidationError as exc:
+                raise AppError(exc.message) from None
+            from .task_environments import dispatch as environment_dispatch
+            return await environment_dispatch(self, action, args, origin, caller_session_id, None)
         for key in ("sessionId", "id") if action in SESSION_ID_ACTIONS else ("sessionId",):
             if key == "sessionId" and args.get(key) is None and action in {
                     "canvas.visibility", "view.update", "attachment.add", "attachment.remove"}:
@@ -1756,11 +1809,11 @@ class AppService:
                     scope = native_project(exact)
             try:
                 target = self.directory.resolve(args[target_key], scope,
-                                                include_hidden_workspaces=action == 'session.select')
+                                                include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
                 if target is None:
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
-                                                    include_hidden_workspaces=action == 'session.select')
+                                                    include_hidden_workspaces=action == 'session.select' and 'chatReference' not in args)
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             if scope and target is None:
@@ -1803,6 +1856,8 @@ class AppService:
             args['args'] = {**invocation, 'actor': origin}
         if action == 'runtime.control' and args.get('operation', '').startswith(('schedule.', 'observation.', 'coordination.')):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
+        if action == 'runtime.control' and args.get('operation', '').startswith(('configuration.operation.', 'configuration.effect.')):
+            raise AppError('Use the operation-bound configuration recovery actions.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
             raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
@@ -1829,10 +1884,13 @@ class AppService:
                 or args.get('clientId', client_id) != client_id
                 or self.clients.record().get('kind') != 'web'):
             raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
+        if action == 'session.select' and 'chatReference' in args and (
+                origin != 'ui' or client_id is None or self.clients.record().get('kind') != 'web'):
+            raise AppError('A chat reference opens only from its originating browser.', 403)
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
-        if resolved_target is not None and action != 'session.titlePreview':
+        if resolved_target is not None and action != 'session.titlePreview' and not (action == 'session.select' and 'chatReference' in args):
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -1851,12 +1909,50 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action == 'configuration.patchPlacement.read':
+            from .patch_placement import read
+            try:
+                return {'accepted': True, 'result': await read(self.management, args, origin, caller_session_id)}
+            except (ValueError, OSError, KeyError, TypeError):
+                raise AppError('Patch placement cannot be verified for this calling root. No worker was started.', 409) from None
+        if action == 'configuration.operation.read':
+            from .configuration_recovery import command as recovery_command
+            async with self.lock:
+                try:
+                    result = recovery_command(self.management, action, args, origin, caller_session_id)
+                except (ValueError, OSError, KeyError, TypeError) as exc:
+                    raise AppError('The retained configuration operation cannot be read: ' + str(exc), 409) from None
+            return {'accepted': True, 'result': result}
         if action.startswith("session.handoff."):
             return await self.handoffs.dispatch(action, args, origin, caller_session_id,
                 include_state=include_state, admission_check=admission_check)
+        if action.startswith("access."):
+            return await self.access_mode.dispatch(action, args, origin, command_id, caller_session_id,
+                admission_check=admission_check, expected_revision=expected_revision)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
+        if action == 'configuration.patchPlacement.bind' and command_id:
+            from .patch_placement import retained_receipt
+            async with self.lock:
+                if admission_check is not None:
+                    admission_check()
+                try:
+                    retained = retained_receipt(self.management, args, origin, caller_session_id,
+                        command_id, command_fingerprint(action, args, origin, client_id))
+                except (ValueError, OSError, KeyError, TypeError):
+                    raise AppError('The retained patch binding cannot be verified for this root. No effect was admitted.', 409) from None
+            if retained is not None:
+                return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in test_runner_definitions(schema, string):
+            from .registered_test_runners import dispatch as test_runner_dispatch
+            return await test_runner_dispatch(self, action, args, configuration_authority)
+        if action in test_capacity_definitions(schema, string):
+            from .test_capacity_settings import dispatch as test_capacity_dispatch
+            return await test_capacity_dispatch(self, action, args, configuration_authority)
+        if action in test_execution_definitions(schema, string):
+            from .test_execution_settings import dispatch as test_execution_dispatch
+            return await test_execution_dispatch(self, action, args, configuration_authority)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
         if action in environment_definitions(schema, string):
@@ -1871,7 +1967,7 @@ class AppService:
                 raise AppError("Profiling requires the running host adapter.", 503)
             return await host.dispatch(action, args, command_id)
         transfer_sid = None
-        if action in {'outputs.attach', 'outputs.attachMedia', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
+        if action in {'outputs.attach', 'outputs.attachMedia', 'outputs.attachChatReference', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
                       'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
                       'worker.spawn', 'worker.message', 'worker.steer', 'question.answer', 'operations.submit', 'operations.write'}:
             transfer_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
@@ -1968,6 +2064,9 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
+        if action in storage_cleanup_definitions(schema, string):
+            from .storage_cleanup import dispatch as cleanup_dispatch
+            return await cleanup_dispatch(self, action, args, origin, command_id)
         if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
             from .managed_deletion import dispatch as delete_history
             selection = {key: args[key] for key in ('project', 'nativeId') if args.get(key)}
@@ -2023,6 +2122,9 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('assignment.'):
             return await self.assignments.dispatch(action, args, origin, command_id, caller_session_id)
+        if action.startswith("modelCapacity."):
+            from .model_capacity_settings import dispatch as model_capacity_dispatch
+            return await model_capacity_dispatch(self, action, args, origin, command_id)
         if action.startswith("capacity."):
             from .capacity import dispatch as capacity_dispatch
             return await capacity_dispatch(self, action, args, origin, command_id, include_state)
@@ -2112,7 +2214,7 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('worktree.'):
             try:
-                result = await self.worktrees.dispatch(action, args, origin, command_id)
+                result = await self.worktrees.dispatch(action, args, origin, command_id, caller_session_id)
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
@@ -2130,7 +2232,7 @@ class AppService:
                     current=self._session(sid)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
-        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        fingerprint = command_fingerprint(action, args, origin, client_id)
         prepared_workspace = None
         prepared_identity = None
         from .managed_chats import is_managed, allocate, creation_identity
@@ -2219,9 +2321,11 @@ class AppService:
                 source = copy.deepcopy(self._session(args['sessionId']))
                 artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
             try:
+                chat_references = await self.outputs.chat_references.export_references(source['id'])
                 rows = await asyncio.to_thread(messages, self.data_dir, source)
                 prepared_share = (source, snapshot(self.data_dir, source, artifacts,
-                    resolver=self.peer_attribution.resolve, message_rows=rows)[0])
+                    resolver=self.peer_attribution.resolve, message_rows=rows,
+                    chat_references=chat_references)[0])
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
         if action == 'session.export' and args.get('format', 'json') != 'markdown' and any(key in args for key in ('scope', 'fromMessageId', 'throughMessageId', 'minimal', 'includeExecution', 'includeConversationId', 'includeTimestamps', 'includeReferenceIds')):
@@ -2243,9 +2347,11 @@ class AppService:
             # Native storage may be slow. Freeze the host-owned portion first,
             # then let navigation and runtime events continue during the read.
             try:
+                chat_references = await self.outputs.chat_references.export_references(source['id'])
                 rows = await asyncio.to_thread(messages, self.data_dir, source)
                 prepared_export = (source, snapshot(self.data_dir, source, artifacts, args,
-                    resolver=self.peer_attribution.resolve, message_rows=rows))
+                    resolver=self.peer_attribution.resolve, message_rows=rows,
+                    chat_references=chat_references))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
         retained_file = None
@@ -2284,8 +2390,31 @@ class AppService:
                     raise ValueError('The saved assistant identity changed while opening Canvas.')
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
+        chat_reference_proof = None
+        if action == 'session.select' and 'chatReference' in args:
+            try:
+                chat_reference_proof = await self.outputs.chat_references.preflight(args, origin)
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from None
+        copy_references = []
+        if action == 'message.copy':
+            try:
+                copy_references = await self.outputs.chat_references.export_references(
+                    args['sessionId'], args['messageId'])
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from None
         pending = []
         async with self.lock:
+            if chat_reference_proof is not None:
+                try:
+                    self.outputs.chat_references.guard(args, origin, chat_reference_proof)
+                except (ValueError, KeyError) as exc:
+                    raise AppError(str(exc), 409) from None
+                # Call the same sidebar guard even for a same-ID click/replay.
+                # Its own same-scope preservation rules remain authoritative.
+                self.canvas_views.guard_transition(action, args)
+                if resolved_target is not None:
+                    self._admit_session(resolved_target)
             if action == 'canvas.openGif':
                 try:
                     current = self.outputs.media.guard(args, proof=gif_proof)
@@ -2350,10 +2479,22 @@ class AppService:
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
-                if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+                if action != 'question.answer' and current and self.assignments.blocked(current):
+                    raise AppError('This assignment is stopped. Open Shared tasks and assignment in the commissioning chat and choose Resume assignment before sending new work.', 409, code='assignment_stopped')
+                if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
+                    raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
-                    from .chat_permissions import PENDING_DETAIL
-                    raise AppError(PENDING_DETAIL, 409)
+                    generation = current.get('collaborationGeneration') or {}
+                    # Existing work retains its mounted policy until it settles.
+                    # Let the human guide that work without starting another run.
+                    steering_existing = (
+                        origin == 'ui' and action == 'conversation.send'
+                        and current.get('status') in {'working', 'starting', 'running'}
+                        and generation.get('id') and not generation.get('terminal')
+                    )
+                    if not steering_existing:
+                        from .chat_permissions import PENDING_DETAIL
+                        raise AppError(PENDING_DETAIL, 409)
             if action == 'session.pin':
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
@@ -2794,7 +2935,10 @@ class AppService:
                     raise AppError('This message is no longer available.',404)
                 identity = str(uuid.uuid4())
                 self.state['view']['messageCopy'] = {**args,'requestId':identity,'status':'pending'}
-                effects.append({'type':'message.copy',**args,'requestId':identity})
+                from .conversation_export import chat_reference_lines
+                fallback = '\n\n'.join(chat_reference_lines(copy_references, message))
+                effects.append({'type':'message.copy',**args,'requestId':identity,
+                                **({'chatReferenceText':fallback} if fallback else {})})
             elif action == 'message.copyResult':
                 result = self.state['view'].get('messageCopy',{})
                 if result.get('requestId') == args['requestId']:
@@ -2945,7 +3089,10 @@ class AppService:
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
                 from .conversation_steering import target as steering_target
-                target_generation = steering_target(session, args.get('expectedGenerationId'), args.get('allowNextTurn', False))
+                # A run ending before delivery must not turn this correction
+                # into new work under a policy that is awaiting replacement.
+                allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
+                target_generation = steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 text = args["text"].strip()
                 from .message_interactions import resolve_quote
                 quote = resolve_quote(session, args.get("replyId"))
@@ -2966,7 +3113,7 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': args.get('allowNextTurn') is True}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': allow_next_turn}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 if post_previous is not None:
                     promote_human_post(session, message, post_previous)
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
@@ -3068,8 +3215,14 @@ class AppService:
                     raise AppError("This tool requested user approval. It must be answered by the user.", 403)
                 decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
                 approval["status"] = decision
+                comment = args.get('comment', '').strip()
+                if comment:
+                    approval['comment'] = comment
+                    self._message(session, 'user', f'Permission {decision}:\n\n{comment}', 'permission',
+                                  approvalId=args['id'], inputOrigin='approval')
                 if self.runtime:
-                    pending.append((self.runtime.approval, (session["id"], args["id"], decision)))
+                    values = (session["id"], args["id"], decision) + ((comment,) if comment else ())
+                    pending.append((self.runtime.approval, values))
             elif action == "attention.read":
                 from .attention import snapshot
                 # Acknowledge current owner facts, including globals changed
@@ -3090,6 +3243,8 @@ class AppService:
                 patch = route_legacy(self.state, patch)
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "imageSettingsEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "canvasOverviewWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
                 allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor', 'configurationDrafts', 'workWorkspaceSettings'})
+                allowed.update({'workHomeView', 'workHomeFilter', 'workHomeScope', 'workHomeQuery', 'workHomePages'})
+                allowed.update({'navMode', 'navStatusCollapsed', 'navStatusExpanded', 'navStatusPages'})
                 if 'planExpanded' in patch:
                     choices = patch['planExpanded']
                     if not isinstance(choices, dict) or len(choices) > 500 or any(not isinstance(k, str) or len(k) > 200 or type(v) is not bool for k, v in choices.items()):
@@ -3212,9 +3367,32 @@ class AppService:
                     SettingsStore(self.data_dir).update(workspace, 'local' if args['scope']=='workspace' else 'global', update_default)
                 self._shared_preferences_stamp = None
                 self._refresh_shared_preferences()
+            elif action == 'configuration.patchPlacement.bind':
+                from .patch_placement import admit
+                try:
+                    diagnostic_result = admit(self.management, args, origin, caller_session_id,
+                        command_id, configuration_authority)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                except (OSError, KeyError, TypeError):
+                    raise AppError('Patch configuration cannot be verified; no binding was admitted.', 409) from None
+            elif action in {'configuration.operation.reconcile', 'configuration.operation.resume'}:
+                from .configuration_recovery import command as recovery_command
+                try:
+                    diagnostic_result = recovery_command(self.management, action, args, origin, caller_session_id)
+                except (ValueError, OSError, KeyError, TypeError) as exc:
+                    raise AppError('Configuration recovery refused: ' + str(exc), 409) from None
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
-                pending.append((self.management.command,(action,copy.deepcopy(args),command_id,configuration_authority)))
+                values = (action, copy.deepcopy(args), command_id, configuration_authority)
+                if action == 'configuration.apply' or action == 'runtime.control' and args.get('operation') == 'configuration.apply':
+                    target = self._session(args.get('id') or args.get('sessionId'))
+                    # Host-only provenance, captured before the background wait;
+                    # never accept origin or caller identity from model arguments.
+                    values += ({'origin': origin, 'callerSessionId': caller_session_id,
+                        'generation': copy.deepcopy(target.get('collaborationGeneration')),
+                        'target': self.management.configuration_target_binding(target)},)
+                pending.append((self.management.command, values))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
                 if action == 'updates.forceRestart':
@@ -3709,6 +3887,10 @@ class AppService:
                 message_bound and message['delivery'].get('status') == 'failed'):
             return  # A racing timeout cannot erase an explicit pre-input rejection.
         if message_bound:
+            if status == 'accepted':
+                # Publish acceptance and consumption together: the browser may
+                # retire its outbox before the awaited send RPC returns.
+                self.clients.consume_attachments(session, message.get('attachments', []))
             message['delivery'] = {'status':status}
             if status in {'accepted', 'failed', 'unknown'}:
                 self._post_disposition(session, message, 'accepted' if status == 'accepted' else 'retained')
@@ -4101,11 +4283,15 @@ class AppService:
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
                 if session["status"] == "ready":
-                    if session.get('failure', {}).get('category') != 'execution_interrupted':
+                    from .session_health import current_terminal_failure
+                    retained_failure = current_terminal_failure(session)
+                    if (session.get('failure', {}).get('category') != 'execution_interrupted'
+                            and not retained_failure):
                         session.pop("error", None)
                         session.pop("failure", None)
-                    session.pop("errorType", None)
-                    session.pop("turnErrorType", None)
+                    if not retained_failure:
+                        session.pop("errorType", None)
+                        session.pop("turnErrorType", None)
                     session.pop("moduleFailures", None)
                     if isinstance(session.get("health"), dict):
                         session["health"].pop("moduleFailures", None)
@@ -4146,7 +4332,7 @@ class AppService:
                     detail=str(failure)
                 startup = payload.get('errorType') == 'RuntimeStartupError' or payload.get('phase') == 'worker_startup'
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
-                from .session_health import failure_details
+                from .session_health import current_terminal_failure, failure_details
                 projected = failure_details(detail, error_type)
                 existing = session.get('failure')
                 if startup and projected['category'] == 'unknown':
@@ -4154,7 +4340,8 @@ class AppService:
                     projected = failure_details(detail, error_type)
                 current_input = session.get('execution', {}).get('currentTurnId')
                 failure_inputs = (existing.get('inputIds') or [existing.get('inputId')]) if isinstance(existing, dict) else []
-                same_input = not current_input or not any(failure_inputs) or current_input in failure_inputs
+                same_input = (current_terminal_failure(session) or not current_input
+                    or not any(failure_inputs) or current_input in failure_inputs)
                 if (not startup and same_input and isinstance(existing, dict)
                         and (existing.get('stage') or projected['category'] == 'unknown'
                              and existing.get('category') != 'unknown')):
@@ -4199,9 +4386,33 @@ class AppService:
                     from .session_health import generation_failure
                     failure = generation_failure(payload)
                     existing = session.get('failure')
-                    if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'):
+                    safety_categories = {'content_filter', 'computer_capture_stop'}
+                    explicit_change = (failure and failure.get('category') != 'unknown'
+                        and isinstance(existing, dict) and failure['category'] != existing.get('category'))
+                    # A terminal's explicit cause supersedes an earlier transient
+                    # provider error. Never turn a terminal safety stop into a
+                    # resumable rate-limit failure by binding the earlier cause.
+                    # Conversely, a later non-safety wrapper cannot erase an
+                    # already observed safety halt; retain its separate cause.
+                    if explicit_change and existing.get('category') in safety_categories and failure['category'] not in safety_categories:
+                        existing['terminalFailure'] = copy.deepcopy(failure)
+                    if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'
+                            or explicit_change and (existing.get('category') not in safety_categories
+                                                    or failure['category'] in safety_categories)):
                         session['failure'] = {**failure, 'recordedAt': event['at'],
                             'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
+                    elif isinstance(existing, dict):
+                        active = session.get('collaborationGeneration') or {}
+                        # A classified provider cause precedes the terminal
+                        # event. Bind it only to its observed admitted input
+                        # and generation, never to an unrelated later failure.
+                        if (active.get('id') == payload.get('generation_id') and not active.get('terminal')
+                                and existing.get('generationId') in {None, active.get('id')}
+                                and existing.get('inputId')
+                                and existing['inputId'] in active.get('inputIds', [])
+                                and existing['inputId'] in payload.get('input_ids', [])):
+                            session['failure'] = {**existing, 'generationId': active['id'],
+                                'inputIds': payload['input_ids']}
                 if root_generation and payload.get("event") == "generation.finished":
                     if not scheduled_generation:
                         from .attention import completed
@@ -4250,6 +4461,8 @@ class AppService:
             elif kind == "approval.requested":
                 session["approvals"].append({**payload, "status": "pending"})
                 self._activity(session, "approval", "Waiting for your approval")
+                if self.access_mode.full(session):
+                    self._task(self.access_mode.settle(session["id"]))
             elif kind == "approval.resolved":
                 for approval in session["approvals"]:
                     if approval["id"] == payload.get("id"):
@@ -4414,6 +4627,10 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'configuration.effect.admit':
+            from .configuration_recovery import authorize
+            async with self.lock:
+                return authorize(self.management, session_id, args)
         if operation == "coordination.continuation_ready":
             return self.collaboration.continuation_ready(session_id, args)
         if operation == "coordination.admit":
@@ -4494,8 +4711,11 @@ class AppService:
                     return {**result, 'inputIds': args.get('_contextInputs', [])}
                 return self.surface_context.read(session_id, args, bindings)
         if operation == "capacity.admit":
-            from .capacity import admission
-            return await admission(self, session_id, args)
+            from .capacity_wait import admit
+            return await admit(self, session_id, args)
+        if operation == 'capacity.abandoned':
+            from .capacity import abandoned
+            return await abandoned(self, session_id, args)
         if operation == "history":
             from .history_query import query_history
             return await query_history(self, args, session_id)
@@ -4509,6 +4729,11 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
+            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
+                # Do not infer nativeProject through _session: even hydrate=False
+                # admits cold owners. The read validates the exact transport root.
+                return await self.dispatch(args['action'], action_args, origin='agent',
+                    command_id=args.get('id'), include_state=False, caller_session_id=session_id)
             # Resolve native aliases before the existing caller-ownership checks;
             # aliases never authorize a different conversation.
             from .session_identity import resolve
@@ -4530,7 +4755,10 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith('worktree.') or (args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}):
+            if args['action'].startswith('worktree.'):
+                # The canonical worktree owner checks commissioned-manager scope.
+                action_args.setdefault('sessionId', session_id)
+            if args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id

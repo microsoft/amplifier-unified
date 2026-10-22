@@ -51,9 +51,12 @@ Command receipts make an exact retry idempotent. A changed policy invalidates
 only this chat's configuration through the existing runtime owner; active work
 and persistent children reach their existing safe boundary before remounting.
 Before the canonical file write, the existing host record durably fences new
-input with a pending file-access change. New root/worker/voice input is rejected,
+input with a pending file-access change. New root/worker/voice execution is rejected,
 queued peer input waits, and schedules/observations recheck their existing
-admission guards. Answers, approvals and Stop remain available for existing work.
+admission guards. Human messages to the current active root generation remain
+available as steering. They cannot fall forward into a new turn if that run ends
+before delivery; an undelivered message remains saved with its delivery state.
+Answers, approvals and Stop remain available for existing work.
 The UI explains pending access and how to finish or stop existing child work.
 Only confirmed retirement, or proof that no owned mount exists, clears the fence.
 After host restart, new mounts read canonical settings; no old worker is adopted.
@@ -163,6 +166,19 @@ Cross-account or multi-tenant isolation is not established by this local work.
 
 ## Qualification boundary
 
+Configuration attempts bind to the native worker identity reported on its private
+startup pipe, including the native session ID. A managed launcher such as `uv`
+can have a different PID. Missing or invalid worker identity refuses before
+dispatch and leaves a known unperformed operation, rather than holding input on
+an unknown outcome. This identity stays out of public runtime reports; original
+grant, target, interruption and native receipt checks remain in force.
+
+The maintained queued-configuration checks include actual `uv` launcher/worker
+separation, successful settings application/remount, and missing or invalid
+identity refusal without a settings write or unresolved input fence. Runtime
+checks reject identity from another native session. Run these affected checks
+with `uv` installed; a direct-Python fixture alone does not cover that boundary.
+
 Tests include positive user and agent administration, denied effects/scopes,
 revocation while queued or preparing, durable approvals/restart, exact retries,
 lost acknowledgments, Stop, peer lineage, and new scheduled roots. Native tests
@@ -175,3 +191,62 @@ qualified separately from the scripted browser adapter.
 Source, native, browser and installed-wheel evidence are distinct. These checks
 do not establish real-provider cooperation, provider-login acceptance, optional
 recipe integration, release publication, installed-host adoption or OS isolation.
+
+## Persistent Full access
+
+Chat info > **Access & approvals** offers **Ask when needed** and **Full access**.
+The user chooses this chat, workspace default, or app default; chat overrides
+workspace, which overrides app. Inherit removes that layer's choice. Defaults
+remain Ask when needed. Full access persists across turns, Stop and host restarts.
+Only authenticated user controls can call `access.set`; agents can inspect their
+own mode with `access.get` but cannot enable it. Repository settings cannot opt in.
+Records live in the existing host command database with revision-checked,
+idempotent saves. New native workers read only the three exact policy records.
+
+Full access preauthorizes configuration effects at all scopes and ordinary
+allow/deny tool permissions. Pending valid permission requests are answered once;
+questions, expired requests, lost workers and old tool effects are never replayed.
+Existing root ownership, execution identity, Stop, resource ownership, capacity,
+retention and recovery checks remain in force. A trusted root remains responsible
+for evaluating peer messages. Configuration commits recheck the captured mode
+revision; turning the mode off fences delayed changes and grants derived from it.
+
+File, patch, image and search mounts (including child definitions and restored
+plans) use all accessible local filesystem roots under Full access. Original
+policy declarations are retained in the plan and restored before recomposition;
+turning Full access off cannot preserve a widened snapshot by accident. Existing
+worker retirement follows the file-access admission fence and waits for active
+work and persistent children. Approvals use the saved preference immediately; the
+UI separately identifies file mounts pending retirement. No provider turn starts.
+Operating system permissions, unavailable tools, external account authentication
+and explicit user questions are not replaced by this preference.
+
+
+### Global access and routine testing
+
+Settings > Privacy & files > **Access & approvals** sets the app-wide default
+without opening or creating a chat. It applies to existing and future chats in
+all workspaces on this host; explicit chat or workspace overrides still win.
+The shared `access.get` and `access.set` actions accept `scope: "app"` without a
+`sessionId` for this user-only settings path. Saves retain revision and command-ID
+checks. Agents cannot enable Full access.
+
+Routine managed test snapshot, preparation, execution, export and owned cleanup
+are task-authorized workspace work, including in Ask when needed mode. They retain
+owner, generation, Stop, assignment, placement and backend identity checks. Host
+setup and broader configuration administration keep their separate grants.
+
+Pending capability cards are retired after Stop, workspace change or expiry, and
+native waits expire after host replacement. Legacy test-only cards also retire.
+Retirement preserves receipts and history, never grants permission or starts work.
+A stale Allow/Deny click acknowledges the expired request with `decisionApplied:
+false` instead of trapping the user in an error. Raw API configuration requests
+without a native waiter may still survive a host restart when otherwise valid.
+
+Both Allow and Deny accept an optional `comment` (up to 4,000 characters). The
+host retains it with the decision and in chat history. A live native waiter
+receives the note in model context before its tool is released; configuration
+requests also return it in their canonical grant receipt. Notes on expired
+requests are retained only. They never revive an old waiter or start a turn.
+Choose Deny when the proposed operation itself needs to change; an Allow note
+is guidance for subsequent work, not a rewrite of the operation being approved.

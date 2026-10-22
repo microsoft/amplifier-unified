@@ -253,6 +253,102 @@ async def test_releasing_last_interest_retires_blocked_worker_without_query_comp
     assert not (service.data_dir / 'query-release').exists()
 
 
+@pytest.mark.parametrize('resource', ['recentNavigation', 'workStatusIdle'])
+async def test_returning_demand_waits_for_its_retiring_query_without_retry(service, resource):
+    owner = prepare(service)
+    closing, release_close = asyncio.Event(), asyncio.Event()
+    projectors = []
+
+    class GatedClose(ProcessProjector):
+        async def close(self):
+            closing.set()
+            await release_close.wait()
+            await super().close()
+
+    def factory(home, **kwargs):
+        kwargs['_command'] = (sys.executable, str(Path(__file__).resolve()), 'worker')
+        projector = GatedClose(home, **kwargs)
+        projectors.append(projector)
+        return projector
+
+    owner.queries.factory = factory
+    try:
+        snapshot(service, wanted=(resource,))
+        await started(service)
+        process, spool = projectors[0]._process, projectors[0]._root
+        snapshot(service, wanted=(), demand=2)
+        retiring = owner.queries.retiring
+        await asyncio.wait_for(closing.wait(), 5)
+        # The user returns to exactly the same page before its canceled read
+        # has stopped. This is renewed demand, not a failed catalog read.
+        snapshot(service, wanted=(resource,), demand=3)
+        assert len(projectors) == 1
+        release_close.set()
+        await asyncio.wait_for(asyncio.shield(retiring), 5)
+        assert process.returncode == 0 and not spool.exists()
+        (service.data_dir / 'query-release').touch()
+        result = await settle(service, wanted=(resource,), demand=3)
+        page = result['instances']['chats']['resources'][resource]['value'][resource]
+        assert page['total'] == 2
+        assert len(projectors) == 2
+        assert not owner.queries.failures
+        assert service.performance_diagnostics.counters.get('shell.query.retry', 0) == 0
+    finally:
+        release_close.set()
+
+
+@pytest.mark.parametrize('resource', ['recentNavigation', 'workStatusIdle'])
+async def test_departing_queued_demand_during_retirement_leaves_owner_usable(service, resource):
+    owner = prepare(service)
+    closing, release_close = asyncio.Event(), asyncio.Event()
+    projectors = []
+
+    class GatedClose(ProcessProjector):
+        async def close(self):
+            await super().close()
+            closing.set()
+            await release_close.wait()
+
+    def factory(home, **kwargs):
+        kwargs['_command'] = (sys.executable, str(Path(__file__).resolve()), 'worker')
+        projector = GatedClose(home, **kwargs)
+        projectors.append(projector)
+        return projector
+
+    owner.queries.factory = factory
+    try:
+        snapshot(service, wanted=(resource,))
+        await started(service)
+        process, spool = projectors[0]._process, projectors[0]._root
+        replacement = 'workStatusIdle' if resource == 'recentNavigation' else 'recentNavigation'
+        snapshot(service, wanted=(replacement,), demand=2)
+        runner = owner.queries.runner
+        await asyncio.wait_for(closing.wait(), 5)
+        async with asyncio.timeout(5):
+            while owner.queries.active is not None:
+                await asyncio.sleep(0)
+        # The old child has exited and the owner is awaiting its held close.
+        # Remove the queued replacement while that await yields to navigation.
+        assert process.returncode == 0 and not spool.exists()
+        assert owner.queries.jobs and not runner.done()
+        snapshot(service, wanted=(), demand=3)
+        assert not owner.queries.jobs
+        release_close.set()
+        await asyncio.wait_for(asyncio.shield(runner), 5)
+        assert owner.queries.runner is None and owner.queries.active is None
+        assert len(projectors) == 1
+        assert not owner.queries.failures
+        assert service.performance_diagnostics.counters.get('shell.query.retry', 0) == 0
+
+        # A later visit still creates one replacement and returns current rows.
+        (service.data_dir / 'query-release').touch()
+        result = await settle(service, wanted=(resource,), demand=4)
+        page = result['instances']['chats']['resources'][resource]['value'][resource]
+        assert page['total'] == 2 and len(projectors) == 2
+    finally:
+        release_close.set()
+
+
 async def test_queue_is_bounded_and_input_has_no_transcript_or_private_draft(service):
     owner = prepare(service)
     owner.queries.factory = held_projector
@@ -389,6 +485,153 @@ async def test_input_admission_copies_only_query_facts_and_rejects_before_large_
     monkeypatch.setattr(shell_query_owner, 'INPUT_LIMIT', 128)
     with pytest.raises(shell_query_owner.InputLimit):
         shell_query_owner.capture_inputs(directory, state, 'chats', {}, fence)
+
+
+async def test_distinct_cold_queries_share_registry_and_commit_replaces_it_without_mutating_jobs(service, monkeypatch):
+    from amplifier_web import shell_query_owner
+
+    owner = prepare(service)
+    captures = []
+    original = shell_query_owner.InputBudget.copy
+
+    def capture(budget, value, depth=0):
+        if isinstance(value, dict) and {'id', 'path', 'name'} <= value.keys():
+            captures.append(value['id'])
+        return original(budget, value, depth)
+
+    monkeypatch.setattr(shell_query_owner.InputBudget, 'copy', capture)
+    wanted = ('recentNavigation', 'sidebarSearch', 'workspaceShortcuts')
+    snapshot(service, wanted=wanted)
+    jobs = list(owner.queries.jobs.values())
+    assert len(jobs) >= 2
+    first = jobs[0]['inputs']['state']['workspaces']
+    old = deepcopy(first)
+    assert all(job['inputs']['state']['workspaces'] is first for job in jobs)
+    assert captures == [row['id'] for row in service._state['workspaces']]
+    assert first is not service._state['workspaces']
+    assert all(frozen is not live for frozen, live in zip(first, service._state['workspaces']))
+    assert all(set(row) <= shell_query_owner.WORKSPACE_FIELDS for row in first)
+
+    service._state['workspaces'][0]['name'] = 'Committed replacement name'
+    service._save_changes(globals={'workspaces'})
+    assert owner.queries.workspace_snapshot is None
+    snapshot(service, wanted=wanted)
+    following = list(owner.queries.jobs.values())
+    assert following
+    current = following[0]['inputs']['state']['workspaces']
+    assert all(job['inputs']['state']['workspaces'] is current for job in following)
+    assert current is not first and current[0]['name'] == 'Committed replacement name'
+    assert first == old
+    assert captures == [row['id'] for row in service._state['workspaces']] * 2
+    # No scheduling turn has started a worker; close still releases the cache
+    # and all queued references without altering inputs already handed out.
+    await owner.close()
+    assert owner.queries.workspace_snapshot is None and not owner.queries.jobs
+    assert first == old
+
+
+@pytest.mark.parametrize('invalidation', ['workspaces', 'unknown'])
+async def test_workspace_invalidation_releases_old_registry_before_next_query(service, invalidation):
+    import gc
+    import weakref
+    from amplifier_web.shell_query_owner import capture_inputs
+
+    owner = prepare(service)
+    fence = owner.queries._fence()
+    original_registry = service._state['workspaces']
+
+    class Configuration:
+        pass
+
+    service._state['workspaces'] = [{'id': 'temporary', 'path': '/temporary',
+        'name': 'Temporary workspace', 'available': True, 'configuration': Configuration()}]
+    marker = weakref.ref(service._state['workspaces'][0]['configuration'])
+    inputs = capture_inputs(service.directory, service._state, 'chats', {'section': None}, fence,
+        workspace_capture=owner.queries._capture_workspaces)
+    frozen = deepcopy(inputs)
+    epoch = owner._epochs({'workspaces'})
+    cache_identity = id(owner.queries.workspace_snapshot)
+    owner.invalidate({'settings'})
+    assert owner._epochs({'workspaces'}) == epoch
+    assert id(owner.queries.workspace_snapshot) == cache_identity
+    service._state['workspaces'] = original_registry
+    owner.invalidate({'workspaces'} if invalidation == 'workspaces' else None)
+    gc.collect()
+    # Retained job input owns only the detached query shape. No subsequent
+    # query or close should be needed to release excluded canonical payloads.
+    assert marker() is None
+    assert owner.queries.workspace_snapshot is None
+    assert owner._epochs({'workspaces'}) != epoch
+    assert inputs == frozen and 'configuration' not in inputs['state']['workspaces'][0]
+    await owner.close()
+
+
+@pytest.mark.parametrize('invalidation', ['unknown_projection', 'unknown_resources', 'list_replacement'])
+async def test_workspace_input_snapshot_observes_non_commit_invalidation(service, invalidation):
+    from amplifier_web.shell_query_owner import capture_inputs
+
+    owner = prepare(service)
+
+    def capture(state=None):
+        return capture_inputs(service.directory, service._state if state is None else state, 'chats',
+            {'section': None}, owner.queries._fence(), workspace_capture=owner.queries._capture_workspaces)
+
+    first = capture()['state']['workspaces']
+    old = deepcopy(first)
+    if invalidation == 'list_replacement':
+        service._state['workspaces'] = deepcopy(service._state['workspaces'])
+    service._state['workspaces'][0]['available'] = False
+    if invalidation == 'unknown_projection':
+        epoch = owner._epochs({'workspaces'})
+        service.projections.invalidate()
+        assert owner._epochs({'workspaces'}) == epoch
+        assert owner.queries.workspace_snapshot is None
+    elif invalidation == 'unknown_resources':
+        owner.invalidate()
+    following = capture()['state']['workspaces']
+    assert following is not first and following[0]['available'] is False
+    assert first == old
+
+    # A standalone or alternate registry has no canonical epoch. It cannot
+    # borrow or replace the owner's cached facts, even with the same row IDs.
+    alternate = {**service._state, 'workspaces': deepcopy(service._state['workspaces'])}
+    alternate['workspaces'][0]['name'] = 'Alternate registry'
+    assert capture(alternate)['state']['workspaces'][0]['name'] == 'Alternate registry'
+    alternate['workspaces'][0]['name'] = 'Changed again without a canonical write'
+    assert capture(alternate)['state']['workspaces'][0]['name'] == 'Changed again without a canonical write'
+    assert capture()['state']['workspaces'] is following
+    await owner.close()
+    assert owner.queries.workspace_snapshot is None
+
+
+async def test_cached_registry_is_fully_charged_to_each_query_input_limit(service, monkeypatch):
+    from amplifier_web import shell_query_owner
+
+    owner = prepare(service)
+    service._state['workspaces'] = [{'id': str(number), 'path': '/workspace/' + 'x' * 200 + str(number),
+        'name': 'Workspace ' + str(number), 'available': True, 'configuration': 'private configuration'}
+        for number in range(32)]
+    monkeypatch.setattr(shell_query_owner, 'INPUT_LIMIT', 32 * 1024)
+    fence = owner.queries._fence()
+
+    def capture(args, workspace_capture=owner.queries._capture_workspaces):
+        return shell_query_owner.capture_inputs(service.directory, service._state, 'chats', args,
+            fence, workspace_capture=workspace_capture)
+
+    first = capture({})
+    shared = first['state']['workspaces']
+    charge = owner.queries.workspace_snapshot[3]
+    assert capture({})['state']['workspaces'] is shared
+    # The rest of this input fits on its own, but adding the registry must
+    # reject both cold and cached captures at the same per-query boundary.
+    args = {'payload': 'x' * (shell_query_owner.INPUT_LIMIT - 512 - charge // 2)}
+    capture(args, workspace_capture=lambda rows, budget: [])
+    for capture_registry in (shell_query_owner.capture_workspaces, owner.queries._capture_workspaces):
+        with pytest.raises(shell_query_owner.InputLimit):
+            capture(args, workspace_capture=capture_registry)
+    assert owner.queries.workspace_snapshot[2] is shared
+    assert all('configuration' not in row for row in shared)
+    await owner.close()
 
 
 async def test_source_change_gets_only_one_delayed_retry_and_close_cancels_timer(service):

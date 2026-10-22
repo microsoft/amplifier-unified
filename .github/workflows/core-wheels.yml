@@ -30,7 +30,7 @@ jobs:
         run: |
           uv sync --locked --group dev
           python scripts/release_qualification.py core-wheel --python .venv/bin/python --destination "$RUNNER_TEMP/host-core-wheel.json"
-          uv run --no-sync pytest tests/test_core_binary.py tests/test_runtime_updates.py tests/test_release_qualification.py tests/test_standalone.py -q
+          uv run --no-sync pytest tests/test_core_binary.py tests/test_runtime_updates.py tests/test_release_qualification.py tests/test_standalone.py -q --junitxml="$RUNNER_TEMP/host-core-junit.xml"
       - name: Resolve the declared loop-live source
         id: runtime-dependency
         run: |
@@ -61,12 +61,12 @@ jobs:
           python scripts/release_qualification.py runtime-snapshot --runtime "$RUNNER_TEMP/core-runtime"
       - name: Qualify real runtime behavior without model calls
         run: |
-          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/core-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/core-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_child_image_policy.py tests/test_child_resume_admission.py tests/test_host_components.py tests/test_runtime_module_cache.py tests/test_steering_runtime.py tests/test_worker_background_naming.py -q
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/core-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/core-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_child_image_policy.py tests/test_child_resume_admission.py tests/test_host_components.py tests/test_runtime_module_cache.py tests/test_steering_runtime.py tests/test_worker_background_naming.py -q --junitxml="$RUNNER_TEMP/runtime-core-junit.xml"
           cp "$RUNNER_TEMP/core-runtime/qualified-runtime.json" "$RUNNER_TEMP/before-tests.json"
           python scripts/release_qualification.py runtime-snapshot --runtime "$RUNNER_TEMP/core-runtime"
           cmp "$RUNNER_TEMP/before-tests.json" "$RUNNER_TEMP/core-runtime/qualified-runtime.json"
           git rev-parse HEAD > "$RUNNER_TEMP/app-revision.txt"
-      - name: Retain only dependency and binary qualification receipts
+      - name: Retain dependency, binary and named test receipts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -74,6 +74,9 @@ jobs:
           path: |
             ${{ runner.temp }}/app-revision.txt
             ${{ runner.temp }}/host-core-wheel.json
+            ${{ runner.temp }}/host-core-junit.xml
+            ${{ runner.temp }}/runtime-core-junit.xml
+            ${{ runner.temp }}/before-tests.json
             ${{ runner.temp }}/core-runtime/pyproject.toml
             ${{ runner.temp }}/core-runtime/uv.lock
             ${{ runner.temp }}/core-runtime/build-constraints.txt

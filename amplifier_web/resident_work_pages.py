@@ -4,6 +4,7 @@ from collections import OrderedDict
 import hashlib
 import hmac
 import json
+from copy import deepcopy
 
 from .browser_detail import NODE_LIMIT, SUMMARY_LIMIT, compact, detail_version, owned_nodes, work_segments
 from .cold_display import raw
@@ -22,6 +23,8 @@ class ResidentWorkPages:
         self.windows = windows
         self.groups = OrderedDict()
         self.interests = set()
+        from .open_work_fields import OpenWorkFields
+        self.open_fields = OpenWorkFields(self)
 
     def _client(self):
         clients = getattr(self.windows.service, 'clients', None)
@@ -33,7 +36,7 @@ class ResidentWorkPages:
     def _source(self, session, start, end):
         source = self.windows.live_view(session)
         nodes = raw(session).get('execution', {}).get('nodes', [])
-        source['execution']['nodes'] = [row for row in nodes[start:end]
+        source['execution']['nodes'] = [self.windows.live_node(session, row) for row in nodes[start:end]
             if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory')]
         return source
 
@@ -89,9 +92,49 @@ class ResidentWorkPages:
         item = compact(row, session['id'], 'nodes', SUMMARY_LIMIT)
         item.update(anchorMessageId=anchor, detailVersion=str(detail_version(row)))
         for key, value in item.items():
-            if key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes':
+            if (key.endswith('Detail') and isinstance(value, dict) and value.get('part') == 'nodes'
+                    and not str(value.get('windowKey', '')).startswith(('event-window:', 'tool-window:', 'open-work:'))):
                 item[key] = {**value, 'windowKey': entry['key']}
-        return item
+        if row.get('kind') == 'llm':
+            # These references belong to the accepted canonical window, not
+            # this resident page. Keep its ID, generation and field reader.
+            recordings = self.windows.provider_details(session, row)
+            if recordings.get('requestDetail') or recordings.get('responseDetail'):
+                # One exact attempt replaces the whole provider-record set.
+                # A partial/new small capture cannot inherit a prior attempt's
+                # response, full-download digest or capture flags.
+                item.pop('requestInfo', None)
+                for field in ('request', 'response'):
+                    for suffix in ('', 'Detail', 'Capture', 'Recording'):
+                        item.pop(field + suffix, None)
+            item.update(recordings)
+            item['detailVersion'] = str(detail_version([row, recordings]))
+        nodes = raw(session).get('execution', {}).get('nodes', [])
+        def reference(identity):
+            position = entry['positions'].get(identity)
+            original = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
+            if (original is not None and original.get('id') == identity and original.get('kind') == 'tool'
+                    and not original.get('canonicalHistory') and not original.get('nativeHistory')):
+                return {'sessionId': session['id'], 'part': 'tool', 'group': entry['group'], 'id': identity}
+            return None
+        def exchange_refs(header, depth=0):
+            if not isinstance(header, dict) or depth > 20:
+                return header
+            result = dict(header)
+            exchange = result.get('exchange')
+            if isinstance(exchange, dict) and (ref := reference(exchange.get('id'))):
+                original = nodes[entry['positions'][exchange['id']]]
+                result['exchange'] = self.open_fields.retain(session, entry, original,
+                    {**exchange, 'toolDetail': ref})
+            if isinstance(result.get('ancestors'), list):
+                result['ancestors'] = [exchange_refs(value, depth+1) for value in result['ancestors'][:20]]
+            return result
+        if row.get('kind') == 'tool' and (ref := reference(row['id'])):
+            item['toolDetail'] = ref
+        item = exchange_refs(item)
+        if 'delegate' in item:
+            item['delegate'] = exchange_refs(item['delegate'])
+        return self.open_fields.retain(session, entry, row, item)
 
     def read(self, session, group, before=None, revision=None):
         if not isinstance(group, str) or not 0 < len(group) <= 1024:
@@ -100,7 +143,7 @@ class ResidentWorkPages:
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         if before is None:
             start, end, within = max(0, len(nodes) - NODE_LIMIT), len(nodes), None
-            entry = {'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
+            entry = {'group': group, 'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
                      'owner': self._owner_stamp(session), 'ranges': {}, 'ids': {}, 'positions': {}, 'revision': None}
         else:
             cursor = self._parse(before)
@@ -181,7 +224,7 @@ class ResidentWorkPages:
                 raise ValueError('This Work changed. Close and reopen its steps.')
             positions.update((i, row) for i, row in enumerate(nodes[start:end], start)
                 if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory'))
-        source['execution']['nodes'] = [positions[i] for i in sorted(positions)]
+        source['execution']['nodes'] = [self.windows.live_node(session, positions[i]) for i in sorted(positions)]
         rows, anchors, segment = self._rows(source, group)
         latest, _, latest_segment = self._rows(self._source(session, *tail_scope), group)
         latest = latest[-NODE_LIMIT:]
@@ -219,23 +262,59 @@ class ResidentWorkPages:
         if len(selected) > MAX_STEPS or len(ranges) > MAX_RANGES:
             raise ValueError('This open Work window reached its page limit. Close and reopen its steps to release it.')
         entry['ids'], entry['ranges'], entry['positions'] = ids, ranges, current_positions
+        for key in tuple(entry.get('fields', {})):
+            if key[0] not in ids:
+                del entry['fields'][key]
         entry['stamp'] = self._stamp(session)
         entry['revision'] = (latest_segment or segment or {}).get('detailRevision', entry['revision'])
         older = self._cursor(session, group, entry)
-        return {'items': [self._compact(session, row, anchors.get(row['id']), entry)
-                         for row in selected if known.get(row['id']) != str(detail_version(row))],
+        compacted = [self._compact(session, row, anchors.get(row['id']), entry) for row in selected]
+        return {'items': [row for row in compacted if known.get(row['id']) != row['detailVersion']],
             'order': [row['id'] for row in selected], 'offset': None, 'total': None, 'before': older,
             'group': group, 'revision': entry['revision'],
             'coverage': {'kind': 'resident-live', 'historyComplete': False}}
 
     def read_text(self, session, args):
         from .browser_detail import read_text
+        entry = self._field_entry(session, args)
+        return read_text(self._source(session, *entry['ids'][args['id']]), args)
+
+    def _field_entry(self, session, args):
         reference = str(args.get('windowKey', ''))
         entry = next((value for (client, identity, _), value in self.groups.items()
                       if client == self._client() and identity == session['id'] and value['key'] == reference), None)
         if entry is None or entry['stamp'] != self._stamp(session) or args.get('id') not in entry['ids']:
             raise ValueError('This Work field expired. Close and reopen its steps.')
-        return read_text(self._source(session, *entry['ids'][args['id']]), args)
+        return entry
+
+    def recording(self, session, args):
+        entry = self._field_entry(session, args)
+        position = entry['positions'][args['id']]
+        start, end = entry['ids'][args['id']]
+        nodes = raw(session).get('execution', {}).get('nodes', [])
+        row = nodes[position] if start <= position < min(end, len(nodes)) else None
+        if (row is None or row.get('id') != args['id'] or row.get('kind') != 'llm'
+                or not (row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory'))):
+            raise ValueError('This provider recording moved. Reopen its Work steps.')
+        field = args.get('field')
+        reference = (row or {}).get('_eventFields', {}).get(field)
+        recording = (row or {}).get(str(field) + 'Recording', {})
+        if field not in {'request', 'response'} or reference is None or args.get('digest') != recording.get('sha256'):
+            raise ValueError('This provider recording is no longer available.')
+        # Opening the file runs in a thread. Freeze only the accepted position,
+        # attribution and canonical evidence, not an alias to the mutable node.
+        node = {key: deepcopy(row.get(key)) for key in ('id', 'kind', 'sessionId', 'rootSessionId',
+                                                       'parentId', 'provider', 'model')}
+        reference = deepcopy(reference)
+        receipt = {'position': position, 'node': node, 'reference': reference, 'recording': deepcopy(recording)}
+        return entry, node, reference, receipt
+
+    def check_recording(self, session, args, entry, receipt):
+        if self.windows.closed or self.windows._owner(session['id']) is not session:
+            raise ValueError('This provider recording expired. Reopen its Work steps.')
+        current, _, _, proof = self.recording(session, args)
+        if current is not entry or proof != receipt:
+            raise ValueError('This provider recording changed. Reopen its Work steps.')
 
     def retain_interest(self, identities):
         departed = self.interests - identities

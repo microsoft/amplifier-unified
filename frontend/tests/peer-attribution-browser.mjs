@@ -1,4 +1,5 @@
 // ROOT-only execution: real receiving UI, NoModel fixture, no paid provider.
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
@@ -32,7 +33,7 @@ try{
  await context.grantPermissions(['clipboard-read','clipboard-write']);
  const page=await context.newPage(),errors=[],detailReads=[];page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/conversation/detail'&&url.searchParams.get('field')==='text')detailReads.push(request.url())});
- await page.goto(staticClient?target:vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ await page.goto(staticClient?target:vite.resolvedUrls.local[0]);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
  const facts=await (await page.request.get(new URL('/api/fixture/peerFacts',page.url()).href)).json();
  assert.equal(facts.installedStatic,installedStatic);
  const article=id=>page.locator(`article[data-message-id="${id}"]`);

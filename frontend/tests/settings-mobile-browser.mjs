@@ -2,9 +2,13 @@ import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {openSettingsDialog,openSettingsPage,openPhoneNotificationSettings,settingsToolObservations} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
 import {spawn} from 'node:child_process';
+import {mkdir} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-settings-mobile');await mkdir(evidence,{recursive:true});
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_collections_server.py',import.meta.url))]);
 let browser,page,stderr='';fixture.stderr.on('data',data=>stderr+=data);
 try{
@@ -16,7 +20,7 @@ try{
  const back=async()=>{const before=await root.getAttribute('data-settings-route');await page.locator('.a-settings-mobile-head button').first().click();await page.waitForFunction(previous=>document.querySelector('.a-settings-experience')?.dataset.settingsRoute!==previous,before);};
  await page.goto(base);await page.waitForSelector('#amp-one');await openSettingsDialog(page);await route('index');
  assert.equal(await page.locator('.a-dialog-head').isVisible(),false);assert.equal(await root.locator('.a-settings-sidebar>button').count(),settingsSections.length);
- await expect(page.getByRole('button',{name:'Close settings',exact:true})).toBeVisible();await page.screenshot({animations:'disabled',path:'/tmp/settings-mobile-index.png'});
+ await expect(page.getByRole('button',{name:'Close settings',exact:true})).toBeVisible();await page.screenshot({animations:'disabled',path:join(evidence,'settings-mobile-index.png')});
  await openSettingsPage(page,'providers');await route('providers');
  const providers=page.locator('[data-part=provider-settings]');await providers.locator('[data-collection-id=two]>button').click();await route('providers/detail');
  const access=providers.locator('.a-provider-access'),accessSummary=access.locator('summary');
@@ -43,7 +47,7 @@ try{
  await back();await providers.getByRole('button',{name:'Preference order',exact:true}).click();assert.deepEqual(await ids(),preview);
  await footer.getByRole('button',{name:'Cancel',exact:true}).click();assert.deepEqual((await state()).setup.providers.map(p=>p.id),['two','three','one']);
  await openSettingsPage(page,'routing');await route('routing');await page.locator('[data-collection-id=general]>button').click();await route('routing/role/general');await page.locator('.a-routing-candidates [data-collection-id="0"]>button').click();await route('routing/choice/general');
- await page.getByLabel('general model 1',{exact:true}).fill('mobile-routing-*');await page.screenshot({path:'/tmp/settings-mobile-choice.png'});await back();await route('routing/role/general');await back();await route('routing');
+ await page.getByLabel('general model 1',{exact:true}).fill('mobile-routing-*');await page.screenshot({path:join(evidence,'settings-mobile-choice.png')});await back();await route('routing/role/general');await back();await route('routing');
  await footer.getByRole('button',{name:'Save active profile',exact:true}).click();await expect(page.getByText('Routing profile saved and selected.',{exact:true})).toBeVisible();assert.equal((await state()).setup.matrix.roles.general.candidates[0].model,'mobile-routing-*');
 
  // A changed candidate set cannot reuse positional IDs from an unfinished order.
@@ -72,7 +76,7 @@ try{
  // Native touch on a row scrolls normally rather than starting a reorder.
  const box=await row.boundingBox();await touch('touchStart',box.x+80,Math.min(box.y+20,650));await touch('touchMove',box.x+80,250);await touch('touchEnd');
  await expect(page.locator('.a-order-floating')).toHaveCount(0);
- await page.screenshot({path:'/tmp/settings-mobile-catalog.png'});
+ await page.screenshot({path:join(evidence,'settings-mobile-catalog.png')});
 
  // A portaled submit button still belongs to its real form.
  await openSettingsPage(page,'tool-connections');await page.getByRole('button',{name:'Add MCP connection',exact:true}).click();await route('tools/connection');
@@ -108,7 +112,7 @@ try{
  // Conversation modules now belong to the selected chat's public Model & tools page.
  const closeNavigation=page.getByRole('button',{name:'Close navigation',exact:true});
  if(await closeNavigation.isVisible())await closeNavigation.click();
- await openChatAdvancedPage(page,'Model & tools');await expect(page.getByRole('button',{name:'Back to Advanced',exact:true})).toBeVisible();await page.getByText('Conversation modules',{exact:true}).click();await expect(page.getByRole('searchbox',{name:'Filter loaded modules',exact:true})).toBeVisible();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeChecked();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeDisabled();await page.screenshot({path:'/tmp/settings-mobile-modules.png'});
+ await openChatAdvancedPage(page,'Model & tools');await expect(page.getByRole('button',{name:'Back to Advanced',exact:true})).toBeVisible();await page.getByText('Conversation modules',{exact:true}).click();await expect(page.getByRole('searchbox',{name:'Filter loaded modules',exact:true})).toBeVisible();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeChecked();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeDisabled();await page.screenshot({path:join(evidence,'settings-mobile-modules.png')});
  assert.deepEqual(errors,[]);console.log('Mobile Settings: index, browser Back/Forward, private drafts, nested routing, footer actions, ordering, catalog selection and all destinations at 5 widths passed.');
-}catch(error){if(page)await page.screenshot({path:'/tmp/settings-mobile-failure.png'});throw error;}
+}catch(error){if(page)await page.screenshot({path:join(evidence,'settings-mobile-failure.png')});throw error;}
 finally{await browser?.close();fixture.kill('SIGTERM');}

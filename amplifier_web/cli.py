@@ -373,6 +373,8 @@ def main():
     if recovery is not None and recovery.command == "reset":
         from .reset import run
         return run(_parse())
+    from .host_dependencies import prepare_environment
+    prepare_environment()
     from .application_generations import delegate
     delegate()
     args = _parse()

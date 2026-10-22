@@ -55,6 +55,30 @@ async def steering(b):
                        stop_epoch=lambda: b.epoch[0])
 
 
+@pytest.mark.parametrize("change", ["none", "forged", "revoked", "budget", "stop"])
+async def test_resume_permission_is_host_owned_rechecked_and_keeps_saved_budget(boundary, input_type, change):
+    b = boundary
+    b.controls.require_idle.side_effect = None
+    b.task.update(status="paused", maxTurns=5, goalState={"turns_used": 4})
+    b.args["humanResume"] = True  # Caller claims never grant the exception.
+    b.permission["humanResume"] = change != "forged"
+    b.controls.tasks.continuation_allowed = AsyncMock(
+        side_effect=lambda **kw: kw.get("resume") is True)
+    calls = 0
+    async def authorize(args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            if change == "revoked": b.permission["humanResume"] = False
+            elif change == "budget": b.task["goalState"]["turns_used"] = 5
+            elif change == "stop": b.epoch[0] += 1
+        return b.permission
+    result = await admit(b.controls, b.runtime, b.args, None, authorize, lambda: b.epoch[0])
+    assert result["accepted"] is (change == "none")
+    assert b.runtime.submit.await_count == (1 if change == "none" else 0)
+    assert b.task["status"] == "paused"
+
+
 async def test_positive_steer_uses_host_envelope_and_exact_capability_not_idle_submit(boundary, input_type):
     b = boundary
     result = await steering(b)
@@ -489,3 +513,27 @@ async def test_checkpoint_anchor_uses_exact_native_index_and_root_generation(mon
     worker.observe({"type": "generation.started", "sessionId": "child", "rootSessionId": "native-root"})
     worker.observe({"type": "input.delivered", "sessionId": "child", "rootSessionId": "native-root", "input_id": "child-input"})
     assert worker.context_inputs == ["root-input"]
+
+@pytest.mark.parametrize('change', ['progress', 'stop', 'new-task', 'pause-resume', 'budget'])
+async def test_outcome_observation_admission_uses_current_task_authority(boundary, input_type, change):
+    b = boundary
+    b.runtime.generation = None
+    b.controls.require_idle = Mock()
+    b.task['continuationEpoch'] = 1
+    b.args['taskContinuationEpoch'] = 1
+    async def authorize(args):
+        b.task['revision'] += 1
+        if change == 'stop':
+            b.epoch[0] += 1
+        elif change == 'new-task':
+            b.task['id'] = 'other'
+        elif change == 'pause-resume':
+            b.task['continuationEpoch'] = 3
+        elif change == 'budget':
+            b.controls.coordinator.session_state['goal'] = {'cap': 2, 'turns_used': 2}
+        return b.permission
+    b.authorize = AsyncMock(side_effect=authorize)
+    result = await admit(b.controls, b.runtime, b.args, b.activation, b.authorize,
+                         stop_epoch=lambda: b.epoch[0])
+    assert result['accepted'] is (change == 'progress')
+    assert b.runtime.submit.await_count == (1 if change == 'progress' else 0)

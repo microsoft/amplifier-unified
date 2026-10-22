@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
@@ -24,7 +25,7 @@ try{
  // Browser-managed downloads use the real signed session cookie; Chromium
  // does not forward Playwright's extra Authorization header to downloads.
  await page.context().addCookies([{name:'amplifier_unified_session',value:fixtureCookie,url:base,httpOnly:true,sameSite:'Strict'}]);
- await page.goto(base);
+ await page.goto(base);await showFixtureConversation(page);
  const groups=page.locator('[data-group-id]'),before=page.locator('[data-group-id$="@before"]'),interim=page.locator('[data-group-id$="@interim"]');
  // The bounded saved-event window settles independently of live host groups.
  // Wait for that real receipt rather than racing its arrival with UI clicks.
@@ -51,12 +52,26 @@ try{
  await expect(interimToggle).toHaveAttribute('aria-expanded','false');await interimToggle.click();
  const action=id=>page.locator(`[data-node-id$=":${id}"]`),read15=action('read15'),read16=action('read16');
  assert.equal(await page.locator('.a-execution-body').count(),0);
- assert.match(await action('brief').innerText(),/Ran git diff --check/);
+ const brief=action('brief'),briefLine=brief.locator(':scope > button.a-execution-action-line');
+ await expect(briefLine.locator('.a-execution-label > span')).toHaveText('Ran · bash git diff --check');
+ await expect(briefLine.locator('code')).toHaveText('git diff --check');
+ await briefLine.click();
+ const command=brief.locator('.a-execution-payload').filter({has:page.locator('header > span:first-child',{hasText:/^Command$/})});
+ await expect(command.locator('pre')).toHaveText('git diff --check');
+ await brief.getByRole('button',{name:'Copy command',exact:true}).click();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'git diff --check');
+ await briefLine.click();
  await read15.locator('button.a-execution-action-line').click();await read16.locator('button.a-execution-action-line').click();
  assert.equal(await read15.locator('pre').innerText(),Array.from({length:15},(_,i)=>'Line '+(i+1)).join('\n'));
  assert.equal(await read15.getByRole('button',{name:/Show all/}).count(),0);
- assert.equal(await read16.locator('pre').innerText(),Array.from({length:10},(_,i)=>'Line '+(i+1)).join('\n'));
- await read16.getByRole('button',{name:'Show all 16 lines'}).click();assert.match(await read16.innerText(),/Line 16/);
+ const read16Full=Array.from({length:16},(_,i)=>'Line '+(i+1)).join('\n');
+ assert.equal(await read16.locator('pre').innerText(),Array.from({length:10},(_,i)=>'Line '+(i+1)).join('\n')+'\n…');
+ await expect(read16.getByText('Showing a preview.',{exact:true})).toBeVisible();
+ await read16.getByRole('button',{name:'Copy file content',exact:true}).click();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),read16Full,'Copy retains every saved line while the display is shortened');
+ await read16.getByRole('button',{name:'Show all 16 lines'}).click();
+ assert.equal(await read16.locator('pre').innerText(),read16Full);
+ await expect(read16.getByText('Showing a preview.',{exact:true})).toHaveCount(0);
  assert.equal(await read15.locator('.a-execution-payload details').count(),0);
  assert.equal(await read16.locator('.a-execution-payload details').count(),0);
  await action('owned').locator('button.a-execution-action-line').click();
@@ -114,7 +129,7 @@ try{
  assert.equal(requestReads.length,2);assert.equal(responseReads.length,1);
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await expect(model.getByRole('button',{name:/^View request/})).toBeVisible();assert.equal(responseReads.length,1);
- const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
+ const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/This call’s request recording isn’t available here/);
  const priorWindow=await saved.getAttribute('data-group-id');
  await control({op:'canonical-append'});
  await expect(saved).not.toHaveAttribute('data-group-id',priorWindow,{timeout:15000});

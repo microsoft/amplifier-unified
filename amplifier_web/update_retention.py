@@ -191,7 +191,7 @@ def _folders(manager):
                   and not folder.is_symlink() and folder.is_dir()) if root.exists() else []
 
 
-def retire(manager, folder, project, *, remove_project):
+def retire(manager, folder, project, *, remove_project, measurement=None):
     """Only metadata renames hold admission; partial retirement is preserved."""
     from .deployment import write_private
 
@@ -211,6 +211,11 @@ def retire(manager, folder, project, *, remove_project):
     folder.rename(payload / 'release')
     if remove_project:
         project.rename(payload / 'runtime')
+    if measurement is not None:
+        from .storage_cleanup_measure import measure
+        paths = [str(payload / 'release')] + ([str(payload / 'runtime')] if remove_project else [])
+        if measure(paths)['stamp'] != measurement['stamp']:
+            raise ValueError('Files changed during retirement. The detached copies were retained for inspection.')
     record['phase'] = 'retired'
     write_private(entry / 'retirement.json', json.dumps(record))
     return entry
@@ -241,12 +246,15 @@ async def remove_retired(manager, entry, *, timeout):
     entry.rmdir()
 
 
-async def reclaim(manager):
+async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
     """Inspect a bounded batch without holding runtime admission hostage."""
     from .runtime_environment import project_path
     from .updates import process
 
     removed, retained, checked = 0, 0, 0
+    candidates = []
+    inspected_protected = set()
+    complete = True
     deadline = time.monotonic() + PASS_SECONDS
     def remaining(limit):
         value = min(limit, deadline - time.monotonic())
@@ -257,14 +265,16 @@ async def reclaim(manager):
         cursors = {key: getattr(manager, attribute) for key, attribute in (
             ('generationCursor', '_retention_cursor'), ('retiredCursor', '_retired_cursor'))
             if getattr(manager, attribute, None)}
-        return {'removed': removed, 'retained': retained, **cursors, **({'reason': reason} if reason else {})}
+        return {'removed': removed, 'retained': retained, **cursors,
+                **({'candidates': candidates, 'protectedIds': sorted(inspected_protected), 'complete': complete and not reason} if inspect_only else {}),
+                **({'reason': reason} if reason else {})}
     prior = manager.service.state['updates'].get('storage', {})
     if maintenance_blocked(manager):
         return result('Storage maintenance deferred while an update is pending.')
     retired = Path(manager.directory) / 'retired'
     if retired.is_symlink():
         return result('Unknown retirement storage was kept.')
-    entries = sorted(retired.iterdir()) if retired.exists() else []
+    entries = sorted(retired.iterdir()) if retired.exists() and not inspect_only and selected is None else []
     cursor = getattr(manager, '_retired_cursor', prior.get('retiredCursor', ''))
     entries = [p for p in entries if p.name > cursor] + [p for p in entries if p.name <= cursor]
     for entry in entries:
@@ -297,6 +307,8 @@ async def reclaim(manager):
         if checked >= MAX_CANDIDATES or time.monotonic() >= deadline:
             return result('Storage maintenance reached its batch limit; remaining storage was kept.')
         manager._retention_cursor = folder.name
+        if selected is not None and folder.name not in selected:
+            continue
         marker = folder / "validated.json"
         if (
             folder.name in protected
@@ -304,6 +316,7 @@ async def reclaim(manager):
             or not marker.is_file()
         ):
             retained += 1
+            inspected_protected.add(folder.name)
             continue
         try:
             marker_text = marker.read_text()
@@ -343,7 +356,10 @@ async def reclaim(manager):
                 extras = await process(
                     "git", "ls-files", "--others", cwd=source, timeout=remaining(INSPECTION_SECONDS)
                 )
-                if changes or any(
+                local_commits = await process(
+                    'git', 'rev-list', '--max-count=1', '--all', '--not', 'HEAD', '--remotes',
+                    cwd=source, timeout=remaining(INSPECTION_SECONDS))
+                if local_commits or changes or any(
                     name != ".amplifier_cache_meta.json" for name in extras.splitlines()
                 ):
                     raise ValueError("Local or generated changes retained")
@@ -366,6 +382,7 @@ async def reclaim(manager):
                         or project_path(manager.home, folder.name) != project
                         or marker.read_text() != marker_text or graph.read_text() != graph_text):
                     retained += 1
+                    inspected_protected.add(folder.name)
                     continue
                 # Recompute sharing from all surviving receipts, including
                 # generations created while the inspection was in progress.
@@ -374,13 +391,32 @@ async def reclaim(manager):
                                       for row in root.iterdir() if row.is_dir() and row != folder}
                 remove_project = (project.resolve() not in surviving_projects and project.exists()
                                   and project.parent.resolve() == (Path(manager.home) / 'runtime').resolve())
-                entry = retire(manager, folder, project, remove_project=remove_project)
+                paths = [str(folder)] + ([str(project)] if remove_project else [])
+                measured = None
+                if inspect_only or selected is not None:
+                    measured = await _probe('measure', {'paths': paths}, timeout=remaining(INSPECTION_SECONDS))
+                if inspect_only:
+                    candidates.append({'kind': 'ecosystem', 'id': folder.name,
+                        'label': 'Unused component version', 'paths': paths, **measured})
+                    continue
+                # Measuring yielded; preserve newly active work and settings.
+                latest_references = await inspect_references(manager, timeout=remaining(REFERENCE_SECONDS))
+                if (maintenance_blocked(manager) or folder.name in protected_generations(manager)
+                        or str(folder) in latest_references or str(project) in latest_references
+                        or (not modern and manager.busy())):
+                    inspected_protected.add(folder.name)
+                    continue
+                if evidence:
+                    evidence('attempting', {'kind': 'ecosystem', 'id': folder.name, **(measured or {})})
+                entry = retire(manager, folder, project, remove_project=remove_project, measurement=measured)
             # Recursive deletion may be slow or cancelled. The generation is
             # already detached, so it cannot delay activation or shutdown.
             if maintenance_blocked(manager):
                 return result('Retired storage was kept while an update is pending.')
             await remove_retired(manager, entry, timeout=remaining(INSPECTION_SECONDS))
             removed += 1
+            if evidence:
+                evidence('completed', {'kind': 'ecosystem', 'id': folder.name})
         except (
             OSError,
             ValueError,
@@ -391,6 +427,7 @@ async def reclaim(manager):
             subprocess.SubprocessError,
         ):
             retained += 1
+            inspected_protected.add(folder.name)
     return result()
 
 
@@ -405,6 +442,14 @@ if __name__ == '__main__':
         from .runtime_qualification import verify_recorded
         verify_recorded(Path(values['project']), Path(values['folder']))
         print('null')
+    elif sys.argv[1] == 'runner':
+        from .managed_runner_updates import runtime_identity
+        if runtime_identity(values['installation']) != values['runtime']:
+            raise ValueError('Runner runtime changed')
+        print('null')
+    elif sys.argv[1] == 'measure':
+        from .storage_cleanup_measure import measure
+        print(json.dumps(measure(values['paths'])))
     elif sys.argv[1] == 'remove':
         shutil.rmtree(values['path'])
         print('null')

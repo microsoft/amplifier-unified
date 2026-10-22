@@ -80,6 +80,18 @@ def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
 
 
+@pytest.mark.parametrize('connected', [False, True])
+async def test_root_preparation_advertises_only_existing_human_transport(mounted_host, connected):
+    ask = AsyncMock() if connected else None
+    h = mounted_host
+    await h.prepare(ask=ask)
+    assert h.capabilities['approval.interactive'] is connected
+    adapter = h.prepared.create_session.call_args.kwargs['approval_system']
+    assert adapter.interactive is connected
+    if connected:
+        ask.assert_not_called()
+
+
 @pytest.mark.parametrize('frozen', [False, True])
 async def test_host_binds_instruction_paths_after_overrides_except_frozen_snapshots(mounted_host, monkeypatch, frozen):
     h = mounted_host

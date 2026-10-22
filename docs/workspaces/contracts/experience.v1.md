@@ -15,10 +15,12 @@ outputs, sources, helpers, changes, and previews belonging to the current scope.
 Viewing a detail is not an execution or authority-changing action.
 
 ```text
-New chat
-Pinned         selected conversations                 (collapsible)
-Workspaces     workspace → its full conversation list (collapsible)
-Recent         unpinned conversations, all locations   (collapsible)
+Browse organization
+  Pinned       selected conversations                  (collapsible)
+  Workspaces   registered workspace → full chat list   (collapsible)
+  Recent       unpinned conversations, all locations   (collapsible)
+Status organization
+  Existing attention / unread / working / other saved chats
 
 Chat details → Outputs · Sources · Agents · Changes · Preview
 Workspace details → Files · Chats · Directions · Settings
@@ -31,12 +33,13 @@ Workspace details → Files · Chats · Directions · Settings
    Creation/attachment returns to that unsent draft with the workspace selected.
    Attachment asks for a folder, never a developer mode or a redundant preview.
 
-2. **Navigation uses shared controls.** Pinned, Workspaces, and Recent are the
-   three collapsible sections. One rich chat row renders each pin consistently;
-   one workspace explorer provides recent folders, folder browsing, and chat
-   drill-in. Pins are excluded from global Recent and remain available in a
-   workspace's full chat list. Helpers stay with their parent chat. Additional
-   filters sit behind a disclosure. Collapse state persists independently.
+2. **Navigation uses shared controls.** Browse groups Pinned, Workspaces, and Recent in shared collapsible sections. An alternate Status
+   organization uses existing chat activity, not another work store; the web
+   [Home/sidebar contract](../../shell/work-discovery.v1.md) owns its presentation.
+   One rich chat row renders pins consistently; one workspace explorer provides
+   recent folders, folder browsing, and chat drill-in. Pins remain excluded from
+   global Recent and present in their workspace's full list. Helpers stay with their parent chat. Additional
+   Browse filters use disclosure; collapse state persists independently.
 
 3. **Details preserve conversation state.** The existing Canvas hosts inspection
    while retaining its tabs. Opening a source, output, helper, or preview leaves
@@ -155,6 +158,7 @@ unsent drafts, session history, or activity timestamps.
 
 | Date | Change | Evidence |
 |---|---|---|
+| 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../../ux/decisions/20261020.md). |
 | 2026-09-22 | Initial navigation and disclosure rules. | Live Spark PWA inspection, supplied sidebar/attachments screenshots, and the user's request for a simpler default experience. |
 | 2026-09-22 | Simplify attachment and add the New chat workspace picker. | User's critique of redundant folder confirmation and developer options. |
 | 2026-09-23 | Consolidate the two navigation views into shared collapsible sections, reuse Settings reorder, and page Recent at 50/40. | User's live sidebar screenshots and five requested adjustments. |

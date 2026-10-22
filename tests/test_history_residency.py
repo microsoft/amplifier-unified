@@ -157,3 +157,59 @@ def test_one_wide_owner_cannot_exhaust_retirement_budget_before_rechecking(monke
     # the entire 20,000-element container to finish.
     assert examined <= 128
     assert len(owner['messages']) == 20000
+
+
+@pytest.mark.parametrize('protection', ['working', 'runtime', 'configuration', 'approval'])
+async def test_active_working_set_keeps_index_across_detail_publications(app_factory, protection):
+    from amplifier_web import history_residency
+
+    app = app_factory()
+    for number in range(12):
+        row = app._new_session({'title': f'Active {number}'})
+        row['status'] = 'working' if protection == 'working' else 'idle'
+        if protection == 'configuration':
+            row['configurationPending'] = {'revision': 1}
+        if protection == 'approval':
+            row['approvals'] = [{'id': f'approval-{number}', 'status': 'pending'}]
+        app._state['sessions'].append(row)
+    identities = [row['id'] for row in app._state['sessions']]
+    if protection == 'runtime':
+        app.runtime.workers = dict.fromkeys(identities)
+    app._state['selectedSessionId'] = identities[0]
+    app._save()
+    index = app.projections.sessions(app._state)
+    # Do not borrow an index alias during the proof: this test's retained index
+    # is safe because all rows are independently protected from retirement.
+    for iteration in range(3):
+        identity = identities[-1]
+        app._session(identity, hydrate=False)['streamingText'] = f'chunk {iteration}'
+        app._publish_changes(sessions={identity}, detail_only=True)
+        assert app.projections.sessions(app._state) is index
+        assert set(index.by_id) == set(identities)
+        assert not history_residency.retire(app)
+    if protection == 'runtime':
+        app.runtime.workers = {}
+
+
+async def test_retained_active_index_observes_same_count_workspace_replacement(app_factory):
+    app = app_factory()
+    for number in range(12):
+        row = app._new_session({'title': f'Working {number}'})
+        row['status'] = 'working'
+        app._state['sessions'].append(row)
+    app._save()
+    before = app.projections.sessions(app._state)
+    old = app._state['workspaces'][0]
+    replacement = {**old, 'id': 'resolved-workspace', 'name': 'Resolved workspace'}
+    # Native reconciliation can remove an unresolved registration and append
+    # its resolved replacement without changing the registry's length.
+    app._state['workspaces'] = [replacement, *app._state['workspaces'][1:]]
+    app._save_changes(globals={'workspaces'})
+    current = app.projections.sessions(app._state)
+    assert old['id'] not in current.workspaces
+    assert current.workspaces[replacement['id']] == replacement
+    assert current.workspace_positions[replacement['id']] == 0
+    assert set(current.by_id) == set(before.by_id)
+    identity = row['id']
+    app._publish_changes(sessions={identity}, detail_only=True)
+    assert app.projections.sessions(app._state) is current

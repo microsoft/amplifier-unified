@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Ordinary public sharing path; expiry is advanced only in disposable fixture data.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -16,7 +17,7 @@ try{
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:950},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const value=request.postDataJSON();actions.push(value.action==='shell.command'?value.args:value)}});
  const observe=async()=>{const response=await page.request.get(url+'/fixture/share');assert.equal(response.status(),200);return response.json()};
- await page.goto(url);const draft=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(draft).toBeEditable();await draft.fill('PRIVATE unsent draft must never be shared');
+ await page.goto(url);await showFixtureConversation(page,{navPinned:true});const draft=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(draft).toBeEditable();await draft.fill('PRIVATE unsent draft must never be shared');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe('PRIVATE unsent draft must never be shared');
  await page.getByRole('button',{name:'Chat',exact:true}).click();await page.getByRole('button',{name:'Share or save',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Share or save',exact:true});await expect(dialog).toBeVisible();await dialog.locator('summary').filter({hasText:'Share a copy'}).click();

@@ -16,6 +16,23 @@ const component={id:'bundle',label:'Community bundle',status:'update',current:'a
 function state(updates={}){return {view:{},settings:{updates:{}},updates:{application,items:[],...updates}};}
 function render(updates={},view={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:{...state(updates),view},act:()=>{}}));}
 
+test('confirmed app success stays visible beside component failure without opening details',()=>{
+ const result={attemptId:'a'.repeat(32),phase:'restart-ack',version:application.current,revision:'b'.repeat(40),verifiedAt:10};
+ const updates={application:{...application,runningRevision:result.revision},applicationResult:result,
+  phase:'error',error:'Component sources changed.',sequence:{stage:'other'},
+  diagnostics:{attemptId:'component',batch:{attemptId:'component',kind:'ecosystem',components:['foundation']},
+   lastFailure:{attemptId:'component',kind:'ecosystem',phase:'ecosystem-validation',status:'failed',reason:'runtime-source-changed',at:12}}};
+ const html=render(updates);
+ assert.match(html,/Application updated successfully/);
+ assert.match(html,/Some components were not updated/);
+ assert.match(html,/Affected batch: foundation/);
+ assert.match(html,/Check for updates again before retrying/);
+ assert.ok(html.indexOf('Application updated successfully')<html.indexOf('ecosystem-update-details'));
+ assert.doesNotMatch(render({...updates,pendingRestart:{requestStatus:'uncertain'}}),/Application updated successfully|Some components were not updated/);
+ assert.doesNotMatch(render({...updates,applicationResult:{...result,phase:'restart-reconcile'}}),/Application updated successfully/);
+ assert.match(render({...updates,applicationResult:{...result,phase:'restart-reconcile'}}),/Current application verified/);
+});
+
 test('current batch names progress and completed batches remain visible without claiming the new batch installed',()=>{
  const html=render({phase:'validating',sequence:{stage:'other',install:true},
   diagnostics:{attemptId:'new',batch:{attemptId:'new',kind:'ecosystem',tier:'other',components:['amplifier-hooks-approval'],componentCount:1,startedAt:1},
@@ -62,6 +79,24 @@ test('saved older update intervals are explained without silently choosing or su
 
 const release={version:'0.6.4',title:'Shared settings',changes:['Workspace settings now apply.'],notices:[{id:'shared',title:'Review shared settings',detail:'A setting affects other apps.',action:'Check your workspace.'}]};
 const noticeId='release-notice:0.6.4:shared';
+test('initial compact state waits for note details instead of reporting them missing',()=>{
+ assert.match(render(),/Loading release notes…/);
+ assert.doesNotMatch(render(),/Release notes for this version are unavailable/);
+ assert.match(render({application:{...application,releaseNotes:[]}}),/Release notes for this version are unavailable/);
+});
+test('release summary is before controls and outside disclosures without marking notices read',async()=>{
+ const calls=[];let root;
+ const initial=state({application:{...application,status:'update',latest:'v0.6.4',releaseNotes:[release]}});
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:initial,act:(...args)=>calls.push(args)}))});
+ const card=root.root.findByProps({'data-part':'update-release-summary'});
+ assert.match(card.findByType('li').children.join(''),/Workspace settings now apply/);
+ for(let parent=card.parent;parent;parent=parent.parent)assert.notEqual(parent.type,'details');
+ assert.deepEqual(calls,[]);
+ const html=render(initial.updates);
+ assert.ok(html.indexOf('data-part="update-release-summary"')<html.indexOf('data-part="update-controls"'));
+ assert.ok(html.indexOf('aria-label="Changelog"')<html.indexOf('data-part="ecosystem-update-details"'));
+ await renderAct(async()=>root.unmount());
+});
 test('changelog separates installed, upcoming and earlier versions and escapes authored text',()=>{
  const html=render({application:{...application,releaseNotes:[release,{...release,version:'0.6.3',notices:[]},{...release,version:'0.6.2',title:'<script>bad()</script>',notices:[]}]}});
  assert.match(html,/Changelog/);assert.match(html,/Upcoming/);assert.match(html,/Earlier release/);
@@ -161,6 +196,23 @@ test('prepared app failure is visibly an error and allows the existing install a
  await renderAct(async()=>button.props.onClick());
  assert.equal(calls[0].name,'updates.install');
  await renderAct(async()=>root.unmount());
+});
+
+test('queued release refresh is read-only and only available before an app handoff',async()=>{
+ const queued={pendingApp:{...application,status:'update',latest:'v0.6.4'},phase:'app-staged'};
+ for(const patch of [{},{applicationCheckPending:true},{pendingApp:{...queued.pendingApp,featureSelection:{requestId:'chosen'}}},{pendingRestart:{version:'0.6.4'}},{pendingReplacement:{attemptId:'unknown'}},{phase:'staging'},{pendingRelease:'components'},{pendingSmartTools:[{id:'tool'}]}]){
+  const calls=[];let root;
+  try{
+   await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state({...queued,...patch}),act:(action,args)=>calls.push({action,args})}))});
+   const check=root.root.findByProps({'data-action':'updates.check'});
+   assert.equal(check.props.disabled,Object.keys(patch).length>0,JSON.stringify(patch));
+   assert.deepEqual(calls,[]);
+   if(!check.props.disabled){assert.match(JSON.stringify(root.toJSON()),/Check for newer release/);await renderAct(async()=>check.props.onClick());assert.deepEqual(calls,[{action:'updates.check',args:undefined}])}
+  }finally{await renderAct(async()=>root.unmount())}
+ }
+ const offline=render({...queued,applicationCheckWarning:'Could not check for a newer release. The prepared update is still available.'});
+ assert.match(offline,/prepared update is still available/);assert.match(offline,/Waiting for your work to finish/);
+ assert.doesNotMatch(offline,/Updates need attention/);
 });
 
 test('a rejected restart keeps its work gate but displays actionable failure instead of restarting',()=>{
@@ -441,4 +493,51 @@ test('an error arriving during validation is never hidden by a progress summary'
  const html=render({phase:'validating',error:'Validation stopped',diagnostics:{attemptId:'new',batch:{attemptId:'new'}},probeProgress:{attemptId:'new',completed:1,total:2}});
  const banner=html.slice(0,html.indexOf('data-part="update-controls"'));
  assert.match(banner,/Updates need attention/);assert.doesNotMatch(banner,/Finishing your update/);
+});
+
+test('runner-only wait keeps availability refresh usable without exposing unrelated work as a blocker',async()=>{
+ const runner={previous:'old',runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check'};
+ const base={phase:'staged',pendingSmartTools:[runner],blockers:[{kind:'conversation',sessionId:'one',label:'Unrelated chat'}]};
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(base),act:(name,args)=>calls.push({name,args})}))});
+ const check=root.root.findByProps({'data-action':'updates.check'});
+ assert.equal(check.props.disabled,false);assert.equal(check.findByType('span').children.join(''),'Check for updates');
+ assert.equal(root.root.findAllByProps({'data-part':'update-blockers'}).length,0);
+ await renderAct(async()=>check.props.onClick());assert.deepEqual(calls,[{name:'updates.check',args:undefined}]);
+ for(const change of [{pendingRelease:'candidate'},{pendingSmartTools:[runner,{previous:'ordinary-tool'}]},{phase:'validating'}]){
+  await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state({...base,...change}),act:()=>{}})));
+  assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,true);
+ }
+ await renderAct(async()=>root.unmount());
+});
+
+test('runner wait leaves Update Amplifier actionable and retains its separate result',async()=>{
+ const runner={previous:'old',runnerSource:{runnerKind:'managed-dtu-core'},runnerUpdate:'check',runnerWaiting:'unknown'};
+ const updates={phase:'available',application:{status:'update',current:'0.20.205',latest:'v0.20.207'},pendingSmartTools:[runner]};
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(updates),act:name=>calls.push(name)}))});
+ const install=root.root.findByProps({'data-action':'updates.install'});
+ assert.equal(install.props.disabled,false);
+ assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,false);
+ assert.equal(root.root.findAllByProps({'aria-label':'Smart Tool update results'}).length,1);
+ await renderAct(async()=>install.props.onClick());assert.deepEqual(calls,['updates.install']);
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('prepared source mismatch explains preservation and exports only mismatch field names',()=>{
+ const failure={id:'mismatch',attemptId:'candidate',phase:'ecosystem-validation',status:'failed',
+  errorType:'ValueError',reason:'runtime-installed-source-mismatch',package:'amplifier-foundation',
+  resolutionMismatches:['revision','private/source', {path:'/private/cache'},'revision'],
+  path:'/private/cache',message:'credential-bearing failure'};
+ const diagnostics={attemptId:'candidate',lastFailure:failure,events:[failure]};
+ const html=render({phase:'error',diagnostics});
+ assert.match(html,/amplifier-foundation/);
+ assert.match(html,/component changed to a different source during update preparation/);
+ assert.match(html,/kept the current components active/);
+ assert.match(html,/share the update details/);
+ const exported=JSON.parse(diagnosticReceipt(diagnostics));
+ assert.deepEqual(exported.lastFailure.resolutionMismatches,['revision']);
+ assert.deepEqual(exported.events[0].resolutionMismatches,['revision']);
+ assert.doesNotMatch(JSON.stringify(exported),/private|credential/);
 });

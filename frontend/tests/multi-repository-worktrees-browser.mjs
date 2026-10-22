@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {fileURLToPath} from 'node:url';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
@@ -11,7 +12,7 @@ try{
  const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(ready.url);await page.getByRole('region',{name:'Task worktrees'}).waitFor();
+ await page.goto(ready.url);await showFixtureConversation(page);await page.getByRole('region',{name:'Task worktrees'}).waitFor();
  const panel=page.getByRole('region',{name:'Task worktrees'});
  await panel.getByText('Select a repository within this workspace',{exact:true}).click();
  const input=panel.getByLabel('Repository folder',{exact:true});

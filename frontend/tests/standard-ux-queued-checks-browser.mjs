@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public queued-check controls; controlled local backend, no container/provider acceptance.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -17,8 +18,8 @@ try{
  const mode=async value=>{const response=await page.request.post(ready.url+'/fixture/environment-mode',{data:value});assert.equal(response.status(),200)};
  // This credential-free fixture has no connection; dismiss its real setup prompt.
  const dismissSetup=async()=>{const dialog=page.getByRole('dialog',{name:'Settings',exact:true});await expect(dialog).toBeVisible();await dialog.getByRole('button',{name:'Close panel',exact:true}).click();await expect(dialog).toHaveCount(0)};
- await page.goto(ready.url);await dismissSetup();const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep the queued check private draft');const initial=await facts();
- await page.locator('[data-part="header"] .a-work-crumb').click();
+ await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});await dismissSetup();const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep the queued check private draft');const initial=await facts();
+ await page.locator('[data-part="header"] .a-work-crumb:not(.a-work-home-crumb)').click();
  await page.getByRole('group',{name:'Workspace view',exact:true}).getByRole('button',{name:'Details',exact:true}).click();
  await page.getByText('Managed resources',{exact:true}).click();const panel=page.getByRole('region',{name:'Test environments',exact:true});
  await expect(panel.getByRole('form',{name:'Queue isolated check'})).toBeVisible();assert.deepEqual((await facts()).calls,[]);

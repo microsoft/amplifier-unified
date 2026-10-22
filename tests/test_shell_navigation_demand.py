@@ -5,6 +5,7 @@ import pytest
 
 from amplifier_web.service import AppError
 from amplifier_web.shell_navigation_demand import NAVIGATION_RESOURCES, parse_navigation_resources
+from amplifier_web.adaptive_work import STATUS_RESOURCES
 from test_shell_modules import service, stage, record_validation
 
 
@@ -41,7 +42,14 @@ async def test_each_requested_resource_matches_complete_snapshot(service, resour
     full = service.shell.snapshot(client, instance, identity='demand-client')
     scoped = service.shell.snapshot(client, instance, identity='demand-client', navigation_resources=frozenset({resource}))
     assert scoped['navigationResources'] == [resource]
-    if resource.startswith('sidebar'):
+    if resource in STATUS_RESOURCES:
+        # Status is explicit bundled demand; third-party full snapshots do not
+        # acquire additional pages. Its rows still come from the same catalog.
+        assert resource not in full
+        expected = full['workHome']['groups'][STATUS_RESOURCES[resource]]
+        assert {key: scoped[resource][key] for key in expected} == expected
+        assert scoped[resource]['workScope'] == 'two'
+    elif resource.startswith('sidebar'):
         field = resource.removeprefix('sidebar').lower()
         assert scoped['sidebarNavigation'][field] == full['sidebarNavigation'][field]
         assert set(scoped['sidebarNavigation']) == {'recentView', field}

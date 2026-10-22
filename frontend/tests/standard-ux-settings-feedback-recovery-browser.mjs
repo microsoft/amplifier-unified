@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Real notices and local attachment staging. No report is submitted or uploaded.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -14,7 +15,7 @@ try{
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1366,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),actions=[],errors=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST')actions.push(request.postDataJSON())});
  const facts=async()=>{const response=await page.request.get(boot.url+'/fixture/ordinary-recovery');assert.ok(response.ok());return response.json()};
- await page.goto(boot.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Retain this unsent ordinary recovery draft');
+ await page.goto(boot.url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Retain this unsent ordinary recovery draft');
  const before=await facts(),notice=before.attention.items.find(row=>row.id==='notifications:error'),other=before.attention.items.find(row=>row.page==='updates'&&!row.read);assert.ok(notice&&!notice.read);assert.ok(other);
  await openSettingsPage(page,'notifications');await page.bringToFront();await expect(page.getByText(/Synthetic delivery notice one/)).toBeVisible();
  await expect.poll(async()=>(await facts()).attentionRead[notice.id]).toBe(notice.fingerprint);

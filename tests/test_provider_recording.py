@@ -1,4 +1,5 @@
 import copy
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -169,6 +170,52 @@ async def test_real_kernel_pipeline_redacts_before_capture_and_keeps_request_unc
     assert 'raw' not in records[-1] and 'raw_request' not in records[-1]
     await hooks.emit('llm:response', {'raw': {'api_key': 'also-private'}})
     assert records[-1]['raw']['api_key'] == '[REDACTED]'
+
+
+async def test_canonical_capture_gets_exact_wrapped_call_identity_for_stream_retry_and_child():
+    from amplifier_core import HookRegistry, HookResult
+    from amplifier_web.execution_events import ExecutionEvents, CURRENT_CALL
+    hooks, capabilities, records = HookRegistry(), {}, []
+    events = ExecutionEvents('root', lambda value: None)
+    coordinator = SimpleNamespace(hooks=hooks, get_capability=capabilities.get,
+        register_capability=lambda key, value: capabilities.update({key: value}))
+    async def capture(event, data):
+        records.append((event, data))
+        return HookResult()
+    for event in ('llm:request', 'llm:response'):
+        hooks.register(event, capture, priority=100)
+    install_request_redaction(coordinator)
+    async def emit(event, sid, attempt):
+        # Core can dispatch hooks in a new task; the exact call context must
+        # reach the redactor before canonical capture in that task too.
+        await asyncio.create_task(hooks.emit(event, {'session_id': sid,
+            'request_id': attempt, 'unified_call_id': 'forged', 'raw': {'text': event}}))
+    class Provider:
+        def __init__(self, sid): self.sid = sid
+        def get_info(self): return {'id': 'test', 'defaults': {'model': 'fixture'}}
+        async def complete(self, request):
+            for attempt in ('first', 'retry'):
+                await emit('llm:request', self.sid, attempt)
+                await emit('llm:response', self.sid, attempt)
+            return {'usage': {'input_tokens': 3, 'output_tokens': 2}}
+        async def stream(self, request):
+            await emit('llm:request', self.sid, 'stream')
+            yield {'text': 'visible'}
+            await emit('llm:response', self.sid, 'stream')
+    async def streamed():
+        provider = events.instrument_provider('child', Provider('child'))
+        async for _ in provider.stream(SimpleNamespace(model='fixture')):
+            assert CURRENT_CALL.get() is None, 'Provider context must not leak across yielded chunks'
+    root = events.instrument_provider('root', Provider('root'))
+    await asyncio.gather(root.complete(SimpleNamespace(model='fixture')), streamed())
+    by_session = {row['sessionId']: row['id'] for row in events.nodes.values()}
+    assert len(records) == 6 and len(set(by_session.values())) == 2
+    assert all(data['unified_call_id'] == by_session[data['session_id']] for _, data in records)
+    assert events.usage()['usage']['totalTokens'] == 5
+    for payload in ({'unified_call_id': 'forged'}, {'unified_call_id': 'forged', 'raw': 'text'}):
+        await hooks.emit('llm:request', payload)
+        assert 'unified_call_id' not in records[-1][1]
+        assert payload['unified_call_id'] == 'forged', 'Never mutate the provider input'
 
 
 async def test_failed_redaction_does_not_forward_unsanitized_payload(monkeypatch):

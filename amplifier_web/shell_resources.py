@@ -101,9 +101,13 @@ class ShellResources:
         """Called with actual changed global keys after a canonical commit."""
         if global_keys is None:
             self.unknown_epoch += 1
+            self.queries.invalidate_workspaces()
         else:
-            for key in set(global_keys) & GLOBAL_KEYS:
+            changed = set(global_keys) & GLOBAL_KEYS
+            for key in changed:
                 self.epochs[key] += 1
+            if 'workspaces' in changed:
+                self.queries.invalidate_workspaces()
 
     def _prune(self):
         service, now = self.shell.service, time.monotonic()
@@ -139,19 +143,40 @@ class ShellResources:
         from .shell_modules import DEFAULT
         return DEFAULT if recovery else client['preview']['composition'] if client.get('preview') else client['composition']
 
-    def _bootstrap(self, identity, client, recovery):
-        from .shell_components import resolved
-        composition = self._composition(client, recovery)
+    def _bootstrap(self, identity, client, composition, instances):
         facts = [self.shell.service.instance_id, identity, client.get('revision', 0),
                  (client.get('preview') or {}).get('id'), composition,
                  [(item['id'], item['package'], client.get('views', {}).get(item['id'], {}).get('generation', 0))
-                  for item in resolved(composition)]]
+                  for item in instances]]
         return hashlib.sha256(encoded(facts).encode()).hexdigest()
+
+    def _prepare(self, identity, recovery):
+        from .shell_components import resolved
+        client = self.shell.client(identity)
+        composition = self._composition(client, recovery)
+        instances = resolved(composition)
+        return client, composition, instances, self._bootstrap(identity, client, composition, instances)
 
     def bootstrap_key(self, identity):
         self._bound(identity)
         registration = self.clients.get(identity)
-        return self._bootstrap(identity, self.shell.client(identity), bool(registration and registration['recovery']))
+        return self._prepare(identity, bool(registration and registration['recovery']))[3]
+
+    def browser_projection(self, identity):
+        """Prepare one frame's descriptor and resources from one client read."""
+        state = self._bound(identity)
+        registration = self.clients.get(identity)
+        client, composition, instances, bootstrap = self._prepare(
+            identity, bool(registration and registration['recovery']))
+        # Keep descriptor availability independent of resource registration,
+        # including the frame that retires an idle registration.
+        result = {'shellBootstrapKey': bootstrap}
+        self._prune()
+        registration = self.clients.get(identity)
+        if registration is not None and registration['scope'] == scope_for(state):
+            result['shellResources'] = self._prepared_snapshot(identity, state=state, client=client,
+                composition=composition, instances=instances, bootstrap=bootstrap)
+        return result
 
     def register(self, identity, demand_id, resources, scope, recovery=False):
         state = self._bound(identity)
@@ -191,6 +216,19 @@ class ShellResources:
 
     def _page_key(self, name, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision):
         view = dict(scoped['view'])
+        from .adaptive_work import STATUS_RESOURCES
+        if name in STATUS_RESOURCES:
+            pinned = instance.get('scope', {}).get('workspaceId') if instance.get('scope', {}).get('mode') == 'pinned' else None
+            return (((root_navigation_revision, workspace_revision), None), self._epochs(CHAT_GLOBALS),
+                    pinned, scoped.get('selectedSessionId'),
+                    encoded({'index': (view.get('navStatusPages') or {}).get(STATUS_RESOURCES[name], 0)}))
+        if name == 'workHome':
+            from .adaptive_work import WORK_QUERY_FIELDS
+            return (((root_navigation_revision, workspace_revision), None), self._epochs(CHAT_GLOBALS),
+                    view.get('workHomeScope'), scoped.get('selectedSessionId'),
+                    encoded({**{key: view.get(key) for key in WORK_QUERY_FIELDS},
+                             'pinnedWorkspaceId': instance.get('scope', {}).get('workspaceId')
+                             if instance.get('scope', {}).get('mode') == 'pinned' else None}))
         saved = view.get('navRecentLimit', 20)
         from .chat_navigation import RECENT_LIMITS
         saved = saved if type(saved) is int and saved in RECENT_LIMITS else 20
@@ -256,16 +294,18 @@ class ShellResources:
         registration = self.clients.get(identity)
         if registration is None or registration['scope'] != scope_for(state):
             return None
-        client = self.shell.client(identity)
-        bootstrap = self._bootstrap(identity, client, registration['recovery'])
+        client, composition, instances, bootstrap = self._prepare(identity, registration['recovery'])
+        return self._prepared_snapshot(identity, state=state, client=client,
+            composition=composition, instances=instances, bootstrap=bootstrap)
+
+    def _prepared_snapshot(self, identity, *, state, client, composition, instances, bootstrap):
+        registration = self.clients[identity]
         directory = getattr(self.shell.service, 'directory', None)
         semantic = directory.observation_revision if directory is not None else {}
         nav = (semantic.get('navigation', state.get('revision')), semantic.get('attention'))
         workspace_revision = semantic.get('workspace', state.get('revision'))
         root_navigation_revision = semantic.get('root_navigation', state.get('revision'))
-        from .shell_components import resolved
         from .shell_modules import BUILTINS
-        instances = resolved(self._composition(client, registration['recovery']))
         scoped_states = {item['id']: self.shell.scoped_state(client, item) for item in instances
                          if item['package'] in {'builtin.chats', 'builtin.workspaces'}}
         # The effective view also contains initial preferences and derives its
@@ -281,7 +321,7 @@ class ShellResources:
                  scoped_views, tuple(registration['scope']), registration['wanted'], recent,
                  state.get('revision') if any(item['package'] not in ('builtin.chats', 'builtin.workspaces')
                      and not item['package'].startswith('builtin.')
-                     for item in self._composition(client, registration['recovery'])['instances']) else None)
+                     for item in composition['instances']) else None)
         budget_stamp = (stamp, self.total_bytes, MAX_CLIENT_BYTES, MAX_TOTAL_BYTES)
         if registration.get('failed_stamp') == budget_stamp:
             return registration['error_envelope']
@@ -294,7 +334,7 @@ class ShellResources:
         try:
             result = self._snapshot(identity, state=state, client=client, bootstrap=bootstrap,
                 navigation_revision=nav, workspace_revision=workspace_revision, root_navigation_revision=root_navigation_revision,
-                scoped_states=scoped_states)
+                scoped_states=scoped_states, resolved_instances=instances)
         except ResourceLimit:
             result = {'hostInstanceId': self.shell.service.instance_id, 'clientId': identity,
                 'demandId': registration['demandId'], 'bootstrapKey': bootstrap,
@@ -313,12 +353,11 @@ class ShellResources:
         return result
 
     def _snapshot(self, identity, *, state, client, bootstrap, navigation_revision, workspace_revision, root_navigation_revision,
-                  scoped_states):
+                  scoped_states, resolved_instances):
         registration = self.clients[identity]
-        from .shell_components import resolved
         from .shell_modules import BUILTINS
         instances, keys = {}, {}
-        for instance in resolved(self._composition(client, registration['recovery'])):
+        for instance in resolved_instances:
             name = instance['id']
             generation = client.get('views', {}).get(name, {}).get('generation', 0)
             custom = instance['package'] not in BUILTINS

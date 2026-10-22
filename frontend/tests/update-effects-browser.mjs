@@ -6,6 +6,8 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {openSettingsPage} from './browser-settings.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {mkdir} from 'node:fs/promises';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/update_effects_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
@@ -13,8 +15,8 @@ try{
  const boot=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),actions=[],errors=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST')actions.push(request.postDataJSON())});
- const receipt=async mode=>{const response=mode?await page.request.post(boot.url+'/fixture/update-effects',{data:{mode}}):await page.request.get(boot.url+'/fixture/update-effects');assert.ok(response.ok());return response.json()};
- await page.goto(boot.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep my unsent update draft');const before=await receipt();
+ const receipt=async mode=>{const response=mode?await page.request.post(boot.url+'/fixture/update-effects',{data:{mode}}):await page.request.get(boot.url+'/fixture/update-effects');assert.ok(response.ok(),`Fixture ${mode||'read'} returned ${response.status()}: ${await response.text()}`);return response.json()};
+ await page.goto(boot.url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep my unsent update draft');const before=await receipt();
  await openSettingsPage(page,'updates');const updates=page.locator('[data-part="updates"]'),overview=page.locator('[data-part="application-update"]').first();
  const identity=overview.locator('.a-update-version-line');
  await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');
@@ -23,10 +25,31 @@ try{
  await updates.locator('[data-part="update-blockers"]>summary').click();await expect(updates.locator('[data-part="update-blockers"]')).toContainText('Settings test');
  assert.equal(actions.filter(row=>row.action==='updates.forceRestart').length,0);assert.equal(staged.updates.application.current,'0.20.165');
  await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');await expect(overview).not.toContainText('Latest release installed');
+ // A public check refreshes the channel while work is running, without turning
+ // that read into an install or losing the exact qualified pending receipt.
+ await receipt('newer-release');
+ await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
+ await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');
+ await expect(updates.getByRole('button',{name:'Check for newer release',exact:true})).toBeEnabled();
+ const refreshed=await receipt();assert.equal(refreshed.calls.length,1);assert.equal(refreshed.checks.length,1);assert.deepEqual(refreshed.updates.pendingApp,staged.updates.pendingApp);assert.equal(refreshed.generation.active,'original-generation');
+ await updates.getByRole('button',{name:'Force restart…',exact:true}).click();
+ const confirmation=updates.getByRole('alertdialog',{name:'Confirm update restart'});
+ await expect(confirmation).toContainText('prepared Amplifier 99.0.0');
+ await expect(confirmation).toContainText('Amplifier 99.0.1 is available');
+ await confirmation.getByRole('button',{name:'Cancel',exact:true}).click();
+ await expect(confirmation).toHaveCount(0);
+ await receipt('offline');await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
+ await expect(updates).toContainText('The prepared update is still available');
+ await expect(overview).toContainText('Waiting for 1 chat to finish');
+ assert.deepEqual((await receipt()).updates.pendingApp,staged.updates.pendingApp);
+ if(process.env.AMPLIFIER_TEST_ARTIFACTS){await mkdir(process.env.AMPLIFIER_TEST_ARTIFACTS,{recursive:true});await page.screenshot({path:process.env.AMPLIFIER_TEST_ARTIFACTS+'/queued-update-offline.png'});}
+ await receipt('newer-release');await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
+ await expect(updates).not.toContainText('The prepared update is still available');
+ await expect(updates.getByRole('button',{name:'Check for newer release',exact:true})).toBeEnabled();
  await receipt('unknown');await expect(overview).toContainText('Updates need attention');await expect(updates).toContainText('installation needs verification');await expect(updates.locator('[data-action="updates.check"]')).toBeDisabled();await expect(updates.locator('[data-action="updates.install"]')).toHaveCount(0);assert.equal((await receipt()).calls.length,1);
- await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');assert.equal((await receipt()).generation.active,'original-generation');
+ await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');assert.equal((await receipt()).generation.active,'original-generation');
  await receipt('known-failure');await expect(updates.getByRole('button',{name:'Try update again',exact:true})).toBeEnabled();assert.equal((await receipt()).generation.active,'original-generation');
- await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');await expect(updates).toContainText('Synthetic staging failed; original generation retained.');
+ await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');await expect(updates).toContainText('Synthetic staging failed; original generation retained.');
  await updates.getByRole('button',{name:'Try update again',exact:true}).click();await expect(overview).toContainText('Waiting for 1 chat to finish');assert.equal((await receipt()).calls.length,2);
  await receipt('rollback-ready');
  // The only rollback control is within Advanced details; this is supplemental

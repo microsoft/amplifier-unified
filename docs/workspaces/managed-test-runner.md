@@ -17,15 +17,72 @@ an environment is launched.
 
 Setup is a separate host effect: a direct user action authorizes it, while an
 agent needs `test_host_setup` in global scope. This does not grant authority to
-change unrelated configuration. Existing session-scoped `test_environments`
-authority still governs checks. Passive discovery and result reads do not request
-configuration authority.
+change unrelated configuration. Routine task-owned testing needs no separate `test_environments` approval.
+Root ownership, Stop and current backend identity still govern checks. Passive
+discovery and result reads do not request configuration authority.
 
 Setup retains its identity and phase before effects. Repeating a request returns
 its retained result; interrupted effects are observed, never blindly repeated.
 Ready requires an actual backend probe. Readiness includes its observation time
 and does not claim every project's dependencies are prepared. Upgrading a backend
 does not replace the retained backend of an existing environment.
+
+## Runner update policy
+
+App-managed runner packages follow their declared moving upstream source under
+the global update preference. A resolved commit is an installation identity,
+not a standing update pin. Explicit user pins remain explicit. Existing
+app-generated pins can be migrated only with an owned setup receipt establishing
+their origin; matching a package name or a familiar commit is insufficient.
+
+A runner update installs separately and qualifies the exact package,
+dependencies, adapter protocol and configured execution target before selection.
+The qualification includes a task-owned source snapshot and actual offline
+execution, result retention and owned cleanup. Matching a version number or a
+self-reported schema does not qualify a runner. Updating package code must not
+rerun host setup, alter a daemon/project/network, or reset operator limits.
+
+Selection is an atomic change for future accepted checks. Existing jobs,
+environments, unknown outcomes and rollback references retain their exact
+installation, controller, configuration and execution target. A lost reply or
+restart reconciles the saved operation; it does not repeat a check or replace an
+unknown environment. Old packages remain available until all references are
+settled. Each registered machine qualifies its own configured backend; a probe
+on another machine is not acceptance evidence.
+
+The updater reports a failed qualification plainly and continues using the
+previous runner. Unsupported configured installations remain visible as
+owner-managed or explicitly pinned; they must not be reported as current merely
+because no automatic update path is implemented.
+
+### Incus engine generations
+
+The Incus engine is a separate update source from the deterministic runner core.
+For an app-managed local or registered native Linux target, availability checks
+inspect the installed engine and its retained source policy on that actual
+machine. Explicit pins and installations without setup provenance remain
+protected. Passive discovery does not install a controller or change host setup.
+
+A candidate installs into a private target-owned generation and must finish a
+fixed source-copy, offline command, retained artifact and owned-removal check.
+Only then can the target atomically select it for future tests. An unchanged
+dynamic core can retain its previous proof through a composed receipt recording
+the exact core proof and new engine proof; changed code or unrelated settings
+cannot borrow those proofs. Original core rollback and accepted-work references
+remain valid. Capacity-only edits do not erase a declared moving source policy.
+
+Confirmed no-effect capacity refusals may make a new admission attempt. Unknown
+launch or removal outcomes retain the exact original owner and are observed
+before continuing. A missing retained artifact fails qualification even when
+native absence is confirmed; the proven absent owner releases capacity.
+
+The first implementation removes known settled, unpublished failed or skipped
+private runtimes and retains their receipts. Prior selected generations and
+unknown installer/guest outcomes remain in the private generation store. Finite
+reference-aware retirement of prior Incus generations is not implemented yet.
+This differs from core-package retirement and must be reported as retained
+storage, not completed cleanup. Native Windows automatic Incus updates are
+unsupported; passive Updates inventory still works without POSIX modules.
 
 ## Prepared profiles
 
@@ -83,3 +140,55 @@ owned resource cleanup. Linux qualification does not imply native macOS,
 Windows, WSL or a hosted-runner path is supported. Interactive access to an app
 inside the test environment requires a separately qualified preview route;
 headless browser tests inside the environment do not establish that capability.
+
+Executable bytecode is part of a dynamic runtime's exact identity, including
+cached and sourceless Python modules. Managed helper and snapshot exports disable
+bytecode writes so normal use does not alter the qualified generation. The
+registered controller runs only the source bytes in its retained verified
+manifest; adjacent bytecode cannot substitute for those sources, including when
+an older controller bootstraps into its qualified interpreter. These checks bind
+application-owned execution evidence; they are not an OS security boundary.
+
+
+## Remote testing from Mac, Windows, WSL or Linux
+
+A registered Linux machine can be the first and only testing backend. In global
+Settings → Testing → Connected test machines, choose an existing SSH connection
+to a machine whose native Incus runner is already configured. The origin needs
+Git and an SSH client with non-interactive authentication and a trusted host key.
+It does not need Docker, Incus, a Linux runtime or a managed DTU installation.
+Registration installs only the app's fixed, verified controller in the target
+account; it does not initialize a daemon, network, image or project. There is no
+new per-check permission prompt.
+
+The origin creates a deterministic snapshot of the selected Git working area,
+including dirty tracked and nonignored untracked files. Git metadata, ignored
+files, host configuration and credentials are not injected into the guest.
+Tracked source remains source: this is not a secret scanner. Source links are
+copied as link text without reading their destinations; submodule entries do not
+recursively copy other working areas. Snapshot output stays outside the source;
+no index, refs, hooks or source files are modified. A changing source, unmerged
+index or unsupported file fails before environment creation.
+
+The snapshot exporter is bundled with the app. Native Windows uses pinned Win32
+handles, rejects parent junctions/reparse points, and verifies retained authority
+records' owner and ACL. The Windows token's user or verified default administrator owner must own those
+records. OWNER RIGHTS grants refer only to that verified owner; inheritance-only
+entries do not grant access to the current object. Ordinary other users cannot
+have write access (SYSTEM and Administrators retain
+normal OS authority). POSIX reads and writes remain relative to pinned directory
+descriptors, so replacing a parent cannot redirect a source read or receipt.
+Git for Windows link-text checkouts and executable index modes are preserved.
+
+Accepted checks retain their original controller, exact target, resource limits,
+source hash and cleanup identity. Pausing a machine prevents new selection;
+existing work and lost responses retain their original route. A waiting check
+may choose another of its already accepted targets before admission. It never
+moves after an uncertain effect. Remote capacity, execution and cleanup use the
+existing per-machine account authority; no origin-wide pool replaces it.
+
+The origin retains source and downloads verified evidence after target cleanup.
+If a download is interrupted, the authoritative target export remains available.
+Removing or pausing a current registration does not remove an admitted owner's
+retained recovery descriptor. A target whose SSH identity changes must be repaired
+through normal host trust; the app never silently accepts a new host key.

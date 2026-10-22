@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Actual OS denial as an unprivileged DTU user, without weakening agent policy.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -12,7 +13,7 @@ try{
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1366,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),writes=[],errors=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST'&&request.postDataJSON().action==='workspace.resources.provision')writes.push(request.postDataJSON())});
  const facts=async()=>{const response=await page.request.get(boot.url+'/fixture/storage');assert.ok(response.ok());return response.json()};
- await page.goto(boot.url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();const before=await facts();assert.equal(before.writeDenied,true);assert.equal(before.managedPathExists,false);
+ await page.goto(boot.url);await showFixtureConversation(page,{navPinned:true});await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();const before=await facts();assert.equal(before.writeDenied,true);assert.equal(before.managedPathExists,false);
  // Workspace placement is a fixture prerequisite; allocation is the public UI.
  await page.evaluate(workspaceId=>window.amplifier.dispatch('view.update',{patch:{panel:null,setupJourney:'done',workSurface:'workspace',workWorkspaceId:workspaceId,workWorkspaceTab:'details'}}),before.workspaceId);
  await page.getByText('Managed resources',{exact:true}).click();const storage=page.getByRole('region',{name:'Task storage',exact:true});

@@ -101,3 +101,18 @@ def test_reset_refuses_missing_uv_opt_in(tmp_path, monkeypatch):
     monkeypatch.delenv("AMPLIFIER_RESET_TEST_UV", raising=False)
     with pytest.raises(ValueError, match="requires AMPLIFIER_RESET_TEST_UV"):
         clients.preflight("uv-reset", tmp_path)
+
+
+@pytest.mark.parametrize('dependencies', [False, True])
+def test_browser_preparation_can_target_existing_noneditable_interpreter(tmp_path, dependencies):
+    import json
+    (tmp_path / 'frontend').mkdir()
+    (tmp_path / 'frontend/package-lock.json').write_text(json.dumps({
+        'packages': {'node_modules/playwright': {'version': '1.63.0'}}}))
+    commands = clients.browser_prepare_commands(tmp_path, '/owned/uv', '/owned/.venv/bin/python',
+                                                 install_dependencies=dependencies)
+    assert commands[0] == ['/owned/uv', 'pip', 'install', '--python',
+                           '/owned/.venv/bin/python', 'playwright==1.63.0']
+    assert commands[1] == ['/owned/.venv/bin/python', '-m', 'playwright', 'install',
+                           *(['--with-deps'] if dependencies else []), 'chromium']
+    assert not any('sync' in row or '--editable' in row for row in commands)

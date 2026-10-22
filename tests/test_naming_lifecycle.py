@@ -157,7 +157,12 @@ async def test_worker_rejects_uncontrolled_naming_before_execute(tmp_path, monke
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
     monkeypatch.setattr('amplifier_web.host.config.app_home', lambda: tmp_path / 'app')
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager', AsyncMock(return_value=(session, runtime, {})))
-    monkeypatch.setattr('amplifier_web.runtime_controls.RuntimeControls', lambda *args: controls)
+    def make_controls(session_arg, runtime_arg, telemetry, *, preserve_configuration):
+        assert session_arg is session
+        assert runtime_arg is runtime
+        assert preserve_configuration is False
+        return controls
+    monkeypatch.setattr('amplifier_web.runtime_controls.RuntimeControls', make_controls)
     monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     monkeypatch.setattr('amplifier_web.app_guidance.install_app_access', AsyncMock())
@@ -170,8 +175,10 @@ async def test_worker_rejects_uncontrolled_naming_before_execute(tmp_path, monke
     worker.shared_handle = SimpleNamespace()
     worker.activation_gate = ActivationGate()
     await worker.start({'id': 'blocked', 'workspace': str(tmp_path)}, recover_bundle=False)
+    session.execute.assert_not_called()
     session.execute.assert_not_awaited()
     assert worker.execution is None and worker.shutdown.is_set()
+    assert not any(event['type'] == 'runtime.ready' for event in events)
     assert any(event['type'] == 'runtime.error' and 'recognized lifecycle' in event['error'] for event in events)
 
 
@@ -282,6 +289,7 @@ async def test_default_app_naming_uses_current_selected_provider_not_priority_or
     host.release.set()
     result = await namer.suggest()
     assert result['name'] == 'Generated project' and len(host.calls) == 1
+    assert host.calls[0].model == 'chosen-model'
     loop.root_provider = SelectedProvider(Unwanted(), {'model': 'missing'})
     with pytest.raises(ValueError, match='no longer mounted'):
         namer.hook._select_session_provider(providers)
@@ -315,12 +323,11 @@ async def test_first_exchange_and_periodic_refresh_change_titles_without_idle_ca
     assert host.metadata.read()['name'] == 'Generated project'
     host.provider.response_name = 'Expanded project'
     for number in range(2, 6): await turn(number)
-    assert len(host.calls) == 2
+    assert len(host.calls) == 3  # Initial, early refinement, then interval review.
     assert host.metadata.read()['name'] == 'Expanded project'
-    # Both calls use the initial title+description contract; the second adds
-    # a stability instruction instead of the upstream description-only prompt.
-    assert 'Only change it when' in str(host.calls[1])
-    assert 'name + description' in str(host.calls[1])
+    assert 'early clarification' in str(host.calls[1])
+    assert 'periodic review' in str(host.calls[2])
+    assert '"keep"' in str(host.calls[1])
     before = len(host.calls)
     namer.refresh_seconds = .01
     namer.observe({'type': 'generation.started'})

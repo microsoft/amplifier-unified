@@ -11,6 +11,7 @@ from amplifier_web.runtime_worker import Worker
 
 SCRIPT = r'''
 import json,sys,time
+from pathlib import Path
 parked=False
 for line in sys.stdin:
     data=json.loads(line); op=data['op']; result={}
@@ -33,7 +34,11 @@ for line in sys.stdin:
         time.sleep(.02)
         result={'retired':parked}
     print(json.dumps({'op':'reply','id':data['id'],'result':result}),flush=True)
-    if op=='retire' and parked:break
+    if op=='retire' and parked:
+        print(json.dumps({'type':'session.closed'}),flush=True)
+        if len(sys.argv)>1:
+            while not Path(sys.argv[1]).exists(): time.sleep(.01)
+        break
 '''
 
 
@@ -182,6 +187,7 @@ async def test_late_retirement_refusal_reopens_same_worker(manager):
     assert (await asyncio.wait_for(manager.control('late-refusal', 'inspect'), 2))['ok']
     assert manager.workers['late-refusal']['process'] is first
     assert first.returncode is None and not manager.workers['late-refusal']['closing']
+    assert 'stop_reason' not in manager.workers['late-refusal']
 
 
 async def test_missing_retirement_reply_never_force_kills_and_explicit_stop_cleans_up(manager):
@@ -196,10 +202,38 @@ async def test_missing_retirement_reply_never_force_kills_and_explicit_stop_clea
     assert not manager.workers['no-reply']['retirement_task'].done()
     await manager.stop('no-reply')
     assert first.returncode == 0 and 'no-reply' not in manager._retired
+    assert ('runtime.status', {'sessionId': 'no-reply', 'status': 'stopped'}) in manager.events
 
 
-async def test_exit_without_retirement_ack_is_reported_as_uncertain(manager):
-    manager.command = [sys.executable, '-c', SCRIPT.replace("time.sleep(.02)", "break")]
+async def test_user_stop_wins_after_retirement_ack_before_exit(manager, tmp_path):
+    # A real Stop can arrive after the ack, while native cleanup is still
+    # running. The maintenance path must not mask or undo that Stop.
+    release = tmp_path/'release'
+    manager.command = [sys.executable, '-c', SCRIPT, str(release)]
+    first = await warm(manager, 'stop-race')
+    manager.retention.settings['max_warm_workers'] = 0
+    sweep = asyncio.create_task(manager.retention.sweep())
+    stop = None
+    try:
+        async with asyncio.timeout(3):
+            while not any(kind == 'runtime.warmth' and data.get('status') == 'cold' for kind, data in manager.events):
+                await asyncio.sleep(.005)
+        assert first.returncode is None
+        stop = asyncio.create_task(manager.stop('stop-race'))
+        await asyncio.sleep(0)
+        release.touch()
+        await asyncio.wait_for(stop, 3)
+        assert first.returncode == 0 and 'stop-race' not in manager._retired
+        assert ('runtime.status', {'sessionId': 'stop-race', 'status': 'stopped'}) in manager.events
+    finally:
+        release.touch()
+        await asyncio.gather(sweep, *([stop] if stop else []), return_exceptions=True)
+
+
+@pytest.mark.parametrize('closed_event', [False, True])
+async def test_exit_without_retirement_ack_is_reported_as_uncertain(manager, closed_event):
+    close = "print(json.dumps({'type':'session.closed'}),flush=True); " if closed_event else ''
+    manager.command = [sys.executable, '-c', SCRIPT.replace("time.sleep(.02)", close + "break")]
     first = await warm(manager, 'no-ack')
     manager.retention.settings['max_warm_workers'] = 0
     await manager.retention.sweep()

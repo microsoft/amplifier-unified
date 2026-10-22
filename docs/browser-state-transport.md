@@ -299,6 +299,14 @@ No omitted browser page changes durable membership, execution, or persistence.
 
 ## Existing stream and receipt behavior
 
+Recent Work readiness notifies an attached, selected web reader as soon as its
+state stream exists, including before shell-resource registration finishes.
+That notification invalidates the reader's cached frame through the existing
+loss-safe shell lane. It does not depend on an unrelated command or view report
+to expose a completed read. Registered/current selected web readers retain the
+same behavior; unrelated selections, dormant client records and non-web clients
+do not gain a notification or a new display read.
+
 Browsers opt into compact action receipts with `X-Amplifier-State-Transport:
 delta-v1`. Current hosts advertise `websocket` at client attachment; browsers
 connect to `/api/events/ws?transport=delta-v1` with their attached `clientId`.

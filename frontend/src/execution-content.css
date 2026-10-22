@@ -60,6 +60,7 @@
 #amp-one .a-execution-content .a-execution-action-line .a-execution-label{flex:1;min-width:0;overflow:hidden;white-space:nowrap}
 #amp-one .a-execution-content .a-execution-action-line .a-execution-label>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #amp-one .a-execution-content .a-execution-action-line .a-execution-label code{white-space:nowrap}
+#amp-one .a-execution-content .a-execution-label .a-execution-failure-hint{color:var(--a-danger)}
 #amp-one .a-execution-content .a-execution-model-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 16px;margin:0 0 12px;font-size:var(--a-text-base,14px)}
 #amp-one .a-execution-content .a-execution-model-facts dt{color:var(--a-muted)}
 #amp-one .a-execution-content .a-execution-model-facts dd{margin:0;overflow-wrap:anywhere}
@@ -88,4 +89,10 @@
  #amp-one .a-execution-turn-line>.a-execution-complete,#amp-one .a-execution-turn-line>.a-execution-warning,#amp-one .a-execution-turn-line>.a-execution-dot{order:1}
  #amp-one .a-execution-turn-line>.a-execution-usage{order:2}
  #amp-one .a-execution-turn-line>.a-execution-call-counts{order:3;font-size:var(--a-text-sm,13px)}
+}
+
+#amp-one .a-execution-content .a-execution-preview-note{margin:0 12px 6px;color:var(--a-muted);font-size:var(--a-text-sm,13px)}
+@media(max-width:600px){
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-label>span{white-space:normal}
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-label code{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;margin-top:3px;overflow-wrap:anywhere}
 }

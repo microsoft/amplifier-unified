@@ -171,7 +171,7 @@ def test_installed_service_can_find_uv_from_installer_path(tmp_path, monkeypatch
     monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: None)
     deployment_service.install(tmp_path / "data", tmp_path)
     service_path = _unit_environment_path(unit)
-    assert service_path == installer_path
+    assert service_path.startswith(installer_path + os.pathsep)
     assert shutil.which("uv", path=service_path) == str(uv)
     # Exercise the actual runtime discovery, not only the generated text.
     monkeypatch.setenv("PATH", service_path)
@@ -190,7 +190,7 @@ def test_replacing_service_restarts_it_to_apply_new_environment(tmp_path, monkey
     deployment_service.install(tmp_path / "data", tmp_path, replace=True)
     assert calls == [("daemon-reload",), ("enable", deployment_service.UNIT_NAME),
                      ("restart", deployment_service.UNIT_NAME)]
-    assert _unit_environment_path(unit) == "/snap/bin:/usr/bin:/bin"
+    assert _unit_environment_path(unit).startswith("/snap/bin:/usr/bin:/bin:")
 
 
 def test_missing_path_uses_portable_default(tmp_path, monkeypatch):
@@ -199,7 +199,7 @@ def test_missing_path_uses_portable_default(tmp_path, monkeypatch):
     monkeypatch.setattr(deployment_service, "unit_path", lambda: unit)
     monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: None)
     deployment_service.install(tmp_path / "data", tmp_path)
-    assert _unit_environment_path(unit) == f"{Path.home() / '.local' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
+    assert set(_unit_environment_path(unit).split(os.pathsep)) >= {"/bin", "/usr/bin", str(Path.home() / ".local/bin"), str(Path.home() / ".cargo/bin")}
 
 
 @pytest.mark.parametrize("value", ["/bin\n[Service]\nExecStart=/bad", "/bin\r", "/bin\x01"])
@@ -277,7 +277,7 @@ def test_macos_install_writes_private_launch_agent_and_bootstraps(tmp_path, monk
         "--workspace", str(workspace), "serve",
     ]
     assert contents["WorkingDirectory"] == str(workspace)
-    assert contents["EnvironmentVariables"]["PATH"] == "/custom/bin:/usr/bin:/bin"
+    assert contents["EnvironmentVariables"]["PATH"].startswith("/custom/bin:/usr/bin:/bin:")
     assert contents["EnvironmentVariables"]["AMPLIFIER_SESSION_STATE_HOME"] == str(tmp_path / "shared-state")
     assert contents["EnvironmentVariables"]["AMPLIFIER_UNIFIED_LAUNCHD_LABEL"] == deployment_service.LAUNCHD_LABEL
     assert Path(contents["StandardOutPath"]).parent == data_dir / "logs"

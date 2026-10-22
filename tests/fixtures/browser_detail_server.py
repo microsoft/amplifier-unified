@@ -80,7 +80,7 @@ async def main():
             @turn_id.setter
             def turn_id(self,value):self.observer.turn_id=value
             def hook(self,sid,event,data):
-                log_hook(sid,event,data);self.observer.hook(sid,event,data)
+                recorded=self.observer.hook(sid,event,data);log_hook(sid,event,recorded or data)
             def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
@@ -98,7 +98,8 @@ async def main():
             if op=='setup':
                 write_private(temp/'native'/'settings.yaml',yaml.safe_dump(provider_settings if args.get('connected') else {'config':{'providers':[]}}))
                 manager=SetupManager(temp/'app')
-                service.state['setup'].update(providers=manager.provider_rows(alpha),providersLoadedAt=time.time(),providersWorkspace=str(alpha))
+                workspace = Path(service._session(args['sessionId'])['workspace']) if args.get('sessionId') else alpha
+                service.state['setup'].update(providers=manager.provider_rows(workspace),providersLoadedAt=time.time(),providersWorkspace=str(workspace))
                 service.state['view']['setupJourney']=args.get('journey','done')
             elif op=='native-history':
                 from amplifier_web.session_files import project_slug
@@ -212,6 +213,169 @@ async def main():
                 await service.event_log_view.windows.close()
                 service.event_log_view.windows = WorkWindows(service)
                 await service.event_log_view.windows.read(aid)
+            elif op == 'bounded-tool-records':
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.runtime import normalize_event
+                from amplifier_web.event_log_view import event_path
+                from amplifier_web.work_windows import WorkWindows
+                row = service._session(aid)
+                event_path(row, aid).unlink(missing_ok=True)
+                now = time.time()
+                row.update(status='idle', workers=[], messages=[{'id':'tool-detail-question',
+                    'role':'user', 'text':'Inspect older and delegated saved tool details',
+                    'createdAt':now-10}], execution={'nodes':[], 'turns':[]})
+                ensure_turn(row, 'tool-details')
+                row['execution']['turns'][0].update(anchorMessageId='tool-detail-question',
+                    startedAt=now-9, phase='completed')
+                emitted=[]
+                events=ExecutionEvents(aid, emitted.append)
+                events.turn_id='tool-details'
+                async def call(sid, identity, name, arguments, result, *, legacy=False):
+                    for event, data in [
+                        ('tool:pre', {'tool_call_id':identity,'tool_name':name,'tool_input':arguments}),
+                        ('tool:post', {'tool_call_id':identity,'tool_name':name,'tool_input':arguments,'result':result})]:
+                        data=events.hook(sid,event,data) or data
+                        public=emitted[-1]['event']
+                        if legacy:
+                            data.pop('unified_tool_observation_id',None)
+                            public.pop('toolObservationId',None)
+                        log_hook(sid,event,data,public.get('endedAt') or public['startedAt'])
+                    for event in emitted:
+                        kind,data=normalize_event(event,aid)
+                        await service.on_runtime_event(kind,data)
+                    emitted.clear()
+                await call(aid,'older-exact','bash',{'command':'printf older-exact-command\n'+'# retained older code\n'*90+'# OLDER-EXACT-INPUT-END'},
+                    {'success':True,'output':{'stdout':'OLDER-EXACT-RESULT-END','returncode':0}})
+                await call(aid,'older-legacy','app_control',{'action':'workspace.inspect','note':'LEGACY-INPUT-END'},
+                    {'success':True,'output':'LEGACY-OUTPUT-END'},legacy=True)
+                await call(aid,'older-delegate','delegate',
+                    {'agent':'reviewer','instruction':'Review retained request. '*90+'DELEGATE-REQUEST-END'},
+                    {'success':True,'output':'Saved review result. '*90+'DELEGATE-RESPONSE-END'})
+                events.lifecycle({'type':'child.updated','sessionId':'details-child','parentSessionId':aid,
+                    'callId':'older-delegate','agent':'reviewer','status':'completed'})
+                for event in emitted:
+                    kind,data=normalize_event(event,aid)
+                    await service.on_runtime_event(kind,data)
+                emitted.clear()
+                event_path(row,'details-child').unlink(missing_ok=True)
+                await call('details-child','child-exact','tool_exec',
+                    {'code':'print("child command")\n'+'# retained line\n'*90+'# CHILD-CODE-END'},
+                    {'success':False,'output':{'stderr':'Child validation failed','returncode':2,
+                        'stdout':'Child full output. '*90+'CHILD-OUTPUT-END'}})
+                for index in range(140):
+                    log_hook(aid,'tool:post',{'tool_call_id':'newer-unrelated-'+str(index),
+                        'tool_name':'unrelated','result':'later observation'},now+index)
+                legacy=next(node for node in row['execution']['nodes']
+                    if node.get('toolCallId')=='older-legacy')
+                log_hook(aid,'tool:post',{'tool_call_id':'older-legacy',
+                    'tool_name':'app_control','result':'LEGACY-RECENT-OUTPUT'},legacy['endedAt'])
+                await service.event_log_view.windows.close()
+                service.event_log_view.windows=WorkWindows(service)
+                await service.event_log_view.windows.read(aid)
+                def no_complete_projection(*args,**kwargs):
+                    raise AssertionError('Tool details must use bounded event windows only')
+                service.event_log_view.read=no_complete_projection
+            elif op == 'bounded-provider-records':
+                from types import SimpleNamespace
+                from amplifier_core import HookRegistry, HookResult
+                from amplifier_web.event_log_view import event_path
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.provider_recording import install_request_redaction
+                from amplifier_web.runtime import normalize_event
+                from amplifier_web.work_windows import WorkWindows
+                row = service._session(aid)
+                event_path(row, aid).unlink(missing_ok=True)
+                now = time.time()
+                # Two bounded saved pages exercise the enclosing collapsed
+                # Work group, not just a standalone observation turn.
+                for i in range(140):
+                    log_hook(aid, 'tool:post', {'tool_call_id': 'saved-' + str(i),
+                        'tool_name': 'Earlier saved check', 'result': {'success': True}}, now - 30 + i / 100)
+                row.update(status='idle', messages=[{'id': 'recording-question', 'role': 'user',
+                    'text': 'Inspect the saved provider calls', 'createdAt': now - 10}],
+                    execution={'nodes': [], 'turns': []})
+                ensure_turn(row, 'recordings')
+                row['execution']['turns'][0].update(anchorMessageId='recording-question', startedAt=now-9,
+                    phase='completed')
+                for i in range(105):
+                    row['execution']['nodes'].append({'id': 'earlier-' + str(i), 'kind': 'tool',
+                        'turnId': 'recordings', 'label': 'Earlier check', 'phase': 'completed',
+                        'startedAt': now - 8, 'endedAt': now - 7})
+                if args.get('retention'):
+                    row['execution']['nodes'] = []
+                    emitted_tools=[]
+                    tools=LoggedEvents(aid,emitted_tools.append);tools.turn_id='recordings'
+                    arguments={'code':'// retained tool input\n'*100+'TOOL-INPUT-END'}
+                    for event in ('tool:pre','tool:post'):
+                        data={'tool_call_id':'retained-tool','tool_name':'tool_exec','tool_input':arguments}
+                        if event=='tool:post':
+                            data['result']={'success':True,'output':'retained output\n'*100+'TOOL-OUTPUT-END'}
+                        tools.hook(aid,event,data)
+                    for event in emitted_tools:
+                        kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
+                hooks, capabilities, emitted = HookRegistry(), {}, []
+                coordinator = SimpleNamespace(hooks=hooks, get_capability=capabilities.get,
+                    register_capability=lambda key, value: capabilities.update({key: value}))
+                install_request_redaction(coordinator, directory=event_path(row, aid).parent)
+                pending = []
+                async def capture(event, data):
+                    pending.append((event, copy.deepcopy(data), time.time()))
+                    return HookResult()
+                for event in ('llm:request', 'llm:response'):
+                    hooks.register(event, capture, priority=100)
+                class Provider:
+                    def get_info(self): return {'id': 'test', 'defaults': {'model': 'bounded-recording'}}
+                    async def complete(self, request):
+                        await hooks.emit('llm:request', {'provider': 'test', 'model': 'bounded-recording',
+                            'request_id': 'bounded-attempt', 'raw': {'instructions': 'RECORDED-REQUEST',
+                            'largeDiagnostic': 'x' * 1_100_000, 'end': 'FULL-RECORDING-END'}})
+                        await hooks.emit('llm:response', {'provider': 'test', 'model': 'bounded-recording',
+                            'request_id': 'bounded-attempt', 'raw': {'text': 'RECORDED-RESPONSE'}})
+                        return {'usage': {'input_tokens': 2500, 'output_tokens': 103}}
+                events = ExecutionEvents(aid, emitted.append)
+                events.turn_id = 'recordings'
+                await events.instrument_provider(aid, Provider()).complete(SimpleNamespace(model='bounded-recording'))
+                for event in emitted:
+                    kind, data = normalize_event(event, aid)
+                    await service.on_runtime_event(kind, data)
+                # Legacy bytes are intact but have no exact host-call receipt.
+                # The browser must expose their own observation, never infer a
+                # live association merely from matching model/time/usage.
+                for name, value in (('request', 'LEGACY-REQUEST'), ('response', 'LEGACY-RESPONSE')):
+                    pending.append(('llm:' + name, {'provider': 'test', 'model': 'legacy-recording',
+                        'request_id': 'legacy-attempt', 'raw': {'text': value}}, time.time()))
+                await service.on_runtime_event('execution.event', {'id': 'llm:legacy', 'kind': 'llm',
+                    'sessionId': aid, 'rootSessionId': aid, 'turnId': 'recordings', 'producerId': 'legacy-fixture',
+                    'revision': 1, 'liveObservation': True, 'phase': 'completed', 'label': 'Legacy model call',
+                    'provider': 'test', 'model': 'legacy-recording', 'startedAt': now, 'endedAt': time.time(),
+                    'usage': {'totalTokens': 12}})
+                service.fixture_provider_records = pending
+                if not args.get('delayCapture'):
+                    for event, data, at in pending:
+                        log_hook(aid, event, data, at)
+                    service.fixture_provider_records = []
+                await service.event_log_view.windows.close()
+                service.event_log_view.windows = WorkWindows(service)
+                await service.event_log_view.windows.read(aid)
+                def no_complete_projection(*args, **kwargs):
+                    raise AssertionError('This fixture must use bounded event windows only')
+                service.event_log_view.read = no_complete_projection
+            elif op == 'append-retention-records':
+                count=args.get('count',1)
+                assert type(count) is int and 0<count<=201
+                for index in range(count):
+                    log_hook(aid,'tool:post',{'tool_call_id':f'unrelated-{time.time_ns()}-{index}',
+                        'tool_name':'Newer saved work','result':{'success':True}})
+                await service.event_log_view.windows.read(aid)
+            elif op == 'flush-provider-records':
+                # Only canonical bytes arrive: no execution event can wake an
+                # already open completed call on behalf of the product.
+                for event, data, at in service.fixture_provider_records:
+                    log_hook(aid, event, data, at)
+                service.fixture_provider_records = []
+                await service.event_log_view.windows.read(aid)
             elif op in {'canonical-work','canonical-append'}:
                 from amplifier_web.event_log_view import event_path
                 row=service._session(aid);base=1700000000
@@ -319,6 +483,10 @@ async def main():
                      {'success':True,'output':{'stdout':'','stderr':'','returncode':0}}),
                     ('failed','bash',{'command':'python failing_test.py'},
                      {'success':False,'output':{'stdout':'','stderr':'AssertionError: expected committed','returncode':1},'error':{'message':'Exit code 1'}}),
+                    ('code','tool_exec',{'description':'a long saved description '*50,
+                      'code':'const result = await tools.check({name: "fixture"});\n'+ '// retained code\n'*80+'// CODE-END'},
+                     {'success':False,'output':{'stdout':'long retained output\n'*100,
+                       'stderr':'Traceback\nFixtureError: exact failure detail','exit_code':9}}),
                     ('malformed','todo',{'todos':[{'content':{'unexpected':'shape'},'status':42}]},
                      {'success':False,'output':'Invalid task input'}),
                     ('delegate','delegate',{'agent':'code-reviewer','instruction':'Review the retry test'},
@@ -334,6 +502,22 @@ async def main():
                 for event in emitted:
                     kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
                 await service.on_runtime_event('execution.event',{'id':'legacy','kind':'tool','turnId':'inspect','label':'legacy.tool','phase':'completed','summary':'Tool completed. Expand any delegated actions below for their progress and results.'})
+            elif op=='inspection-previews':
+                from amplifier_web.runtime import normalize_event
+                emitted=[];events=LoggedEvents(aid,emitted.append);events.turn_id='inspect'
+                examples=json.loads((Path(__file__).parent/'tool-preview-cases.json').read_text())
+                examples += [
+                    {'name':'long-preview','tool':'custom_lookup','input':{'query':'Find the project schedule and next steps. '*150+'QUERY-END'}},
+                    {'name':'nested-failure','tool':'tool_exec','input':{'code':'const result = await tools.inspect(); text(result);'},
+                     'result':{'success':False,'error':{'message':'One or more nested calls did not confirm success'},'output':json.dumps({'error':{'code':'nested_call_failed','message':'One or more nested calls did not confirm success'},'calls':[{'name':'inspect','status':'unknown'}],'notes':'retained detail '*1200+'RESULT-END'},separators=(',',':'))}},
+                ]
+                for example in examples:
+                    identity='preview-'+example['name'];name=example['tool'];arguments=example['input']
+                    events.hook(aid,'tool:pre',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments})
+                    events.hook(aid,'tool:post',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments,
+                        'result':example.get('result',{'success':True,'output':{'matched':3,'next':None}})})
+                for event in emitted:
+                    kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
             elif op=='inspection-finish':
                 now=time.time()
                 model={**service.fixture_inspection_model,'revision':2,'phase':'completed','endedAt':now,

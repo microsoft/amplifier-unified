@@ -24,7 +24,7 @@ import time
 from filelock import FileLock, Timeout
 
 LEGACY_REPOSITORY = 'https://github.com/microsoft/amplifier-bundle-digital-twin-universe'
-LEGACY_COMMIT = '241849071f682706791ae5f4a1e5462d0e316df7'
+LEGACY_COMMIT = 'ce9219d8dac2770efe0b8270acd8ec017af625c7'
 INCUS_IMAGE_SERVER = 'https://images.linuxcontainers.org'
 INCUS_IMAGE_ALIAS = 'ubuntu/24.04/cloud'
 ACTIVE = {'accepted', 'running'}
@@ -132,7 +132,11 @@ def command(argv, *, env=None, timeout=20):
     return result['stdout'].strip()
 
 
-def capacity_defaults():
+def capacity_defaults(*, resource_admission=False):
+    if resource_admission:
+        # Native host reservations and current pressure govern parallelism.
+        # Stopped retained guests consume disk, not an arbitrary instance slot.
+        return {'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 4 * 1024 ** 3}
     try:
         memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     except (OSError, ValueError):
@@ -199,9 +203,19 @@ def discover():
 
 async def readiness(app, *, force=False):
     from .task_environments import configuration, invoke
+    from . import test_capacity_settings
+    config, state, reason = await settled_thread(configuration, app)
+    if config and config.get('remoteRunner'):
+        return {'status': 'ready', 'reason': reason, 'remote': True, 'backend': 'incus'}
+    if not sys.platform.startswith('linux'):
+        return {'status': state, 'reason': reason}
     raw = read_json(Path(app.data_dir) / 'test-environments.json')
     installs = [{'id': row.get('id'), 'status': row.get('status'), 'commit': row.get('commit'), 'python': row.get('python')} for row in getattr(getattr(app, 'smart_tools', None), 'state', {}).get('installations', [])]
-    key = hashlib.sha256(json.dumps([raw, installs], sort_keys=True).encode()).hexdigest()
+    try:
+        effective = test_capacity_settings.apply(app, config) if config else None
+    except (OSError, ValueError, TypeError):
+        return {'status': 'unavailable', 'reason': 'The saved testing capacity settings need attention. Open Settings → Testing.'}
+    key = hashlib.sha256(json.dumps([raw, installs, effective], sort_keys=True).encode()).hexdigest()
     cached = getattr(app, '_test_setup_readiness', None)
     if not force and cached and cached['key'] == key and time.monotonic() - cached['at'] < 30:
         return cached['value']
@@ -211,12 +225,19 @@ async def readiness(app, *, force=False):
     if read_json(Path(app.data_dir) / 'test-environments.json') != raw:
         return {'status': 'unavailable', 'reason': 'The runner configuration changed during inspection. Refresh its status.'}
     try:
-        observed = await settled_thread(invoke, config, app.data_dir, {}, 'capacity', {})
+        if test_capacity_settings.apply(app, config) != effective:
+            return {'status': 'unavailable', 'reason': 'The runner or its capacity settings changed during inspection. Refresh its status.'}
+        # Setup reports the same policy as guarded launch admission. The retained
+        # backend configuration remains the exact identity for cleanup owners.
+        observed = await settled_thread(invoke, effective, app.data_dir, {}, 'capacity', {})
         if not observed.get('ok') or not isinstance(observed.get('capacity'), dict):
             raise ValueError('The configured daemon did not answer.')
         capacity = observed['capacity']
         blockers = capacity.get('blockers', [])
         await settled_thread(inspect_base_image, config)
+        if (read_json(Path(app.data_dir) / 'test-environments.json') != raw
+                or test_capacity_settings.apply(app, config) != effective):
+            return {'status': 'unavailable', 'reason': 'The runner or its capacity settings changed during inspection. Refresh its status.'}
         proof_path = root(app, create=False) / ('verified-' + hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest() + '.json')
         proof = read_json(proof_path)
         verified = bool(proof and proof.get('configuration') == raw and proof.get('proof', {}).get('probeRemoved'))
@@ -224,11 +245,18 @@ async def readiness(app, *, force=False):
                  'capacity': capacity, 'available': not blockers, 'backend': config.get('backend', 'docker'), 'observedAt': time.time()}
         app._test_setup_readiness = {'key': key, 'at': time.monotonic(), 'value': value}
         return value
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError, TypeError):
         return {'status': 'unavailable', 'reason': 'The saved runner could not be verified. Check that its local daemon is running and the approved installation is still available.'}
 
 
 async def read(app):
+    from .task_environments import configuration
+    config, state, reason = await settled_thread(configuration, app)
+    if config and config.get('remoteRunner'):
+        return {'status': 'ready', 'reason': reason, 'remote': True, 'backend': 'incus',
+                'requestId': None, 'backends': [], 'operation': None}
+    if not sys.platform.startswith('linux'):
+        return {'status': state, 'reason': reason, 'requestId': None, 'backends': [], 'operation': None}
     cached = getattr(app, '_test_setup_discovery', None)
     if cached and time.monotonic() - cached['at'] < 60:
         choices = cached['value']
@@ -399,6 +427,8 @@ async def _run(app, record, lock, guard):
         if installed.get('commit') != owner.DTU_COMMIT or installed.get('extras'):
             raise ValueError('The managed runner did not match the approved core.')
         record['installationId'] = installed['id']
+        record['runnerSourcePolicy'] = {'version': 1, 'repository': owner.REPOSITORY,
+                                        'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
         write_json(path, record)
         base = {'enabled': True, 'installationId': installed['id'], 'commit': owner.DTU_COMMIT, 'backend': record['backend']}
         owned = folder / record['id']
@@ -486,8 +516,11 @@ async def verify_existing(config, raw, owned, record, step):
 
 async def setup_docker(base, selected, owned, record, step):
     from .task_environments import APPROVED_IMAGE
+    from . import test_host_resources
     binary, endpoint = selected['executable'], selected['dockerHost']
-    config = {**base, 'dockerHost': endpoint, 'image': APPROVED_IMAGE, **capacity_defaults()}
+    target = await settled_thread(test_host_resources.local_target, endpoint, {'dockerd'})
+    config = {**base, 'dockerHost': endpoint, 'image': APPROVED_IMAGE,
+              **capacity_defaults(resource_admission=target.get('supported') is True)}
     await step('preparing_image', 'Downloading the approved Python base image. Project dependencies are prepared separately.')
     await settled_thread(command, [binary, '--host', endpoint, 'pull', APPROVED_IMAGE], timeout=600)
     await step('checking_profile', 'Running a disposable offline Python check in the approved image.')
@@ -508,7 +541,9 @@ async def setup_docker(base, selected, owned, record, step):
 
 
 async def setup_incus(base, selected, owned, record, step):
-    from .incus_environment_worker import file_digest, package_digest, QUALIFIED_PACKAGES
+    from .incus_environment_worker import file_digest, package_digest, QUALIFIED_PACKAGES, CURRENT_QUALIFIED_VERSION
+    record['engineSourcePolicy'] = {'version': 1, 'repository': LEGACY_REPOSITORY,
+                                    'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
     binary = selected['executable']
     uv = shutil.which('uv')
     if not uv:
@@ -518,8 +553,8 @@ async def setup_incus(base, selected, owned, record, step):
     await settled_thread(command, [uv, 'venv', '--python', sys.executable, str(venv)], timeout=120)
     python = venv / 'bin/python'
     await settled_thread(command, [uv, 'pip', 'install', '--python', str(python), 'git+' + LEGACY_REPOSITORY + '@' + LEGACY_COMMIT], timeout=600)
-    package = json.loads(await settled_thread(command, [str(python), '-I', '-c', 'import importlib.util,json; print(json.dumps(next(iter(importlib.util.find_spec("amplifier_bundle_digital_twin_universe").submodule_search_locations))))']))
-    if package_digest(package) != QUALIFIED_PACKAGES['0.4.1']:
+    package = json.loads(await settled_thread(command, [str(python), '-I', '-c', 'import importlib.util,importlib.metadata,json; print(json.dumps({"directory":next(iter(importlib.util.find_spec("amplifier_bundle_digital_twin_universe").submodule_search_locations)),"version":importlib.metadata.version("amplifier-bundle-digital-twin-universe")}))']))
+    if package.get('version') != CURRENT_QUALIFIED_VERSION or package_digest(package['directory']) != QUALIFIED_PACKAGES[CURRENT_QUALIFIED_VERSION]:
         raise ValueError('The installed Incus adapter did not match the approved package bytes.')
     client, admission = owned / 'client', owned / 'admission'
     client.mkdir(mode=0o700)
@@ -570,9 +605,12 @@ async def setup_incus(base, selected, owned, record, step):
     daemon = json.loads(await incus(['query', '/1.0']))['environment']['certificate_fingerprint']
     launcher = venv / 'bin/amplifier-digital-twin'
     config = {**base, 'incus': {'executable': str(launcher), 'executableSha256': file_digest(launcher, 65536)[0],
-        'packageSha256': QUALIFIED_PACKAGES['0.4.1'], 'incusExecutable': binary, 'configDir': str(client),
+        'packageSha256': QUALIFIED_PACKAGES[CURRENT_QUALIFIED_VERSION], 'incusExecutable': binary, 'configDir': str(client),
         'admissionDir': str(admission), 'project': project, 'image': image,
         'daemonFingerprint': daemon, 'preparationNetwork': bridge, **capacity_defaults()}}
+    from .incus_environment_worker import host_target
+    target = await settled_thread(host_target, config['incus'], env)
+    config['incus'].update(capacity_defaults(resource_admission=target.get('supported') is True))
     await step('checking_profile', 'Running a disposable offline check in the private test project.')
     name = 'setup-' + record['id'][:16]
     write_json(owned / 'probe.json', {'backend': 'incus', 'name': name, 'project': project})

@@ -1,9 +1,10 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Authored acceptance, not qualification. Only synthetic/public sample bytes.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {hostname,homedir} from 'node:os';
 import {chromium,expect,request} from '@playwright/test';
 import assert from 'node:assert/strict';
@@ -26,6 +27,7 @@ const browserArgs=process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS
 if(!Array.isArray(browserArgs)||browserArgs.some(arg=>typeof arg!=='string'||arg.startsWith('--disable-web-security')))
  throw Error('CHROMIUM_ARGS must be an array of existing executor arguments, without disabling web security');
 const receipts=[],contexts=new Set(),pages=new Set(),fixtureRows=[],pageErrors=[];
+const blockedApplicationCleanup=new WeakSet();
 const physicalNames=['mp4-native-controls','visibility','keyboard-200-percent'];
 const scenarioPhases=['gif-live-attach','metadata-malformed-retry','gif-resume','gif-report-cadence','report-readback-negative-control',
  'mp4-native','mp4-native-controls','mp4-decode-error','mp4-explicit-cleanup','partial-disposal','large-native',
@@ -85,6 +87,9 @@ async function receiptDeadline(label,work){
 }
 async function action(page,name,args={}){
  return receiptDeadline(`App action ${name}`,()=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]));
+}
+function gifCanvasCleanupAllowed(clickAttempted,primaryFailed,clickSettled){
+ return !clickAttempted||(!primaryFailed&&clickSettled===true);
 }
 const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
  const data=node.getContext('2d').getImageData(0,0,node.width,node.height).data;
@@ -244,7 +249,7 @@ async function newClient(options={}){
   await page.goto(boot.url+'/login');
   await page.getByLabel('Username').fill('media-fixture');
   await page.getByLabel('Password').fill('fixture-password');
-  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();await showFixtureConversation(page);
   await expect(page.locator(`[data-message-id="${boot.messageId}"]`)).toBeVisible();
   const selectedAvailability=()=>page.evaluate(()=>{
    const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId)?.linkedMediaAvailable;
@@ -266,15 +271,15 @@ async function newClient(options={}){
   sharedStorage=await context.storageState();
   await record('empty-descriptor-completed','PASS',{status:200,items:[],completed:true,explicitRead:true,
    automaticRequests:metadataRequests.length,emptyLongMessages:boot.emptyLongMessageCount});
- }else await page.goto(boot.url);
+ }else{await page.goto(boot.url);await showFixtureConversation(page)}
  await page.waitForSelector('#amp-one');
  const article=page.locator(`[data-message-id="${boot.messageId}"]`);
  await expect(article).toBeVisible();
  return {page,context,article};
 }
-async function unmountAndClose(client){
+async function unmountAndClose(client,dispatchAction=action){
  const {page,context}=client;
- await action(page,'session.create',{title:'Synthetic cleanup conversation'});
+ await dispatchAction(page,'session.create',{title:'Synthetic cleanup conversation'});
  await expect.poll(()=>page.locator('[data-media-id]').count()).toBe(0);
  await expect.poll(async()=>{const p=await probeState(page);return p.frames+p.decoders+p.active}).toBe(0);
  const evidence=await probeState(page);
@@ -1205,8 +1210,109 @@ try{
    const inline=page.locator(`[data-message-id="${boot.messageId}"] [data-media-id="${saved.id}"]`);
    const canvasRoot=page.locator('[data-canvas-view="primary"]');
    let releaseEarlier,dirtyHostAdmitted=false,dirtyReceipt,dirtyTarget,primaryError;
+   let clickAttempted=false,clickSettled=null;
    const earlierGate=new Promise(done=>{releaseEarlier=done});
    const commandOrder=[],blockerId='gif-canvas-earlier-command';
+   const dirtyTrueId=randomUUID(),ownedCommandIds=new Set([blockerId,dirtyTrueId]);
+   // Phase-local diagnostics observe the real queue, never replace its effects.
+   // Only identifiers, lifecycle flags and revisions leave the synthetic page.
+   const network=[],requests=new WeakMap(),started=Date.now();
+   let droppedNetwork=0,pinnedRequest=null,pinnedId=null,bodyObservers=0;
+   const token=value=>typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,120}$/.test(value)?value:null;
+   const number=value=>Number.isFinite(value)?value:null;
+   const onRequest=request=>{
+    const url=new URL(request.url()),method=request.method();
+    if(!(url.pathname==='/api/actions'&&method==='POST'||url.pathname==='/api/state'&&method==='GET'))return;
+    let body;try{body=method==='POST'?request.postDataJSON():null}catch{}
+    const row={atMs:Date.now()-started,route:url.pathname,method,id:token(body?.id),action:token(body?.action),request:'issued'};
+    requests.set(request,row);network.push(row);
+    if(row.id===pinnedId)pinnedRequest=row;
+    if(network.length>64){network.shift();droppedNetwork++}
+   };
+   const onResponse=response=>{
+    const row=requests.get(response.request());if(!row)return;
+    row.status=response.status();row.headersAtMs=Date.now()-started;
+   };
+   const onFinished=request=>{
+    const row=requests.get(request);if(!row)return;
+    row.request='body-finished';row.finishedAtMs=Date.now()-started;
+    if(row.method!=='POST'||!ownedCommandIds.has(row.id))return;
+    if(bodyObservers>=8){row.receipt='observer-cap';return}
+    bodyObservers++;
+    // This observer is not awaited by application dispatch or failure capture.
+    request.response().then(async response=>{
+     const length=await response.headerValue('content-length');
+     if(length!==null&&Number(length)>1024*1024){row.receipt='omitted-large';return}
+     const body=await response.body();
+     if(body.length>1024*1024){row.receipt='omitted-large';return}
+     let value;try{value=JSON.parse(body.toString('utf8'))}catch{row.receipt='invalid-json';return}
+     row.receipt='observer-parsed';row.accepted=typeof value.accepted==='boolean'?value.accepted:null;
+     row.stateRevision=number(value.stateRevision);row.hostInstanceId=token(value.hostInstanceId);
+     row.embeddedState=!!value.state;row.parsedAtMs=Date.now()-started;
+    }).catch(()=>{row.receipt='unavailable'}).finally(()=>{bodyObservers--});
+   };
+   const onFailed=request=>{
+    const row=requests.get(request);if(row){row.request='failed';row.failedAtMs=Date.now()-started}
+   };
+   page.on('request',onRequest);page.on('response',onResponse);
+   page.on('requestfinished',onFinished);page.on('requestfailed',onFailed);
+   const initializeCommands=()=>receiptDeadline('Initialize command diagnostic',()=>page.evaluate(()=>{
+    const rows=[],pending=new Map();let dropped=0;
+    const token=value=>typeof value==='string'&&/^[a-zA-Z0-9_.:-]{1,120}$/.test(value)?value:null;
+    const revision=value=>Number.isFinite(value)?value:null;
+    const observed=()=>{
+     try{const state=window.amplifier.getState();return {status:'observed',revision:revision(state.revision),hostInstanceId:token(state.client?.hostInstanceId)}}
+     catch{return {status:'unavailable',revision:null,hostInstanceId:null}}
+    };
+    window.__gifCommandDiagnostic={rows,pending,get dropped(){return dropped},observed,token};
+    window.__gifDispatch=(name,args={},id=crypto.randomUUID())=>{
+     const row={id,action:name,dirty:typeof args.dirty==='boolean'?args.dirty:null,calledAt:performance.now(),settlement:'pending',before:observed()};
+     if(rows.length<64)rows.push(row);else dropped++;
+     let promise;
+     try{promise=window.amplifier.dispatch(name,args,{id})}
+     catch(error){row.settlement='threw';row.after=observed();throw error}
+     pending.set(id,promise);
+     const settled=()=>{pending.delete(id);row.settledAt=performance.now();row.after=observed()};
+     promise.then(value=>{
+      row.settlement='fulfilled';row.accepted=typeof value.accepted==='boolean'?value.accepted:null;
+      row.stateRevision=revision(value.stateRevision);row.hostInstanceId=token(value.hostInstanceId);row.embeddedState=!!value.state;
+      settled();
+     },()=>{row.settlement='rejected';settled()}).catch(()=>{row.observerError=true});
+     return promise; // Retain the original, not the deadline race or observer.
+    };
+   }));
+   const phaseAction=async(_page,name,args={})=>{
+    const id=randomUUID();
+    ownedCommandIds.add(id);
+    if(name==='canvas.views.dirty'&&args.dirty===false&&!pinnedId)pinnedId=id;
+    return receiptDeadline(`App action ${name}`,()=>page.evaluate(([name,args,id])=>window.__gifDispatch(name,args,id),[name,args,id]));
+   };
+   const captureCommands=async label=>{
+    const captureStartedAtMs=Date.now()-started;
+    let observed={status:'unavailable'};
+    try{
+     observed=await receiptDeadline('Read bounded command diagnostic',()=>page.evaluate(()=>{
+      const d=window.__gifCommandDiagnostic,state=window.amplifier.getState();
+      const view=state.canvasWorkspace?.views?.find(row=>row.viewId==='primary');
+      return {status:'observed',state:d.observed(),commands:d.rows,droppedCommands:d.dropped,
+       pendingIds:[...d.pending.keys()].slice(-64),
+       fetchIssued:window.__actionPosts.slice(-64).map(row=>({id:d.token(row.id),action:d.token(row.action)})),
+       primary:{dirty:typeof view?.dirty==='boolean'?view.dirty:null,
+        resourceRevision:Number.isFinite(view?.resourceRevision)?view.resourceRevision:null,
+        generation:Number.isFinite(view?.generation)?view.generation:null}};
+     }));
+    }catch{}
+    const snapshot=JSON.parse(JSON.stringify({label,captureStartedAtMs,capturedAtMs:Date.now()-started,
+     clickOwned:{attempted:clickAttempted,settled:clickSettled,primaryFailed:!!primaryError},
+     pinnedId,pinnedRequest,network,droppedNetwork,bodyObservers,observed}));
+    await writeEvidence(join(evidenceDir,`gif-canvas-commands-${label}.json`),snapshot);
+   };
+   const pendingSettled=()=>page.evaluate(async()=>{
+    const d=window.__gifCommandDiagnostic;
+    if(!d)throw Error('Command diagnostic was not initialized');
+    await Promise.allSettled([...d.pending.values(),window.__gifEarlier,window.__gifDirty]);
+    if(d.pending.size||d.dropped)throw Error('Tracked command settlement remains unknown');
+   });
    const holdEarlier=async route=>{
     const body=route.request().postDataJSON();
     if(body?.id===blockerId){
@@ -1227,12 +1333,13 @@ try{
     return route.continue();
    };
    try{
+    await initializeCommands();
     await inline.scrollIntoViewIfNeeded();
     await expect(inline).toHaveAttribute('data-media-state','ready');
     for(const figure of await page.locator('[data-message-id] [data-media-id]').all()){
      if(await figure.locator('canvas').count())await expect(figure).toHaveAttribute('data-media-state','ready');
     }
-    await action(page,'canvas.show',{kind:'text',title:'Dirty primary',content:'Keep the mounted dirty view'});
+    await phaseAction(page,'canvas.show',{kind:'text',title:'Dirty primary',content:'Keep the mounted dirty view'});
     const current=await page.evaluate(()=>window.amplifier.getState());
     const view=current.canvasWorkspace.views.find(view=>view.viewId==='primary');
     const target=Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
@@ -1245,18 +1352,19 @@ try{
     // Hold an ACTUAL earlier command in App's commandQueue. Do not await dirty
     // before the click: its declaration must remain queued behind that command.
     await page.evaluate(blockerId=>{
-     window.__gifEarlier=window.amplifier.dispatch('canvas.views.inspect',{}, {id:blockerId});
+     window.__gifEarlier=window.__gifDispatch('canvas.views.inspect',{},blockerId);
      window.__gifEarlier.catch(()=>{});
     },blockerId);
     await expect.poll(()=>commandOrder[0]).toBe('earlier-issued');
     const postStart=await page.evaluate(()=>window.__actionPosts.length);
-    await page.evaluate(target=>{
-     window.__gifDirty=window.amplifier.dispatch('canvas.views.dirty',{...target,dirty:true});
+    await page.evaluate(([target,id])=>{
+     window.__gifDirty=window.__gifDispatch('canvas.views.dirty',{...target,dirty:true},id);
      window.__gifDirty.catch(()=>{});
-    },target);
+    },[target,dirtyTrueId]);
     const refused=page.waitForResponse(response=>response.request().method()==='POST'&&
      new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='canvas.openGif');
     refused.catch(()=>{}); // Preserve its eventual rejection until the ordered receipt checks await it.
+    clickAttempted=true;clickSettled=null;
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
     await expect(inline.getByRole('button',{name:'Opening in Canvas…',exact:true})).toBeDisabled();
     // fetch is observed synchronously at issuance. No sleep or absence timeout
@@ -1279,10 +1387,11 @@ try{
     assert.deepEqual(after.view.canvasDraft,before.view.canvasDraft,'No Library or draft-view selection was changed');
     assert.equal(after.canvasWorkspace.views.find(view=>view.viewId==='primary').dirty,true);
     await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Queued GIF unsent draft');
-    await action(page,'canvas.views.dirty',{...target,dirty:false});
+    await phaseAction(page,'canvas.views.dirty',{...target,dirty:false});
     // Hold the REAL native first decode. Mounted is not ready; closing owns
     // pending-frame cleanup and may not leak a late frame into a replacement.
     await page.evaluate(()=>{window.__mediaProbe.hold=true});
+    clickAttempted=true;clickSettled=null;
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
     const figure=canvasRoot.locator(`[data-media-id="${saved.id}"]`);
     await expect(figure).toHaveAttribute('data-media-state','loading');
@@ -1291,7 +1400,7 @@ try{
     assert.equal(pending.canvas.kind,'gif');
     assert.notEqual(pending.canvasWorkspace.views.find(view=>view.viewId==='primary').activation?.status,'ready');
     const heldDecoder=(await probeState(page)).created;
-    await action(page,'canvas.show',{kind:'text',title:'Replacement',content:'No late GIF draw here'});
+    await phaseAction(page,'canvas.show',{kind:'text',title:'Replacement',content:'No late GIF draw here'});
     await page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())});
     await expect(figure).toHaveCount(0);
     await expect.poll(async()=>page.evaluate(id=>window.__mediaProbe.perDecoder[id].live,heldDecoder)).toBe(0);
@@ -1305,12 +1414,14 @@ try{
      const response=await route.fetch();assert.equal(response.status(),200);
      await route.fulfill({response,body:Buffer.from('synthetic undecodable GIF')});
     });
+    clickAttempted=true;clickSettled=null;
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
     await expect(figure).toHaveAttribute('data-media-state','error');
     await expect.poll(async()=>page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views
      .find(view=>view.viewId==='primary').activation?.status)).toBe('error');
     await expect(figure.getByRole('link',{name:'Download original'})).toHaveCount(1);
     await page.unroute('**/api/outputs/*/media?*');
+    await captureCommands('completed');
     return {commandOrder,queuedDirtyAdmission:true,dirtyRejectedBeforeMutation:true,visibleError:true,actualDecodeReadiness:true,
      replacementCleanup:true,lateFramesOwned:true,decoderError:'error',mountedReady:false};
    }catch(error){
@@ -1318,6 +1429,8 @@ try{
     // A cleanup receipt can itself be unsettled; retain the first failure now.
     try{await writeEvidence(join(evidenceDir,'gif-canvas-errors-primary.json'),errorEvidence(error))}
     catch(writeError){error.cleanupErrors=[{step:'save primary error evidence',...errorEvidence(writeError)}]}
+    try{await captureCommands('before-cleanup')}
+    catch{error.cleanupErrors=[...(error.cleanupErrors||[]),{step:'save command diagnostic',reason:'Diagnostic write failed'}]}
     throw error;
    }finally{
     const cleanupErrors=[...(primaryError?.cleanupErrors||[])];
@@ -1328,19 +1441,39 @@ try{
     releaseEarlier();
     if(!page.isClosed()){
      // Let the released route finish before unregistering its handler.
-     const settled=await cleanup('settle queued Canvas receipts',()=>page.evaluate(()=>Promise.allSettled([window.__gifEarlier,window.__gifDirty])));
+     let settled=await cleanup('settle latest Canvas receipts',pendingSettled);
      await cleanup('release action route',()=>page.unroute('**/api/actions',holdEarlier));
+     // UI clicks use the component's dispatch, not __gifDispatch. A primary
+     // failure after any click leaves that command conservatively unknown.
+     // Only on the successful path observe MediaFigure's post-dispatch finally
+     // binding; HTTP/body completion alone is never application settlement.
+     if(clickAttempted&&!primaryError)clickSettled=await cleanup('confirm UI-owned Canvas open settlement',async()=>{
+      await expect(inline.getByRole('button',{name:'Open in Canvas',exact:true})).toBeEnabled();
+     });
+     if(!gifCanvasCleanupAllowed(clickAttempted,!!primaryError,clickSettled)){
+      settled=false;
+      blockedApplicationCleanup.add(page);
+      cleanupErrors.push({step:'click-owned Canvas open',reason:'Settlement unconfirmed; application cleanup not attempted'});
+     }
      // Do not enqueue more app commands behind a receipt that never settled.
-     if(settled)await cleanup('clear owned dirty view',()=>page.evaluate(async target=>{
+     if(settled)settled=await cleanup('clear owned dirty view',()=>page.evaluate(async target=>{
       const view=window.amplifier.getState().canvasWorkspace.views.find(view=>view.viewId==='primary');
       if(target&&view?.dirty&&['resourceId','resourceRevision','generation'].every(key=>view[key]===target[key]))
-       await window.amplifier.dispatch('canvas.views.dirty',{...target,dirty:false});
+       await window.__gifDispatch('canvas.views.dirty',{...target,dirty:false});
      },dirtyTarget));
      await cleanup('release held decoder frames',()=>page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())}));
-     if(settled)await cleanup('unmount and close owned client',()=>unmountAndClose(client));
+     if(settled)settled=await cleanup('confirm latest receipt settlement',pendingSettled);
+     if(settled)settled=await cleanup('unmount and close owned client',()=>unmountAndClose(client,phaseAction));
+     if(!settled){
+      blockedApplicationCleanup.add(page);
+      cleanupErrors.push({step:'application cleanup',reason:'Not attempted or not confirmed; no further mutations behind unresolved dispatch'});
+     }
+     if(!page.isClosed())await cleanup('save pre-close command diagnostic',()=>captureCommands('after-cleanup'));
      if(!page.isClosed())await cleanup('close unsettled owned page',()=>page.close());
      if(page.isClosed())pages.delete(page);
     }
+    page.off('request',onRequest);page.off('response',onResponse);
+    page.off('requestfinished',onFinished);page.off('requestfailed',onFailed);
     if(cleanupErrors.length){
      try{await writeEvidence(join(evidenceDir,'gif-canvas-errors-cleanup.json'),{errors:cleanupErrors,pageClosed:page.isClosed()})}
      catch(writeError){cleanupErrors.push({step:'save cleanup evidence',...errorEvidence(writeError)})}
@@ -1459,6 +1592,7 @@ try{
    for(const page of context.pages()){
     if(page.isClosed())continue;
     try{
+     if(blockedApplicationCleanup.has(page))throw Error('Application cleanup remains incomplete; final sweep must not enqueue behind unresolved dispatch');
      if(await page.evaluate(()=>!!window.__mediaProbe)){
       await page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())});
       await action(page,'session.create',{title:'Final synthetic cleanup'});

@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -22,7 +23,7 @@ try{
  const url=vite.resolvedUrls.local[0];
  const dispatch=(p,action,args={})=>p.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const view=(p,patch)=>dispatch(p,'view.update',{patch});
- for(const p of [page,peer]){await p.goto(url);await p.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId)}
+ for(const p of [page,peer]){await p.goto(url);await showFixtureConversation(p,{navPinned:true});await p.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId)}
  const info=await page.evaluate(async()=>await(await fetch('/api/fixture/readiness')).json());
  for(const p of [page,peer]){await dispatch(p,'session.select',{id:info.sessionId});await view(p,{panel:null,workSurface:'chat'})}
  await dispatch(page,'session.markUnread',{id:info.sessionId});

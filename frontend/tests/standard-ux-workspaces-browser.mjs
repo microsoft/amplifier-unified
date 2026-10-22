@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -33,7 +34,7 @@ try{
  const probe=async(id,workflows,run)=>{const row=await evidence.probe('desktop-pointer.'+id,workflows,async()=>{await run();return {variant:'desktop-pointer',...await evidence.snapshot(page,id,'#amp-one')}});if(row.status!=='passed')throw Error('Dependent checks stopped after '+id)};
  let initial,home,created,existing,workspace,sessionId,peerId;
  await probe('suggestion-and-managed-draft',['create.suggestion','create.draft'],async()=>{
-  await evidence.action('Open the clean app',()=>page.goto(url));await expect(input).toBeEditable();initial=await state();home=path.dirname(initial.workspaceDefaults.root);
+  await evidence.action('Open the clean app',()=>page.goto(url));await showFixtureConversation(page,{navPinned:true});await expect(input).toBeEditable();initial=await state();home=path.dirname(initial.workspaceDefaults.root);
   await click('Choose a starter prompt',page.getByRole('button',{name:/Draft an email/}));await expect(input).not.toHaveDraft('');
   evidence.assertion('Suggestion creates no session',(await state()).sessions.length,0);evidence.assertion('Suggestion sends nothing',(await observation()).sent.length,0);
   await input.fill('Private workspace draft');await expect(page.getByRole('button',{name:/Draft an email/})).toHaveCount(0);

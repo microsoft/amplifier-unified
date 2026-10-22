@@ -19,7 +19,7 @@ try{
  // Ordinary browser frames contain selected context, not catalog membership.
  // A two-row bounded page proves both the exact owner and no extra creation.
  const expectCatalog=async ids=>{const response=await page.request.get(url+'/api/sessions?kind=root&limit=2',{headers:{'X-Amplifier-Client':(await state()).client.id}});assert.equal(response.status(),200);const pageValue=await response.json();assert.deepEqual(pageValue.items.map(row=>row.id).sort(),[...ids].sort());assert.equal(pageValue.nextOffset,null)};
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ await page.goto(url);await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  await action('view.update',{patch:{navPinned:true}});
  const launcher=page.getByRole('button',{name:'New chat',exact:true});await expect(launcher).toHaveCount(1);
  assert.equal(await page.locator('.a-top [data-action="session.create"],.a-top [data-action="session.draft"]').count(),0);

@@ -1,4 +1,5 @@
 // Real actions and built assets, synthetic model, isolated history only.
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
@@ -11,13 +12,15 @@ try{
  await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(ready.url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(ready.url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await action('view.update',{patch:{navPinned:true,navExpanded:true}});
  await action('session.naming',{id:ready.sessionId,automatic:false});
  const chat=(await state()).sessions.find(row=>row.id===ready.sessionId);
- await page.getByRole('button',{name:'Details and actions for '+chat.title,exact:true}).first().click();
+ const chatRow=page.locator('.a-nav-chat').filter({has:page.getByRole('button',{name:chat.title,exact:true})}).first();
+ await chatRow.hover();
+ await chatRow.getByRole('button',{name:'Details and actions for '+chat.title,exact:true}).click();
  let dialog=page.getByRole('dialog',{name:'Details for '+chat.title,exact:true});
  await dialog.getByRole('button',{name:'Rename '+chat.title,exact:true}).click();
  const generate=page.getByRole('button',{name:'Auto name now',exact:true});await expect(generate).toBeVisible();

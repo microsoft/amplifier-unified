@@ -187,13 +187,16 @@ def inventory(home, *, installed=None, graph=None):
         observed[name] = {'url': urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', '')),
                           'ref': policy.get('ref') or next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '') or source.get('branch') or source.get('rev') or '',
                           'current': resolved.fragment, 'subdirectory': next(iter(query.get('subdirectory', [''])), ''),
-                          'provenance': 'worker resolution lock'}
+                          'provenance': 'worker resolution lock',
+                          **({'policyOrigin': policy['policyOrigin']} if policy.get('policyOrigin') else {})}
     for name, source in (installed_sources(project, graph=graph, tracked=locked) if installed is None else installed).items():
         resolved = locked.get(name)
         policy = effective_policies.get(name)
         if (policy and source.get('current') == (policy.get('revision') or (resolved.fragment if resolved else None))
                 and source.get('url') == policy.get('url') and source.get('subdirectory', '') == policy.get('subdirectory', '')):
             source['ref'] = policy['ref']
+            if policy.get('policyOrigin'):
+                source['policyOrigin'] = policy['policyOrigin']
         observed[name] = source
     rows = []
     base = receipt_directory(home, generation) / 'runtime-base.toml'
@@ -204,17 +207,40 @@ def inventory(home, *, installed=None, graph=None):
                      'current': hashlib.sha256(baseline).hexdigest(),
                      'latest': hashlib.sha256(manifest_path().read_bytes()).hexdigest(),
                      'usage': 'configured', 'usageEvidence': ['Updated application dependency declarations']})
+    from .runtime_registry_updates import managed_source
+    core = managed_source(project, receipt_directory(home, generation), baseline, graph, manifest_path().read_bytes())
+    if core is not None:
+        observed['amplifier-core'] = core
+    elif observed.get('amplifier-core', {}).get('override'):
+        # An unexplained registry/local Core is not authority to replace a user pin.
+        observed['amplifier-core']['trackedSource'] = True
     for name, source in sorted(observed.items()):
         ref = source.get('ref', '')
         override = source.get('override', False)
         registry_migration = core_registry_migration(name, source, baseline)
-        eligible = bool(not override and not registry_migration and ref and not pinned(ref) and source.get('current'))
+        eligible = bool(source.get('registryManaged') or not override and not registry_migration and ref and not pinned(ref) and source.get('current'))
+        policy_evidence = []
+        if ref and pinned(ref) and not source.get('policyOrigin'):
+            # Legacy install receipts cannot tell an authored pin from uv's
+            # normalized commit. Preserve it and surface the missing provenance.
+            from .runtime_source_policy import origin
+            source['policyOrigin'] = origin({**source, 'revision': source.get('current', '')}, 'unrecorded')
+        if (source.get('policyOrigin') or {}).get('kind') == 'unrecorded':
+            policy_evidence.append('Version pin origin is not recorded; source policy needs confirmation')
         rows.append({'id': 'runtime:' + name, 'package': name, 'kind': 'runtime dependency',
                      'label': safe_label(source['url']) if source.get('url') else name,
                      **source, 'ref': ref, 'status': 'not_checked' if eligible or registry_migration else 'local' if override else 'pinned',
                      **({'registryMigration': True} if registry_migration else {}),
                      'eligible': eligible, 'usage': 'configured',
-                     'usageEvidence': ['Conversation worker environment', source['provenance']]})
+                     'usageEvidence': ['Conversation worker environment', source['provenance'], *policy_evidence]})
+    from .runtime_policy_reconciliation import annotate_retained, pending
+    annotate_retained(home, generation, rows)
+    policy_refresh = pending(home, generation, rows)
+    if policy_refresh and not any(row.get('id') == 'runtime:environment' for row in rows):
+        rows.insert(0, {'id': 'runtime:environment', 'kind': 'runtime environment',
+                       'label': 'Refresh included components', 'status': 'update', 'eligible': True,
+                       'current': 'legacy-policy', 'latest': policy_refresh['configuration'],
+                       'usage': 'configured', 'usageEvidence': ['Check versions used by your current setup']})
     return rows
 
 
@@ -367,13 +393,43 @@ def augmented_manifest(content, rows):
             '\n'.join(json.dumps(key) + ' = ' + toml_value(value) for key, value in data.items()) + '\n').encode()
 
 
-def matches_resolution(resolved, row):
-    if resolved is None or resolved.fragment != row['latest']:
-        return False
-    query = parse_qs(resolved.query)
-    ref = next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '')
-    url = urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', ''))
-    return url == row['url'] and ref == row['ref'] and next(iter(query.get('subdirectory', [''])), '') == row.get('subdirectory', '')
+def verify_resolution(resolved, row):
+    """Reject changed sources with evidence that is safe to copy for diagnosis."""
+    expected = {'repository': row['url'], 'ref': row['ref'],
+                'subdirectory': row.get('subdirectory', ''), 'revision': row['latest']}
+    if resolved is None:
+        mismatches = ['source']
+    else:
+        query = parse_qs(resolved.query, keep_blank_values=True)
+        refs = [(key, value) for key in ('branch', 'rev', 'tag') for value in query.get(key, [])]
+        ref = refs[0][1] if len(refs) == 1 else None
+        # uv can replace a moving rev with its full checked commit. This is
+        # identity equivalence only, never permission to follow a different ref
+        # or accept a newer commit than the one offered by Check for updates.
+        normalized = (refs == [('rev', row['latest'])] and
+                      re.fullmatch(r'[0-9a-f]{40}', row['latest']) is not None and
+                      resolved.fragment == row['latest'])
+        subdirectories = query.get('subdirectory', [''])
+        observed = {'repository': urlunsplit((resolved.scheme, resolved.netloc, resolved.path, '', '')),
+                    'ref': row['ref'] if normalized else ref,
+                    'subdirectory': subdirectories[0] if len(subdirectories) == 1 else None,
+                    'revision': resolved.fragment}
+        mismatches = [key for key in expected if expected[key] != observed[key]]
+    if mismatches:
+        error = ValueError('A runtime source resolved differently after checking; check for updates again.')
+        # Field names and commits distinguish drift from other resolver
+        # differences without exposing repository URLs, refs or local paths.
+        error.diagnostic_facts = {
+            'reason': 'runtime-resolution-mismatch', 'component': row['package'],
+            'resolutionMismatches': mismatches, 'expectedRevision': row['latest'],
+            **({'observedRevision': resolved.fragment} if resolved is not None else {}),
+        }
+        raise error
+    policy = {'url': row['url'], 'ref': row['ref'], 'subdirectory': row.get('subdirectory', ''),
+              'revision': row['latest']}
+    from .runtime_source_policy import carried_origin
+    policy['policyOrigin'] = carried_origin(policy, row.get('policyOrigin'))
+    return policy
 
 
 async def stage(manager, generation, candidates, *, finalize=True):
@@ -392,6 +448,9 @@ async def stage(manager, generation, candidates, *, finalize=True):
         observed, content = [], manifest_content(manager.home, generation)
     else:
         observed, content = await manager.diagnostics.run('ecosystem-runtime-preflight', update_manifest, manager.home)
+    from .runtime_registry_updates import prepare_manifest, verify_candidate, RECEIPT as registry_receipt
+    selected = [] if receipt.exists() else candidates
+    content, registry_policy = prepare_manifest(content, observed, selected) if not receipt.exists() else (content, {})
     project = prepare_project(manager.home, generation, content=content)
     baseline = receipt if receipt.exists() else previous_receipt if previous_receipt.exists() else current / 'uv.lock'
     if baseline.exists():
@@ -405,7 +464,7 @@ async def stage(manager, generation, candidates, *, finalize=True):
     for row in selected:
         if row.get('kind') == 'runtime dependency':
             installed = baseline_sources.get(row['package'])
-            if not installed or installed.get('registryMigration') or any(installed.get(key, '') != row.get(key, '') for key in ('current', 'url', 'ref', 'subdirectory')):
+            if not installed or installed.get('registryMigration') or any(installed.get(key, '') != row.get(key, '') for key in ('current', 'url', 'ref', 'subdirectory', 'registryManaged', 'registry', 'minimumVersion')):
                 raise ValueError('Runtime dependencies changed since checking; check for updates again.')
     from .updates import pinned
     declared = tomllib.loads(content.decode()).get('tool', {}).get('uv', {}).get('sources', {})
@@ -422,12 +481,39 @@ async def stage(manager, generation, candidates, *, finalize=True):
     flags = ['--locked'] if receipt.exists() else [arg for name in packages for arg in ('--upgrade-package', name, '--refresh-package', name)]
     await manager.diagnostics.run('ecosystem-runtime-lock', process, uv, 'lock', '--project', str(project),
                                   '--python', '3.13', *flags, timeout=900)
+    verify_candidate(project, registry_policy)
+    if registry_policy and not receipt.exists():
+        from .deployment import write_private
+        write_private(receipt.with_name(registry_receipt), json.dumps(registry_policy) + '\n')
     locked = locked_sources(project)
+    policies = {}
     for row in selected:
-        if row.get('kind') == 'runtime dependency':
+        if row.get('kind') == 'runtime dependency' and not row.get('registryManaged'):
             installed = locked.get(row['package'])
-            if not matches_resolution(installed, row):
-                raise ValueError('A runtime branch moved after checking; check for updates again.')
+            policies[row['package']] = verify_resolution(installed, row)
+    declared = {package_name(name): source for name, source in declared.items()}
+    for row in observed:
+        if (row.get('kind') != 'runtime dependency' or row['package'] in policies
+                or row.get('override') or not row.get('url') or not row.get('ref')):
+            continue
+        installed = locked.get(row['package'])
+        source = declared.get(row['package'])
+        if source and (source.get('git') != row['url']
+                or (source.get('branch') or source.get('rev') or source.get('tag')) != row['ref']
+                or source.get('subdirectory', '') != row.get('subdirectory', '')):
+            continue  # A changed manifest's policy is not the old source policy.
+        if installed is not None and installed.fragment == row.get('current'):
+            try:
+                # A different tier can leave a source unchanged while uv
+                # normalizes its ref. Retain only that exact prior identity.
+                policies[row['package']] = verify_resolution(installed, {**row, 'latest': row['current']})
+            except ValueError:
+                pass  # Never apply an old policy to a changed or ambiguous source.
+    if not receipt.exists():
+        # Handoff checked policy separately from uv's representation. Freeze
+        # binds it again to installed identity; recorded generations stay intact.
+        from .deployment import write_private
+        write_private(receipt.with_name('runtime-sources.json'), json.dumps(policies, indent=2) + '\n')
     if finalize and not receipt.exists():
         receipt.with_name('runtime-base.toml').write_bytes(manifest_path().read_bytes())
         shutil.copy2(project / 'pyproject.toml', receipt.with_name('runtime.toml'))

@@ -12,7 +12,7 @@ try{
  const context=await browser.newContext({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),page=await context.newPage();
  // A deterministic immediate reload: no debounced composer request may leave.
  await page.addInitScript(()=>{const timer=window.setTimeout.bind(window);window.setTimeout=(fn,delay,...args)=>timer(fn,delay===220?60000:delay,...args)});
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ await page.goto(url);await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const client=()=>page.evaluate(()=>window.amplifier.getState().client.id);
  await composer.fill('New chat draft before autosave');const firstClient=await client();

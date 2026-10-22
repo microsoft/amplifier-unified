@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Packaged UI and disposable history; no live tools, providers or user data.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -28,7 +29,7 @@ try{
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({extraHTTPHeaders:headers,viewport:{width:1280,height:950}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto(base);
+ await page.goto(base);await showFixtureConversation(page,{navPinned:true});
  const chat=page.locator(`.a-nav-chat[data-session-id="${alpha}"]`).first(),group=page.locator('[data-group-id="turn@input"]');
  const header=group.locator('.a-execution-turn-line');
  await expect(chat.locator('.a-navigation-status')).toHaveAttribute('data-kind','working');

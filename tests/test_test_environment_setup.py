@@ -44,6 +44,11 @@ async def test_passive_read_does_not_create_setup_or_install(app):
 
 
 async def test_setup_returns_before_work_and_reuses_exact_managed_core(app, monkeypatch):
+    # A qualified older installation remains available for its existing owners;
+    # new setup must still request the current reviewed snapshot.
+    previous = {'id': 'b' * 24, 'commit': '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04',
+                'status': 'installed', 'extras': []}
+    app.smart_tools.state['installations'].append(previous)
     entered, release = asyncio.Event(), asyncio.Event()
     async def backend(base, selected, owned, record, step):
         await step('checking_profile', 'Checking')
@@ -68,6 +73,7 @@ async def test_setup_returns_before_work_and_reuses_exact_managed_core(app, monk
     config = app.data_dir / 'test-environments.json'
     assert config.stat().st_mode & 0o777 == 0o600
     assert json.loads(config.read_text())['commit'] == owner.DTU_COMMIT
+    assert app.smart_tools.state['installations'] == [previous]
 
 
 async def test_revoke_before_external_effect_never_installs(app, monkeypatch):
@@ -253,6 +259,11 @@ def test_capacity_defaults_use_host_memory_conservatively(monkeypatch):
         assert policy['minFreeBytes'] == 4 * 1024 ** 3
 
 
+def test_verified_native_setup_relies_on_resource_admission_not_fixed_counts():
+    assert setup.capacity_defaults(resource_admission=True) == {
+        'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 4 * 1024**3}
+
+
 async def test_shutdown_holds_setup_ownership_until_inflight_thread_settles(app, monkeypatch):
     import threading
     entered, release = asyncio.Event(), threading.Event()
@@ -312,19 +323,21 @@ def test_unknown_probe_admission_is_not_settled_by_absence(app, monkeypatch):
     assert setup.observe_partial(app, record)['absent']
 
 
-async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app, monkeypatch, tmp_path):
+@pytest.mark.parametrize('installed_version', ['0.4.3', '0.4.2', '0.4.1'])
+async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app, monkeypatch, tmp_path, installed_version):
     from amplifier_web import incus_environment_worker as worker
     fingerprint, daemon = 'a' * 64, 'b' * 64
     calls = []
     monkeypatch.setattr(setup.shutil, 'which', lambda _: '/usr/bin/uv')
-    monkeypatch.setattr(worker, 'package_digest', lambda _: worker.QUALIFIED_PACKAGES['0.4.1'])
+    monkeypatch.setattr(worker, 'package_digest', lambda _: worker.QUALIFIED_PACKAGES['0.4.3'])
     monkeypatch.setattr(worker, 'file_digest', lambda *a: ('c' * 64, 10))
+    monkeypatch.setattr(worker, 'host_target', lambda *a: {'supported': True, 'machineId': 'fixture'})
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[0] == '/usr/bin/uv':
             return ''
         if '-I' in argv:
-            return '"/approved/package"'
+            return json.dumps({'directory': '/approved/package', 'version': installed_version})
         if 'query' in argv:
             assert '--project' not in argv, 'Incus query rejects the global project flag'
             if '/1.0/instances/' in argv[-1]:
@@ -350,8 +363,17 @@ async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app
     record = {'id': 'f' * 32}
     async def step(phase, detail):
         record.update(phase=phase, detail=detail)
+    if installed_version != '0.4.3':
+        with pytest.raises(ValueError, match='approved package'):
+            await setup.setup_incus({'backend': 'incus'}, {'executable': '/usr/bin/incus'}, tmp_path, record, step)
+        assert not any(call[0] == '/usr/bin/incus' for call in calls)
+        return
     config, proof = await setup.setup_incus({'backend': 'incus'}, {'executable': '/usr/bin/incus'}, tmp_path, record, step)
     assert config['incus']['image'] == fingerprint
+    assert config['incus']['maxRunning'] == config['incus']['maxInstances'] == 0
+    assert config['incus']['packageSha256'] == worker.QUALIFIED_PACKAGES['0.4.3']
+    install = next(call for call in calls if 'install' in call)
+    assert install[-1] == 'git+' + setup.LEGACY_REPOSITORY + '@' + setup.LEGACY_COMMIT
     assert config['incus']['preparationStorage'] == 'existing-pool'
     assert proof['probeRemoved'] and proof['offline']
     assert len([call for call in calls if 'copy' in call]) == 1

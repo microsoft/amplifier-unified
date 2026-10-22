@@ -20,14 +20,18 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 # Preserve previously qualified owners and configuration identity during upgrades.
 # Launcher bytes vary with installation path; package pairs are exact.
 QUALIFIED_PACKAGES = {
     '0.4.0': '5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39',
     '0.4.1': 'b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06',
+    '0.4.2': '0911d18ec7256913253b53ce66520fac2f6cc78d19696a3f7b724a646dd909b8',
+    '0.4.3': '2019e9b6ed0d2a1e882f90d8767f3652a278e9a5df0902efcf2a4a3b869a09ff',
 }
+CURRENT_QUALIFIED_VERSION = '0.4.3'
+CREATION_RECOVERY_DIGESTS = frozenset(QUALIFIED_PACKAGES[version] for version in ('0.4.2', '0.4.3'))
 OUTPUT_BYTES = 8192
 CONTROL_BYTES = 65536
 EXPORT_BYTES = 8 * 1024 ** 3
@@ -116,17 +120,24 @@ def launcher_interpreter(path):
     return interpreter
 
 
-def validate_configuration(value):
+def engine_generations():
+    spec = importlib.util.spec_from_file_location('_incus_engine_generations', Path(__file__).with_name('incus_engine_generations.py'))
+    generations = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generations)
+    return generations
+
+
+def validate_configuration(value, *, _engine_owner=None):
     """Read-only qualification of an explicitly installed legacy CLI generation."""
     required = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir', 'admissionDir', 'project', 'image'}
-    allowed = required | {'daemonFingerprint', 'maxRunning', 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory', 'preparationNetwork', 'preparationStorage'}
+    allowed = required | {'daemonFingerprint', 'maxRunning', 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory', 'preparationNetwork', 'preparationStorage', 'engineQualification'}
     if not isinstance(value, dict) or not required <= value.keys() or value.keys() - allowed:
         raise ValueError('The qualified Incus backend configuration is incomplete.')
     config = dict(value)
     for key in ('executableSha256', 'packageSha256', 'image'):
         if not isinstance(config[key], str) or not re.fullmatch(r'[a-f0-9]{64}', config[key]):
             raise ValueError('Backend code and image identities must be exact SHA-256 values.')
-    if config['packageSha256'] not in QUALIFIED_PACKAGES.values():
+    if not config.get('engineQualification') and config['packageSha256'] not in QUALIFIED_PACKAGES.values():
         raise ValueError('The legacy package pin is not the app-qualified generation.')
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}', config['project']):
         raise ValueError('An explicit Incus project is required.')
@@ -146,14 +157,20 @@ def validate_configuration(value):
     interpreter = launcher_interpreter(config['executable'])
     # Normal venv interpreter symlinks are legitimate. The package source and
     # launcher, not the venv symlink spelling, define this qualification.
-    probe = run([str(interpreter), '-I', '-c',
+    probe = run([str(interpreter), '-I', '-B', '-c',
         'import importlib.util,importlib.metadata,json; s=importlib.util.find_spec("amplifier_bundle_digital_twin_universe"); print(json.dumps({"version":importlib.metadata.version("amplifier-bundle-digital-twin-universe"),"directory":next(iter(s.submodule_search_locations))}))'],
         env={'PATH': os.defpath, 'LANG': 'C.UTF-8'}, timeout=10)
     if probe['exit_code'] or probe['truncated']:
         raise ValueError('The qualified legacy interpreter is unavailable.')
     installed = json.loads(probe['stdout'])
-    if QUALIFIED_PACKAGES.get(installed['version']) != config['packageSha256'] or package_digest(installed['directory']) != config['packageSha256']:
+    if (not config.get('engineQualification') and QUALIFIED_PACKAGES.get(installed['version']) != config['packageSha256']
+            or package_digest(installed['directory']) != config['packageSha256']):
         raise ValueError('The installed legacy backend is not this app\'s qualified generation.')
+    # A purpose-created candidate cannot become a historical static-qualified
+    # install by dropping its receipt, including unchanged package source bytes.
+    generations = engine_generations()
+    if config.get('engineQualification') or Path(config['executable']).is_relative_to(generations.root()):
+        generations.verify(config, owner=_engine_owner, runtime=False)
     config.update(interpreter=str(interpreter), packageDirectory=installed['directory'])
     for key, env_key in [('maxRunning', 'AMPLIFIER_DTU_MAX_RUNNING'), ('maxInstances', 'AMPLIFIER_DTU_MAX_INSTANCES'), ('minFreeBytes', 'AMPLIFIER_DTU_MIN_FREE_BYTES')]:
         # Preserve explicit operator environment policy when host configuration
@@ -217,7 +234,9 @@ def run(arguments, env, timeout=30, watched_file=None, output_bytes=OUTPUT_BYTES
 
 
 def cli(config, env, arguments, timeout=30):
-    result = run([config['executable'], *arguments], env, timeout, output_bytes=CONTROL_BYTES)
+    command = ([config['interpreter'], '-I', '-B', config['executable']]
+               if config.get('engineQualification') else [config['executable']])
+    result = run([*command, *arguments], env, timeout, output_bytes=CONTROL_BYTES)
     if result['truncated']:
         raise BackendFailure('response_limit', 'The backend receipt exceeded its bound; inspect the recorded operation.')
     try:
@@ -251,7 +270,7 @@ def checked(result):
     return result
 
 
-def export_selected(config, env, name, destination):
+def export_selected(config, env, name, destination, *, selections=common.retention.SELECTION, archive_only=False):
     """Filter a stopped instance's backup stream without extracting guest paths."""
     process = subprocess.Popen([config['incusExecutable'], '--quiet', '--project', config['project'],
         'export', name, '-', '--instance-only', '--compression', 'none'], stdin=subprocess.DEVNULL,
@@ -283,7 +302,7 @@ def export_selected(config, env, name, destination):
             selector.register(process.stdout, selectors.EVENT_READ)
             selector.register(process.stderr, selectors.EVENT_READ)
             reader = Reader(selector)
-            archives = common.retention.filter_incus_stream(reader, destination, name)
+            archives = common.retention.filter_incus_stream(reader, destination, name, selections=selections, archive_only=archive_only)
             while reader.read(65536):
                 pass
             if reader.tail != bytes(1024) or process.wait(timeout=max(1, deadline - time.monotonic())) != 0:
@@ -303,18 +322,39 @@ def export_selected(config, env, name, destination):
 def reconcile(config, env, name, payload, backend, binding_source):
     # Inventory uses one successful actual daemon/project query. launch-status
     # alone may be a cached unknown receipt and cannot establish absence.
-    raw = checked(incus(config, env, ['query', '/1.0/instances?recursion=1']))
+    # Names only: peer instance metadata can exceed the bounded control reply
+    # even in a modest shared project. Fetch metadata for this owner alone.
+    raw = checked(incus(config, env, ['query', '/1.0/instances']))
     if raw['truncated']:
         raise BackendFailure('response_limit', 'The actual inventory exceeded its bound.')
     instances = json.loads(raw['stdout'])
-    if not isinstance(instances, list):
+    if not isinstance(instances, list) or any(not isinstance(item, str) for item in instances):
         raise BackendFailure('backend_unknown', 'The actual inventory is unavailable.')
-    matches = [item for item in instances if item.get('name') == name]
+    resources = [urlsplit(item) for item in instances]
+    if any(uri.scheme or uri.netloc or uri.fragment or not uri.path.startswith('/1.0/instances/')
+           or parse_qs(uri.query) not in ({}, {'project': [config['project']]}) for uri in resources):
+        raise BackendFailure('backend_unknown', 'The actual inventory identity is unavailable.')
+    matches = [uri for uri in resources if uri.path == '/1.0/instances/' + quote(name, safe='')]
     if len(matches) > 1:
         raise BackendFailure('ownership_conflict', 'The actual inventory has conflicting identities.')
+    if matches:
+        raw = checked(incus(config, env, ['query', '/1.0/instances/' + quote(name, safe='')]))
+        if raw['truncated']:
+            raise BackendFailure('response_limit', 'The owned instance observation exceeded its bound.')
+        item = json.loads(raw['stdout'])
+        if not isinstance(item, dict):
+            raise BackendFailure('backend_unknown', 'The owned instance observation is unavailable.')
+        matches = [item]
     request = cli(config, env, ['launch-status', payload['operationId']])
     matches_owner = request.get('name') == name and request.get('owner_root') == payload['rootOwner']
-    complete = matches_owner and request.get('state') in {'ready', 'stopped', 'removed'}
+    # Qualified 0.4.2 and 0.4.3 record definitive pre-submission rejection and terminal creation
+    # failure. Exact receipt identity plus an empty actual inventory can settle
+    # these attempts; an absent unknown receipt remains unresolved.
+    failed_creation = (config.get('packageSha256') in CREATION_RECOVERY_DIGESTS
+                       and request.get('request_id') == payload['operationId']
+                       and request.get('state') == 'failed')
+    complete = matches_owner and (request.get('state') in {'ready', 'stopped', 'removed'}
+                                  or failed_creation and not matches)
     if matches:
         item = matches[0]
         metadata = item.get('config', {})
@@ -360,7 +400,9 @@ def check_legacy_image(config, env, payload):
 
 def observe(config, env, name, payload, confinement=False):
     request = cli(config, env, ['launch-status', payload['operationId']])
-    if request['state'] in {'not_recorded', 'removed', 'failed'}:
+    failed_instance = (config.get('packageSha256') in CREATION_RECOVERY_DIGESTS
+                       and request.get('state') == 'failed' and 'instance_status' in request)
+    if request['state'] in {'not_recorded', 'removed', 'failed'} and not failed_instance:
         return request, None
     if request.get('name') != name or request.get('owner_root') != payload['rootOwner'] or request['state'] == 'conflict':
         raise BackendFailure('ownership_conflict', 'The environment no longer matches this task\'s ownership.')
@@ -398,15 +440,38 @@ def persist_attempt(root, value):
         os.close(descriptor)
 
 
-def execute_call(payload):
+def host_target(config, env):
+    # Read the actual selected client endpoint. Only a kernel-local daemon peer
+    # can share the caller's machine authority; remote names are not evidence.
+    try:
+        current = checked(run([config['incusExecutable'], 'remote', 'get-default'], env, output_bytes=CONTROL_BYTES))['stdout'].strip()
+        remotes = json.loads(checked(run([config['incusExecutable'], 'remote', 'list', '--format', 'json'], env, output_bytes=CONTROL_BYTES))['stdout'])
+        remote = remotes[current]
+        addresses = [remote[key] for key in ('Addr', 'addr') if key in remote]
+        if 'Addrs' in remote:
+            if not isinstance(remote['Addrs'], list) or len(remote['Addrs']) != 1:
+                raise ValueError('The Incus endpoint is ambiguous.')
+            addresses.extend(remote['Addrs'])
+        if not addresses or any(not isinstance(value, str) or value != addresses[0] for value in addresses):
+            raise ValueError('The Incus endpoint identity is ambiguous.')
+        return common.host_resources.local_target(addresses[0], {'incusd'})
+    except (KeyError, TypeError, ValueError, BackendFailure):
+        return {'supported': False, 'reason': 'The Incus execution target has no verified local machine authority. Backend limits still apply.'}
+
+
+def execute_call(payload, *, _engine_owner=None):
     root = private_directory(payload['root'])
-    config = validate_configuration(payload['incus'])
+    config = (validate_configuration(payload['incus'], _engine_owner=_engine_owner) if _engine_owner
+              else validate_configuration(payload['incus']))
+    if config.get('engineQualification'):
+        engine_generations().verify(config, owner=_engine_owner, runtime=True)
     env = environment(config, root)
     action = payload['action']
     name = None if action == 'capacity' else identity(payload)
     if payload.get('universeId') and payload['universeId'] != name:
         raise ValueError('The retained environment identity changed.')
     snapshot = payload.get('snapshot')
+    phase = None
     try:
         if action == 'capacity':
             capacity = cli(config, env, ['capacity'])
@@ -433,7 +498,7 @@ def execute_call(payload):
             from digital_twin_universe import lib
             snapshot = common.serialize(lib.export_repository_snapshot(Path(payload['source']), root / 'source.tar'))
             (root / 'snapshot.json').write_text(json.dumps(snapshot))
-            return {'ok': True, 'universeId': name, 'snapshot': snapshot, 'backendIdentity': backend_identity}
+            return {'ok': True, 'universeId': name, 'snapshot': snapshot, 'backendIdentity': backend_identity, 'hostTarget': host_target(config, env)}
         if action == 'start':
             common.source_identity(name, snapshot)
             if file_digest(root / 'source.tar', 512 * 1024 ** 2)[0] != snapshot['archive_sha256']:
@@ -480,12 +545,13 @@ def execute_call(payload):
             if state != 'ready' or not ready:
                 raise BackendFailure('source_unknown', 'The exact source and running environment are not confirmed. No check started.', admitted=False)
             seconds = payload.get('timeoutSeconds', 60)
-            if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 300:
-                raise ValueError('The command timeout must be between 1 and 300 seconds.')
+            if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2147483647:
+                raise ValueError('The command timeout exceeds its supported serialization bound.')
             command = payload['command']
             if not isinstance(command, str) or not command or len(command) > 16384:
                 raise ValueError('The command is invalid.')
-            result = incus(config, env, ['exec', name, '--cwd', '/workspace', '--', '/bin/sh', '-lc', command], seconds)
+            arguments = common.jobs.arguments({**payload, 'jobEnvironment': common.selected_profile(payload)['environment']})
+            result = incus(config, env, ['exec', name, '--cwd', '/workspace', '--', *arguments], seconds)
             return {'ok': True, 'universeId': name, 'result': result}
         if action == 'stop':
             if instance.get('status') != 'Stopped':
@@ -493,12 +559,17 @@ def execute_call(payload):
             _, after = observe(config, env, name, payload)
             stopped = after is not None and after.get('status') == 'Stopped'
             return {'ok': stopped, 'universeId': name, 'status': 'stopped' if stopped else 'unknown', 'message': 'Stopped; source and artifacts remain retained.' if stopped else 'Stop is not confirmed.'}
-        if action == 'remove':
-            mode = payload.get('retentionMode', 'files')
-            if mode not in {'files', 'full'}:
+        if action in {'remove', 'finishCleanup', 'exportArtifacts'}:
+            artifacts_only = action == 'exportArtifacts'
+            recovering = action == 'finishCleanup'
+            mode = 'archive-only' if recovering else payload.get('retentionMode', 'files')
+            if not artifacts_only and mode not in {'files', 'full', 'archive-only'}:
                 raise BackendFailure('retention_unsupported', 'The selected retention policy is unsupported. The stopped environment remains.', admitted=False)
             if instance.get('status') != 'Stopped':
                 raise BackendFailure('not_stopped', 'Removal requires an observed stopped environment.', admitted=False)
+            if not artifacts_only:
+                phase = 'preserving'
+                common.cleanup_phase(payload, phase)
             capacity = cli(config, env, ['capacity'])
             if any(capacity.get('scope', {}).get(key) != backend_identity[key] for key in ('daemon', 'project')):
                 raise BackendFailure('backend_changed', 'The actual backend changed before export. The environment remains.', admitted=False)
@@ -507,25 +578,50 @@ def execute_call(payload):
                     or pool_free < EXPORT_BYTES + FREE_RESERVE_BYTES
                     or shutil.disk_usage(root).free < EXPORT_BYTES + FREE_RESERVE_BYTES):
                 raise BackendFailure('retention_storage', 'There is not enough free space for a bounded retained export. The stopped environment remains.', admitted=False)
-            destination = root / ('retained-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
+            destination = root / (('artifacts-' if artifacts_only else 'retained-')
+                                  + hashlib.sha256(payload['requestId'].encode()).hexdigest())
             destination.mkdir(mode=0o700)
             archive = destination / 'instance.tar'
             try:
-                if mode == 'full':
+                if artifacts_only:
+                    # The input stream/member/deadline bounds remain unchanged.
+                    # Only selected artifacts, never the workspace, are retained.
+                    archives = export_selected(config, env, name, destination, selections=('artifacts',))
+                elif mode == 'full':
                     checked(incus(config, env, ['export', name, str(archive), '--instance-only', '--compression', 'none'], 300, watched_file=archive))
                     digest, size = file_digest(archive, EXPORT_BYTES)
                     archives = [{'id': name, 'source': '/', 'retainedPaths': ['/workspace', '/artifacts'], 'destination': str(archive), 'bytes': size, 'sha256': digest}]
                 else:
-                    archives = export_selected(config, env, name, destination)
-                retained = common.retention.verify_retention(root, archives, mode)
+                    archives = export_selected(config, env, name, destination, archive_only=recovering)
+                if not artifacts_only:
+                    phase = 'verifying'
+                    common.cleanup_phase(payload, phase)
+                retained = (common.retention.verify_artifacts(archives) if artifacts_only
+                            else common.retention.verify_retention(root, archives, mode))
                 common.retain_manifest(destination, archives)
             except Exception:
                 (destination / 'incomplete.json').write_text(json.dumps({'status': 'unknown', 'environmentPreserved': True,
                     'policy': mode, 'partialArchives': [str(path) for path in destination.glob('*.tar')]}))
                 raise
+            if artifacts_only:
+                return {'ok': True, 'universeId': name, 'status': 'stopped', 'archives': archives,
+                        'artifactExport': retained,
+                        'message': 'Artifacts retained. The stopped environment and workspace are unchanged; removal is not authorized.'}
+            phase = 'rechecking'
+            common.cleanup_phase(payload, phase)
+            _, current = observe(config, env, name, payload)
+            if current is None or current.get('status') != 'Stopped':
+                return common.cleanup_failure(payload, phase, name, 'owner_changed')
+            phase = 'removing'
+            common.cleanup_phase(payload, phase)
             cli(config, env, ['destroy', name, '--owner-root', payload['rootOwner'], '--request-id', payload['operationId']], 120)
             after = cli(config, env, ['launch-status', payload['operationId']])
             removed = after['state'] == 'removed'
+            if recovering:
+                phase = 'observing'
+                common.cleanup_phase(payload, phase)
+                observed = reconcile(config, env, name, payload, backend_identity, binding_source)
+                removed = observed['status'] == 'absent'
             if removed:
                 common.retain_settlement(payload, name, backend_identity, 'removed')
             return {'ok': removed, 'universeId': name, 'status': 'removed' if removed else 'unknown', 'archives': archives,
@@ -533,9 +629,16 @@ def execute_call(payload):
                     'message': 'The complete source and artifact filesystem was retained before removal.' if removed else 'The export is retained; removal is not confirmed.'}
         raise ValueError('Unsupported managed test environment action.')
     except BackendFailure as exc:
+        if phase is not None:
+            return common.cleanup_failure(payload, phase, name, exc.code)
         return {'ok': False, 'universeId': name, 'snapshot': snapshot, 'status': 'not-started' if action == 'start' and not exc.admitted else 'unknown',
                 'code': exc.code, 'effectAdmitted': exc.admitted,
                 'admissionDenied': action == 'start' and not exc.admitted and exc.code in {'execution_capacity', 'retained_capacity', 'storage_pressure', 'storage_unknown', 'admission_busy'}, 'capacity': exc.details.get('capacity'), 'message': str(exc)}
+
+    except (OSError, ValueError, common.retention.tarfile.TarError):
+        if phase is not None:
+            return common.cleanup_failure(payload, phase, name)
+        raise
 
 
 def main():

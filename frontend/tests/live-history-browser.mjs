@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 // Real HTTP/SSE and saved JSONL, with a synthetic runtime and temporary home.
 import {chromium,expect} from '@playwright/test';
@@ -22,7 +23,7 @@ try{
  const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:headers}),errors=[],pages=[];
  page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/conversation/detail'&&url.searchParams.get('part')==='messages'&&url.searchParams.has('before'))pages.push(Object.fromEntries(url.searchParams))});
- await page.goto(base);
+ await page.goto(base);await showFixtureConversation(page);
  await expect(page.locator('[data-message-id]')).toHaveCount(100);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this draft');
  const pane=page.locator('.a-messages');

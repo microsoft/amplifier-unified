@@ -170,7 +170,9 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 or session.get('recentActivityAt', 0) > baseline
                 or bool(dict.get(session, MARKER)))
             if customized:
-                result['sessions'].append({**{key: session[key] for key in INDEX_FIELDS if key in session}, '$native': True,
+                # Keep an explicit Stop revision in this saved reference only;
+                # native index/default projections are not its authority.
+                result['sessions'].append({**{key: session[key] for key in (*INDEX_FIELDS, 'interruptionRevision') if key in session}, '$native': True,
                     **({MARKER: copy.deepcopy(dict.get(session, MARKER)),
                         '_coldMessageCount': session.get('_coldMessageCount', 0),
                         '_coldNotifications': copy.deepcopy(session.get('_coldNotifications', []))}
@@ -224,7 +226,11 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             SessionStore._atomic(path, text)
             cache[str(path)] = text
-        result['sessions'].append({**{key: session[key] for key in ('id', 'workspace', 'runtimeSessionId') if key in session}, '$view': 1,
+        # Passive owner checks need present scalar facts without loading the view
+        # body. Do not invent defaults or backfill older sparse references.
+        result['sessions'].append({**{key: session[key] for key in (
+            'id', 'workspace', 'runtimeSessionId', 'sessionKind', 'workingDirectory',
+            'executionRevision', 'interruptionRevision') if key in session}, '$view': 1,
                                    **({'$viewPayload': payload} if payload else {}),
                                    **({MARKER: copy.deepcopy(value[MARKER])} if value.get(MARKER) else {})})
     if references is not None:

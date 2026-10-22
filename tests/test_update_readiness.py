@@ -101,6 +101,37 @@ async def test_constructor_waits_for_real_listener_readiness(tmp_path,monkeypatc
         await service.close()
 
 
+async def test_application_result_survives_component_failure_and_service_reload(tmp_path,monkeypatch):
+    service,manager=make_manager(tmp_path,monkeypatch)
+    try:
+        assert not await manager.confirm_readiness(health(manager,revision='e'*40))
+        assert 'applicationResult' not in service.state['updates']
+        assert await manager.confirm_readiness(health(manager))
+        result=deepcopy(service.state['updates']['applicationResult'])
+        assert result['attemptId']==ATTEMPT and result['phase']=='restart-ack'
+        assert result['version']==__version__ and result['revision']==REVISION
+        assert result['verifiedAt']>0
+        # This result is not a diagnostic ring entry: later component batches
+        # must not erase it or turn it into a claim about the failed component.
+        for index in range(9):
+            manager.diagnostics.begin('ecosystem',format(index,'032x'),tier='included')
+            manager.diagnostics.record('ecosystem-activation','succeeded')
+        manager.diagnostics.begin('ecosystem','f'*32,tier='other',components=['foundation'])
+        manager.diagnostics.record('ecosystem-validation','failed',reason='runtime-source-changed')
+        await manager.publish(phase='error',error='Component sources changed.',sequence={'stage':'other'})
+        assert service.state['updates']['applicationResult']==result
+    finally:
+        await service.close()
+    restored=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    try:
+        restored.update_manager=UpdateManager(restored)
+        assert restored.state['updates']['applicationResult']==result
+        assert restored.state['updates']['phase']=='error'
+        assert restored.state['updates']['diagnostics']['lastFailure']['reason']=='runtime-source-changed'
+    finally:
+        await restored.close()
+
+
 async def test_legacy_application_state_preserves_restart_readiness(tmp_path,monkeypatch):
     from amplifier_web import app_updates
     monkeypatch.setattr(app_updates,'application_state',lambda:{'current':__version__,'status':'current'})

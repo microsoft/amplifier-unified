@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public local-file path, exact server location, copy and Canvas lifecycle.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -15,7 +16,7 @@ try{
  const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('File fixture timed out')),15000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('File fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}})});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:950},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto(ready.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep private file-inspection draft');
+ await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep private file-inspection draft');
  await page.getByRole('button',{name:'Open canvas',exact:true}).click();const canvas=page.locator('#workspace-canvas');await expect(canvas).toBeVisible();
  await canvas.getByRole('button',{name:'Open file',exact:true}).click();const form=canvas.locator('.a-canvas-file-form');
  await form.getByLabel('File in this workspace',{exact:true}).fill('report.txt');await form.getByRole('combobox',{name:'Canvas file format',exact:true}).selectOption('text');await form.getByRole('button',{name:'Open file',exact:true}).click();

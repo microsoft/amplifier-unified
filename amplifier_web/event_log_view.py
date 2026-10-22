@@ -417,6 +417,12 @@ class EventIndex:
                     node.get('_eventFields', {}).pop(field, None)
                 node.pop('endedAt', None)
                 node['startedAt'] = at
+            from .tool_observations import input_hints, outcome_summary
+            input_key = next((name for name in ('tool_input', 'arguments', 'input') if name in data), None)
+            if input_key is not None or name == 'tool:pre':
+                node.update(input_hints(data.get('tool_name') or data.get('tool') or node.get('label'),
+                    data.get(input_key), present=input_key is not None))
+            node['outcomeSummary'] = outcome_summary(name, data)
             self.field(node, 'input', data, ('tool_input', 'arguments', 'input'), reference)
             from .delegate_exchange import tool_name
             if tool_name(node) == 'delegate':
@@ -437,7 +443,14 @@ class EventIndex:
                 self.field(node, 'output', data, ('result', 'tool_result'), reference)
                 self.field(node, 'error', data, ('error', 'error_message'), reference)
                 if tool_name(node) == 'delegate':
-                    self.delegate_field(node, 'delegateResponse', data, ('result', 'tool_result'), reference)
+                    if name == 'tool:error' or data.get('error') or data.get('error_message'):
+                        # A successful-looking inner value can be a partial
+                        # result. Keep the raw result, not a typed final answer.
+                        node.pop('delegateResponse', None)
+                        node.pop('delegateResponseDetail', None)
+                        node.get('_eventFields', {}).pop('delegateResponse', None)
+                    else:
+                        self.delegate_field(node, 'delegateResponse', data, ('result', 'tool_result'), reference)
                 result = data.get('result', data.get('tool_result'))
                 if isinstance(result, dict) and result.get('success') is False:
                     node['phase'] = 'error'
@@ -1407,10 +1420,16 @@ class EventLogView:
         shell = getattr(self.service, 'shell', None)
         if shell is None:
             return
-        # Registered bundled interests are capped at 32. No dormant owner,
-        # independent API reader or unrelated client's frame is constructed.
-        for client in tuple(shell.resources.clients):
-            record = self.service.clients.records.get(client, {})
+        # A web subscription exists before shell-resource registration. Include
+        # connected/current readers as TranscriptWindows does; notify still
+        # filters to this selected owner and uses the existing loss-safe lane.
+        clients = self.service.clients
+        identities = set(shell.resources.clients)
+        identities.update(getattr(self.service, 'queue_clients', {}).values())
+        current = getattr(clients, 'current', None)
+        identities.add(current.get() if current is not None else None)
+        for client in identities:
+            record = clients.records.get(client, {})
             if record.get('kind') == 'web' and record.get('selectedSessionId') == identity:
                 shell.notify(client)
 

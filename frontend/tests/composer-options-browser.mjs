@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
  const page=await browser.newPage({viewport:{width:390,height:844},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),options=page.getByRole('button',{name:'Chat options',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),options=page.getByRole('button',{name:'Chat options',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
  await expect(options).toBeVisible();await composer.fill('Use my selected model');
  // A saved custom ID can be valid without appearing in a provider's catalog.
  // Seed that prerequisite, then prove ordinary Options never silently replaces it.

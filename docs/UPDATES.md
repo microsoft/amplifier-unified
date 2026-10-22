@@ -6,6 +6,31 @@ Automatic update checks default to every **4 hours**. Under **Update preferences
 
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 
+A prepared app update that is waiting for active work continues checking the
+published release channel at the configured automatic-check interval. **Check
+for newer release** refreshes availability without installing or replacing the
+qualified candidate. The existing installation request then prepares a strictly
+newer published version in isolation; only successful validation replaces the
+waiting candidate. Before an ordinary idle restart, the updater refreshes again
+unless it has checked within the last minute. This final check belongs to the
+already requested installation, even if periodic checks are disabled.
+
+An unavailable release channel leaves the prepared update usable and shows a
+nonfatal warning. A newer candidate that fails validation retains the earlier
+receipt but stops automatic adoption until an explicit retry. Older metadata,
+a moved tag at the same version, or a changed commit without a newer version
+cannot replace a qualified candidate or discard a newer known target. The final
+activation lock also rejects an obsolete candidate if a concurrent check found
+a newer release while activation waited. These checks cannot guarantee knowledge
+of a release published after the last lookup. An already started replacement or
+restart, an explicit optional-feature selection, and a confirmed force restart
+retain their exact target; none is silently retargeted.
+
+Superseded app staging directories and their qualification receipts remain on
+disk. The existing automatic retention owner covers ecosystem generations, not
+app-installation generations; this path does not infer that an older app directory
+is safe to delete.
+
 When a qualified application update is waiting, expand **View active work** to
 find **Force restart…**. Its confirmation explains that running chats, workers,
 tools and calls will be interrupted, saved history and drafts are retained, and
@@ -49,9 +74,16 @@ The logical roles are candidate, current and previous. Physical generations rema
 
 Availability checks reuse a private inventory index, invalidated by generation, registry and configuration changes, with periodic full reconciliation. Remote-ref requests retain coalescing and bounded cached availability; a manual refresh refreshes remote availability. Every installation repeats exact source preflight, so cached availability cannot authorize overwriting an intervening local edit. Unified owns its registry, source store and runtimes. CLI caches and registries remain separate; shared settings, credentials and native projects/history authorities are unchanged.
 
-Core, Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
+Core follows published PyPI releases using the app's wheel-only policy. Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
 
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
+
+If a worker dependency resolves differently from the checked update, activation
+stops. The diagnostic receipt identifies the component, checked/resolved commit
+IDs when available, and which fields differ: repository, ref, subdirectory,
+revision, or a missing Git source. It does not include the source URLs, ref values
+or paths. A successful resolver command alone does not prove a matching candidate,
+and this failure does not by itself prove that a remote branch moved.
 
 Application activation also verifies that the running host and the executable on PATH belong to the same uv tool installation. A development checkout or a different launcher cannot replace another installed tool. Candidate and installed-package probes use isolated Python imports, reject packages outside that environment, and cannot accidentally validate a checkout from the launch directory or PYTHONPATH. The installed package is checked again after replacement; a failed check leaves the running host up for recovery. The restart helper uses the separate validated environment, and new work remains blocked until restart. It preserves the effective bind addresses, public origins, TLS certificate/key, session lifetime, port, workspace and data directory without writing CLI overrides into saved server settings. The replacement host acknowledges the pending restart only after an authenticated HTTP request to its live listener confirms the expected version, exact installed Git revision, data directory identity, and a different process instance. Package probes and application construction alone cannot acknowledge a restart. Smart Tool servers are reported disconnected after restart and can be reconnected explicitly. The recovery record stores the actual prior installation source when available, rather than assuming an older release tag exists. Repeated installation requests reuse a pending validated generation. Cache symlinks remain symlinks while staging; external workspace trees are not copied into the update.
 
@@ -131,15 +163,17 @@ Updates includes an offline changelog packaged from `amplifier_web/release-notes
 
 Add an entry for every release with `version`, a concise `title`, a nonempty `changes` list, and `notices` (empty for ordinary changes). Add a notice for configuration migrations, compatibility changes, changes to existing workflows, or required action. Each notice needs a stable `id`, `title`, `detail` explaining the impact, and `action` explaining what to check or do. Do not use HTML or invent notices from commit titles. Keep existing entries so users who skip versions can review the intervening changes.
 
-High-impact notices appear above the update controls and contribute to the shared Settings / Updates attention badges. `attention.read` marks the current notice wording reviewed across devices. Reviewing is acknowledgment, not confirmation that an action was performed, and never gates installation. Notices remain in the changelog after review; changed wording becomes unread again. All high-impact notices in the available history start unread, including on a fresh installation.
+The release owner follows the [version and notes checklist](validation/release-qualification.md#version-choice-and-release-notes), including maintenance-only releases. Historical omissions are backfilled under their actual release versions and delivered in the next package; published tags and assets remain immutable.
 
-The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. The publisher generates GitHub release text from that entry. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one. The bounded format supports up to 100 releases, five notices per release and 256 KB of text; archive older history deliberately when approaching those limits.
+Updates shows a release summary above its actions without expanding a disclosure: the available release before installation, the update owner's exact target during preparation/restart, and the verified running release afterward. Newer discovery cannot relabel an in-flight target. While components finish, the app summary stays on the installed release; unknown target identity and missing notes are labeled rather than inferred. The summary uses the existing bounded release history and never marks high-impact notices read. Important changes and the full Changelog remain expandable below the actions, outside Advanced details. Ordinary release entries do not create attention badges. High-impact notices contribute to the shared Settings / Updates attention badges. `attention.read` marks the current notice wording reviewed across devices when its content is visible. Reviewing is acknowledgment, not confirmation that an action was performed, and never gates installation. Notices remain in history after review; changed wording becomes unread again. Fresh installations begin attention at their installed version, while older history remains browsable; legacy state without that boundary retains its existing notices.
+
+The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. The publisher generates GitHub release text from that entry. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one. The bounded format supports up to 256 releases, five notices per release and 256,000 UTF-8 bytes; plan older-history retention deliberately when approaching those limits.
 
 ### Release workflow
 
 The **Publish application release** GitHub Actions workflow runs when the package version or release tooling changes on main, and can also be started manually on main. A release requires the same stable `X.Y.Z` version in `pyproject.toml` and `amplifier_web/__init__.py`, with the lockfile updated. Build the frontend and commit the resulting `amplifier_web/static` assets before merging; Git-based installs consume those checked-in files.
 
-The workflow runs the Python and frontend tests, rebuilds the frontend and checks for asset drift, builds a wheel and source archive, checks their versions and packaged source/assets, and imports the installed wheel in a fresh environment. It then creates the immutable `vX.Y.Z` tag and a draft release, attaches both distributions and SHA-256 checksums, and publishes the release. Publication happens only after validation and asset upload, so incomplete drafts are invisible to the updater. The workflow uses the repository's GitHub Actions token with contents-write permission; no additional provider credentials or paid model calls are needed.
+The workflow follows the [short publication graph](validation/release-qualification.md): prepare, package, frontend, native runtime and publish. It verifies the wheel/source identity, canonical assets and required runtime behavior, then creates the immutable `vX.Y.Z` tag and a draft release, attaches both distributions and SHA-256 checksums, and publishes. Broad verification runs afterward. Publication happens only after qualification and asset upload, so incomplete drafts are invisible to the updater. The workflow uses the repository's GitHub Actions token with contents-write permission; no additional provider credentials or paid model calls are needed.
 
 Manual reruns can resume a draft and replace incomplete draft assets only when the selected commit exactly matches the existing tag's commit. A dispatch from a later commit with the same package version fails with instructions to increment the version; it never silently checks out the older release. A published release and its assets remain unchanged. Existing tags are never moved; a tag/package mismatch or conflicting remote revision fails the run. Releasing an older version does not replace a newer stable release as Latest. To ship additional code, increment the version and merge again.
 
@@ -258,6 +292,13 @@ source content and explicit policy match; graph changes invalidate that reuse.
 A new attempt always starts with fresh dependency resolution. Existing explicit
 local/registry overrides are not replaced by a remembered Git lock.
 
+uv may represent a checked moving ref as `rev=<full checked commit>#<same commit>`.
+That spelling is equivalent only when repository, subdirectory and exact commit
+also match; abbreviated commits, other refs and branch movement still fail.
+The checked ref policy is carried separately into qualification and bound again
+to the installed source identity. Frozen installs retain exact commits while the
+next update check continues following the configured branch.
+
 After the uv-managed launcher supports generation activation, an already tested
 application environment becomes the live launch target through an atomic private
 pointer. This avoids installing its exact packages a second time. Older
@@ -325,3 +366,18 @@ remain authoritative. Skills' generic `cache_dir` option avoids changing
 `AMPLIFIER_HOME`, which remains the shared settings/history root. Older Skills
 modules must receive the component update before they honor that option;
 source tests do not establish adoption by already running workers.
+
+
+### App-managed Core registry updates
+
+Included-component checks also compare app-managed Core with the latest stable
+PyPI release. Eligibility requires the app's open-ended registry dependency and
+wheel-only policy, an exact PyPI lock entry, and matching installed provenance.
+Explicit fixed versions, constraints, alternate indexes, Git/local sources, or
+unexplained changes to the recorded installation remain protected.
+
+Preparation pins the checked Core version in an isolated candidate and verifies
+both the resolved registry version and the post-preparation installed package.
+Other update tiers retain the current Core version. Frozen generation receipts
+remain exact for rollback and revalidation; they do not become standing version
+pins for future update checks. The Core source-build prohibition remains enabled.

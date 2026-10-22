@@ -1,6 +1,11 @@
 name: Public readiness
 on:
   workflow_dispatch:
+    inputs:
+      installed_media_diagnostic:
+        description: Run only the full installed-media diagnostic on its pinned product baseline
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -11,6 +16,7 @@ permissions:
   contents: read
 jobs:
   critical:
+    if: ${{ !inputs.installed_media_diagnostic }}
     name: Recovery and first-use checks
     runs-on: ubuntu-latest
     # This is exhaustive background verification, not the publication gate.
@@ -47,7 +53,7 @@ jobs:
           tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
           tests/test_release_qualification.py tests/test_release_automation.py tests/test_release_notes.py
       - name: Check chat naming and internal terminal sessions
-        run: uv run --no-sync pytest -q tests/test_automatic_naming.py tests/test_chat_title_preview.py tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py tests/test_image_setup.py tests/test_image_defaults.py tests/test_provider_environment.py tests/test_readiness101.py tests/test_installer_script.py
+        run: uv run --no-sync pytest -q tests/test_automatic_naming.py tests/test_chat_title_preview.py tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py tests/test_image_setup.py tests/test_image_defaults.py tests/test_provider_environment.py tests/test_readiness101.py tests/test_installer_script.py tests/test_host_dependencies.py
       - name: Check demand-scoped catalogs and retained worker evidence
         run: uv run --no-sync pytest -q tests/test_chat_demand.py tests/test_browser_demand.py tests/test_provider_catalog.py tests/test_provider_publication.py tests/test_conversation_models.py
       - run: npm test --prefix frontend
@@ -248,3 +254,121 @@ jobs:
           name: public-readiness-browser-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.AMPLIFIER_TEST_ARTIFACTS }}/
           if-no-files-found: warn
+  installed-media-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.installed_media_diagnostic }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      INLINE_MEDIA_MODE: installed
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the original product inputs
+        run: |
+          python - <<'PY'
+          import subprocess
+          allowed = {'.github/workflows/public-readiness.yml',
+                     'frontend/tests/inline-media-browser.mjs',
+                     'tests/test_release_qualification.py'}
+          changed = set(subprocess.check_output([
+              'git', 'diff', '--name-only', '-z',
+              'a5d1ab2397a00f76495c591835b5c9194e09f5a8', 'HEAD'], text=True).split('\0')) - {''}
+          assert changed <= allowed, sorted(changed - allowed)
+          assert not subprocess.check_output(['git', 'status', '--porcelain'], text=True)
+          PY
+      - name: Initialize owned diagnostic paths
+        shell: bash
+        run: |
+          printf '%s\n' \
+            "INLINE_MEDIA_EVIDENCE_DIR=$RUNNER_TEMP/inline-media-diagnostic" \
+            "INLINE_MEDIA_MP4=$RUNNER_TEMP/inline-media-diagnostic/synthetic.mp4" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev --group artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - name: Bind the diagnostic to the original production build
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          static = Path('amplifier_web/static')
+          build = json.loads((static / 'build.json').read_text())
+          assert build == {'version': '0.20.176', 'id': 'e4a71c46fd41ecf6'}, build
+          assert not any(path.is_symlink() for path in static.rglob('*'))
+          files = {str(path.relative_to(static)): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in sorted(static.rglob('*')) if path.is_file()}
+          payload = hashlib.sha256()
+          for name, digest in sorted(files.items()):
+              payload.update(name.encode() + b'\0' + digest.encode() + b'\n')
+          # Exact membership and bytes from successful artifact12121555367,
+          # not merely the builder's shorter input-derived identifier.
+          assert len(files) == 311
+          assert payload.hexdigest() == '1b4c114ffe44d4c7a5dcf8a2136fb363847feb4ec4b27aa5bbc5fe2435deb337'
+          output = Path(os.environ['INLINE_MEDIA_EVIDENCE_DIR'])
+          output.mkdir(parents=True, exist_ok=True)
+          record = {'revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'productBaseline': 'a5d1ab2397a00f76495c591835b5c9194e09f5a8',
+                    'runId': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                    'build': build, 'staticSha256': files, 'payloadSha256': payload.hexdigest()}
+          (output / 'source-build-identity.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - name: Install the same browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run the entire installed-media scenario once
+        run: |
+          uv pip install --python .venv/bin/python --no-deps --reinstall .
+          command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
+          ffmpeg -v error -f lavfi -i testsrc=size=64x48:rate=10 -t 2 -c:v libvpx-vp9 -tag:v vp09 -pix_fmt yuv420p -an "$INLINE_MEDIA_MP4"
+          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" node frontend/tests/inline-media-browser.mjs
+      - name: Gate sanitized bounded diagnostic evidence
+        id: diagnostic-evidence
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os, re, socket
+          from pathlib import Path
+          root = Path(os.environ['INLINE_MEDIA_EVIDENCE_DIR'])
+          paths = list(root.glob('*.json'))
+          assert paths, 'No diagnostic evidence'
+          private = [str(Path.home()), socket.gethostname(), os.environ['GITHUB_WORKSPACE']]
+          for path in paths:
+              text = path.read_text()
+              assert not any(value in text for value in private), 'Private identity; upload refused'
+              assert not re.search(r'/home/|/Users/|[A-Za-z]:\\Users\\', text), 'Private path; upload refused'
+          if (root / 'result.json').is_file():
+              result = json.loads((root / 'result.json').read_text())
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+                  out.write('Full installed-media diagnostic only, not Public readiness.\n')
+                  out.write('Core: ' + result['coreChecks'] + '; physical: ' + result['physicalChecks'] + '\n')
+          PY
+      - name: Retain only sanitized JSON and synthetic screenshots
+        if: always() && steps.diagnostic-evidence.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-media-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/inline-media-diagnostic/*.json
+            ${{ runner.temp }}/inline-media-diagnostic/*.png
+          if-no-files-found: error
+      - name: Require complete core scenario
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['INLINE_MEDIA_EVIDENCE_DIR']) / 'result.json').read_text())
+          assert result['fullScenario'] and result['coreChecks'] == 'PASS'
+          assert all(row['status'] == 'NOT_QUALIFIED' for row in result['remainingPhysical'])
+          PY

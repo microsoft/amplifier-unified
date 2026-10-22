@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -44,7 +45,7 @@ try{
   window.clearInterval=key=>intervals.has(key)?intervals.delete(key):nativeClear(key);
   window.tickActivity=()=>{offset+=1000;for(const fn of intervals.values())fn()};
  });
- await page.goto(vite.resolvedUrls.local[0]);
+ await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.waitFor();await page.locator('[data-message-id="message-119"] strong').waitFor();
  // The latest page is bounded; the older-page positive control below must

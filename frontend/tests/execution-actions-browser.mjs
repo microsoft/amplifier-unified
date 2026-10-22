@@ -1,3 +1,4 @@
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -13,11 +14,12 @@ const port=await new Promise((resolve,reject)=>{let output='';const timer=setTim
 const base=`http://127.0.0.1:${port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
 const control=async body=>{const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});if(!response.ok)throw Error(await response.text()+' '+log);return response.json()};
 await control({op:'inspection'});await control({op:'inspection-actions'});await control({op:'inspection-finish'});
-const browser=await chromium.launch({headless:true});
+const browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
 try{
  const page=await browser.newPage({viewport:{width:1300,height:1050},extraHTTPHeaders:headers}),errors=[];
- page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base);
+ const fieldReads=[];page.on('request',r=>{if(r.url().includes('/api/conversation/detail?')){const params=new URL(r.url()).searchParams;if(params.get('part')==='nodes'&&params.has('field'))fieldReads.push(r.url())}});
+ page.on('pageerror',e=>{errors.push(e.message);console.error('Page error:',e.message)});
+ await page.goto(base);await showFixtureConversation(page);
  const turn=page.locator('[data-group-id="inspect@long-answer"]');
  // Wait for canonical groups before clicking; positional locators can retarget as history arrives.
  await expect.poll(async()=>{
@@ -31,6 +33,20 @@ try{
   await expect(group).toHaveAttribute('aria-expanded','true');
  }
  const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.waitFor();const button=row.locator(':scope > button.a-execution-action-line');if(await button.getAttribute('aria-expanded')==='false')await button.click();return row};
+ await expect(action('command').locator(':scope > button')).toContainText('bash');
+ await expect(action('command').locator(':scope > button')).toContainText('python -m pytest');
+ await expect(action('app').locator(':scope > button')).toContainText('session.rename');
+ await expect(action('code').locator(':scope > button')).toContainText('tools.check');
+ await expect(action('code').locator(':scope > button')).toContainText('FixtureError: exact failure detail');
+ await expect(action('code').locator(':scope > button')).toContainText('Exit 9');
+ assert.equal(fieldReads.length,0,'Skimming collapsed rows must not fetch complete payloads');
+ await action('code').scrollIntoViewIfNeeded();
+ await page.screenshot({path:join(outputDir,'collapsed-action-hints.png')});
+ const code=await open('code');
+ await expect(code.getByRole('button',{name:/Show all .* lines/}).first()).toBeVisible();
+ await code.getByRole('button',{name:/Show all .* lines/}).first().click();
+ await expect(code).toContainText('CODE-END');
+ await expect(code).toContainText('FixtureError: exact failure detail');
  const patch=await open('patch');await patch.locator('.a-execution-diff').waitFor();
  assert.equal(await patch.locator('.a-execution-diff-row.add').count(),2);assert.equal(await patch.locator('.a-execution-diff-row.remove').count(),1);
  assert.match(await patch.innerText(),/result = retry\(operation\)/);
@@ -50,7 +66,7 @@ try{
  assert.equal(await activity.getAttribute('aria-expanded'),'true');
  const nested=await open('nested');assert.match(await nested.innerText(),/git diff --check/);assert.match(await nested.innerText(),/No output/);
  await page.locator('[data-node-id="legacy"] > button').click();
- assert.match(await page.locator('[data-node-id="legacy"]').innerText(),/No action content is available in the event log/);assert.ok(!(await turn.innerText()).includes('Tool completed'));
+ assert.match(await page.locator('[data-node-id="legacy"]').innerText(),/Action content is not (?:available|in the loaded saved work)/);assert.ok(!(await turn.innerText()).includes('Tool completed'));
  // Agent-facing view update uses exactly the same expansion path as buttons.
  const expanded=await page.evaluate(()=>window.amplifier.getState().view.executionExpanded);
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:[]}}));

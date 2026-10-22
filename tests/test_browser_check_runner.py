@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import sys
 import subprocess
@@ -49,6 +50,11 @@ def test_owned_orphan_is_reaped_and_reported_before_next_check(tmp_path, detache
               f'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],start_new_session={detached!r});Path({str(pid)!r}).write_text(str(p.pid))')
     code, report, _ = execute(tmp_path, [scenario('leaks', source), scenario('next', 'pass')])
     assert code == 1 and report['scenarios'][0]['cleanup']['terminated'] == 1
+    observed = report['scenarios'][0]['cleanup']['observedBeforeTermination']
+    assert len(observed) == 1 and observed[0]['pid'] == int(pid.read_text())
+    assert observed[0]['startTime'].isdigit()
+    assert observed[0]['executable'] == Path(sys.executable).resolve().name
+    assert set(observed[0]) == {'pid', 'startTime', 'parentPid', 'processGroup', 'executable'}
     assert report['scenarios'][1]['status'] == 'passed'
     stat = Path('/proc') / pid.read_text() / 'stat'
     assert not stat.exists() or stat.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
@@ -61,6 +67,16 @@ def test_uncertain_cleanup_stops_and_records_unrun_without_false_cascade(tmp_pat
     assert report['scenarios'][1]['status'] == 'unrun'
     assert report['scenarios'][1]['reason'] == 'unsafe_cleanup'
     assert not (tmp_path / 'results/must-not-run.log').exists()
+
+
+def test_cleanup_identity_details_are_bounded_without_reducing_failure_count(monkeypatch):
+    identities = {-pid: '1' for pid in range(1, 41)}
+    snapshots = iter([{}, identities, {}])
+    monkeypatch.setattr(runner, 'owned_members', lambda *args: next(snapshots))
+    cleanup = runner.retire_group(-1, 'synthetic')
+    assert cleanup['terminated'] == 40 and cleanup['remaining'] == []
+    assert len(cleanup['observedBeforeTermination']) == 32
+    assert cleanup['omittedProcessDetails'] == 8
 
 
 def test_last_successful_exit_with_unreadable_ownership_still_fails(tmp_path, monkeypatch):
@@ -218,14 +234,19 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        "assignment-adoption": {},
+        "request-cancellation": {},
         'diagram-navigation': {'DIAGRAM_EVIDENCE': '{root}/output/browser-checks/diagram-navigation/report.json'},
         'chat-shortcuts': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/chat-shortcuts'},
         'automation-hub': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/automation-hub'},
         'cross-workspace-handoff': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/cross-workspace-handoff'},
+        'chat-reference': {'CHAT_REFERENCE_EVIDENCE_DIR': '{root}/output/browser-checks/chat-reference'},
         'peer-attribution': {'AMPLIFIER_TEST_BUILT_STATIC': '1'},
         'device-pairing': {},
         'settings-drafts': {},
+        'testing-settings': {},
         'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
+        'approval-layout': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/approval-layout'},
         'standard-ux-connection-controls': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-connection-controls'},
         'standard-ux-preferences': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-preferences'},
         'standard-ux-privacy-effects': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-privacy-effects'},
@@ -233,6 +254,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'smart-tool-updates': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/smart-tool-updates-artifacts'},
         'archive-feedback': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/archive-feedback'},
         'update-restart': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-restart-artifacts'},
+        'update-effects': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-effects'},
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
@@ -241,14 +263,35 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'mcp-clients': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-clients.png'},
         'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
         'execution-observability': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/execution-observability'},
+        'test-environments': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                              'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/test-environments'},
+        'access-mode': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/access-mode'},
+        'adaptive-work': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/adaptive-work'},
+        'attachment-consumption': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
+        'home-sidebar': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/home-sidebar'},
+        'tool-details': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/tool-details'},
+        'tool-previews': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/tool-previews'},
+        'shared-landing': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-landing'},
+        'focus-navigation': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/focus-navigation'},
+        'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
+        'storage-cleanup-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/storage-cleanup-settings'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
     for row in added:
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row.get('env', {}) == additions[row['id']]
-    original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 88
+    recovery_additions = [
+        {'id': 'configuration-recovery-components',
+         'command': ['node', '--test', 'tests/configuration-recovery.test.mjs']},
+        {'id': 'configuration-recovery',
+         'command': ['node', 'tests/configuration-recovery-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/configuration-recovery'}},
+    ]
+    recovery_ids = {row['id'] for row in recovery_additions}
+    assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
+    original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
+    assert len(original) == 65 and len(rows) == 107
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -262,7 +305,51 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
     assert ['node', 'tests/empty-host-browser.mjs', '--lost-create'] in commands
-    assert all((ROOT / 'frontend' / command[1]).is_file() for command in commands)
+    assert all((ROOT / 'frontend' / command[2 if command[1] == '--test' else 1]).is_file()
+               for command in commands)
+
+
+def assert_readiness_python_coverage(workflow, *, targets, run_blocks_sha256):
+    """Count real normal-lane arguments; retain order and duplicates as evidence."""
+    runs = [step['run'] for step in workflow['jobs']['critical']['steps'] if 'run' in step]
+    files = []
+    for run in runs:
+        for line in run.splitlines():
+            if line.strip().startswith('uv run --no-sync pytest '):
+                argv = shlex.split(line, comments=True)
+                files.extend(arg for arg in argv[4:] if re.fullmatch(r'tests/test_\w+\.py', arg))
+    assert len(files) == len(set(files)) == targets, 'Normal readiness target count or duplicate changed'
+    # A fixed pre-diagnostic oracle also detects altered ordering or a duplicate
+    # command written in an unrecognized shell form. Do not sort/deduplicate it.
+    assert hashlib.sha256(json.dumps(runs).encode()).hexdigest() == run_blocks_sha256, 'Normal readiness commands changed'
+    return files
+
+
+@pytest.mark.parametrize('change', ['diagnostic-noise', 'duplicate-step', 'duplicate-argument',
+                                  'alternate-duplicate', 'reorder'])
+def test_readiness_inventory_distinguishes_diagnostic_mentions_from_real_commands(change):
+    runs = ['uv run --no-sync pytest -q tests/test_first.py',
+            'uv run --no-sync pytest -q tests/test_second.py']
+    expected = hashlib.sha256(json.dumps(runs).encode()).hexdigest()
+    steps = [{'run': run} for run in runs]
+    workflow = {'jobs': {'critical': {'steps': steps}, 'diagnostic': {'steps': [
+        {'run': "allowed = {'tests/test_first.py'}"},
+        {'run': 'uv run --no-sync pytest -q tests/test_first.py'},
+    ]}}}
+    if change == 'duplicate-step':
+        steps.append(steps[0].copy())
+    elif change == 'duplicate-argument':
+        steps[0]['run'] += ' tests/test_first.py'
+    elif change == 'alternate-duplicate':
+        steps.append({'run': 'python -m pytest tests/test_first.py'})
+    elif change == 'reorder':
+        steps.reverse()
+    if change == 'diagnostic-noise':
+        assert assert_readiness_python_coverage(workflow, targets=2, run_blocks_sha256=expected) == [
+            'tests/test_first.py', 'tests/test_second.py']
+    else:
+        with pytest.raises(AssertionError, match='Normal readiness'):
+            assert_readiness_python_coverage(workflow, targets=2, run_blocks_sha256=expected)
 
 
 def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_coverage():
@@ -271,11 +358,37 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     steps = browser['jobs']['browser']['steps']
     assert any('browser_check_runner.py' in step.get('run', '') for step in steps)
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
-    assert len(uploads) == 1 and uploads[0]['if'] == 'always()'
-    assert 'output/browser-checks/' in uploads[0]['with']['path']
-    readiness = (workflows / 'public-readiness.yml').read_text()
-    files = re.findall(r'tests/test_\w+\.py', readiness)
-    assert len(files) == len(set(files)) == 98
+    assert len(uploads) == 2
+    by_name = {step['with']['name']: step for step in uploads}
+    diagnostics_name = 'extended-browser-evidence-${{ github.run_attempt }}'
+    static_name = 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}'
+    assert set(by_name) == {diagnostics_name, static_name}
+    diagnostics, static = by_name[diagnostics_name], by_name[static_name]
+    assert diagnostics['if'] == 'always()'
+    assert diagnostics['with'] == {
+        'name': diagnostics_name,
+        'path': 'output/browser-checks/\noutput/active-client-performance/\noutput/state-transport-browser/\noutput/scoped-navigation/\noutput/selected-context/\n',
+        'if-no-files-found': 'warn',
+    }
+    assert static['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
+    assert static['with'] == {
+        'name': static_name, 'path': 'amplifier_web/static/',
+        'include-hidden-files': 'true', 'if-no-files-found': 'error',
+    }
+    assert set(diagnostics['with']['path'].splitlines()).isdisjoint({static['with']['path']})
+    # Never replace failed-run diagnostics with a successful-build-only upload.
+    # Exact names, count and paths also reject additional or overlapping uploads.
+    build = next(step for step in steps if step.get('id') == 'frontend-build')
+    assert build['run'] == 'npm run build --prefix frontend'
+    assert steps.index(build) < steps.index(static)
+    readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    # Ordered normal critical run blocks from reviewed a99ab643, before the
+    # independent diagnostic job was merged, plus host helper recovery coverage.
+    # Eight pytest calls / 99 targets; all previous targets and ordering retained.
+    assert_readiness_python_coverage(
+        readiness, targets=99,
+        run_blocks_sha256='a965ab7dd574127e46823a19e23a97932416aa5114a6558c60ec042588edbdf5',
+    )
 
 
 def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
@@ -287,11 +400,12 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     readiness_scripts = {match.group(1) for _, line in commands
                          if (match := re.search(r'node (tests/[^ ]+-browser\.mjs)', line))}
     plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
-    extended_scripts = {row['command'][1] for row in plan['scenarios']}
+    extended_scripts = {row['command'][2 if row['command'][1] == '--test' else 1]
+                        for row in plan['scenarios']}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
-        'cross-workspace-handoff', 'automation-hub', 'settings-drafts')}
+        'cross-workspace-handoff', 'chat-reference', 'automation-hub', 'settings-drafts', 'approval-layout')}
     assert source_only <= extended_scripts
     assert not source_only & readiness_scripts
     installed_overlap = {f'tests/{name}-browser.mjs' for name in (
@@ -307,14 +421,49 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # All 108 original scripts, three navigation regressions, confirmed restart,
     # Smart Tool recovery, archive feedback and appearance preview navigation
     # and sequential keyboard reflow, saved MCP recovery, device pairing, and media transition
-    # each retain an explicit owning lane; unsaved settings and independent MCP clients now have owners too.
-    assert len(readiness_scripts | extended_scripts) == 131
+    # each retain an explicit owning lane; unsaved settings, independent MCP clients
+    # and the approval reading-column regression now have owners too. The two
+    # recovery additions retain distinct component and full-journey commands;
+    # the existing-chat card, adaptive Home, temporary Focus passes and sidebar modes each add a journey.
+    # Attachment consumption is one additional source-only owner, not a
+    # duplicate readiness invocation or a replacement of any existing script.
+    attachment = 'tests/attachment-consumption-browser.mjs'
+    assert attachment in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', attachment] for row in plan['scenarios']) == 1
+    cancellation = 'tests/request-cancellation-browser.mjs'
+    assert cancellation in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', cancellation] for row in plan['scenarios']) == 1
+    shared_landing = 'tests/shared-landing-browser.mjs'
+    assert shared_landing in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', shared_landing] for row in plan['scenarios']) == 1
+    tool_details = 'tests/tool-details-browser.mjs'
+    assert tool_details in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', tool_details] for row in plan['scenarios']) == 1
+    tool_previews = 'tests/tool-previews-browser.mjs'
+    assert tool_previews in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', tool_previews] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews}) == 145
+    assert len(readiness_scripts | extended_scripts) == 150
+    assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
+    assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
+               for row in plan['scenarios']) == 1
+    assert 'tests/focus-navigation-browser.mjs' in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', 'tests/focus-navigation-browser.mjs']
+               for row in plan['scenarios']) == 1
+    assert 'tests/access-mode-browser.mjs' in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', 'tests/access-mode-browser.mjs']
+               for row in plan['scenarios']) == 1
+    assert {'tests/configuration-recovery.test.mjs',
+            'tests/configuration-recovery-browser.mjs'} <= extended_scripts - readiness_scripts
     assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 
-    # The environment journey belongs to coordination, outside these two lanes.
+    # Keep coordination's existing direct owner; the extended manifest now also
+    # runs this fixed journey exactly once with its own retained evidence folder.
     environment = 'tests/test-environments-browser.mjs'
-    assert environment not in readiness_scripts | extended_scripts
+    assert environment not in readiness_scripts and environment in extended_scripts
+    assert sum(row['command'] == ['node', environment] for row in plan['scenarios']) == 1
     owners = []
     for path in workflows.glob('*.yml'):
         value = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
@@ -329,6 +478,57 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
                and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
                for step in coordination['jobs']['contracts']['steps'])
+
+
+def test_attachment_focus_selects_exact_existing_owner_without_changing_plan():
+    import copy
+    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+    before = copy.deepcopy(plan)
+    focused = runner.attachment_consumption_plan(plan)
+    assert plan == before
+    assert focused == {'schemaVersion': 1, 'scenarios': [{
+        'id': 'attachment-consumption',
+        'command': ['node', 'tests/attachment-consumption-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-consumption'},
+    }]}
+    for mutation in ('missing', 'duplicate', 'command', 'environment'):
+        broken = copy.deepcopy(focused)
+        if mutation == 'missing':
+            broken['scenarios'] = []
+        elif mutation == 'duplicate':
+            broken['scenarios'] *= 2
+        elif mutation == 'command':
+            broken['scenarios'][0]['command'] = ['node', 'tests/other.mjs']
+        else:
+            broken['scenarios'][0]['env'] = {}
+        with pytest.raises(ValueError):
+            runner.attachment_consumption_plan(broken)
+
+
+def test_attachment_focus_workflow_retains_failures_and_default_coverage():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
+    assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
+    job = workflow['jobs']['browser']
+    assert job['if'] == '${{ !inputs.mcp_boundary }}'
+    runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    assert len(runs) == 2
+    flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
+    assert all(flag in step['run'] for step in runs)
+    assert '--budget-seconds 1500' in runs[1]['run']
+    host = next(step for step in job['steps'] if step.get('id') == 'attachment-contracts')
+    assert host['if'] == '${{ inputs.attachment_consumption }}' and host['continue-on-error'] == 'true'
+    targets = re.findall(r'tests/test_[\w]+\.py', host['run'])
+    assert targets == ['tests/test_attachments.py', 'tests/test_message_delivery.py',
+                       'tests/test_live_clients.py', 'tests/test_chat_references.py',
+                       'tests/test_browser_check_runner.py', 'tests/test_release_qualification.py']
+    assert '--junitxml=output/browser-checks/attachment-contracts.xml' in host['run']
+    final = next(step for step in job['steps'] if step.get('name') == 'Preserve failed attachment contracts')
+    assert final['run'] == 'exit 1'
+    assert "always()" in final['if'] and "steps.attachment-contracts.outcome != 'success'" in final['if']
+    assert "steps.attachment-client-contracts.outcome != 'success'" in final['if']
+    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
+               for step in job['steps'])
 
 
 def test_reload_failure_diagnostics_have_retained_scenario_owners():
@@ -357,3 +557,564 @@ def test_performance_reports_are_distinct_and_uploaded():
                    for line in step['with']['path'].splitlines() if line.strip()]
     assert all(any(path.removeprefix('{root}/').startswith(directory) for directory in directories)
                for path in reports.values())
+
+
+# Independent literal identities: do not construct the positive TAP fixture from
+# the validator's allow-list, or a changed/missing identity could validate itself.
+APP004_EXPECTED_GROUPS = (
+    (
+        'chat reference metadata is a fixed bounded data shape',
+        'chat reference rejects action',
+        'chat reference rejects URL',
+        'chat reference rejects foreign source',
+        'chat reference rejects foreign message',
+        'chat reference rejects missing target',
+        'chat reference rejects wrong version',
+        'chat reference rejects invalid revision',
+        'chat reference rejects unbounded label',
+        'chat reference rejects control character',
+        'chat reference rejects missing availability',
+        'chat reference rejects duplicate, oversized and expanded envelopes',
+    ),
+    (
+        'copy uses an available message without another request',
+        'copy reads an explicitly addressed off-page chat without changing selection',
+        'missing scoped message reports failure instead of copying unrelated content',
+        'copy retains prose and appends only the host-supplied inert reference fallback',
+    ),
+    (
+        'held route stays blocked through exercise and drains once before unregistration',
+        'drain includes concurrent callbacks and waiting unroute joins a final protocol arrival',
+        'callback errors become an awaited failure, not ignored or retried',
+        'primary assertion survives successful release and cleanup',
+        'primary error is retained with callback and teardown errors as secondary',
+        'early-started action rejection stays observable until it is awaited',
+        'cleanup failure alone fails and cannot replace a prior primary failure',
+    ),
+)
+APP004_EXPECTED_NAMES = tuple(name for group in APP004_EXPECTED_GROUPS for name in group)
+ABSENT = object()
+
+
+def app004_tap():
+    return ('TAP version 13\n'
+            + ''.join(f'ok {index} - {name}\n' for index, name in enumerate(APP004_EXPECTED_NAMES, 1))
+            + '1..23\n# tests 23\n# suites 0\n# pass 23\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n')
+
+
+def app004_witness(token='fresh-fixture-token'):
+    # Synthetic validator input, NOT evidence of a browser/card/Node execution.
+    outcome = {
+        'qualificationToken': token, 'negativeReload': True,
+        'identityBoundary': {
+            'id': 'app004-same-document', 'attachmentAccepted': True, 'cardVisible': True,
+            'draftHeld': True, 'clickCompleted': True, 'attempted': True, 'verdict': 'failed',
+            'targetSessionId': 'fixture-target', 'selectedSessionId': 'fixture-target',
+            'before': {'document': 'before-document', 'timeOrigin': 1000, 'client': 'fixture-client'},
+            'after': {'document': 'after-document', 'timeOrigin': 2000, 'client': 'fixture-client'},
+        },
+        'primary': {'name': 'AssertionError', 'code': 'ERR_ASSERTION', 'boundary': 'app004-same-document'},
+        'browserErrors': [], 'secondary': [], 'fixtureExit': {'code': 0, 'signal': None},
+    }
+    routes = [
+        {'route': 'held-draft', 'phase': 'registered'},
+        {'route': 'held-draft', 'phase': 'started', 'id': 1},
+        {'route': 'held-draft', 'phase': 'gate-released'},
+        {'route': 'held-draft', 'phase': 'completed', 'id': 1},
+        {'route': 'held-draft', 'phase': 'drained'},
+        {'route': 'held-draft', 'phase': 'unregistered'},
+    ]
+    return outcome, routes
+
+
+def write_app004_witness(folder, token='fresh-fixture-token'):
+    folder.mkdir(parents=True, exist_ok=True)
+    outcome, routes = app004_witness(token)
+    (folder / 'outcome.json').write_text(json.dumps(outcome))
+    (folder / 'route-lifecycle.json').write_text(json.dumps(routes))
+    return outcome, routes
+
+
+def change_app004_field(value, path, replacement):
+    keys = path.split('.')
+    for key in keys[:-1]:
+        value = value[key]
+    if replacement is ABSENT:
+        value.pop(keys[-1])
+    else:
+        value[keys[-1]] = replacement
+
+
+def prepare_app004_verdict(tmp_path, identity='reload-negative'):
+    folder = tmp_path / 'qualification'
+    write_app004_witness(folder / 'negative')
+    row = {'id': identity, 'status': 'failed' if identity == 'reload-negative' else 'passed',
+           'reason': None, 'exitCode': 1 if identity == 'reload-negative' else 0,
+           'cleanup': {'remaining': [], 'terminated': 0}, 'executionToken': 'fresh-fixture-token',
+           'log': identity + '.log'}
+    (folder / row['log']).write_text(app004_tap() if identity == 'units' else 'synthetic assertion failure\n')
+    return row, folder
+
+
+def mock_app004_commands(monkeypatch, *, units_source=None, negative_source=None, timeout=2):
+    # Only descriptors are substituted. Real scheduler, ownership, deadlines and
+    # verdicts run against harmless Python children; this is not Node/Chromium QA.
+    initial = runner.initial_app004
+    outcome, routes = app004_witness()
+    if units_source is None:
+        units_source = (f'print({app004_tap()!r},end="");import os;'
+                        'print("# fixture-owner "+os.environ["AMPLIFIER_BROWSER_CHECK_OWNER"])')
+    if negative_source is None:
+        negative_source = (
+            'import json,os;from pathlib import Path;'
+            'token=os.environ["APP004_QUALIFICATION_TOKEN"];'
+            'assert token and token!="inherited-stale-token";'
+            'assert token==os.environ["AMPLIFIER_BROWSER_CHECK_OWNER"];'
+            'assert os.environ["CHAT_REFERENCE_NEGATIVE_RELOAD"]=="1";'
+            f'outcome=json.loads({json.dumps(outcome)!r});outcome["qualificationToken"]=token;'
+            'folder=Path(os.environ["CHAT_REFERENCE_EVIDENCE_DIR"]);folder.mkdir(parents=True,exist_ok=True);'
+            '(folder/"outcome.json").write_text(json.dumps(outcome));'
+            f'(folder/"route-lifecycle.json").write_text({json.dumps(routes)!r});'
+            'print("synthetic negative witness");raise SystemExit(1)'
+        )
+    def fixed(provenance):
+        report = initial(provenance)
+        for row, source in zip(report['checks'], (units_source, negative_source), strict=True):
+            row['command'] = [sys.executable, '-c', source]
+            row['timeoutSeconds'] = timeout
+        return report
+    monkeypatch.setattr(runner, 'initial_app004', fixed)
+
+
+def test_app004_fixed_commands_and_literal_twenty_three_identities():
+    provenance = {'revision': 'b' * 40}
+    report = runner.initial_app004(provenance)
+    assert report == {
+        'schemaVersion': 1, 'source': provenance, 'complete': False, 'passed': False,
+        'checks': [
+            {'id': 'units', 'status': 'unrun', 'reason': 'not_started', 'timeoutSeconds': 60,
+             'command': ['node', '--test', '--test-reporter=tap', 'tests/chat-reference.test.mjs',
+                         'tests/message-copy.test.mjs', 'tests/chat-reference-harness.test.mjs']},
+            {'id': 'reload-negative', 'status': 'unrun', 'reason': 'not_started', 'timeoutSeconds': 300,
+             'command': ['node', 'tests/chat-reference-browser.mjs']},
+        ],
+    }
+    assert tuple(map(len, APP004_EXPECTED_GROUPS)) == (12, 4, 7)
+    assert len(APP004_EXPECTED_NAMES) == len(set(APP004_EXPECTED_NAMES)) == 23
+    assert tuple(runner.APP004_UNIT_NAMES) == APP004_EXPECTED_NAMES
+    assert runner.APP004_BOUNDARY == 'app004-same-document'
+
+
+@pytest.mark.parametrize('corruption', [
+    'missing-case', 'duplicate-name', 'foreign-name', 'extra-case', 'wrong-tests', 'wrong-pass',
+    'failure', 'cancelled', 'skipped', 'todo', 'skip-directive', 'todo-directive',
+    'not-ok', 'bail-out', 'duplicate-summary', 'missing-summary',
+])
+def test_app004_units_requires_exact_unique_unskipped_tap(tmp_path, corruption):
+    log = tmp_path / 'units.log'
+    valid = app004_tap()
+    log.write_text(valid)
+    assert runner.app004_units(log) is None
+    first = f'ok 1 - {APP004_EXPECTED_NAMES[0]}'
+    mutations = {
+        'missing-case': valid.replace(first + '\n', ''),
+        'duplicate-name': valid.replace(APP004_EXPECTED_NAMES[-1], APP004_EXPECTED_NAMES[0]),
+        'foreign-name': valid.replace(APP004_EXPECTED_NAMES[-1], 'unrelated unit'),
+        'extra-case': valid + 'ok 24 - unrelated unit\n',
+        'wrong-tests': valid.replace('# tests 23', '# tests 22'),
+        'wrong-pass': valid.replace('# pass 23', '# pass 22'),
+        'failure': valid.replace('# fail 0', '# fail 1'),
+        'cancelled': valid.replace('# cancelled 0', '# cancelled 1'),
+        'skipped': valid.replace('# skipped 0', '# skipped 1'),
+        'todo': valid.replace('# todo 0', '# todo 1'),
+        'skip-directive': valid.replace(first, first + ' # SKIP unavailable'),
+        'todo-directive': valid.replace(first, first + ' # TODO later'),
+        'not-ok': valid + 'not ok 24 - unexpected failure\n',
+        'bail-out': valid + 'Bail out! stopped\n',
+        'duplicate-summary': valid + '# pass 23\n',
+        'missing-summary': valid.replace('# skipped 0\n', ''),
+    }
+    log.write_text(mutations[corruption])
+    with pytest.raises(ValueError):
+        runner.app004_units(log)
+
+
+@pytest.mark.parametrize('path,replacement', [
+    ('qualificationToken', 'stale-fixture-token'), ('qualificationToken', ABSENT),
+    ('negativeReload', False), ('negativeReload', 'true'),
+    ('identityBoundary', {}), ('identityBoundary.id', 'some-other-assertion'),
+    ('identityBoundary.verdict', 'passed'),
+    *((f'identityBoundary.{flag}', False) for flag in
+      ('attachmentAccepted', 'cardVisible', 'draftHeld', 'clickCompleted', 'attempted')),
+    ('identityBoundary.clickCompleted', 1),
+    ('identityBoundary.targetSessionId', ''), ('identityBoundary.targetSessionId', ABSENT),
+    ('identityBoundary.selectedSessionId', 'wrong-target'),
+    ('primary', {}), ('primary.name', 'Error'), ('primary.name', 'TimeoutError'),
+    ('primary.code', 'OTHER_ERROR'), ('primary.boundary', 'later-focus-assertion'),
+    ('primary.boundary', ABSENT), ('secondary', [{'name': 'Error', 'message': 'cleanup failed'}]),
+    ('browserErrors', ABSENT), ('browserErrors', ['uncaught browser error']),
+    ('fixtureExit', None), ('fixtureExit.code', 1), ('fixtureExit.code', False),
+    ('fixtureExit.signal', 'SIGTERM'),
+])
+def test_app004_negative_requires_fresh_exact_genuine_click_boundary(tmp_path, path, replacement):
+    outcome, _ = write_app004_witness(tmp_path)
+    assert runner.app004_negative(tmp_path, 'fresh-fixture-token') is None
+    change_app004_field(outcome, path, replacement)
+    (tmp_path / 'outcome.json').write_text(json.dumps(outcome))
+    with pytest.raises(ValueError):
+        runner.app004_negative(tmp_path, 'fresh-fixture-token')
+
+
+@pytest.mark.parametrize('path,replacement', [
+    *((f'identityBoundary.{side}.{key}', ABSENT)
+      for side in ('before', 'after') for key in ('document', 'timeOrigin', 'client')),
+    *((f'identityBoundary.{side}.timeOrigin', value)
+      for side in ('before', 'after') for value in (False, 0, -1, '2000')),
+    *((f'identityBoundary.{side}.{key}', '')
+      for side in ('before', 'after') for key in ('document', 'client')),
+    ('identityBoundary.after.document', 'before-document'),
+    ('identityBoundary.after.timeOrigin', 1000),
+    ('identityBoundary.after', {'document': 'before-document', 'timeOrigin': 1000, 'client': 'other-client'}),
+    ('identityBoundary.after.extra', 'not-a-marker'),
+    ('identityBoundary.before.timeOrigin', float('nan')),
+    ('identityBoundary.after.timeOrigin', float('inf')),
+])
+def test_app004_negative_requires_full_markers_and_both_reload_changes(tmp_path, path, replacement):
+    outcome, _ = write_app004_witness(tmp_path)
+    # A retained client alone does not invalidate a proven document reload.
+    assert outcome['identityBoundary']['before']['client'] == outcome['identityBoundary']['after']['client']
+    assert runner.app004_negative(tmp_path, 'fresh-fixture-token') is None
+    change_app004_field(outcome, path, replacement)
+    (tmp_path / 'outcome.json').write_text(json.dumps(outcome))
+    with pytest.raises(ValueError):
+        runner.app004_negative(tmp_path, 'fresh-fixture-token')
+
+
+@pytest.mark.parametrize('corruption', [
+    'empty', 'foreign-route', 'error', 'null-error', 'missing-completion', 'missing-drain',
+    'missing-unregister', 'duplicate-start', 'duplicate-completion', 'completion-before-start',
+    'wrong-id', 'boolean-id', 'missing-id', 'unknown-phase', 'reordered-phases',
+    'missing-register', 'missing-gate', 'oversized',
+])
+def test_app004_negative_rejects_failed_or_unfinished_routes(tmp_path, corruption):
+    _, routes = write_app004_witness(tmp_path)
+    assert runner.app004_negative(tmp_path, 'fresh-fixture-token') is None
+    if corruption == 'empty':
+        routes = []
+    elif corruption == 'foreign-route':
+        routes[1]['route'] = 'later-navigation'
+    elif corruption in ('error', 'null-error'):
+        routes[3]['error'] = 'Route is already handled!' if corruption == 'error' else None
+    elif corruption.startswith('missing-') and corruption != 'missing-id':
+        phase = {'missing-completion': 'completed', 'missing-drain': 'drained',
+                 'missing-unregister': 'unregistered', 'missing-register': 'registered',
+                 'missing-gate': 'gate-released'}[corruption]
+        routes = [row for row in routes if row['phase'] != phase]
+    elif corruption == 'duplicate-start':
+        routes.insert(2, dict(routes[1]))
+    elif corruption == 'duplicate-completion':
+        routes.insert(4, dict(routes[3]))
+    elif corruption == 'completion-before-start':
+        routes[1], routes[3] = routes[3], routes[1]
+    elif corruption == 'wrong-id':
+        routes[3]['id'] = 2
+    elif corruption == 'boolean-id':
+        routes[1]['id'] = True
+    elif corruption == 'missing-id':
+        del routes[1]['id']
+    elif corruption == 'unknown-phase':
+        routes[3]['phase'] = 'failed'
+    elif corruption == 'reordered-phases':
+        routes[2], routes[4] = routes[4], routes[2]
+    elif corruption == 'oversized':
+        routes *= 1667
+    (tmp_path / 'route-lifecycle.json').write_text(json.dumps(routes))
+    with pytest.raises(ValueError):
+        runner.app004_negative(tmp_path, 'fresh-fixture-token')
+
+
+@pytest.mark.parametrize('corruption', [
+    'missing-outcome', 'missing-routes', 'invalid-json', 'outcome-list', 'proof-list', 'primary-list',
+    'marker-list', 'routes-object', 'null-route', 'oversized-outcome', 'oversized-routes',
+    'missing-log', 'stale-token',
+])
+def test_app004_verdict_rejects_missing_or_malformed_evidence(tmp_path, corruption):
+    row, folder = prepare_app004_verdict(tmp_path)
+    control = dict(row)
+    runner.app004_verdict(control, folder)
+    assert control['status'] == 'passed' and control['verdict'] == 'expected_identity_failure'
+    negative = folder / 'negative'
+    outcome_path, routes_path = negative / 'outcome.json', negative / 'route-lifecycle.json'
+    outcome, routes = app004_witness()
+    if corruption == 'missing-outcome':
+        outcome_path.unlink()
+    elif corruption == 'missing-routes':
+        routes_path.unlink()
+    elif corruption == 'invalid-json':
+        outcome_path.write_text('{')
+    elif corruption in ('outcome-list', 'proof-list', 'primary-list', 'marker-list'):
+        if corruption == 'outcome-list':
+            outcome = []
+        else:
+            change_app004_field(outcome, {'proof-list': 'identityBoundary', 'primary-list': 'primary',
+                                         'marker-list': 'identityBoundary.before'}[corruption], [])
+        outcome_path.write_text(json.dumps(outcome))
+    elif corruption == 'routes-object':
+        routes_path.write_text('{}')
+    elif corruption == 'null-route':
+        routes[1] = None
+        routes_path.write_text(json.dumps(routes))
+    elif corruption in ('oversized-outcome', 'oversized-routes'):
+        path = outcome_path if corruption == 'oversized-outcome' else routes_path
+        # Whitespace keeps the JSON valid: rejection must be the size limit.
+        path.write_text(path.read_text() + ' ' * (1024 * 1024))
+    elif corruption == 'missing-log':
+        (folder / row['log']).unlink()
+    elif corruption == 'stale-token':
+        row['executionToken'] = 'different-run-token'
+    runner.app004_verdict(row, folder)
+    assert row['status'] == 'failed' and row['verdict'] == 'rejected'
+    assert row['verdictReason']
+    assert row['exitCode'] == 1 and row['reason'] is None
+    assert 'evidenceSha256' not in row
+
+
+@pytest.mark.parametrize('identity', ['units', 'reload-negative'])
+def test_app004_verdict_retains_raw_exit_and_hashes_exact_inputs(tmp_path, identity):
+    row, folder = prepare_app004_verdict(tmp_path, identity)
+    raw = {key: row[key] for key in ('exitCode', 'reason', 'cleanup', 'executionToken', 'log')}
+    runner.app004_verdict(row, folder)
+    assert row['status'] == 'passed'
+    assert row['verdict'] == ('exact_units' if identity == 'units' else 'expected_identity_failure')
+    assert {key: row[key] for key in raw} == raw
+    files = ([row['log']] if identity == 'units'
+             else [row['log'], 'negative/outcome.json', 'negative/route-lifecycle.json'])
+    assert row['evidenceSha256'] == {
+        name: hashlib.sha256((folder / name).read_bytes()).hexdigest() for name in files}
+
+
+@pytest.mark.parametrize('identity,field,value', [
+    *(('reload-negative', 'exitCode', code) for code in (0, 2, -15, None, True)),
+    *(('units', 'exitCode', code) for code in (1, 7, -15, None, False)),
+    *((identity, 'reason', reason) for identity in ('units', 'reload-negative')
+      for reason in ('timeout', 'cancelled', 'FileNotFoundError')),
+    *((identity, 'cleanup', cleanup) for identity in ('units', 'reload-negative')
+      for cleanup in ({'remaining': [], 'terminated': 1},
+                      {'remaining': [123], 'terminated': 0},
+                      {'remaining': ['unknown'], 'terminated': 0, 'error': 'PermissionError'})),
+])
+def test_app004_verdict_never_waives_raw_failure_or_unexpected_green(tmp_path, identity, field, value):
+    row, folder = prepare_app004_verdict(tmp_path, identity)
+    control = dict(row)
+    runner.app004_verdict(control, folder)
+    assert control['status'] == 'passed'
+    row[field] = value
+    raw = json.dumps({key: row[key] for key in ('exitCode', 'reason', 'cleanup')}, sort_keys=True)
+    runner.app004_verdict(row, folder)
+    assert row['status'] == 'failed' and row['verdict'] == 'rejected'
+    assert row['verdictReason']
+    assert json.dumps({key: row[key] for key in ('exitCode', 'reason', 'cleanup')}, sort_keys=True) == raw
+    assert 'evidenceSha256' not in row
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('normal_exit', [0, 7])
+def test_app004_scheduler_is_opt_in_and_never_waives_normal_failure(tmp_path, monkeypatch, enabled, normal_exit):
+    mock_app004_commands(monkeypatch)
+    monkeypatch.setenv('APP004_QUALIFICATION_TOKEN', 'inherited-stale-token')
+    rows = [scenario('normal', f'print("normal result");raise SystemExit({normal_exit})'),
+            scenario('independent', 'print("independent result")')]
+    code, report, output = execute(
+        tmp_path, rows, budget=30, **({'app004_qualification': True} if enabled else {}))
+    assert code == (1 if normal_exit else 0)
+    assert report['complete'] and report['passed'] is (normal_exit == 0)
+    assert [row['id'] for row in report['scenarios']] == ['normal', 'independent']
+    assert [row['command'] for row in report['scenarios']] == [row['command'] for row in rows]
+    assert [row['exitCode'] for row in report['scenarios']] == [normal_exit, 0]
+    assert [row['status'] for row in report['scenarios']] == ['failed' if normal_exit else 'passed', 'passed']
+    assert all(row['reason'] is None for row in report['scenarios'])
+    assert 'normal result' in (output / 'normal.log').read_text()
+    folder = output / 'app004-qualification'
+    if not enabled:
+        assert not folder.exists()
+        return
+    qualification = json.loads((folder / 'results.json').read_text())
+    assert qualification['source'] == report['source']
+    assert qualification['complete'] and qualification['passed']
+    assert qualification['normalPassed'] is (normal_exit == 0)
+    assert qualification['combinedPassed'] is (normal_exit == 0)
+    units, negative = qualification['checks']
+    assert [row['id'] for row in qualification['checks']] == ['units', 'reload-negative']
+    assert [row['exitCode'] for row in qualification['checks']] == [0, 1]
+    assert [row['verdict'] for row in qualification['checks']] == ['exact_units', 'expected_identity_failure']
+    assert units['executionToken'] != negative['executionToken']
+    assert all(row['executionToken'] != 'inherited-stale-token' for row in qualification['checks'])
+    assert '# fixture-owner ' + units['executionToken'] in (folder / units['log']).read_text()
+    assert json.loads((folder / 'negative/outcome.json').read_text())['qualificationToken'] == negative['executionToken']
+
+
+def test_app004_initial_and_running_receipts_are_durable_before_each_launch(tmp_path, monkeypatch):
+    mock_app004_commands(monkeypatch)
+    original = subprocess.Popen
+    snapshots = []
+    def launch(*args, **kwargs):
+        output = tmp_path / 'results'
+        snapshots.append((
+            json.loads((output / 'results.json').read_text()),
+            json.loads((output / 'app004-qualification/results.json').read_text()),
+            kwargs['env'][runner.OWNER_ENV],
+        ))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, 'Popen', launch)
+    code, _, _ = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=30)
+    assert code == 0 and len(snapshots) == 3
+    normal, initial, _ = snapshots[0]
+    assert normal['scenarios'][0]['status'] == 'running' and not normal['complete']
+    assert initial['source'] == normal['source']
+    assert not initial['complete'] and not initial['passed']
+    assert [(row['status'], row['reason']) for row in initial['checks']] == [('unrun', 'not_started')] * 2
+    assert [row['id'] for row in initial['checks']] == ['units', 'reload-negative']
+    for index, (_, qualification, token) in enumerate(snapshots[1:]):
+        completed_normal = snapshots[index + 1][0]
+        assert completed_normal['complete'] and completed_normal['passed']
+        assert qualification['checks'][index]['status'] == 'running'
+        assert qualification['checks'][index]['executionToken'] == token
+    assert snapshots[1][1]['checks'][1]['status'] == 'unrun'
+    assert snapshots[2][1]['checks'][0]['status'] == 'passed'
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_app004_cli_initialize_saves_unrun_without_launching_commands(tmp_path, monkeypatch, enabled):
+    (tmp_path / 'scripts').mkdir()
+    script = tmp_path / 'scripts/browser_check_runner.py'
+    shutil.copy(ROOT / 'scripts/browser_check_runner.py', script)
+    plan = tmp_path / 'plan.json'
+    plan.write_text(json.dumps({'schemaVersion': 1, 'scenarios': [scenario('normal', 'pass')]}))
+    monkeypatch.setattr(runner, '__file__', str(script))
+    def source(command, **kwargs):
+        assert kwargs['cwd'] == tmp_path
+        return {('git', 'rev-parse', 'HEAD'): b'a' * 40,
+                ('git', 'rev-parse', 'HEAD^{tree}'): b'b' * 40,
+                ('git', 'diff', '--binary', 'HEAD'): b''}[tuple(command)]
+    def forbidden(*args, **kwargs):
+        pytest.fail('Initialization must not launch any normal or qualification command')
+    monkeypatch.setattr(runner.subprocess, 'check_output', source)
+    monkeypatch.setattr(runner.subprocess, 'Popen', forbidden)
+    output = tmp_path / 'evidence'
+    monkeypatch.setattr(sys, 'argv', [str(script), '--plan', str(plan), '--output', str(output),
+                                    '--initialize', *(['--app004-qualification'] if enabled else [])])
+    assert runner.main() == 0
+    report = json.loads((output / 'results.json').read_text())
+    assert not report['complete'] and not report['passed']
+    assert report['scenarios'][0]['status'] == 'unrun'
+    assert report['scenarios'][0]['reason'] == 'not_started'
+    assert report['source']['planSha256'] == hashlib.sha256(plan.read_bytes()).hexdigest()
+    qualification_path = output / 'app004-qualification/results.json'
+    if enabled:
+        assert json.loads(qualification_path.read_text()) == runner.initial_app004(report['source'])
+    else:
+        assert not qualification_path.exists()
+
+
+@pytest.mark.parametrize('exhaust_after', ['normal', 'units'])
+def test_app004_extras_share_original_deadline_and_require_remaining_budget(tmp_path, monkeypatch, exhaust_after):
+    mock_app004_commands(monkeypatch)
+    original_clock, retire = runner.time.monotonic, runner.retire_group
+    offset, retired = [0], []
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: original_clock() + offset[0])
+    def cleanup(*args):
+        result = retire(*args)
+        retired.append(args[1])
+        if len(retired) == (1 if exhaust_after == 'normal' else 2):
+            offset[0] += 9  # Less than either extra's two-second budget remains.
+        return result
+    monkeypatch.setattr(runner, 'retire_group', cleanup)
+    code, report, output = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=10)
+    assert code == 1 and report['complete'] and report['passed']
+    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
+    assert not qualification['complete'] and not qualification['passed']
+    assert [row['status'] for row in qualification['checks']] == (
+        ['unrun', 'unrun'] if exhaust_after == 'normal' else ['passed', 'unrun'])
+    for row in qualification['checks']:
+        if row['status'] == 'unrun':
+            assert row['reason'] == 'budget_exhausted'
+            assert 'executionToken' not in row and 'exitCode' not in row
+            assert not (output / 'app004-qualification' / (row['id'] + '.log')).exists()
+    assert len(retired) == (1 if exhaust_after == 'normal' else 2)
+
+
+@pytest.mark.parametrize('cancel_at', ['normal', 'units'])
+def test_app004_cancellation_reaps_current_and_keeps_extras_unrun(tmp_path, monkeypatch, cancel_at):
+    cancel = 'import os,signal,time;os.kill(os.getppid(),signal.SIGTERM);time.sleep(60)'
+    mock_app004_commands(monkeypatch, units_source=cancel if cancel_at == 'units' else None)
+    code, report, output = execute(
+        tmp_path, [scenario('normal', cancel if cancel_at == 'normal' else 'pass'), scenario('later', 'pass')],
+        app004_qualification=True, budget=30)
+    assert code == 1
+    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
+    active = report['scenarios'][0] if cancel_at == 'normal' else qualification['checks'][0]
+    assert active['status'] == 'failed' and active['reason'] == 'cancelled'
+    assert active['cleanup']['remaining'] == []
+    assert not qualification['complete'] and not qualification['passed']
+    assert [row['status'] for row in qualification['checks']] == (
+        ['unrun', 'unrun'] if cancel_at == 'normal' else ['failed', 'unrun'])
+    if cancel_at == 'normal':
+        assert report['scenarios'][1]['status'] == 'unrun' and not report['complete']
+    else:
+        assert report['complete'] and report['passed']
+    assert qualification['checks'][1]['reason'] == 'cancelled'
+    assert not (output / 'app004-qualification/reload-negative.log').exists()
+
+
+@pytest.mark.parametrize('stage,remaining,terminated,reason', [
+    ('normal', [], 1, 'unsafe_normal_cleanup'),
+    ('normal', ['unknown'], 0, 'unsafe_cleanup'),
+    ('units', ['unknown'], 0, 'unsafe_cleanup'),
+])
+def test_app004_unsafe_cleanup_cannot_launch_remaining_extras(tmp_path, monkeypatch, stage, remaining, terminated, reason):
+    mock_app004_commands(monkeypatch)
+    retire, retired = runner.retire_group, []
+    def cleanup(*args):
+        actual = retire(*args)
+        assert actual == {'remaining': [], 'terminated': 0}
+        retired.append(args[1])
+        if len(retired) == (1 if stage == 'normal' else 2):
+            # Inject an uncertain cleanup receipt only after real child cleanup.
+            return {'remaining': remaining, 'terminated': terminated}
+        return actual
+    monkeypatch.setattr(runner, 'retire_group', cleanup)
+    code, report, output = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=30)
+    assert code == 1
+    assert report['complete'] and report['passed'] is (stage == 'units')
+    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
+    assert not qualification['complete'] and not qualification['passed']
+    assert [row['status'] for row in qualification['checks']] == (
+        ['unrun', 'unrun'] if stage == 'normal' else ['failed', 'unrun'])
+    for row in qualification['checks']:
+        if row['status'] == 'unrun':
+            assert row['reason'] == reason
+            assert not (output / 'app004-qualification' / (row['id'] + '.log')).exists()
+    assert len(retired) == (1 if stage == 'normal' else 2)
+
+
+@pytest.mark.parametrize('timeout_at', ['units', 'reload-negative'])
+def test_app004_extra_timeout_is_failure_not_expected_negative(tmp_path, monkeypatch, timeout_at):
+    slow = 'import time;time.sleep(60)'
+    mock_app004_commands(monkeypatch, units_source=slow if timeout_at == 'units' else None,
+                         negative_source=slow if timeout_at == 'reload-negative' else None)
+    initial = runner.initial_app004
+    def short(provenance):
+        report = initial(provenance)
+        next(row for row in report['checks'] if row['id'] == timeout_at)['timeoutSeconds'] = .15
+        return report
+    monkeypatch.setattr(runner, 'initial_app004', short)
+    code, report, output = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=30)
+    assert code == 1 and report['complete'] and report['passed']
+    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
+    assert qualification['complete'] and not qualification['passed']
+    row = next(row for row in qualification['checks'] if row['id'] == timeout_at)
+    assert row['status'] == 'failed' and row['reason'] == 'timeout'
+    assert row['verdict'] == 'rejected' and row['exitCode'] is None
+    assert row['cleanup']['remaining'] == []
+    other = next(row for row in qualification['checks'] if row['id'] != timeout_at)
+    assert other['status'] == 'passed'

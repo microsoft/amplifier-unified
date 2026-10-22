@@ -55,6 +55,10 @@ async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, m
     marker = manager.directory / 'applications' / ('a' * 40) / 'validated.json'
     marker.write_text(json.dumps({**json.loads(marker.read_text()), 'extras': previous}))
     monkeypatch.setattr(app_updates, 'installed_extras', lambda: current)
+    # Idle activation first refreshes public release metadata. Keep that
+    # read-only boundary separate from the installer/probe effect witness.
+    release_lookup = AsyncMock(return_value=dict(service.state['updates']['pendingApp']))
+    monkeypatch.setattr(app_updates, 'check', release_lookup)
     process = AsyncMock()
     close = AsyncMock(return_value=None)
     monkeypatch.setattr(app_updates, 'process', process)
@@ -62,6 +66,7 @@ async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, m
     try:
         with pytest.raises(ValueError, match='Optional features changed'):
             await manager.app()
+        release_lookup.assert_awaited_once_with()
         process.assert_not_awaited()
         close.assert_not_awaited()
         assert service.state['updates']['phase'] == 'error'
@@ -185,6 +190,7 @@ def test_real_isolated_probe_validates_selected_features_without_observing_deskt
     source = Path(app_updates.__file__).parent
     shutil.copy2(source / 'runtime_bootstrap.py', package)
     shutil.copy2(source / 'collaboration_input.py', package)
+    shutil.copy2(source / 'task_binding.py', package)
     shutil.copytree(source.parent / 'amplifier_operations', tmp_path / 'amplifier_operations')
     shutil.copytree(source.parent / 'amplifier_kernels', tmp_path / 'amplifier_kernels')
     (tmp_path / 'pam.py').write_text('def authenticate(*args): pass\n')

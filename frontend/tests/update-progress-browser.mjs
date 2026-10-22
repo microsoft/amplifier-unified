@@ -73,6 +73,36 @@ try{
  await expect(updates).not.toContainText('Other components installed at');
  await expect(install).toBeEnabled();
  await expect(overview.locator('.a-progress-spinner')).toHaveCount(0);
+ await stage('source-mismatch');
+ await expect(overview).toContainText('Updates need attention');
+ await expect(updates).toContainText('A component changed to a different source during update preparation.');
+ await expect(updates).toContainText('Amplifier kept the current components active.');
+ await expect(updates).toContainText('amplifier-foundation');
+ await page.screenshot({path:output+'-source-mismatch.png'});
+ // A later component failure cannot erase a verified app result. Reload keeps
+ // both outcomes; a stale install identity or unconfirmed restart cannot claim it.
+ await stage('application-confirmed');
+ await expect(overview).toContainText('Application updated successfully');
+ await stage('component-source-changed');
+ await expect(overview).toContainText('Some components were not updated');
+ await expect(overview).toContainText('Application updated successfully');
+ await expect(overview).toContainText('amplifier-foundation');
+ await expect(overview).toContainText('Check for updates again before retrying');
+ await expect(check).toBeEnabled();
+ await page.reload();await page.waitForSelector('#amp-one');
+ if(!await overview.isVisible())await openSettingsPage(page,'updates');
+ await expect(overview).toContainText('Application updated successfully');
+ await expect(overview).toContainText('Some components were not updated');
+ await page.setViewportSize({width:320,height:844});
+ await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+ await page.screenshot({path:output+'-partial-success-mobile.png'});
+ await stage('app-result-stale');
+ await expect(overview).not.toContainText('Application updated successfully');
+ await expect(overview).toContainText('Updates need attention');
+ await stage('application-confirmed');await stage('unconfirmed-restart');
+ await expect(overview).toContainText('Waiting for restart confirmation');
+ await expect(overview).not.toContainText('Application updated successfully');
+ await stage('clear-app-result');await page.setViewportSize({width:1280,height:950});
  await stage('adopting');await expect(overview).toContainText('Ready for new work');await expect(overview).toContainText('No app restart');await expect(check).toBeEnabled();
  await stage('installed');await expect(updates).toContainText('Other components installed at');
  await expect(updates).toContainText('Included components installed at');
@@ -101,6 +131,41 @@ try{
  await updates.getByRole('button',{name:'Return to chat',exact:true}).click();
  await expect(page.locator('.a-settings-experience')).not.toBeVisible();
  await openSettingsPage(page,'updates');await expect(overview).toContainText('Finishing your update');
+ // The release card follows the target through discovery, restart and component
+ // completion; reading its ordinary changes does not acknowledge guidance.
+ await stage('summary-before');
+ const summary=updates.locator('[data-part="update-release-summary"]');
+ await expect(summary).toBeVisible();await expect(summary).toContainText('What’s new in 0.20.206');
+ await expect(summary).toContainText('See what an update includes before installing.');
+ assert.equal(await summary.evaluate(el=>!!el.closest('details')),false);
+ assert.equal(await summary.evaluate(el=>!!(el.compareDocumentPosition(document.querySelector('[data-part="update-controls"]'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
+ const noticeRead=()=>page.evaluate(()=>window.amplifier.getState().attention?.items?.find(item=>item.id==='release-notice:0.20.206:summary-guidance')?.read);
+ await expect.poll(noticeRead).toBe(false);
+ await page.screenshot({path:output+'-release-before.png'});
+ await stage('summary-queued');await expect(summary).toContainText('Included in this update · 0.20.206');
+ await expect(summary).not.toContainText('Later release');await expect(overview).toContainText('Latest v0.20.207');
+ await page.reload();await openSettingsPage(page,'updates');await expect(summary).toContainText('Included in this update · 0.20.206');
+ await stage('summary-restarting');await expect(summary).toContainText('Included in this update · 0.20.206');
+ await expect(summary).not.toContainText('Now installed');
+ await page.screenshot({path:output+'-release-during.png'});
+ await stage('summary-after');await expect(summary).toContainText('Now installed · 0.20.206');
+ await expect(overview).toContainText('Finishing test runner update');await expect(overview).toContainText('Application updated successfully');
+ await page.reload();await openSettingsPage(page,'updates');await expect(summary).toContainText('Now installed · 0.20.206');
+ await expect.poll(noticeRead).toBe(false);
+ await page.screenshot({path:output+'-release-after.png'});
+ await page.setViewportSize({width:320,height:844});
+ await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+ await summary.scrollIntoViewIfNeeded();await page.screenshot({path:output+'-release-phone.png'});
+ // High-impact acknowledgment still requires viewing that separate content.
+ await updates.locator('[data-part="important-release-changes"]>summary').click();
+ await updates.getByText('Example important guidance',{exact:true}).first().scrollIntoViewIfNeeded();
+ await expect.poll(noticeRead).toBe(true);
+ await stage('summary-missing');await expect(summary).toContainText('Included in this update · 0.20.204');
+ await expect(summary).toContainText('Release notes for this version are unavailable');
+ await expect(summary.getByRole('link')).toHaveAttribute('href','https://github.com/microsoft/amplifier-unified/releases/tag/v0.20.204');
+ await expect(summary).not.toContainText('Clearer update summaries');
+ await stage('summary-reset');await page.setViewportSize({width:1280,height:950});
+ result.releaseSummary={before:true,exactQueuedTarget:true,newerDiscovery:true,uncertainRestart:true,confirmedWithRunnerWait:true,reload:true,missingNotes:true,phone:true,noticeReadSeparate:true};
  // Ordinary preferences retain an unfamiliar saved interval until explicitly changed.
  await stage('installed');
  const observations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
@@ -119,6 +184,6 @@ try{
  // Explicit checks carry their own outcome. A failed attempt cannot remain green.
  await check.click();await expect(overview).toContainText('Updates need attention');await expect(updates).toContainText('Synthetic update lookup failed. Check again.');assert.equal((await observations()).calls.check,1);
  await check.click();await expect(overview).toContainText('You’re up to date');await expect(updates.getByText('Synthetic update lookup failed. Check again.',{exact:true})).toHaveCount(0);assert.deepEqual((await observations()).calls,{check:2,install:0,rollback:0});
- assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,savedPreferences:true,unknownIntervalPreserved:true,explicitCheckFailureRetry:true,noInstallEffects:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
+ assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,partialSuccess:true,partialSuccessReload:true,staleAppResultExcluded:true,unconfirmedRestartExcluded:true,savedPreferences:true,unknownIntervalPreserved:true,explicitCheckFailureRetry:true,noInstallEffects:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
 }catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:output+'-failed.png'});throw error}
 finally{try{await browser?.close()}finally{fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});result.fixtureLog=log;await writeFile(output+'.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));}}

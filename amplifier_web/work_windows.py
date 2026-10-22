@@ -73,6 +73,8 @@ class WorkWindows:
         self.retry_at = {}
         from .resident_work_pages import ResidentWorkPages
         self.live_pages = ResidentWorkPages(self)
+        from .tool_payload_windows import ToolPayloadWindows
+        self.tool_payloads = ToolPayloadWindows(self)
 
     def _worker(self):
         if self.projector is None and not sys.platform.startswith('linux'):
@@ -239,6 +241,10 @@ class WorkWindows:
         page = {**page, 'sessionId': identity, 'source': source}
         group = 'event-window:' + page['generation']
         page['group'] = group
+        page['providerRecords'] = self._provider_records(page)
+        from .tool_window_records import records
+        page['toolRecords'] = records(page)
+        page['hasProviderRecords'] = any(row.get('requestDetail') or row.get('responseDetail') for row in page['items'])
         self.pages.pop(group, None)
         self.pages[group] = page
         while len(self.pages) > MAX_PAGES:
@@ -301,10 +307,28 @@ class WorkWindows:
             generations=resident.get('generations', [])[-20:])
         source.update({
             'execution': {**{key: tree[key] for key in ('aggregateUsage', 'usage', 'plan', 'currentTurnId') if key in tree},
-                'nodes': [row for row in tree.get('nodes', [])[-100:]
+                'nodes': [self.live_node(session, row) for row in tree.get('nodes', [])[-100:]
                 if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory')],
                 'turns': tree.get('turns', [])[-20:], 'currentTurnId': tree.get('currentTurnId')}})
         return source
+
+    def live_node(self, session, node):
+        if node.get('kind') == 'tool' and not node.get('canonicalHistory') and not node.get('nativeHistory'):
+            from .tool_window_records import attach, linked
+            page = self.pages.get(self.current.get(session['id']))
+            fields = linked(page, session, node) if page and page['source'] == source_identity(session) else None
+            return attach(node, fields)
+        if node.get('kind') != 'llm':
+            return node
+        from .browser_detail import detail_version
+        details = self.provider_details(session, node)
+        semantic = {key: (bool(detail) if key == 'recordingsGroup' else detail)
+                    for key, detail in details.items()}
+        # A completed call may precede canonical flush. Wake its open detail
+        # subscription when recordings arrive or their accepted page changes.
+        # Exact field references must move to the new bounded page before an
+        # older page expires; an unrelated shortcut alone has no such lease.
+        return {**node, '_providerRecordsRevision': detail_version(semantic)}
 
     def project(self, session):
         page = self.pages.get(self.current.get(session['id']))
@@ -338,11 +362,58 @@ class WorkWindows:
 
     def _page(self, identity, group):
         owner = self._owner(identity)  # Current canonical authority, not cache presence.
+        if str(group).startswith('open-work:'):
+            return self.live_pages.open_fields.page(owner, group)
         page = self.pages.get(group)
-        if page is None or page['sessionId'] != identity or source_identity(owner) != page['source']:
+        if page is None or page['sessionId'] != identity or source_identity(owner) != page.get('ownerSource', page['source']):
             raise ValueError('This saved work window expired. Open the recent window again.')
+        if '_toolScope' in page:
+            self.tool_payloads.check(owner, page)
         self.pages.move_to_end(group)
         return page
+
+    @staticmethod
+    def _provider_records(page):
+        calls = {}
+        for row in page['items']:
+            if row.get('kind') != 'llm' or not row.get('_hostCallId') or not row.get('requestId'):
+                continue
+            key = (row.get('sessionId'), row['_hostCallId'])
+            calls.setdefault(key, []).append(row)
+        result = {}
+        for key, rows in calls.items():
+            # A host call may contain retries. Do not combine attempts, choose
+            # a terminal attempt by arrival, or guess through duplicate fields.
+            attempts = {(row['requestId'], row.get('provider'), row.get('model')) for row in rows}
+            if len(attempts) != 1:
+                continue
+            fields = {}
+            for field in ('request', 'response'):
+                matches = [row for row in rows if field + 'Detail' in row]
+                if len(matches) > 1:
+                    break
+                if matches:
+                    row = matches[0]
+                    for suffix in ('Detail', 'Capture', 'Recording'):
+                        if field + suffix in row:
+                            fields[field + suffix] = deepcopy(row[field + suffix])
+                    fields[field + 'Detail'].update(sessionId=page['sessionId'], windowKey=page['group'])
+            else:
+                result[key] = fields
+        return result
+
+    def provider_details(self, session, node):
+        page = self.pages.get(self.current.get(session['id']))
+        if page is None or page['source'] != source_identity(session) or not page['hasProviderRecords']:
+            return {}
+        identity = node.get('sessionId')
+        if identity == session['id']:
+            # Runtime delivery maps only the root coordinator ID to the app
+            # owner. Undo exactly that alias for canonical capture lookup;
+            # child IDs retain their own namespace.
+            identity = page['source'].get('nativeIdentity') or page['source'].get('runtimeSessionId') or session['id']
+        fields = page['providerRecords'].get((identity, node['id']), {})
+        return {**deepcopy(fields), 'recordingsGroup': page['group']}
 
     def nodes(self, identity, group, *, revision=None, known=None):
         page = self._page(identity, group)
@@ -350,9 +421,9 @@ class WorkWindows:
             raise ValueError('This saved work window changed. Open it again.')
         items = []
         for original in page['items']:
-            row = {key: deepcopy(value) for key, value in original.items() if key != '_eventFields'}
+            row = {key: deepcopy(value) for key, value in original.items() if not key.startswith('_')}
             row.update(turnId=group, detailVersion=page['generation'], observationWindow=True)
-            for field in ('input', 'output', 'error', 'request', 'response'):
+            for field in ('input', 'output', 'error', 'request', 'response', 'delegateRequest', 'delegateResponse'):
                 if field + 'Detail' in row:
                     row[field + 'Detail'].update(sessionId=identity, windowKey=group)
             if known is None or known.get(row['id']) != row['detailVersion']:
@@ -360,6 +431,18 @@ class WorkWindows:
         return {'items': items, 'order': [row['id'] for row in page['items']],
                 'offset': 0, 'total': len(page['items']), 'before': None,
                 'group': group, 'revision': page['generation'], 'coverage': page['coverage']}
+
+    async def read_tool(self, identity, args):
+        return await self.tool_payloads.read(self._owner(identity), args)
+
+    @staticmethod
+    def field_failure(result):
+        reason = result.get('reason')
+        if reason == 'source_changed':
+            raise ValueError('This saved field changed. Reopen its Work window.')
+        if reason in {'queue_full', 'timeout'}:
+            raise ValueError('Saved content is taking longer to read. Try again shortly.')
+        raise ValueError('Saved content could not be read. Try again.')
 
     async def read_text(self, identity, args):
         owner = self._owner(identity)
@@ -373,13 +456,31 @@ class WorkWindows:
         result = await self._worker().project({'operation': 'field', 'session': page['source'],
             'reference': reference, 'offset': int(args.get('offset', 0)),
             'limit': min(16384, max(1, int(args.get('limit', 16000))))}, key=owner['id'] + ':field:' + row['id'])
-        if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
-                or source_identity(owner) != page['source']):
+        if (self.closed or self._owner(owner['id']) is not owner or self._page(owner['id'], page['group']) is not page
+                or source_identity(owner) != page.get('ownerSource', page['source'])):
             raise ValueError('This saved field expired.')
         if result.get('status') != 'complete':
-            raise ValueError('This saved field changed. Reopen its Work window.')
+            self.field_failure(result)
+        if '_toolScope' in page:
+            self.tool_payloads.check(owner, page)
         value = result['field']
         return {'value': value['text'], 'nextOffset': value['nextOffset'], 'total': value['total']}
+
+    def recording(self, identity, args):
+        owner = self._owner(identity)
+        page = self._page(owner['id'], args.get('windowKey'))
+        row = next((row for row in page['items'] if row['id'] == args.get('id') and row.get('kind') == 'llm'), None)
+        field = args.get('field')
+        reference = (row or {}).get('_eventFields', {}).get(field)
+        recording = (row or {}).get(str(field) + 'Recording', {})
+        if field not in {'request', 'response'} or reference is None or args.get('digest') != recording.get('sha256'):
+            raise ValueError('This provider recording is no longer available.')
+        return owner, page, row, reference
+
+    def check_recording(self, owner, page):
+        if (self.closed or self._owner(owner['id']) is not owner or self._page(owner['id'], page['group']) is not page
+                or source_identity(owner) != page.get('ownerSource', page['source'])):
+            raise ValueError('This provider recording expired. Reopen its saved work window.')
 
     async def close(self):
         self.closed = True

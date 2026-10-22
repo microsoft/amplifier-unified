@@ -6,12 +6,12 @@ import asyncio
 import json
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, AsyncExitStack
 
 from amplifier_operations.coordination import fingerprint
 from .capacity import LIVE, aggregate, evaluate, number, usage_snapshot
 
-DEFAULTS = dict(maxOpenTasks=8, maxMembers=64, maxConcurrentCalls=8,
+DEFAULTS = dict(maxOpenTasks=None, maxMembers=64, maxConcurrentCalls=None,
                 maxTotalTokens=None, maxCostUsd=None, reserveTokens=0,
                 reserveCostUsd=0, unknownPolicy='pause', includeEstimatedCost=False)
 
@@ -19,8 +19,9 @@ DEFAULTS = dict(maxOpenTasks=8, maxMembers=64, maxConcurrentCalls=8,
 def definitions(schema, string):
     target = {'sessionId': string(200)}
     revision = {**target, 'expectedRevision': {'type': 'integer', 'minimum': 0}}
-    limits = {key: {'type': 'integer', 'minimum': 1, 'maximum': 64}
-              for key in ('maxOpenTasks', 'maxMembers', 'maxConcurrentCalls')}
+    limits = {key: {'type': ['integer', 'null'], 'minimum': 1}
+              for key in ('maxOpenTasks', 'maxConcurrentCalls')}
+    limits['maxMembers'] = {'type': 'integer', 'minimum': 1, 'maximum': 64}
     limits.update(maxTotalTokens={'type': ['integer', 'null'], 'minimum': 1},
                   maxCostUsd={'type': ['number', 'null'], 'exclusiveMinimum': 0},
                   reserveTokens={'type': 'integer', 'minimum': 0},
@@ -30,10 +31,13 @@ def definitions(schema, string):
     return {
         **task_definitions(schema, string),
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
-        'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Existing chats are never enrolled.', schema(target, ['sessionId'])),
-        'assignment.set': ('Owner sets revision-bound aggregate limits. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
-        'assignment.integration': ('Owner explicitly assigns integration responsibility to a current commissioned member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
+        'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Adding an existing chat requires explicit adoption.', schema(target, ['sessionId'])),
+        'assignment.adoption': ('Review adding one settled existing workspace chat to this manager’s assignment. Does not start work or change membership.', schema({**target, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId'])),
+        'assignment.adopt': ('Explicitly add a reviewed existing chat to this owner’s active assignment. Agents require the current human instruction; do not infer permission from a shared workspace. Preserves history and previous usage, sends no input, and does not clear Stop. Use ordinary guarded resume separately when authorized.', schema({**revision, 'targetSessionId': string(200), 'expectedTargetRevision': string(200), 'sourceMessageId': string(200)}, ['sessionId', 'targetSessionId', 'expectedRevision', 'expectedTargetRevision'])),
+        'assignment.set': ('Owner sets revision-bound aggregate limits. Null maxOpenTasks/maxConcurrentCalls means no execution count limit; retained membership stays bounded. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
+        'assignment.integration': ('Owner explicitly assigns integration responsibility to a current member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
         'assignment.stop': ('Owner closes assignment admission before requesting interruption of still-bound roots and native children. Does not stop independent peers or remove resources.', schema(revision, ['sessionId', 'expectedRevision'])),
+        'assignment.resume': ('User reopens a settled stopped assignment for new requests, preserving members, shared tasks and cumulative usage. Does not send input, resume paused tasks or replay queued work.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.detach': ('User detaches this idle conversation after assignment work settles, retaining attributed usage. Does not resume or send input.', schema(revision, ['sessionId', 'expectedRevision'])),
     }
 
@@ -81,14 +85,14 @@ class Assignments:
             'accepted': True, 'commandAction': 'assignment.record', 'result': value})
 
     @asynccontextmanager
-    async def mutation(self, source, identity):
+    async def mutation(self, source, identity, *, additional=()):
         """Restore only touched metadata if durable commit fails before effects."""
         # The service lock excludes another operation. Its preceding retained
         # receipts must not become part of this operation's rollback group.
         if self.service.db.in_transaction:
             self.service.db.commit()
         assignment = self.current(source)
-        members = set((assignment or {}).get('members', {})) | {source['id']}
+        members = set((assignment or {}).get('members', {})) | {source['id'], *additional}
         keys = ('assignmentId', 'interruptionRevision', 'lastInterruption', 'status')
         rows = {}
         for sid in members:
@@ -130,6 +134,46 @@ class Assignments:
     def blocked(self, session=None, identity=None):
         value = self.load(identity) if identity else self.current(session)
         return 'This assignment was stopped; automatic work is suppressed.' if value and value['status'] != 'active' else None
+
+    def require_settled(self, value):
+        """Resume cannot race outstanding Stop or revive unobserved runtime work."""
+        # A durable recovery proved these exact historical Stop outcomes while
+        # holding native ownership. Do not reacquire a former member's writer
+        # after detachment: it may now be doing unrelated independent work.
+        settled = set()
+        for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='assignment.resume'
+                AND json_extract(receipt,'$.assignmentId')=?""", (value['id'],)):
+            receipt = json.loads(encoded)
+            for proof in receipt.get('result', {}).get('stopRecovery', {}).get('members', []):
+                if (receipt.get('accepted') is True and proof.get('workerAbsent') is True
+                        and proof.get('inputsReplayed') is False and proof.get('ownershipAcquisitionId')):
+                    settled.update((proof.get('sessionId'), stop) for stop in proof.get('stopRequestIds', []))
+        unknown = {}
+        for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='assignment.stop'
+                AND json_extract(receipt,'$.assignmentId')=?""", (value['id'],)):
+            receipt = json.loads(encoded)
+            if (identity in self.interrupting or receipt.get('interruptionsPending') or
+                    any(status not in {'returned', 'unknown'} for status in receipt.get('interruptions', {}).values())):
+                self.service.collaboration.error('The assignment stop has not settled. Try continuing after it finishes.', 409)
+            for sid, status in receipt.get('interruptions', {}).items():
+                if status == 'unknown' and (sid, identity) not in settled:
+                    unknown.setdefault(sid, []).append(identity)
+        for sid, member in value['members'].items():
+            if member['status'] != 'bound':
+                continue
+            session = self.service._session(sid)
+            if (self.current(session) or {}).get('id') != value['id']:
+                continue
+            if (session.get('status') in LIVE | {'working', 'busy', 'stopping'}
+                    or ((session.get('collaborationGeneration') or {}).get('id') and not session['collaborationGeneration'].get('terminal'))
+                    or any(row.get('phase') in LIVE and not row.get('endedAt') for row in usage_snapshot(session)['receipts'])
+                    or any(row.get('status') in {'queued', 'starting', 'running', 'working', 'idle', 'stopping'} for row in session.get('workers', []))
+                    or sid in getattr(self.service.runtime, '_preparations', {})):
+                self.service.collaboration.error('Wait for assignment chats and their workers to settle before resuming.', 409)
+
+        return unknown
 
     def require_request(self, source, target, mode):
         value = self.current(source)
@@ -184,7 +228,7 @@ class Assignments:
                     or task.get('status') in {'active', 'running', 'working'}
                     or key in getattr(self.service.runtime, '_preparations', {})):
                 opened += 1
-        if opened >= limits['maxOpenTasks']:
+        if limits['maxOpenTasks'] is not None and opened >= limits['maxOpenTasks']:
             self.service.collaboration.error('The assignment open-task limit is reached, including nested commissioned work.', 429)
         value['members'][sid] = {'status': 'reserved', 'role': 'commissioned',
                                 'creatorSessionId': source['id'], 'creationOperationId': operation}
@@ -216,12 +260,16 @@ class Assignments:
         limits = value['limits']
         policy = {**limits, 'enabled': True}
         result = evaluate(policy, usage)
-        reasons = result['reasons']
+        reasons = list(result['reasons'])
+        renewable = []
         if reason:
             reasons.append(reason)
         pending = [call for call in usage['receipts'] if call.get('phase') in LIVE | {'outcome_unknown'} and not call.get('endedAt')]
-        if len(pending) >= limits['maxConcurrentCalls']:
-            reasons.append('The assignment concurrent model-call limit is reached.')
+        unknown = sum(call.get('phase') == 'outcome_unknown' for call in pending)
+        if limits['maxConcurrentCalls'] is not None and len(pending) >= limits['maxConcurrentCalls']:
+            # Unknown calls keep their slots. Other, live calls can still free
+            # capacity unless the unknown reservations alone fill the ceiling.
+            (reasons if unknown >= limits['maxConcurrentCalls'] else renewable).append('The assignment concurrent model-call limit is reached.')
         for metric, maximum, reserve in [('grossTotalTokens', 'maxTotalTokens', 'reserveTokens'), ('costUsd', 'maxCostUsd', 'reserveCostUsd')]:
             limit = limits[maximum]
             if limit is None:
@@ -231,13 +279,18 @@ class Assignments:
                 recorded -= usage['metrics'][metric]['estimatedValue']
             held = sum(call.get('assignmentReservation', {}).get(reserve, 0) for call in pending)
             if recorded + held + limits[reserve] > limit:
-                reasons.append('The assignment has insufficient unreserved ' + metric + ' capacity.')
+                # Only held in-flight allowances can renew. Recorded spend,
+                # an oversized next reservation and unknown outcomes cannot.
+                destination = renewable if pending and not unknown and recorded + limits[reserve] <= limit else reasons
+                destination.append('The assignment has insufficient unreserved ' + metric + ' capacity.')
         if usage['missingMembers'] and limits['unknownPolicy'] == 'pause':
             reasons.append('Assignment usage is unavailable for a retained member.')
+        waiting = bool(renewable) and not reasons
+        reasons += renewable
         if not reasons:
             row.update(assignmentId=value['id'], assignmentRevision=value['revision'],
                        assignmentReservation={key: limits[key] for key in ('reserveTokens', 'reserveCostUsd')})
-        return {'allowed': not reasons, 'reasons': reasons, 'assignmentId': value['id'], 'assignmentRevision': value['revision']}
+        return {'allowed': not reasons, 'waiting': waiting, 'reasons': reasons, 'assignmentId': value['id'], 'assignmentRevision': value['revision']}
 
     def snapshot(self, session):
         value = self.current(session)
@@ -267,6 +320,9 @@ class Assignments:
                     self.service._task(self.interrupt(identity, stops))
 
     async def _dispatch(self, action, args, origin, command_id, caller):
+        if action in {'assignment.adoption', 'assignment.adopt'}:
+            from .assignment_adoption import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller)
         collaboration = self.service.collaboration
         source = collaboration.source({'sessionId': args['sessionId']}, origin, caller)
         if source['id'] != args['sessionId']:
@@ -275,8 +331,8 @@ class Assignments:
             return {'accepted': True, 'result': self.snapshot(source)}
         identity = command_id or str(uuid.uuid4())
         digest = fingerprint([action, args, origin, source['id']])
-        stops = []
-        async with self.service.lock, self.mutation(source, identity):
+        stops, recovery = [], []
+        async with self.service.lock, self.mutation(source, identity), AsyncExitStack() as boundary:
             duplicate = collaboration.duplicate(identity, digest)
             if duplicate:
                 return duplicate
@@ -290,7 +346,23 @@ class Assignments:
                     collaboration.error('The assignment revision changed; inspect it before editing.', 409)
                 if action != 'assignment.detach' and source['id'] != value['ownerSessionId']:
                     collaboration.error('Only the commissioning owner can control this assignment.')
-                if action == 'assignment.integration':
+                if action == 'assignment.resume':
+                    if origin not in {'ui', 'user'}:
+                        collaboration.error('Only the user can resume a stopped assignment.')
+                    if value['status'] != 'stopped':
+                        collaboration.error('Only a stopped assignment can resume.', 409)
+                    unknown = self.require_settled(value)
+                    for sid, receipts in sorted(unknown.items()):
+                        prove = getattr(self.service.runtime, 'stopped_boundary', None)
+                        if prove is None:
+                            collaboration.error('This runtime cannot confirm that the earlier stop has settled.', 409)
+                        try:
+                            evidence = boundary.enter_context(prove(self.service._session(sid)))
+                        except (OSError, RuntimeError, ValueError) as exc:
+                            collaboration.error(f'Could not confirm that this chat has stopped. {exc}', 409)
+                        recovery.append({'stopRequestIds': receipts, **evidence})
+                    value.update(status='active', resumedAt=time.time(), resumedBy=origin)
+                elif action == 'assignment.integration':
                     responsible = args['responsibleSessionId']
                     if value['status'] != 'active':
                         collaboration.error('A stopped assignment cannot assign integration work.', 409)
@@ -305,8 +377,11 @@ class Assignments:
                         collaboration.error('A stopped assignment cannot be resumed by changing limits.', 409)
                     limits = {**value['limits'], **{key: args[key] for key in DEFAULTS if key in args}}
                     for key in ('maxOpenTasks', 'maxMembers', 'maxConcurrentCalls'):
-                        if type(limits[key]) is not int or not 1 <= limits[key] <= 64:
-                            collaboration.error('Assignment counts must be between 1 and 64.', 400)
+                        val = limits[key]
+                        if val is None and key != 'maxMembers':
+                            continue
+                        if type(val) is not int or val < 1 or (key == 'maxMembers' and val > 64):
+                            collaboration.error('Assignment execution counts must be positive integers or null; total members must be between 1 and 64.', 400)
                     for key in ('maxTotalTokens', 'maxCostUsd', 'reserveTokens', 'reserveCostUsd'):
                         val = limits[key]
                         if val is None and key.startswith('max'):
@@ -349,6 +424,8 @@ class Assignments:
             receipt = {'accepted': True, 'commandAction': action, 'assignmentId': value['id'],
                        'result': {'assignment': copy.deepcopy(value)},
                        'interruptions': {sid: 'requested' for sid in stops}, 'interruptionsPending': len(stops)}
+            if recovery:
+                receipt['result']['stopRecovery'] = {'assignmentRevision': args['expectedRevision'], 'members': recovery}
             if action == 'assignment.stop':
                 receipt['result']['independentWork'] = self.external_requests(value)
             collaboration.insert(identity, digest, receipt)
