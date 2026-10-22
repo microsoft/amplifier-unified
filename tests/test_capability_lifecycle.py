@@ -292,6 +292,33 @@ async def test_configuration_change_does_not_expire_unbounded_raw_request(app):
     assert app.configuration_authority.valid(app.configuration_authority.record(row['id']), source)
 
 
+async def test_full_access_policy_revision_keeps_live_waiter_for_its_owner(app):
+    from test_access_mode import save
+    source = app.state['sessions'][0]
+    async def fail(*args, **kwargs):
+        raise RuntimeError('Not delivered')
+    app.runtime.approval = fail
+    row = (await agent(app, source, 'capability.request', {'sessionId':source['id'],
+        'effects':['modules'], 'scopes':['session'], 'reason':'Live full access'}, 'full-wait',
+        _configurationWait=True))['result']
+    await save(app)
+    await app.access_mode.settle(source['id'])
+    grant = app.configuration_authority.record(row['id'])
+    # An unchanged effective Full access mode with a newer policy revision.
+    grant['accessRevision'] = 'previous-policy-revision'
+    app.configuration_authority.save(grant)
+    app._publish_changes(sessions={source['id']})
+    assert source['approvals'][0]['status']=='pending'
+    deliveries=[]
+    async def delivered(*args):
+        deliveries.append(args)
+    app.runtime.approval=delivered
+    await app.access_mode.settle(source['id'])
+    assert source['approvals'][0]['status']=='allow'
+    assert len(deliveries)==1
+    assert app.configuration_authority.valid(app.configuration_authority.record(row['id']),source)
+
+
 async def test_dismiss_does_not_forward_history_only_note_or_replay_old_commands(app):
     import asyncio
     from test_coordination_generation import until

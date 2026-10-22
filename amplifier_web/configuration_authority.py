@@ -150,9 +150,13 @@ class ConfigurationAuthority:
             if not grant or grant.get('sessionId') != session['id']:
                 reason = 'request_unavailable'
             elif grant['status'] != 'pending':
-                if grant['status'] == 'active' and self.valid(grant, session) and not card.get('_hostRestarted'):
+                if (grant['status'] == 'active' and not card.get('_hostRestarted')
+                        and grant['workspace'] == session['workspace']
+                        and grant['interruptionRevision'] == session.get('interruptionRevision', 0)
+                        and (grant.get('expiresAt') is None or grant['expiresAt'] > time.time())):
                     # Full access owns delivery to a still-live native waiter.
-                    # Keep its unresolved delivery state, without asking again.
+                    # Its policy revision may change while Full access remains
+                    # effective; only that owner refreshes authority/delivery.
                     continue
                 # A saved decision is not a pending request even when its worker
                 # acknowledgement was lost. Never revoke that grant here.

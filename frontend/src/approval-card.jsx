@@ -62,9 +62,9 @@ function CapabilityApprovalCard({approval,sessionId,dispatch,freshnessKey}){
   {!request?.canDecide&&comment&&<p className="a-caption">Dismissal keeps this note in permission history only. It is not sent to Amplifier.</p>}
   {error&&<p role="alert">{error}</p>}
   <div className="a-dialog-actions">
-   {request?.canDecide&&<><button className="a-primary" disabled={busy} onClick={()=>perform('approve')}><Check/>Allow</button><button className="a-soft" disabled={busy} onClick={()=>perform('deny')}>Deny</button></>}
-   {request?.canDismiss&&<button className="a-soft" disabled={busy} onClick={()=>perform('dismiss')}>Dismiss old request</button>}
-   <button className="a-link" disabled={busy} onClick={async()=>{setReview(true);try{await read();setError('')}catch(e){setError(e.message)}}}>Review current scope</button>
+   {request?.canDecide&&<><button className="a-primary" data-action="approval.respond" disabled={busy} onClick={()=>perform('approve')}><Check/>Allow</button><button className="a-soft" data-action="approval.respond" disabled={busy} onClick={()=>perform('deny')}>Deny</button></>}
+   {request?.canDismiss&&<button className="a-soft" data-action="capability.revoke" disabled={busy} onClick={()=>perform('dismiss')}>Dismiss old request</button>}
+   <button className="a-link" data-action="capability.read" disabled={busy} onClick={async()=>{setReview(true);try{await read();setError('')}catch(e){setError(e.message)}}}>Review current scope</button>
   </div>
   {review&&snapshot&&<section aria-label="Current configuration scope">
    <h3>Current configuration scope</h3>
