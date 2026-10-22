@@ -995,3 +995,15 @@ remote cleanup boundaries, concurrent scheduler passes, restart and the exact
 initial-allocation cancellation gap. Unknown or advanced owners remain held. This
 is controlled-backend and rendered-client evidence, not live runner deployment.
 No new broad test lane or publication gate is added.
+
+## Compact composer and peer preview integration (October 22)
+
+The additive `compact-composer`, `composer-options`, and `peer-preview` browser
+scenarios run in the automatic extended source smoke plan. They cover the
+ordinary writing/options controls and grouped incoming-message source preview;
+the existing composer primary-action and peer-attribution journeys retain their
+separate assertions. The frozen original inventory and 65-scenario hash remain
+unchanged. The delta ledger records the specific paths, expected results and
+synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
+qualify installed wheels and negative controls; they do not replace these
+automatic ordinary-path owners.
