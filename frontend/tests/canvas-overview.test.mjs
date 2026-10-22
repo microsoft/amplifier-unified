@@ -45,7 +45,7 @@ test('native disclosure retains heading/status while content is collapsed',()=>{
 test('overview includes actual content in named top-level disclosures',()=>{
  const html=renderToStaticMarkup(React.createElement(ChatOverview,{state,act:()=>{},changeDraft:()=>{}}));
  for(const id of ['outputs','sources','agents','workspace','activity'])assert.match(html,new RegExp('data-overview-section="'+id+'"'));
- assert.match(html,/Source\.txt/);assert.match(html,/Source check/);assert.match(html,/needs attention/);assert.match(html,/Workspace work/);
+ assert.match(html,/Source\.txt/);assert.match(html,/Source check/);assert.match(html,/needs attention/);assert.match(html,/Chat coordination review/);
  assert.doesNotMatch(html,/role="region"/,'outer shell owns the single overview scroll region');
 });
 test('one pinned overview and explicit document list affordance even without open tabs',()=>{
