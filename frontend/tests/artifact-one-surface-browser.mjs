@@ -169,8 +169,16 @@ try{
  await page.setViewportSize({width:1400,height:950});
  await action('canvas.show',{kind:'settings'});
  await openSettingsPage(page,'providers');
- await page.locator('[data-part=provider-settings] [data-collection-id=one] button').click();
- await action('view.update',{patch:{providerEditor:{...(await page.evaluate(()=>window.amplifier.getState().view.providerEditor)),accessOpen:true}}});
+ const [selectionResponse]=await Promise.all([
+  page.waitForResponse(response=>{if(!response.url().endsWith('/api/actions'))return false;const request=response.request().postDataJSON();return request?.action==='view.update'&&request.args?.patch?.providerEditor?.id==='one'&&request.args.patch.providerEditor.detailOpen===true}),
+  page.locator('[data-part=provider-settings] [data-collection-id=one] button').click()
+ ]);
+ assert.equal((await selectionResponse.json()).accepted,true);
+ const providerDetail=page.locator('[data-part=provider-settings] .a-collection-detail');
+ await expect(providerDetail).toBeVisible();
+ const access=providerDetail.locator('.a-provider-access');
+ if(!await access.evaluate(node=>node.open))await access.locator('summary').click();
+ await expect(page.locator('#provider-key-source')).toBeVisible();
  await page.locator('#provider-key-source').selectOption('private');
  await page.locator('#provider-key').fill('synthetic-unsaved-preview-test');
  const settingsId=await page.evaluate(()=>window.amplifier.getState().canvas.id);
