@@ -205,6 +205,7 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
         "amplifier_web/__init__.py": "__version__ = '1.0.0'\n",
         "amplifier_web/cli.py": (package / "cli.py").read_bytes(),
         "amplifier_web/reset.py": package.joinpath("reset.py").read_bytes(),
+        "amplifier_web/host_dependencies.py": package.joinpath("host_dependencies.py").read_bytes(),
         "amplifier_web/__main__.py": "from .cli import main; main()\n",
         "amplifier_web/application_generations.py": "def delegate(): pass\n",
         "amplifier_web/deployment.py": "def load_server_config(*a, **kw): return {}\n",
@@ -227,6 +228,8 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
     prefix = tmp_path / "tools/amplifier-unified"
     sites = next(prefix.glob("lib/python*/site-packages"))
     (sites / "amplifier_web/app_updates.py").write_text("raise RuntimeError('locally hacked app')\n")
+    # Emergency reset must not import the damaged ordinary startup helper.
+    (sites / "amplifier_web/host_dependencies.py").unlink()
     (sites / "reset_fixture_dependency/__init__.py").unlink()
     (sites / "rogue.py").write_text("untracked installation file")
     data = tmp_path / "data"

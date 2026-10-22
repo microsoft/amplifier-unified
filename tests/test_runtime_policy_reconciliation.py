@@ -127,8 +127,19 @@ async def test_untrusted_cache_identity_cannot_establish_policy(selected, case, 
         await s.collector.report(s.batch, s.config)
 
 
-async def test_stale_selected_root_advances_before_install_and_old_generation_is_untouched(selected, monkeypatch):
+@pytest.mark.parametrize('source_owner', ['module', 'host-component'])
+async def test_stale_selected_root_advances_before_install_and_old_generation_is_untouched(selected, monkeypatch, source_owner):
     s = selected
+    if source_owner == 'host-component':
+        from amplifier_foundation import Bundle
+        from amplifier_web.host.components import HostComponents
+        from amplifier_web.host.session import module_source
+        components = HostComponents()
+        components.select_bundle(Bundle(name='host-tools', tools=[{
+            'module': 'fixture', 'source': 'git+' + URL + '@main'}]), {})
+        s.collector.references.clear()
+        s.config._source_policy_observer = s.collector
+        assert module_source(s.config, False, 'fixture', 'git+' + URL + '@main', components) == 'git+' + URL + '@main'
     oldrow = row(ref=s.old, current=s.old)
     request = {'version': 1, 'configuration': migration.configuration(s.config),
                'candidates': migration.legacy_candidates([oldrow])}
@@ -392,3 +403,61 @@ async def test_real_resolver_local_module_override_never_becomes_branch(selected
     report = await s.collector.report(s.batch, s.config)
     assert report['packages'][NAME]['status'] == 'local'
     assert migration.selected_policies(migration.legacy_candidates([row(ref=s.old, current=s.old)]), report)[0] == {}
+
+
+@pytest.mark.parametrize('choice', ['branch', 'pin', 'local', 'installed', 'conflict'])
+async def test_host_component_selection_obeys_source_policy_boundaries(selected, choice):
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.components import HostComponents
+    from amplifier_web.host.session import module_source
+    s = selected
+    s.collector.references.clear()
+    s.config._source_policy_observer = s.collector
+    chosen = (str(s.root) if choice in {'local', 'installed'} else
+              'git+' + URL + '@' + (s.old if choice == 'pin' else 'main'))
+    components = HostComponents(installed={'fixture': lambda: str(s.root)} if choice == 'installed' else None)
+    components.select_bundle(Bundle(name='host-tools', tools=[{
+        'module': 'fixture', 'source': chosen}]), {})
+    # A host-owned source wins over an unrelated late module override; record
+    # only the source that will actually be prepared, never the losing choice.
+    s.config.settings['sources'] = {'modules': {'fixture': chosen if choice == 'local' else 'git+' + URL + '@unused'}}
+    assert module_source(s.config, False, 'fixture', 'git+' + URL + '@old', components) == chosen
+    if choice == 'conflict':
+        s.collector.observe('git+' + URL + '@stable', s.config)
+    report = await s.collector.report(s.batch, s.config)
+    expected = {'branch': 'selected', 'pin': 'explicit-pin', 'local': 'local', 'installed': 'local', 'conflict': 'conflicting'}
+    assert report['packages'][NAME]['status'] == expected[choice]
+    policies, _ = migration.selected_policies(
+        migration.legacy_candidates([row(ref=s.old, current=s.old)]), report)
+    assert bool(policies) == (choice == 'branch')
+    assert (URL, 'unused') not in s.collector.references
+
+
+def test_previous_host_component_observation_receipt_is_rechecked(selected, monkeypatch):
+    s = selected
+    monkeypatch.setattr('amplifier_web.host.config.read_config', lambda *a, **kw: s.config)
+    oldrow = row()
+    receipt = s.home / 'updates/baseline-runtime'
+    receipt.mkdir()
+    receipt.joinpath(migration.RECEIPT).write_text(json.dumps({
+        'version': 1, 'selectionVersion': 2, 'configuration': migration.configuration(s.config),
+        'remaining': migration.legacy_candidates([oldrow]),
+        'decisions': {NAME: 'unselected'}, 'offeredPackages': []}))
+    assert migration.pending(s.home, None, [oldrow]) is not None
+
+
+async def test_relative_host_module_keeps_its_observed_git_behavior_policy(selected):
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.components import HostComponents
+    from amplifier_web.host.session import module_source
+    s = selected
+    s.config._source_policy_observer = s.collector
+    components = HostComponents()
+    behavior = Bundle(name='host-tools', tools=[{'module': 'fixture', 'source': './'}])
+    behavior.base_path = s.root
+    components.select_bundle(behavior, {})
+    assert module_source(s.config, False, 'fixture', './', components) == str(s.root)
+    report = await s.collector.report(s.batch, s.config)
+    assert report['packages'][NAME]['status'] == 'selected'
+    assert report['packages'][NAME]['ref'] == 'main'
+    assert not s.collector.local_sources

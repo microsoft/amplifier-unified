@@ -183,7 +183,7 @@ def effective(policy_value, observation):
     defaults = {'maxReservedCpu': observation['cpuCount'] * 2,
                 'maxReservedMemoryMiB': observation['memoryMiB'] * 4 // 5,
                 'minAvailableMemoryMiB': 1024, 'minFreeBytes': 10 * 1024**3,
-                'maxLoadPercent': 200, 'maxPreparing': 2}
+                'maxLoadPercent': 200, 'maxPreparing': 0}
     return {**defaults, **policy_value['limits']}
 
 

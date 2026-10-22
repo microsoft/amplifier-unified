@@ -204,7 +204,7 @@ def lifecycle(app, monkeypatch):
                 'absenceConfirmed': True, 'admissionSettled': True}
         return value
     monkeypatch.setattr(probe, 'invoke', invoke)
-    monkeypatch.setattr(environments, 'capacity', lambda *args: {'available': True})
+    monkeypatch.setattr(environments, 'capacity', lambda *args, **kwargs: {'available': True})
     monkeypatch.setattr(probe.resources, 'reserve', lambda *args: {'supported': True, 'admitted': True})
     monkeypatch.setattr(probe.resources, 'settle', lambda *args, **kwargs: None)
     monkeypatch.setattr(probe, 'verify_artifact', lambda result: True)
@@ -234,8 +234,8 @@ async def test_actual_owner_state_machine_checks_and_cleans_once(app, lifecycle)
     assert calls == ['prepare', 'start', 'job_start', 'stop', 'remove', 'reconcile']
 
 
-async def test_capacity_uses_existing_limits_and_waits_without_guest(app, lifecycle, monkeypatch):
-    monkeypatch.setattr(environments, 'capacity', lambda *args: {'available': False})
+async def test_backend_capacity_refusal_waits_without_guest(app, lifecycle, monkeypatch):
+    monkeypatch.setattr(environments, 'capacity', lambda *args, **kwargs: {'available': False})
     value, _ = await run_probe(app, 4)
     assert not value['complete'] and value['waiting'] == 'waiting'
     assert lifecycle[0] == ['prepare']
@@ -315,6 +315,63 @@ async def test_runner_limit_overrides_survive_new_selection(app, monkeypatch):
     assert limits.effective(after, limits.load(app))[0]['maxRunning'] == 31
     # Admission applies mutable budgets without changing source authority.
     updates.validate_execution(app.data_dir, limits.apply(app, after))
+
+
+@pytest.mark.parametrize('backend', ['docker', 'incus'])
+def test_qualification_ignores_count_quotas_without_mutating_saved_policy(app, monkeypatch, backend):
+    from amplifier_web import test_capacity_settings as limits
+    original = {'backend': backend, 'installationId': 'fixed', 'commit': 'b' * 40}
+    values = {'maxRunning': 2, 'maxInstances': 4, 'minFreeBytes': 4 * 1024**3}
+    original.update({'incus': dict(values)} if backend == 'incus' else values)
+    identity = limits.execution_key(original)
+    policy = {'version': 1, 'defaults': {'maxRunning': 1},
+              'runners': {identity: {'maxInstances': 1, 'minFreeBytes': 8 * 1024**3}}}
+    limits.write(app, policy)
+    before = copy.deepcopy(original)
+    calls = []
+    def invoke(config, home, row, action, args, **kwargs):
+        calls.append((copy.deepcopy(config), action, kwargs))
+        return {'ok': True}
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    probe.invoke(original, app, {}, 'start', {})
+    actual = calls[0][0]['incus'] if backend == 'incus' else calls[0][0]
+    assert actual['maxRunning'] == actual['maxInstances'] == 0
+    assert actual['minFreeBytes'] == 8 * 1024**3
+    assert calls[0][2] == {'_qualification': True}
+    assert limits.load(app) == policy and original == before
+    ordinary = limits.apply(app, original)
+    ordinary = ordinary['incus'] if backend == 'incus' else ordinary
+    assert ordinary['maxRunning'] == ordinary['maxInstances'] == 1
+
+
+async def test_update_capacity_uses_private_lane_but_keeps_disk_pressure(app, lifecycle, monkeypatch):
+    observations = []
+    def capacity(app, config, *, _qualification=False):
+        observations.append(_qualification)
+        # The ordinary lane is count-blocked; even the private lane must wait
+        # until the real storage observation recovers.
+        return {'available': _qualification and len(observations) > 2}
+    monkeypatch.setattr(environments, 'capacity', capacity)
+    value, staged = await run_probe(app, 3)
+    assert value['waiting'] == 'waiting' and lifecycle[0] == ['prepare']
+    for _ in range(9):
+        value = await updates.advance(app, staged['runnerUpdate'])
+        if value.get('complete'):
+            break
+    assert value.get('complete') and all(observations)
+    assert lifecycle[0].count('start') == 1
+
+
+async def test_update_allocation_is_independent_of_ordinary_owned_resource_quota(app, lifecycle):
+    from amplifier_web import test_execution_settings as execution
+    execution.write(app, {'version': 1, 'queue': {}, 'profiles': {},
+        'concurrency': {'maxOwnedResources': 1}})
+    row = environments.prepare(app.data_dir, 'ordinary', 'workspace', {}, '/fixture', 'binding', 'existing')
+    with pytest.raises(ValueError, match='resource owner capacity'):
+        environments.prepare(app.data_dir, 'ordinary-other', 'workspace', {}, '/fixture', 'binding', 'new')
+    result, _ = await run_probe(app)
+    assert result['complete']
+    assert environments.get(app.data_dir, 'ordinary', row['id']) == row
 
 
 async def test_runner_update_wait_does_not_acquire_chat_idle_barrier(app, monkeypatch):

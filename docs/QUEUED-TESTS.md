@@ -71,6 +71,23 @@ The result does not satisfy a shared-task dependency or prove product acceptance
 
 ## Capacity policy
 
+New managed setups with a verified native machine authority use CPU/memory
+reservations and observed memory, disk and CPU pressure instead of a fixed
+running/retained-environment count. Dependency preparation uses those same
+resource reservations; its default is no separate build-count ceiling. Explicit
+saved operator ceilings remain effective. Existing configurations are not
+silently rewritten: an operator can set the running and retained counts to zero
+in Settings to use resource admission while keeping the disk reserve. A daemon
+without verified native resource admission keeps conservative setup defaults.
+
+The fixed updater qualification probe is independent of ordinary count quotas,
+including retained-owner counts. Its exact owner still reserves one CPU and
+512 MiB, checks current physical pressure and backend storage, and journals each
+effect before dispatch. Unknown launches and cleanup keep their owner; quota
+independence never authorizes deleting another environment or replaying work.
+App/component updates can proceed while this isolated check waits for genuine
+resource availability. No ordinary action argument grants the updater lane.
+
 Global **Settings → Testing & resources → Advanced limits** exposes running
 and total retained environment ceilings and the free-disk reserve. These apply
 across workspaces on this app installation. The screen shows each effective
@@ -95,9 +112,9 @@ Runner overrides identify the qualified **connection**, not a universal machine.
 Changing connection aliases can select a different override; global defaults
 still apply. Docker and Incus retain their own physical daemon/project admission
 locks, but this UI does not synchronize policies across other app installations,
-users, or container systems. CPU/memory budgets, queue size/wait policies,
-resource-aware scheduling and automatic routing across machines remain separate
-work. This screen does not claim those controls exist.
+users, or container systems. The machine resource authority and queue settings
+remain separate owners; their current controls are shown separately in Settings.
+Registered machines use their own verified target authority.
 
 The Docker configuration may set `maxRunning` (default 15), `maxInstances`
 (default 256 retained plus active), and `minFreeBytes` (default 10 GiB). Zero

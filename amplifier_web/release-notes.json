@@ -2,6 +2,73 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.212",
+      "title": "Keep updates moving and let parallel work use available capacity",
+      "changes": [
+        "Keep test-runner update checks independent of ordinary environment-count quotas while retaining CPU, memory, disk and ownership checks. New managed local test setups use measured resource admission instead of fixed running and retained environment counts.",
+        "Allow assignment owners to remove the open-helper and concurrent-model-call ceilings. New assignments start without these count ceilings; existing saved limits, spending budgets, unknown outcomes and Stop remain respected.",
+        "Keep stopped-turn failure information available through worker preparation so an authorized recovery can identify the correct failed generation.",
+        "Preserve unsaved workspace resource and reservation edits when navigating between Home, chats and workspaces, without replaying pending saves.",
+        "Update release-notice and update-readiness smoke fixtures for current installed and pending-runner states."
+      ],
+      "notices": [
+        {
+          "id": "assignment-count-defaults-212",
+          "title": "New assignments can run more work in parallel",
+          "detail": "New assignments no longer default to eight open helpers or eight concurrent model calls. Existing assignments keep their saved limits. Set explicit assignment limits if you want to constrain concurrency or spending; blank execution-count fields mean no count ceiling. Test environments still use machine resource checks.",
+          "action": "Review assignment settings if you want explicit concurrency or spending limits. Existing saved limits are unchanged."
+        }
+      ]
+    },
+    {
+      "version": "0.20.211",
+      "title": "Wait safely for busy assignment capacity",
+      "changes": [
+        "Let queued worker calls wait for active calls to finish when older calls have unknown outcomes. Unknown calls keep their reservations, and existing Stop, budget and concurrency limits remain enforced.",
+        "Update automated Home, navigation, archive and mobile checks for the current shared landing layouts, including keyboard navigation and usable phone controls.",
+        "Keep the complete authored What\u2019s new history available as the release count grows, within the existing size limit."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.210",
+      "title": "Keep built-in tool updates consistent with their selected sources",
+      "changes": [
+        "Record the selected source of built-in tools during update preparation, so newer filesystem and bash modules can be validated and adopted without conflicting with stale source records. Explicit source choices and integrity checks remain enforced."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.209",
+      "title": "Keep update checks responsive during runner checks",
+      "changes": [
+        "Keep a requested update check queued while the test runner briefly checks capacity, then recheck safely and show available app or component updates.",
+        "Avoid repeatedly polling a capacity-blocked runner merely because chats are idle. Its pending qualification and normal periodic checks are preserved."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.208",
+      "title": "Keep updates moving while the test runner waits",
+      "changes": [
+        "Allow app and component updates to proceed while an updated test runner waits for capacity or confirmation of its isolated check. The runner retains its original work and evidence; normal app restart and component safety checks still apply.",
+        "Keep the newer app release summary and Update Amplifier button available alongside the waiting runner. Preserve component update progress and results when the runner later completes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.207",
+      "title": "Reliable Linux setup and conversation settings",
+      "changes": [
+        "Apply conversation settings correctly when the app starts its worker through uv. Missing worker identity now stops the change before it can leave chat input blocked. Previously unresolved changes still require explicit recovery; nothing is replayed automatically.",
+        "Find uv in its standard installation location during setup and managed service startup, with Linux-specific guidance for missing prerequisites and clearer recovery errors.",
+        "Keep emergency reset usable when the ordinary startup helper is missing or damaged, while still finding uv in its standard location.",
+        "Keep the ChatGPT sign-in button readable across supported themes and interaction states.",
+        "Show the relevant release summary before, during and after an update, including when a newer release replaces a waiting update."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.206",
       "title": "Keep open Work details available as activity arrives",
       "changes": [

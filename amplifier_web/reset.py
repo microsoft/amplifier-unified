@@ -30,6 +30,15 @@ UNIT = "amplifier-unified.service"
 LABEL = "com.microsoft.amplifier-unified"
 
 
+def find_uv():
+    # Keep this small lookup independent of app modules: this file also repairs
+    # damaged installations when run directly with the system Python.
+    directories = [Path.home() / '.local/bin', Path.home() / '.cargo/bin']
+    if sys.platform == 'darwin':
+        directories += [Path('/opt/homebrew/bin'), Path('/usr/local/bin')]
+    return shutil.which('uv') or shutil.which('uv', path=os.pathsep.join(map(str, directories)))
+
+
 def options(parser):
     parser.add_argument("--verbose", action="store_true", help="Show technical repair details")
     parser.add_argument("--yes", "-y", action="store_true", help="Confirm the displayed repair plan")
@@ -686,7 +695,7 @@ def run(args):
 def perform(args, home, service):
     if os.environ.get("AMPLIFIER_SOURCE_STORE"):
         raise ValueError("Unset AMPLIFIER_SOURCE_STORE for reset. External/shared source stores are not reset.")
-    uv = shutil.which("uv")
+    uv = find_uv()
     if not uv:
         raise ValueError("uv is required. Install uv, then run reset again.")
     env = environment(anonymous=getattr(args, "anonymous", False))
