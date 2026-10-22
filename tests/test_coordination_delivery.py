@@ -478,6 +478,24 @@ class InstalledWorkAdapter:
             cancellation=SimpleNamespace(is_immediate=False, register_tool_start=lambda *a: None,
                                          register_tool_complete=lambda *a: None))
         self.coordinator = coordinator
+        from amplifier_web.execution_events import ExecutionEvents
+        self.telemetry = ExecutionEvents(child['id'], lambda event: None)
+        self.admissions = []
+        async def admit(row):
+            self.admissions.append(row['id'])
+        self.telemetry.admission_guard = admit
+        self.scope = {
+            'rootSessionId': child['id'], 'runtimeSessionId': child['id'],
+            'generationId': child['collaborationGeneration']['id'],
+            'inputIds': child['collaborationGeneration']['inputIds'],
+            'inputCoverage': 'complete',
+        }
+        self.capabilities['web.work_origin_scope'] = lambda: copy.deepcopy(self.scope)
+        def observe(provider):
+            if not callable(getattr(provider, 'get_info', None)):
+                provider.get_info = lambda: SimpleNamespace(id='fixture', defaults={})
+            return self.telemetry.instrument_provider(child['id'], provider)
+        self.capabilities['web.provider_observe'] = observe
         async def bridge(operation, args):
             if operation == 'context.manifest':
                 return {'surfaces': [], 'inputIds': child['collaborationGeneration']['inputIds']}
@@ -542,6 +560,212 @@ async def installed_work_adapter(app):
     required = (await current_work(app, child))['required']
     assert required['status'] == 'available'
     return await InstalledWorkAdapter().setup(app, child), child, required
+
+
+@pytest.mark.parametrize('fault', ['none', 'missing_guard', 'new_input', 'overflow', 'new_generation'])
+async def test_effect_origin_joins_actual_admission_and_full_input_scope(app, fault):
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    class Provider:
+        async def complete(self, value, **kwargs):
+            return SimpleNamespace(model_dump=lambda: {'content': [{
+                'type': 'tool_call', 'id': 'origin-call', 'name': 'write_file', 'input': {'path': 'owned'}}]})
+    if fault == 'missing_guard':
+        adapter.telemetry.admission_guard = None
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    await wrapped.complete(adapter.request())
+    if fault == 'new_input':
+        adapter.scope['inputIds'] = [*adapter.scope['inputIds'], 'later-input']
+    if fault == 'overflow':
+        adapter.scope['inputCoverage'] = 'overflow'
+    if fault == 'new_generation':
+        adapter.scope['generationId'] = 'successor'
+    coverage = await adapter.delivery.recheck_effect_coverage({
+        'tool_call_id': 'origin-call', 'tool_name': 'write_file', 'tool_input': {'path': 'owned'}})
+    assert coverage['complete'] is (fault == 'none'), coverage
+    assert coverage['effectAuthorized'] is False
+    if fault == 'none':
+        assert coverage['origin']['admittedCallId'] in adapter.admissions
+        assert coverage['origin']['inputIds'] == required['inputIds']
+        assert coverage['origin']['fittedSha256'] == coverage['requestSha256']
+
+
+async def test_capacity_await_cannot_bind_a_successor_input_to_old_fitted_bytes(app):
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    transported = []
+    async def admit(row):
+        adapter.scope['inputIds'] = [*adapter.scope['inputIds'], 'during-capacity-await']
+    adapter.telemetry.admission_guard = admit
+    class Provider:
+        async def complete(self, value, **kwargs):
+            transported.append(value)
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    with pytest.raises(ValueError, match='origin changed'):
+        await wrapped.complete(adapter.request())
+    assert transported == []
+
+
+async def native_outbound_probe(app, tmp_path, monkeypatch, fault):
+    import asyncio
+    from amplifier_module_provider_openai import OpenAIProvider
+    from amplifier_module_provider_openai.native import NativeResponsesProvider, NATIVE_REQUEST
+    from amplifier_web.native_provider import install_native
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    c = adapter.coordinator
+    providers = {'configured': OpenAIProvider(api_key='fixture', config={'default_model': 'gpt-6-astra'})}
+    c.get = lambda key: {'tools': adapter.tools, 'providers': providers,
+                        'context': SimpleNamespace(get_messages=AsyncMock(return_value=[]))}.get(key)
+    c.loop = adapter.loop
+    c.loop.config['native_provider'] = True
+    c.loop._select_provider = lambda values: values['configured']
+    async def mount(kind, value, name):
+        (providers if kind == 'providers' else adapter.tools)[name] = value
+    c.mount = mount
+    adapter.capabilities['live.runtime'] = SimpleNamespace(generation={'id': adapter.scope['generationId']})
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    await install_native(c.loop, c, providers)
+    host = adapter.capabilities['web.native_provider']
+    native = host.provider
+    assert native.prepare_send == host.prepare_send and native.lifecycle == host.send_lifecycle
+    proofs, sent, measured = [], [], []
+    class Effect:
+        name = 'delegate'
+        async def execute(self, value):
+            from amplifier_core import ToolResult
+            dispatch = c._tool_dispatch_contexts[asyncio.current_task()]
+            proofs.append(await adapter.delivery.recheck_effect_coverage({
+                **dispatch, 'tool_name': self.name, 'tool_input': value}))
+            return ToolResult(success=True, output='Controlled fixture; no delegated work.')
+    adapter.tools['delegate'] = Effect()
+    async def start(call):
+        await adapter.loop._execute_tool_only(call, adapter.tools, adapter.hooks, None, c)
+    item = {'type': 'function_call', 'id': 'item-one', 'call_id': 'native-tool',
+            'name': 'delegate', 'arguments': '{"instruction":"fixture"}', 'async': True}
+    response_id = 'wrong' if fault == 'wrong_response' else 'response-one'
+    events = [
+        {'type': 'response.created', 'response': {'id': 'response-one'}},
+        {'type': 'response.output_item.done', 'response_id': response_id, 'item': item},
+        {'type': 'response.completed', 'response': {'id': 'response-one', 'output': [item], 'usage': {}}},
+    ]
+    async def send(wire):
+        sent.append(wire)
+    native.socket = SimpleNamespace(send=send, recv=AsyncMock(side_effect=[json.dumps(e) for e in events]),
+                                    close=AsyncMock())
+    native._connect = AsyncMock()
+    native._guard_assembled_params_with_provider_count = AsyncMock()
+    native.owner = SimpleNamespace(coordinator=c, config={'background_delegate': True},
+                                   runtime=SimpleNamespace(emit=AsyncMock()), start_native_job=start)
+    if fault in {'opaque_only', 'changed_plaintext'}:
+        def checkpoint(params, full):
+            params = copy.deepcopy(params)
+            if fault == 'opaque_only':
+                params['input'] = [{'type': 'compaction', 'encrypted_content': 'opaque'}]
+            else:
+                for entry in params['input']:
+                    for block in entry.get('content', []):
+                        if isinstance(block, dict) and block.get('text', '').startswith('Required Work detail plaintext'):
+                            block['text'] += ' altered'
+            return params
+        native._apply_checkpoint = checkpoint
+    if fault == 'oversized':
+        monkeypatch.setattr('amplifier_web.coordination_delivery.PLAINTEXT_BYTES', 1)
+    class Driver:
+        get_info = native.get_info
+        async def request_budget(self, value, **kwargs):
+            measured.append(value.model_dump_json())
+            return {'tokens': 100}
+        async def complete(self, value, **kwargs):
+            assert value.model_dump_json() == measured[0]
+            native._request_messages = [m.model_dump() for m in value.messages]
+            params = {'input': super(NativeResponsesProvider, native)._convert_messages(native._request_messages),
+                      'tools': [{'type': 'function', 'name': 'delegate', 'parameters': {'type': 'object'}}]}
+            if fault == 'new_input':
+                adapter.scope['inputIds'].append('new-input')
+            token = NATIVE_REQUEST.set(native)
+            try:
+                await native._create_response(params)
+            finally:
+                NATIVE_REQUEST.reset(token)
+            return {}
+    wrapped = adapter.capabilities['web.provider_transform'](Driver())
+    original = adapter.request()
+    await wrapped.request_budget(original)
+    if fault == 'new_input':
+        with pytest.raises(Exception):
+            await wrapped.complete(original)
+        assert sent == [] and proofs == []
+    else:
+        await wrapped.complete(original)
+        assert len(sent) == len(proofs) == 1
+        assert proofs[0]['complete'] is (fault == 'none'), proofs
+        assert proofs[0]['effectAuthorized'] is False
+        if fault == 'none':
+            import hashlib
+            assert proofs[0]['outboundSha256'] == hashlib.sha256(sent[0].encode()).hexdigest()
+            assert proofs[0]['responseId'] == 'response-one'
+            assert proofs[0]['origin']['admittedCallId'] in adapter.admissions
+    assert 'fixture"}' not in host.path.read_text() if host.path.exists() else True
+
+
+async def programmatic_origin_probe(app, fault):
+    import asyncio
+    from amplifier_core import ToolResult
+    from amplifier_core.message_models import ToolCall
+    from amplifier_module_tool_exec import ProgrammaticTool
+    adapter, _, required = await installed_work_adapter(app)
+    if fault not in {'uncovered', 'same_batch_read'}:
+        await adapter.fill(required)
+    c = adapter.coordinator
+    adapter.loop.config['programmatic_dispatch'] = True
+    c.register_capability('tools.dispatch', adapter.loop.approved_dispatch)
+    adapter.delivery.install_dispatch(c)
+    adapter.tools['tool_exec'] = ProgrammaticTool(c, {'timeout_seconds': 10})
+    c.cancellation.is_cancelled = False
+    proofs = []
+    class Probe:
+        name = 'probe'
+        async def execute(self, value):
+            dispatch = c._tool_dispatch_contexts[asyncio.current_task()]
+            if fault == 'stop':
+                adapter.scope['stopRevision'] = 1
+            proof = await adapter.delivery.claim_effect_origin({
+                **dispatch, 'tool_name': 'probe', 'tool_input': value})
+            proofs.append(proof)
+            return ToolResult(success=True, output={'covered': proof.get('complete')})
+    adapter.tools['probe'] = Probe()
+    prefix = ''
+    if fault == 'same_batch_read':
+        ref = required['requirementsRef']
+        prefix = 'await tools.app_control(' + json.dumps({
+            'operation': 'dispatch', 'args': ref}) + '); '
+    code = prefix + 'text(await Promise.all([tools.probe({n:1}), tools.probe({n:2})]));'
+    class Provider:
+        async def complete(self, value, **kwargs):
+            return SimpleNamespace(model_dump=lambda: {'content': [{
+                'type': 'tool_call', 'id': 'parent-program', 'name': 'tool_exec', 'input': {'code': code}}]})
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    await wrapped.complete(adapter.request())
+    args = {'code': code + (' ' if fault == 'changed_parent' else '')}
+    async def execute():
+        with adapter.loop.approved_dispatch.run_scope(c):
+            return await adapter.loop._execute_tool_only(
+                ToolCall(id='parent-program', name='tool_exec', arguments=args),
+                adapter.tools, adapter.hooks, None, c)
+    first = await execute()
+    assert len(proofs) == 2, first
+    assert all(p['complete'] is (fault in {'none', 'reused_parent'}) for p in proofs), proofs
+    if fault == 'none':
+        assert len({p['toolCallId'] for p in proofs}) == 2
+        assert {p['parentToolCallId'] for p in proofs} == {'parent-program'}
+        assert len({p['origin']['admittedCallId'] for p in proofs}) == 1
+    if fault == 'reused_parent':
+        proofs.clear()
+        await execute()
+        assert len(proofs) == 2 and all(p['complete'] is False for p in proofs)
+    from amplifier_web.coordination_delivery import WORK_NESTED
+    assert WORK_NESTED.get() is None and not c._tool_dispatch_contexts
 
 
 @pytest.mark.parametrize('fault', ['none', 'partial', 'forged_id', 'changed_body', 'compacted', 'same_call', 'reopened'])

@@ -298,7 +298,10 @@ async def test_real_native_unsent_callback_reaches_bound_host_disk(tmp_path, mon
         if operation == 'response.create':
             await native._native_response({'input': [{'role': 'user', 'content': 'PRIVATE create'}]})
         else:
-            await native.steer_live(SimpleNamespace(id='input-one'))
+            # This earlier slice tests upstream receipt callbacks, not the new
+            # host admission wrapper (covered separately through installation).
+            from amplifier_module_provider_openai.native import NativeResponsesProvider
+            await NativeResponsesProvider.steer_live(native, SimpleNamespace(id='input-one'))
     if ending == 'send_error':
         socket.send.assert_awaited_once()
         assert 'native.not_sent' not in observed
@@ -552,7 +555,8 @@ async def native_parent_overlap(tmp_path, monkeypatch, *, fail_parent):
     steer_task = None
     try:
         await asyncio.wait_for(parent_created.wait(), 1)
-        steer_task = asyncio.create_task(native.steer_live(SimpleNamespace(id='input-one')))
+        from amplifier_module_provider_openai.native import NativeResponsesProvider
+        steer_task = asyncio.create_task(NativeResponsesProvider.steer_live(native, SimpleNamespace(id='input-one')))
         await asyncio.wait_for(preparing.wait(), 1)
         if fail_parent:
             await events.put(json.dumps({'type': 'error', 'error': {'code': 'synthetic'}}))

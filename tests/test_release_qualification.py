@@ -458,7 +458,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
     ('managed-removal-recovery', ['tests/test_test_environment_worker.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
     ('shared-work-continuity', ['tests/test_task_continuity.py', 'tests/test_coordination_delivery.py', 'tests/test_work_invocation.py', 'tests/test_schedules.py', 'tests/test_collaboration_input.py', 'tests/test_coordination_revisions.py', 'tests/test_release_qualification.py', 'tests/test_voice_visual.py', 'tests/test_surface_context.py', 'tests/test_output_image_pairs.py', 'tests/test_memory_personalization.py', 'tests/test_capacity.py']),
-    ('shared-work-native', ['tests/test_native_provider.py', 'tests/test_release_qualification.py']),
+    ('shared-work-native', ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
 def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):

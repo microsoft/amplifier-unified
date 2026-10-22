@@ -163,24 +163,62 @@ class Worker:
             return existing
         # Workers inherit the originating inputs at assignment, never
         # another client's later input or another coordinator's receipts.
+        canonical_inputs = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids')
         assigned = None if coordinator is self.session.coordinator else list(
-            assignment[0] if assignment is not None else self.context_inputs)
+            assignment[0] if assignment is not None else canonical_inputs or [])
+        assigned_generation = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('id')
         assigned_context = None if assigned is None else copy.deepcopy(
             assignment[1] if assignment is not None else {i: self.context_bindings[i] for i in assigned if i in self.context_bindings})
         assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': assigned_context.get(i, {}).get('clientId')} for i in assigned]
         assigned_clients = None if assigned_bindings is None else [b['clientId'] for b in assigned_bindings]
+        def origin_scope():
+            runtime = getattr(self, 'runtime', None)
+            generation = getattr(runtime, 'generation', None) or {}
+            gate = getattr(self, 'activation_gate', None)
+            # The canonical generation holds every delivered input. Never turn
+            # the bounded visual-context tail into complete Work membership.
+            ids = generation.get('input_ids') if assigned is None else assigned
+            if (not runtime or not generation.get('id') or not gate or not gate.current_valid
+                    or runtime.closed or runtime.stop_requested
+                    or coordinator.cancellation.is_cancelled or not isinstance(ids, list)
+                    or assigned is not None and generation.get('id') != assigned_generation):
+                return None
+            return {'rootSessionId': self.session.coordinator.session_id,
+                    'runtimeSessionId': coordinator.session_id, 'generationId': generation['id'],
+                    'inputIds': list(ids) if len(ids) <= 16 else [],
+                    'inputCoverage': 'complete' if len(ids) <= 16 else 'overflow',
+                    'stopRevision': self.stop_revision}
+        coordinator.register_capability('web.work_origin_scope', origin_scope)
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
             # Neither approval nor generation identity is model-supplied.
             args = {key: value for key, value in args.items()
-                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait"}}
+                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait", "_workOrigin"}}
             if assigned is None:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
                 args["_generationId"] = generation.get("id")
-            args = {**args, '_runtimeSessionId': coordinator.session_id, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
-                                             if assigned_clients is None else assigned_clients)}
+            all_inputs = ((getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids', [])
+                          if assigned is None else assigned)
+            # Transport the full bounded set, not the visual-context tail.
+            # The host independently compares its complete generation and
+            # reports overflow; an empty envelope is never evidence of none.
+            bound_ids = all_inputs if isinstance(all_inputs, list) and len(all_inputs) <= 16 else []
+            bound_context = self.context_bindings if assigned is None else assigned_context
+            args = {**args, '_runtimeSessionId': coordinator.session_id,
+                    '_inputBindings': [{'inputId': i, 'clientId': bound_context.get(i, {}).get('clientId')} for i in bound_ids],
+                    '_inputClients': [bound_context.get(i, {}).get('clientId') for i in bound_ids]}
+            if operation == 'dispatch':
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task())
+                check = coordinator.get_capability('web.work_effect_origin')
+                # The executing task, not model-supplied IDs, supplies this
+                # observation. The service independently owns applicability.
+                if dispatch and callable(check):
+                    args['_workOrigin'] = await check({
+                        **dispatch, 'tool_name': 'app_control',
+                        'tool_input': {'operation': operation,
+                                       'args': {k: v for k, v in args.items() if not k.startswith('_')}}})
             if operation.startswith('context.'):
                 context = self.context_bindings if assigned_context is None else assigned_context
                 bindings = [context[i] for i in ids if i in context]

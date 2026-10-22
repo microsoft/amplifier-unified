@@ -152,6 +152,13 @@ class ExecutionEvents:
                "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
         if self.admission_guard:
             await self.admission_guard(row)
+        # The outer fitted-request boundary retains its own attempt object.
+        # Join it to this exact admitted call, not the mutable public trace ID.
+        from .coordination_delivery import WORK_ATTEMPT
+        active = WORK_ATTEMPT.get()
+        if active and not purpose:
+            delivery, attempt = active
+            delivery.admit_work(attempt, row, guarded=self.admission_guard is not None)
         return row
 
     async def provider_call(self, sid, provider, request, invoke, *, label=None):

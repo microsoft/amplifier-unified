@@ -4,11 +4,14 @@ import json
 import inspect
 import time
 import uuid
+from contextvars import ContextVar
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from .host.config import app_home, write_private
 from .session_files import validate_id
+
+_STEER_INPUT = ContextVar('unified_native_steer_input', default=None)
 
 
 class NativeProviderHost:
@@ -18,6 +21,8 @@ class NativeProviderHost:
         self.provider = None
         self.identity = None
         self.reason = "Native provider transport is not enabled for this bundle."
+        self.send_bindings = {}
+        self.response_origins = {}
         self.state = {"version": 1, "sessionId": coordinator.session_id, "receipts": []}
         self.path = directory / "native-provider-state.json"
         self.checkpoint_path = directory / "native-provider-checkpoint.json"
@@ -40,6 +45,102 @@ class NativeProviderHost:
 
     def save(self):
         write_private(self.path, json.dumps(self.state, ensure_ascii=False))
+
+    def _active_work(self):
+        from .coordination_delivery import WORK_ATTEMPT
+        active = WORK_ATTEMPT.get()
+        if not active or not active[1] or not active[0].origin_current(active[1]):
+            raise ValueError("Native send lacks its current admitted host origin")
+        return active
+
+    async def send_lifecycle(self, kind, data):
+        """One stable sink; never replace a parent's callback with a steer's."""
+        from .coordination_delivery import WORK_ATTEMPT
+        active = WORK_ATTEMPT.get()
+        if kind == 'native.submitting':
+            delivery, attempt = self._active_work()
+            if (data.get('operation') == 'response.steer'
+                    and data.get('input_id') != _STEER_INPUT.get()):
+                raise ValueError("Native steer is not its admitted input")
+            if len(self.send_bindings) >= 128:
+                self.send_bindings = {k: v for k, v in self.send_bindings.items()
+                    if v[0].attempts.get(v[1]['id']) is v[1]}
+            if len(self.send_bindings) >= 128 or data['send_id'] in self.send_bindings:
+                raise ValueError("Native send binding is ambiguous or full")
+            origin = attempt['origin']
+            callback = self.bind_send_lifecycle(
+                attempt_id=origin.attempt_id, generation_id=json.loads(origin.scope_json)['generationId'],
+                admitted_call_id=origin.admitted_call_id)
+            self.send_bindings[data['send_id']] = (delivery, attempt, callback, copy.deepcopy(data))
+            attempt['sendId'] = data['send_id']
+            await callback(kind, data)
+            return
+        if kind == 'native.not_sent':
+            binding = self.send_bindings.get(data.get('send_id'))
+            if binding is None:
+                raise ValueError("Native terminal has no original send binding")
+            await binding[2](kind, data)
+            binding[1]['status'] = 'not_sent'
+            return
+        bindings = list(self.send_bindings.values())
+        if kind.startswith('steering.'):
+            bindings = [b for b in bindings if b[3].get('operation') == 'response.steer'
+                        and b[3].get('input_id') == data.get('input_id')]
+        elif kind == 'native.outcome_unknown':
+            bindings = [b for b in bindings if
+                (active and b[1] is active[1] and b[3].get('operation') == 'response.create')
+                or (b[3].get('operation') == 'response.steer'
+                    and data.get('input_id') is not None and b[3].get('input_id') == data['input_id'])]
+        else:
+            bindings = [b for b in bindings if active and b[1] is active[1]
+                        and b[3].get('operation') == 'response.create']
+        for delivery, attempt, callback, record in bindings:
+            await callback(kind, data)
+            if kind == 'native.outcome_unknown':
+                delivery.finish_work(attempt, failed=True)
+            if kind == 'steering.applied':
+                self.response_origins[data['response_id']] = (delivery, attempt)
+        if kind == 'native.response.created' and active:
+            identity = data.get('response_id')
+            owner = self.response_origins.get(identity, active)
+            if len(self.response_origins) >= 128 and identity not in self.response_origins:
+                raise ValueError("Native response origin bound exceeded")
+            self.response_origins[identity] = owner
+            owner[0].native_response(owner[1], identity)
+
+    async def prepare_send(self, kind, *, input_id=None):
+        from amplifier_module_provider_openai.native import NativeSendAdmission
+        delivery, attempt = self._active_work()
+        if kind == 'response.steer' and input_id != _STEER_INPUT.get():
+            raise ValueError("Native steer input changed")
+        await delivery.prepare_native(attempt)
+        send_id = attempt.get('sendId')
+        binding = self.send_bindings.get(send_id)
+        if binding is None or binding[1] is not attempt or binding[3]['operation'] != kind:
+            raise ValueError("Native send changed during preparation")
+        def admit(envelope):
+            if self.selected_identity() != self.identity:
+                return False
+            return delivery.admit_native(attempt, envelope, send_id=send_id)
+        return NativeSendAdmission(attempt_id=attempt['id'], admit=admit)
+
+    def work_trace(self, kind, value):
+        if kind != 'native.receive':
+            return  # Pre-send tracing is never promoted to actual-send proof.
+        terminal = value.get('response', {})
+        response_id = terminal.get('id') if isinstance(terminal, dict) and terminal else value.get('response_id')
+        owner = self.response_origins.get(response_id)
+        if owner:
+            owner[0].native_work_event(owner[1], kind, value)
+        else:
+            # Unattributed output still consumes its call IDs. It cannot reuse
+            # an earlier response's identical name/args to obtain that proof.
+            delivery = self.coordinator.get_capability('web.surface_delivery')
+            if delivery is not None:
+                items = terminal.get('output', []) if terminal else [value.get('item')]
+                delivery.finish_work(None, {'content': [
+                    {'type': 'tool_call', 'id': item.get('call_id')}
+                    for item in items if isinstance(item, dict) and item.get('type') == 'function_call']})
 
     def bind_send_lifecycle(self, *, attempt_id, generation_id, admitted_call_id):
         """Capture an existing host admission before an opted-in transport call.
@@ -294,7 +395,7 @@ async def install_native(loop, coordinator, providers):
         return providers
     try:
         from amplifier_module_provider_openai import OpenAIProvider
-        from amplifier_module_provider_openai.native import NativeResponsesProvider, NATIVE_REQUEST as PROVIDER_REQUEST
+        from amplifier_module_provider_openai.native import NativeResponsesProvider, NativeSendAdmission, NATIVE_REQUEST as PROVIDER_REQUEST
     except ImportError:
         host.reason = "The installed provider does not include its optional native transport."
         return providers
@@ -333,22 +434,36 @@ async def install_native(loop, coordinator, providers):
             finally:
                 LOOP_REQUEST.reset(token)
 
+        async def steer_live(self, command):
+            # An independently admitted send, never the parent's proof. The
+            # protocol has no separately fitted detail request for steering.
+            from .coordination_delivery import WORK_ATTEMPT
+            delivery = coordinator.get_capability('web.surface_delivery')
+            observe = coordinator.get_capability('web.provider_call')
+            if delivery is None or not callable(observe):
+                raise ValueError("Native steering admission is unavailable")
+            attempt = delivery.begin_steer()
+            token = WORK_ATTEMPT.set((delivery, attempt))
+            steer_token = _STEER_INPUT.set(getattr(command, 'id', None))
+            try:
+                invoke = super().steer_live
+                return await observe(self, SimpleNamespace(model=host.identity['model']),
+                                     lambda: invoke(command), label="Steer provider context")
+            except BaseException:
+                if attempt['status'] != 'not_sent':
+                    delivery.finish_work(attempt, failed=True)
+                raise
+            finally:
+                _STEER_INPUT.reset(steer_token)
+                WORK_ATTEMPT.reset(token)
+
     def owned_loop():
         owner = LIVE_OWNER.get()
         return owner if (getattr(owner, "coordinator", None) is coordinator
                          and host.selected_identity() == host.identity) else None
-    def work_trace(kind, value):
-        # Context-local attempt, not CURRENT_CALL or a mutable last request.
-        # The consumer preserves the pre-send/steering callback limitations;
-        # this callback is synchronous because the provider does not await it.
-        from .coordination_delivery import WORK_ATTEMPT
-        active = WORK_ATTEMPT.get()
-        if active:
-            delivery, attempt = active
-            delivery.native_work_event(attempt, kind, value)
     host.identity = identity
     host.provider = LoopNativeProvider.wrap(original, owner_getter=owned_loop,
-                                            lifecycle=host.lifecycle, trace=work_trace)
+        lifecycle=host.send_lifecycle, trace=host.work_trace, prepare_send=host.prepare_send)
     if host.state.get("outcome") in {"unknown", "pending"}:
         host.provider.request_uncertain = True
     if host.checkpoint_path.exists():

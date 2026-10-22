@@ -119,11 +119,14 @@ async def install_app_access(coordinator, bridge):
     from .memory_delivery import MemoryDelivery, POLICY as MEMORY_POLICY
     from .coordination_delivery import CoordinationDelivery
     # Keep selected visual evidence after general workspace observations.
-    delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(SurfaceDelivery(bridge), bridge), bridge), bridge), bridge)
+    delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(
+        SurfaceDelivery(bridge), bridge, origin_scope=coordinator.get_capability('web.work_origin_scope')),
+        bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
     # Observation only. The service's effect policy must independently decide
     # applicability and permissions; absent producer wiring is not a grant.
     coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)
+    coordinator.register_capability('web.work_effect_origin', delivery.claim_effect_origin)
     from .surface_delivery import SurfaceProvider
     from .request_recovery import RecoveringProvider, install as install_recovery
     install_recovery(coordinator)
@@ -137,6 +140,7 @@ async def install_app_access(coordinator, bridge):
             return await super()._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs)
     transformed = []
     def transform(provider):
+        delivery.install_dispatch(coordinator)
         if isinstance(provider, SurfaceProvider) and provider.delivery is delivery:
             return provider
         observe = coordinator.get_capability('web.provider_observe')
@@ -211,7 +215,13 @@ async def install_app_access(coordinator, bridge):
         delivery.bind_work(data)
         return HookResult()
 
+    async def bind_nested_pre(event, data):
+        delivery.observe_nested_pre(data)
+        return HookResult()
+
     await coordinator.mount('tools', AppControl(), name='app_control')
+    delivery.install_dispatch(coordinator)
+    coordinator.hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
     coordinator.hooks.register('provider:request', guidance, name='web-canvas-guidance')
     coordinator.hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
     coordinator.register_capability('web.app_access', True)
