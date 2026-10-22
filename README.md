@@ -24,6 +24,16 @@ It rejects oversized or ambiguous selections instead of silently expanding or
 truncating them. Corrections to a sent quoted message use a new reply; ordinary
 plain-message editing is unchanged.
 
+### Choose settings before resuming a chat
+
+The conversation's model and bundle controls save **Next message** choices
+without starting its worker. You can read history, browse saved artifacts and
+rename the chat while preparation is unavailable. Saved choices are not a claim
+that the runtime has applied them. The next genuine input validates the selected
+bundle, provider, model and effort before delivery; a failed check keeps the
+choices and does not silently substitute another model. Active work and unresolved
+configuration operations keep their existing guards. Automatic prewarming is not enabled.
+
 ### Collapse interim replies (experimental)
 
 In **Settings → Appearance**, enable **Collapse interim replies** to move earlier

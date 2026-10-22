@@ -2283,6 +2283,60 @@
       "qualification": "docs/workspaces/configuration-authority.md"
     },
     {
+      "id": "delta.1035",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/1035",
+      "reason": "Worker-free Next message choices gain an additive maintained browser owner; preserve the frozen inventory and original scenario commands and hash.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.next-message-settings",
+          "family": "conversation",
+          "title": "Choose the next message's configuration before starting a dormant chat worker",
+          "scope": "standard-path",
+          "entryPath": ["Conversation", "Model and reasoning settings / Conversation bundle / Chat options"],
+          "prerequisites": [
+            "Built production client and isolated production-service fixture with saved history, cached catalogs and a saved artifact",
+            "Conversation runtime calls forbidden; controlled slow/failing catalog resolution and two fixture clients"
+          ],
+          "steps": [
+            "Read saved text and keep an unsent draft while preparation is displayed",
+            "Save bundle, provider, model and effort through visible controls and keyboard selection",
+            "Hold catalog resolution while renaming the chat and opening a saved artifact",
+            "Reload saved choices and reject an older configuration revision from a second client",
+            "Select another bundle with the narrow keyboard controls after catalog failure"
+          ],
+          "expectedResults": [
+            "Choices remain usable before worker readiness and are labeled Next message, not mounted configuration.",
+            "Slow catalog discovery does not block manual naming, saved artifact browsing or the unsent draft.",
+            "Saved choices survive reload; a stale client cannot replace a newer revision or another client's draft.",
+            "Desktop and narrow keyboard controls remain usable after discovery failure.",
+            "Passive controls cause zero conversation-worker starts, prewarms, model calls or input starts."
+          ],
+          "variants": ["desktop-pointer", "desktop-keyboard", "narrow-keyboard", "absent-worker", "held-catalog", "failed-catalog", "second-client", "reload"],
+          "existingTests": [
+            {
+              "path": "frontend/tests/dormant-controls-browser.mjs",
+              "relation": "Registered additive owner dormant-controls; plan supplies output/browser-checks/dormant-controls for results and screenshots"
+            },
+            {
+              "path": "tests/test_next_message_configuration.py",
+              "relation": "Real retired-record no-hydration, current input, exact revision, Stop and permission guards"
+            },
+            {
+              "path": "tests/fixtures/next_message_native_probe.py",
+              "relation": "Separate genuine-send qualification for latest saved settings, adjacent input, failed mount and Stop rollback"
+            }
+          ],
+          "limits": [
+            "Browser uses synthetic runtime and catalog boundaries; it does not qualify a live provider or native worker.",
+            "Manual rename and artifact opening use the client's public action bridge, not pointer traversal of every entry control.",
+            "Resident retired-record proof is not a universal nonresident zero-I/O claim; no latency or automatic prewarm claim.",
+            "Registration is coverage ownership, not a claim that the current candidate passed."
+          ]
+        }
+      ],
+      "qualification": "docs/clients/live-sessions.md"
+    },
+    {
       "id": "delta.compact-composer",
       "sourceCommit": "f1c10e55961bbba30acd9c9c08154f3f3592d3fb",
       "reason": "Keep ordinary compact writing and configuration paths in automatic source smoke coverage; preserve the frozen checklist.",

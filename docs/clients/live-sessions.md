@@ -106,6 +106,28 @@ The optional `expectedRevision` checks the app's global state revision, includin
 presentation changes; it is not a per-session revision. Do not use it as a
 mandatory send precondition during active streaming.
 
+### Next-message choices
+
+`conversation.configure` saves `{sessionId, expectedRevision, bundle?, selection?,
+resetModel?}` without mounting a conversation. `expectedRevision` is the
+conversation's `nextMessageRevision`, not the global app revision. The receipt
+returns the new revision and `mounted:false`. A stale edit conflicts; the client
+must not silently retry it over another browser's choice.
+
+`pendingBundleSelection` and `pendingModelSelection` are desired configuration.
+`bundle` and runtime reports describe applied or last-observed configuration.
+`appliedConfigurationRevision` is updated only after matching runtime readback.
+The bundled composer includes `expectedConfigurationRevision` on a genuine send.
+Revision, Stop, execution placement and original bundle authority are checked
+again after preparation waits. Reading or choosing settings never resumes a goal.
+
+Bundle previews compose declared settings without mounting either root. An
+unavailable source remains an explicit preview failure. Actual native conversion
+uses the existing writer-owned bundle transaction at input preparation, preserving
+history and retaining invalid choices. Public `bundle.switch` and `bundle.fork`
+remain explicit immediate runtime operations; they are not the bundled selector's
+save action. Active turns and unresolved configuration operations are not bypassed.
+
 ### Explicit optional preparation
 
 After discovering `session.warm` in `GET /api/actions`, a client can issue it

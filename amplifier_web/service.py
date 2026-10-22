@@ -399,6 +399,9 @@ from .configuration_recovery import definitions as configuration_recovery_defini
 ACTION_DEFINITIONS.update(configuration_recovery_definitions(schema, string))
 from .patch_placement import definitions as patch_placement_definitions
 ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
+from .next_message_configuration import definitions as next_message_definitions
+ACTION_DEFINITIONS.update(next_message_definitions(schema, string))
+ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationRevision'] = {'type': 'integer', 'minimum': 0}
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -406,7 +409,7 @@ from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 ACTION_POLICIES = {}
 for _access, _actions in {
     "caller_controlled": {
-        "conversation.send", "conversation.stop", "conversation.retry", "worker.spawn",
+        "conversation.send", "conversation.stop", "conversation.retry", "conversation.configure", "worker.spawn",
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
         *configuration_recovery_definitions(schema, string),
@@ -527,6 +530,8 @@ class AppService:
         self.runtime = runtime
         if runtime is not None and hasattr(runtime, "home"):
             runtime.home = self.data_dir
+        from .next_message_configuration import bind
+        bind(self, runtime)
         self.voice_service = None
         self.voice_visual = VoiceVisual(self)
         self.computer_visual = ComputerVisuals(self)
@@ -1723,6 +1728,8 @@ class AppService:
         self.runtime = runtime
         if runtime is not None and hasattr(runtime, "home"):
             runtime.home = self.data_dir
+        from .next_message_configuration import bind
+        bind(self, runtime)
         self.worktrees.bind_runtime()
         from .conversation_models import bind_runtime
         bind_runtime(self)
@@ -2234,7 +2241,9 @@ class AppService:
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
-        if action in {'question.answer', 'conversation.send', 'conversation.retry', 'conversation.delivery', 'worker.spawn', 'worker.message', 'worker.steer', 'worker.stop', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+        passive_configuration = action == 'bundle.preview' or (
+            action == 'runtime.control' and args.get('operation') in {'configuration.catalog', 'provider.queueSelection'})
+        if not passive_configuration and action in {'question.answer', 'conversation.send', 'conversation.retry', 'conversation.delivery', 'worker.spawn', 'worker.message', 'worker.steer', 'worker.stop', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
@@ -3163,8 +3172,14 @@ class AppService:
                 draft[:]=[row for row in draft if row['id']!=args['id']]
             elif action.startswith('question.'):
                 diagnostic_result = self.questions.dispatch(action, args, origin, client_id, pending)
+            elif action == 'conversation.configure':
+                from .next_message_configuration import save
+                diagnostic_result = save(self, args, configuration_authority)
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
+                if ('expectedConfigurationRevision' in args
+                        and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
+                    raise AppError('Next message settings changed. Review them before sending.', 409)
                 from .conversation_steering import target as steering_target
                 # A run ending before delivery must not turn this correction
                 # into new work under a policy that is awaiting replacement.
@@ -4577,6 +4592,9 @@ class AppService:
                     activity["lastEvent"] = {"tool": payload.get("tool"), "phase": payload.get("phase"), "at": event["at"]}
                 session.setdefault("runtimeEvents", []).append(event)
                 session["runtimeEvents"] = session["runtimeEvents"][-100:]
+            if kind == 'runtime.nextMessageApplied':
+                from .next_message_configuration import applied
+                applied(session, payload)
             if kind == 'runtime.modelSelectionApplied' and session.get('pendingModelSelection') == payload.get('selection'):
                 session.pop('pendingModelSelection', None)
             if (kind == 'approval.requested' or kind == 'runtime.error' or

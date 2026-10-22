@@ -259,7 +259,8 @@ class Management:
             return await self.list_bundles(args, command_id)
         if action == 'providers.list':
             return await self.list_providers(args, command_id)
-        independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'}
+        independent=(action in {'bundle.preview','configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'}
+                     or action == 'runtime.control' and args.get('operation') == 'configuration.catalog')
         try:
             if not independent and self.lock.locked():
                 await self.provider_status(action,args,command_id,'queued')
@@ -362,21 +363,9 @@ class Management:
             return current and (revision is None or revision==state.get('configurationRevision',0))
 
     async def list_bundles(self, args, command_id):
-        """Read the catalog with one start and one atomic completion snapshot.
-
-        Keep the mutation lock: a refresh must not race bundle edits. Publishing
-        each bookkeeping field separately made this inexpensive read block all
-        HTTP clients while rebuilding the same navigation seven times.
-        """
+        """Read atomic saved settings without waiting for a runtime mutation."""
         action = 'bundles.list'
-        try:
-            if self.lock.locked():
-                await self.provider_status(action, args, command_id, 'queued')
-            await self.lock.acquire()
-        except asyncio.CancelledError:
-            await self._bundle_list_transition(args, command_id, 'error',
-                error='Bundle refresh cancelled.', active=False)
-            raise
+        revision = self.service.state.get('configurationRevision', 0)
         try:
             await self._bundle_list_transition(args, command_id, 'working')
             # Uncontended async locks do not yield. Let ready clients consume
@@ -386,6 +375,8 @@ class Management:
             workspace = self.configuration_session(args)['workspace']
             result = await BundleManager(self.service.data_dir).perform(
                 action, {**args, 'workspace': workspace})
+            if revision != self.service.state.get('configurationRevision', 0):
+                raise ValueError('Bundle settings changed during discovery. Refresh the choices.')
             await self._bundle_list_transition(args, command_id, 'ready',
                 values={key: result[key] for key in ('bundles', 'registeredBundles') if key in result})
         except asyncio.CancelledError:
@@ -393,9 +384,6 @@ class Management:
             raise
         except Exception as exc:
             await self._bundle_list_transition(args, command_id, 'error', error=str(exc)[:1000])
-        finally:
-            self.lock.release()
-
     async def _bundle_list_transition(self, args, command_id, phase, *, error=None, values=None, active=True):
         async with self.service.lock:
             state = self.service.state

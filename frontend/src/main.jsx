@@ -67,7 +67,7 @@ import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
 import {request,download,visibleView} from './api';
 import {createPendingView} from './pending-view';
-import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead} from './settings-action-queue';
+import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead,isConversationChoiceRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation,isNavigationAction,usesNavigationQueue} from './conversation-navigation';
@@ -253,6 +253,7 @@ function App(){
    })().finally(()=>{referenceDraftLock.current=false;setReferencingDraft(false)});
   }
   if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
+  if(action==='conversation.send'&&args.expectedConfigurationRevision===undefined){const target=latest.current?.sessions?.find(row=>row.id===args.sessionId);args={...args,expectedConfigurationRevision:target?.nextMessageRevision||0}}
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
@@ -301,14 +302,14 @@ function App(){
   const navigation=isNavigationAction(action,args);
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
-  const defaultsRead=isDraftDefaultsRead(action,meta),catalogRead=isProviderCatalogRead(action,meta)||defaultsRead;
+  const defaultsRead=isDraftDefaultsRead(action,meta),choiceRead=isConversationChoiceRead(action,args,meta),catalogRead=isProviderCatalogRead(action,meta)||defaultsRead||choiceRead;
   // Optional plan summaries have their own exact read result; they must not
   // hold up browsing or ordered mutations while canonical files are read.
   const planRead=action==='session.plans';
-  const queue=usesNavigationQueue(action,args)?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  const queue=usesNavigationQueue(action,args)?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
-  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
+  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead&&!choiceRead?commandQueue.current:null).then(result=>{
    // Each caller owns an optimistic token even when several waiting editor
    // snapshots share the final request. Settle all callers after its receipt.
    if(pending)pendingView.current.settle(pending);

@@ -15,7 +15,8 @@ async def query(request):
         from amplifier_web.bundle_selection import inspect_replacement
         options = request['replacement']
         checked, _ = await inspect_replacement(request['home'], request['workspace'], request['sessionId'], request['bundle'],
-            selection=options.get('selection'), execution_workspace=options.get('workingDirectory'))
+            selection=options.get('selection'), execution_workspace=options.get('workingDirectory'),
+            replace_saved_selection=options.get('replaceSavedSelection', False))
         return checked
     from amplifier_web.host.config import load_config
     from amplifier_web.host.session import load_root_bundle
@@ -34,13 +35,13 @@ async def query(request):
         validate_id(identity)
         directory=sessions_dir(workspace)/identity
         metadata_path=directory/'metadata.json'
-        if metadata_path.exists():
+        if metadata_path.exists() and not request.get('desiredBundle'):
             metadata=json.loads(metadata_path.read_text())
             chosen=(metadata.get('bundle_name') or metadata.get('bundle') or chosen).removeprefix('bundle:')
         control_path=Path(request['home'])/'sessions'/identity/'control-state.json'
         if control_path.exists():selection=json.loads(control_path.read_text()).get('selection')
     _,bundle,_=await load_root_bundle(config,chosen,execution_workspace=workspace)
-    if identity:
+    if identity and not request.get('desiredBundle'):
         edited=Path(request['home'])/'sessions'/identity/'configuration.json'
         if edited.exists():
             from amplifier_web.host.session import apply_runtime_plan
