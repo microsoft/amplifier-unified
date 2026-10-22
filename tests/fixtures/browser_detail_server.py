@@ -309,6 +309,11 @@ async def main():
                     if node.get('toolCallId')=='older-legacy')
                 log_hook(aid,'tool:post',{'tool_call_id':'older-legacy',
                     'tool_name':'app_control','result':'LEGACY-RECENT-OUTPUT'},legacy['endedAt'])
+                # The synthetic runtime events above also queue diagnostic
+                # capture records. Settle them before minting the initial
+                # signed window, so setup cannot append behind its receipt.
+                await service.diagnostics.flush()
+                assert not service.diagnostics.storage_error
                 await service.event_log_view.windows.close()
                 service.event_log_view.windows=WorkWindows(service)
                 await service.event_log_view.windows.read(aid)
