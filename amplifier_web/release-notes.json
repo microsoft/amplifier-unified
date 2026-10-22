@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.211",
+      "title": "Wait safely for busy assignment capacity",
+      "changes": [
+        "Let queued worker calls wait for active calls to finish when older calls have unknown outcomes. Unknown calls keep their reservations, and existing Stop, budget and concurrency limits remain enforced.",
+        "Update automated Home, navigation, archive and mobile checks for the current shared landing layouts, including keyboard navigation and usable phone controls.",
+        "Keep the complete authored What\u2019s new history available as the release count grows, within the existing size limit."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.210",
       "title": "Keep built-in tool updates consistent with their selected sources",
       "changes": [

@@ -58,7 +58,9 @@ The same data supplies installed/offline history and GitHub release text.
 The validator already requires the current entry and a nonempty changes list,
 and rejects invalid, duplicate or future versions; it cannot judge whether the
 words cover the shipped behavior. Keep within `release_notes.py`'s bounded
-history limits; plan retention deliberately rather than silently dropping notes.
+history limits (512 entries and 256,000 UTF-8 bytes); plan retention deliberately
+before either bound is reached rather than silently dropping notes. The entry
+limit accommodates the authored backfill; the independent byte cap remains in force.
 
 ## Preparing a version change
 
