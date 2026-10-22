@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.27.1",
+      "title": "Keep update status separate from chat errors",
+      "changes": [
+        "Stop showing unrelated conversation-control errors on the Updates page. Real update failures, active-work blockers and restart controls remain visible and unchanged."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.27.0",
       "title": "Quote passages directly and build clearer replies",
       "changes": [
