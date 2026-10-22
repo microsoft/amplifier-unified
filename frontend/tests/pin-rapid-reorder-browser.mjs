@@ -108,6 +108,18 @@ try{
  await grip(page,raceSource).focus();await page.keyboard.press('ArrowDown');
  expected=raceFinal;await settled(expected,raceSource);
  checks.push({gesture:'keyboard',concurrentOrder:true,stalePageBlocked:true,order:expected});
+ // Pending state alone (same IDs/order key) must cancel a held pointer preview.
+ const dragCount=commands.length,dragSource=expected[1];
+ const dragFrom=await grip(page,dragSource).boundingBox(),dragTo=await pinned(page).locator(`[data-order-id="${expected[0]}"]`).boundingBox();
+ await page.mouse.move(dragFrom.x+dragFrom.width/2,dragFrom.y+dragFrom.height/2);await page.mouse.down();
+ await page.mouse.move(dragFrom.x+dragFrom.width/2,dragTo.y+dragTo.height/2,{steps:3});
+ await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(1);
+ await control({holdPinsFor:clientId,invalidatePins:true});
+ await expect.poll(async()=>(await shellPins()).pending?.status).toBe('pending');
+ await expect(pinned(page).locator('[data-reordering=true]')).toHaveCount(0);
+ await page.mouse.up();assert.equal(commands.length,dragCount);
+ await control({holdPinsFor:null});await settled(expected,dragSource);
+ checks.push({heldDragCancelledOnPending:true,mutations:0});
  // Hold only the projected page. Receipt/context can arrive with old rows;
  // releasing the page wakes the existing owner at the same app revision.
  const heldPageOrder=expected;
@@ -153,9 +165,25 @@ try{
  checks.push({gesture:'keyboard',source:next,order:expected});
  // Repeated explicit same-order intent is semantically idempotent.
  await action('navigation.pinOrder',{ids:expected});await settled(expected,next);
+ // A saved order with a genuinely missing page stays honest, and an explicit
+ // bounded read repairs display without a reconnect or replaying the mutation.
+ await control({holdPinsFor:clientId});
+ const missingSource=expected[1],missingCount=commands.length;
+ expected=expectedMove(expected,missingSource,expected[0]);
+ await grip(page,missingSource).focus();await page.keyboard.press('ArrowUp');
+ await expect.poll(async()=>(await shellPins()).pending?.status).toBe('pending');
+ await expect(pinned(page).getByRole('button',{name:'Refresh pinned list',exact:true})).toBeVisible({timeout:15000});
+ assert.equal(commands.length,missingCount+1);
+ const readResponse=page.waitForResponse(response=>response.url().endsWith('/api/shell/resources')&&response.request().method()==='POST');
+ await pinned(page).getByRole('button',{name:'Refresh pinned list',exact:true}).click();
+ await readResponse;
+ await expect(pinned(page).getByRole('button',{name:'Reading pins…',exact:true})).toBeVisible();
+ await control({holdPinsFor:null});
+ await settled(expected,missingSource);assert.equal(commands.length,missingCount+1);
+ checks.push({displayReadRecovery:true,coldPageAfterReadResponse:true,reconnect:false,replayed:false,order:expected});
  assert.deepEqual([...new Set(expected)].sort(),[...start].sort());
  assert.equal((await state()).selectedSessionId,selection);await expect(composer).toHaveDraft('Keep this draft through adjacent pin moves');
- await mkdir(output,{recursive:true});await page.screenshot({path:output+'/pin-rapid-desktop.png'});
+ await mkdir(output,{recursive:true});await page.mouse.move(1400,990);await page.keyboard.press('Escape');await page.screenshot({path:output+'/pin-rapid-desktop.png'});
  await page.reload();await expect.poll(()=>order(page)).toEqual(expected);await expect.poll(()=>order(other)).toEqual(expected);
  await expect(composer).toHaveDraft('Keep this draft through adjacent pin moves');
  await page.setViewportSize({width:390,height:844});
@@ -164,7 +192,23 @@ try{
  const narrowSource=expected[1],narrowTarget=expected[0];expected=expectedMove(expected,narrowSource,narrowTarget);
  await pointerMove(narrowSource,narrowTarget);await settled(expected,narrowSource);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- await page.screenshot({path:output+'/pin-rapid-narrow.png'});
+ await page.mouse.move(380,830);await page.screenshot({path:output+'/pin-rapid-narrow.png'});
+ // Lose a mutation's final HTTP acknowledgment after the server commits it.
+ // The UI must not invent a saved receipt or retry the command.
+ let lost=false;
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(!lost&&body.action==='shell.command'&&body.args.action==='navigation.pinOrder'){
+   lost=true;await route.fetch();await route.abort('failed');
+  }else await route.continue();
+ });
+ const lostCount=commands.length,lostSource=expected[1];expected=expectedMove(expected,lostSource,expected[0]);
+ await grip(page,lostSource).focus();await page.keyboard.press('ArrowUp');
+ await expect(alerts()).toHaveCount(1);assert.doesNotMatch(await alerts().innerText(),/Pin order was saved/);
+ await expect.poll(async()=>(await state()).pinnedItemIds).toEqual(expected);
+ assert.equal(commands.length,lostCount+1);await page.unroute('**/api/actions');
+ await expect.poll(()=>order(other)).toEqual(expected);
+ checks.push({lostAcknowledgment:true,unknownReported:true,replayed:false,order:expected});
  assert.deepEqual((await metrics()).runtimeCalls,[]);assert.deepEqual(errors,[]);
  const result={status:'passed',applicationModule:boot.applicationModule,checks,order:expected,commandCount:commands.length,runtimeCalls:[],limits:'Synthetic source host; no inference or native desktop acceptance.'};
  await writeFile(output+'/pin-rapid-result.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

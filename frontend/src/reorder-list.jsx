@@ -38,8 +38,8 @@ export function ReorderList({items,ids,onChange,busy=false,renderItem,className=
   if(current.active&&!cancel&&current.valid)void commit(current.preview,current.id);else{setPreview(null);announce('Reorder cancelled.');focus(current.id)}
  };
  useEffect(()=>{if(typeof document==='undefined')return;const key=e=>{if(e.key==='Escape'&&drag.current){e.preventDefault();e.stopPropagation();finish(true)}};document.addEventListener('keydown',key,true);return()=>document.removeEventListener('keydown',key,true)});
- // A concurrent pin/unpin or external order change invalidates a held drag.
- useEffect(()=>{if(drag.current&&(drag.current.original.join('\0')!==ids.join('\0')||drag.current.orderKey!==orderKey))finish(true)},[ids.join('\0'),orderKey]);
+ // A concurrent pin/unpin, stale page or external order change invalidates a held drag.
+ useEffect(()=>{if(drag.current&&(busy||drag.current.original.join('\0')!==ids.join('\0')||drag.current.orderKey!==orderKey))finish(true)},[ids.join('\0'),orderKey,busy]);
  const down=(event,id)=>{
   if(busy||pending.current||event.button!==0)return;event.preventDefault();
   document.dispatchEvent(new CustomEvent('amplifier-navigation-details',{detail:'reordering'}));

@@ -16,9 +16,9 @@ async function fixture(dispatch=async()=>({accepted:true}),initial={}){
  const model={host,state:current,view:{},act:(...args)=>{calls.push(args);return dispatch(...args)},setDraft(){},choose(){}};
  let root;const element=()=>React.createElement(PinnedItems,{page:current.pinnedNavigation,model,now:0});
  await act(async()=>{root=create(element())});
- const update=async patch=>{await act(async()=>{current={...current,...patch};model.state=current;for(const fn of [...listeners])fn();root.update(element())})};
+ const update=async(patch,render=true)=>{await act(async()=>{current={...current,...patch};if(render)model.state=current;for(const fn of [...listeners])fn();if(render)root.update(element())})};
  const key=async(id,key)=>{await act(async()=>root.root.findByProps({'aria-label':'Reorder '+id}).props.onKeyDown({key,preventDefault(){}}))};
- return {root,calls,listeners,update,key,get current(){return current},order:()=>root.root.findAll(node=>node.type==='div'&&node.props['data-order-id']).map(node=>node.props['data-order-id']),busy:id=>root.root.findByProps({'aria-label':'Reorder '+id}).props['aria-disabled'],close:async()=>act(async()=>root.unmount())};
+ return {root,host,calls,listeners,update,key,get current(){return current},order:()=>root.root.findAll(node=>node.type==='div'&&node.props['data-order-id']).map(node=>node.props['data-order-id']),busy:id=>root.root.findByProps({'aria-label':'Reorder '+id}).props['aria-disabled'],close:async()=>act(async()=>root.unmount())};
 }
 test('accepted command retains preview and blocks a second reorder until its exact query page arrives',async()=>{
  const f=await fixture();try{
@@ -43,7 +43,7 @@ test('a concurrent authoritative order overrides intent without replay or a stuc
 test('query failure releases busy state with a read error and never replays the saved command',async()=>{
  const f=await fixture();try{
   await f.key('session:b','ArrowUp');await f.update({pinnedItemIds:expected,navigationResourcePending:{pinnedNavigation:{status:'retry'}}});
-  assert.equal(f.listeners.size,0);assert.equal(f.busy('session:b'),undefined);assert.equal(f.calls.length,1);assert.match(JSON.stringify(f.root.toJSON()),/display could not be refreshed/);
+  assert.equal(f.listeners.size,0);assert.equal(f.busy('session:b'),true);assert.equal(f.calls.length,1);assert.match(JSON.stringify(f.root.toJSON()),/display could not be refreshed/);
  }finally{await f.close()}
 });
 test('changing the page scope cancels the old order wait',async()=>{
@@ -153,4 +153,99 @@ test('a different item cannot use a stale displayed page while a concurrent orde
   assert.deepEqual(f.order(),final);assert.equal(f.listeners.size,0);
   assert.doesNotMatch(JSON.stringify(f.root.toJSON()),/Reconnect/);
  }finally{await f.close()}
+});
+
+test('publication before React render cannot dispatch a move using an obsolete page',async()=>{
+ const f=await fixture();try{
+  await f.update({pinnedItemIds:expected,navigationResourcePending:{pinnedNavigation:{status:'pending'}}},false);
+  await f.key('session:b','ArrowUp');
+  assert.equal(f.calls.length,0);assert.match(JSON.stringify(f.root.toJSON()),/pinned list is updating/);
+ }finally{await f.close()}
+});
+
+for(const change of [{navigationResources:[]},{navigationResourceRetained:{pinnedNavigation:{}}},{navigationResourceScope:['replacement-host']}])
+test('lost resource coverage or scope cannot falsely settle a saved order '+JSON.stringify(change),async()=>{
+ const f=await fixture();try{
+  await f.key('session:b','ArrowUp');
+  await f.update({pinnedItemIds:expected,pinnedNavigation:{...f.current.pinnedNavigation,items:expected.map(item)},...change});
+  if(change.navigationResourceScope)assert.match(JSON.stringify(f.root.toJSON()),/Pinned view changed/);
+  else{assert.equal(f.busy('session:b'),true);assert.equal(f.listeners.size,1)}
+  assert.equal(f.calls.length,1);
+ }finally{await f.close()}
+});
+
+const refreshButton=f=>f.root.root.findAll(node=>node.type==='button'&&node.props.children==='Refresh pinned list')[0];
+test('saved display timeout offers one authoritative read, without replay or reconnect',async t=>{
+ const f=await fixture();let reads=0;
+ f.host.refreshResources=async()=>{reads++;await f.update({pinnedItemIds:expected,pinnedNavigation:{...f.current.pinnedNavigation,items:expected.map(item)},navigationResourcePending:{}})};
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  await f.key('session:b','ArrowUp');await act(async()=>t.mock.timers.tick(10001));
+  assert.equal(reads,0);assert.equal(f.calls.length,1);assert.ok(refreshButton(f));
+  await act(async()=>refreshButton(f).props.onClick());
+  assert.equal(reads,1);assert.equal(f.calls.length,1);assert.equal(f.listeners.size,0);
+  assert.deepEqual(f.order(),expected);assert.equal(f.root.root.findAllByProps({role:'alert'}).length,0);
+  await f.key('session:a','ArrowUp');assert.equal(f.calls.length,2);
+  await f.update({pinnedItemIds:ids,pinnedNavigation:{...f.current.pinnedNavigation,items:ids.map(item)}});
+  assert.deepEqual(f.order(),ids);
+ }finally{t.mock.timers.reset();await f.close()}
+});
+
+test('a late failed read from A cannot overwrite a newer B move',async t=>{
+ const f=await fixture();let rejectRead,readPromise;
+ f.host.refreshResources=()=>new Promise((_,reject)=>{rejectRead=reject});
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  await f.key('session:b','ArrowUp');await act(async()=>t.mock.timers.tick(10001));
+  await act(async()=>{readPromise=refreshButton(f).props.onClick()});
+  await f.update({pinnedItemIds:expected,pinnedNavigation:{...f.current.pinnedNavigation,items:expected.map(item)}});
+  await f.key('session:a','ArrowUp');
+  await f.update({pinnedItemIds:ids,pinnedNavigation:{...f.current.pinnedNavigation,items:ids.map(item)}});
+  await act(async()=>{rejectRead(Error('late old read failure'));await readPromise});
+  assert.equal(f.calls.length,2);assert.deepEqual(f.order(),ids);
+  assert.equal(f.root.root.findAllByProps({role:'alert'}).length,0);assert.equal(f.listeners.size,0);
+ }finally{t.mock.timers.reset();await f.close()}
+});
+
+for(const outcome of ['pending','rejected','never'])test(`display reconciliation ${outcome} stays honest and bounded`,async t=>{
+ const f=await fixture();let reads=0;
+ f.host.refreshResources=async()=>{reads++;if(outcome==='rejected')throw Error('Read unavailable');if(outcome==='never')await new Promise(()=>{});};
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  await f.key('session:b','ArrowUp');await f.update({pinnedItemIds:expected,navigationResourcePending:{pinnedNavigation:{status:'pending'}}});
+  await act(async()=>t.mock.timers.tick(10001));
+  let read;await act(async()=>{read=refreshButton(f).props.onClick()});
+  if(outcome!=='rejected')await act(async()=>t.mock.timers.tick(10001));
+  await read;assert.equal(reads,1);assert.equal(f.calls.length,1);assert.equal(f.listeners.size,0);
+  assert.match(JSON.stringify(f.root.toJSON()),outcome==='rejected'?/Read unavailable/:/No pin command was repeated/);
+  assert.ok(refreshButton(f));assert.equal(f.busy('session:b'),true);
+ }finally{t.mock.timers.reset();await f.close()}
+});
+
+test('refresh waits for a cold page after its HTTP response without a second read',async t=>{
+ const f=await fixture();let reads=0,read;
+ f.host.refreshResources=async()=>{reads++};
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  await f.key('session:b','ArrowUp');await f.update({pinnedItemIds:expected,navigationResourcePending:{pinnedNavigation:{status:'pending'}}});
+  await act(async()=>t.mock.timers.tick(10001));await act(async()=>{read=refreshButton(f).props.onClick()});
+  assert.equal(reads,1);assert.equal(f.listeners.size,1);assert.match(JSON.stringify(f.root.toJSON()),/Reading pins/);
+  await f.update({pinnedNavigation:{...f.current.pinnedNavigation,items:expected.map(item)},navigationResourcePending:{}});
+  await read;assert.equal(reads,1);assert.equal(f.calls.length,1);assert.equal(f.listeners.size,0);
+  assert.equal(f.root.root.findAllByProps({role:'alert'}).length,0);
+ }finally{t.mock.timers.reset();await f.close()}
+});
+
+test('a delayed pre-save read cannot confirm an old coherent order',async t=>{
+ const f=await fixture();let release,read;
+ f.host.refreshResources=()=>new Promise(resolve=>{release=resolve});
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  await f.key('session:b','ArrowUp');await act(async()=>t.mock.timers.tick(10001));
+  await act(async()=>{read=refreshButton(f).props.onClick()});
+  await act(async()=>release(f.current));
+  assert.equal(f.listeners.size,1);assert.deepEqual(f.order(),ids);
+  await act(async()=>t.mock.timers.tick(10001));await read;
+  assert.match(JSON.stringify(f.root.toJSON()),/Could not confirm the saved pin order/);assert.equal(f.calls.length,1);
+ }finally{t.mock.timers.reset();await f.close()}
 });

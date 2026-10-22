@@ -205,7 +205,10 @@ async def main():
                 assert identity is None or identity in service.clients.records
                 previous = faults['holdPinsClient']
                 faults['holdPinsClient'] = identity
-                if identity is None and previous is not None:
+                if identity is not None and args.get('invalidatePins'):
+                    service.shell.resources.invalidate({'pinnedItemIds'})
+                    service.shell.notify(identity)
+                if identity is None and previous is not None and not args.get('quietPinRelease'):
                     # Wake the existing resource owner, without changing the
                     # app revision or inventing a completed projection.
                     service.shell.notify(previous)
