@@ -190,8 +190,8 @@ try{
  await page.evaluate(()=>window.setSystemTheme(false));
  await reopen;
  await frame.locator('body[data-theme="light"]').waitFor();
- // Current Canvas controls expand beside the mounted live view.
- await page.getByRole('button',{name:'Canvas options',exact:true}).click();
+ // Current Canvas details expand beside the mounted live view.
+ await page.getByRole('button',{name:'Canvas details',exact:true}).click();
  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
  await page.screenshot({path:join(evidence,'canvas.png')});
  // A saved view cannot silently acquire a replacement server configuration.
