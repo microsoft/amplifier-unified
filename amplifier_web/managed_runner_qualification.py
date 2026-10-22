@@ -2,7 +2,8 @@
 
 Each external effect is journalled before dispatch. Re-entry observes the exact
 owner/job; it never creates another guest or reruns an uncertain test. Capacity
-uses the same backend and physical-host ledgers as user checks.
+uses the same backend and physical-host ledgers as user checks, independently
+of ordinary environment-count quotas.
 """
 from __future__ import annotations
 
@@ -38,7 +39,8 @@ def save(path, record, **changes):
 
 
 def invoke(config, app, row, action, args):
-    return environments.invoke(capacity.apply(app, config), app.data_dir, row, action, args, _qualification=True)
+    return environments.invoke(capacity.apply(app, config, _qualification=True),
+                               app.data_dir, row, action, args, _qualification=True)
 
 
 def source(folder):
@@ -149,7 +151,7 @@ def advance(app, path, record, config):
             {'sessionId': 'runner-update-' + record['id'], 'principal': 'host-updater'},
             origin, environments.config_key(config), record['id'], config['installationId'], config,
             resource_request=profiles.freeze('linux-python', {'cpus': 1, 'memoryMiB': 512}),
-            timing_request=profiles.freeze_timing('linux-python'))
+            timing_request=profiles.freeze_timing('linux-python'), _qualification=True)
         save(path, record, resourceId=row['id'], probeState='prepare')
     row = environments.get(app.data_dir, 'runner-update-' + record['id'], record['resourceId'])
     if row['backendKey'] != environments.config_key(config):
@@ -173,7 +175,7 @@ def advance(app, path, record, config):
         save(path, record, probeState='capacity', hostTarget=result.get('hostTarget'))
         return 'waiting'
     if state == 'capacity':
-        observed = environments.capacity(app, config)
+        observed = environments.capacity(app, config, _qualification=True)
         if not observed.get('available'):
             return 'waiting'
         target = record.get('hostTarget') or {}

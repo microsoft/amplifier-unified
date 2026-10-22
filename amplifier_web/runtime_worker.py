@@ -648,7 +648,8 @@ class Worker:
                 replacement = None
             from amplifier_web.support_diagnostics import runtime_versions
             public["support"] = runtime_versions()
-            publish({"type": "runtime.ready", "report": public})
+            publish({"type": "runtime.ready", "report": public,
+                     "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id}})
         except asyncio.CancelledError:
             raise
         except Exception as exc:

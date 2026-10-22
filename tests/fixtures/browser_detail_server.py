@@ -303,6 +303,18 @@ async def main():
                     row['execution']['nodes'].append({'id': 'earlier-' + str(i), 'kind': 'tool',
                         'turnId': 'recordings', 'label': 'Earlier check', 'phase': 'completed',
                         'startedAt': now - 8, 'endedAt': now - 7})
+                if args.get('retention'):
+                    row['execution']['nodes'] = []
+                    emitted_tools=[]
+                    tools=LoggedEvents(aid,emitted_tools.append);tools.turn_id='recordings'
+                    arguments={'code':'// retained tool input\n'*100+'TOOL-INPUT-END'}
+                    for event in ('tool:pre','tool:post'):
+                        data={'tool_call_id':'retained-tool','tool_name':'tool_exec','tool_input':arguments}
+                        if event=='tool:post':
+                            data['result']={'success':True,'output':'retained output\n'*100+'TOOL-OUTPUT-END'}
+                        tools.hook(aid,event,data)
+                    for event in emitted_tools:
+                        kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
                 hooks, capabilities, emitted = HookRegistry(), {}, []
                 coordinator = SimpleNamespace(hooks=hooks, get_capability=capabilities.get,
                     register_capability=lambda key, value: capabilities.update({key: value}))
@@ -350,6 +362,13 @@ async def main():
                 def no_complete_projection(*args, **kwargs):
                     raise AssertionError('This fixture must use bounded event windows only')
                 service.event_log_view.read = no_complete_projection
+            elif op == 'append-retention-records':
+                count=args.get('count',1)
+                assert type(count) is int and 0<count<=201
+                for index in range(count):
+                    log_hook(aid,'tool:post',{'tool_call_id':f'unrelated-{time.time_ns()}-{index}',
+                        'tool_name':'Newer saved work','result':{'success':True}})
+                await service.event_log_view.windows.read(aid)
             elif op == 'flush-provider-records':
                 # Only canonical bytes arrive: no execution event can wake an
                 # already open completed call on behalf of the product.
@@ -483,6 +502,22 @@ async def main():
                 for event in emitted:
                     kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
                 await service.on_runtime_event('execution.event',{'id':'legacy','kind':'tool','turnId':'inspect','label':'legacy.tool','phase':'completed','summary':'Tool completed. Expand any delegated actions below for their progress and results.'})
+            elif op=='inspection-previews':
+                from amplifier_web.runtime import normalize_event
+                emitted=[];events=LoggedEvents(aid,emitted.append);events.turn_id='inspect'
+                examples=json.loads((Path(__file__).parent/'tool-preview-cases.json').read_text())
+                examples += [
+                    {'name':'long-preview','tool':'custom_lookup','input':{'query':'Find the project schedule and next steps. '*150+'QUERY-END'}},
+                    {'name':'nested-failure','tool':'tool_exec','input':{'code':'const result = await tools.inspect(); text(result);'},
+                     'result':{'success':False,'error':{'message':'One or more nested calls did not confirm success'},'output':json.dumps({'error':{'code':'nested_call_failed','message':'One or more nested calls did not confirm success'},'calls':[{'name':'inspect','status':'unknown'}],'notes':'retained detail '*1200+'RESULT-END'},separators=(',',':'))}},
+                ]
+                for example in examples:
+                    identity='preview-'+example['name'];name=example['tool'];arguments=example['input']
+                    events.hook(aid,'tool:pre',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments})
+                    events.hook(aid,'tool:post',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments,
+                        'result':example.get('result',{'success':True,'output':{'matched':3,'next':None}})})
+                for event in emitted:
+                    kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
             elif op=='inspection-finish':
                 now=time.time()
                 model={**service.fixture_inspection_model,'revision':2,'phase':'completed','endedAt':now,

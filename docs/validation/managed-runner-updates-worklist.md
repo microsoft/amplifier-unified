@@ -49,6 +49,31 @@ passive availability checks return a truthful not-checked state without POSIX
 file calls. Linux and WSL behavior is unchanged. macOS and native Windows backend
 lifecycle qualification are not claimed.
 
+Runner qualification is independent of the ordered app/component sequence, not
+just its availability checks. A capacity wait or unknown runner result must keep
+its exact owned attempt while manual/automatic app installation, restart
+continuation, and included/other component updates proceed through their normal
+guards. A late runner result must not overwrite that sequence's phase, errors or
+inventory. Already-owned runner selections are excluded from fresh component
+inventory to prevent duplicate staging. Ordinary Smart Tool batches retain their
+existing idle gate. The maintained `smart-tool-updates` browser scenario covers
+the visible newer app action and release notes during a runner wait, reload,
+retained runner receipt, and the app's subsequent idle wait on narrow/desktop
+clients. Composed backend regressions cover both automatic/manual admission,
+continuation after manager reload and actual local component promotion.
+The refresh journey also holds a runner observation in flight: one click must
+remain queued and discover the new app after that observation finishes. Idle
+notifications must not continuously wake a capacity-only runner; ordinary
+tool, app and component idle wakeups remain covered separately.
+
+Qualification does not consume ordinary environment-count or retained-owner
+quotas. Both the core probe and private Incus engine probe use their existing
+exact update owner and physical-host reservation, with count ceilings disabled
+only for that private admission. Storage thresholds, memory/CPU pressure,
+reservation accounting, immutable backend identity and unknown-effect recovery
+remain mandatory. Explicit ordinary-work policy is neither changed nor bypassed
+by a public action parameter.
+
 Selection changes cancel future qualification effects and reconcile only the
 original owner. Unknown start/cleanup results retain that owner without replay.
 Code retirement is limited to purpose-installed candidates no longer selected,

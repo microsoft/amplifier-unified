@@ -62,6 +62,7 @@
     {"id": "execution-inspection", "command": ["node", "tests/execution-inspection-browser.mjs"]},
     {"id": "execution-actions", "command": ["node", "tests/execution-actions-browser.mjs"]},
     {"id": "tool-details", "command": ["node", "tests/tool-details-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/tool-details"}},
+    {"id": "tool-previews", "command": ["node", "tests/tool-previews-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/tool-previews"}},
     {"id": "canonical-work", "command": ["node", "tests/canonical-work-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/canonical-work"}},
     {"id": "interim-replies", "command": ["node", "tests/interim-replies-browser.mjs"]},
     {"id": "tool-outcomes", "command": ["node", "tests/tool-outcomes-browser.mjs"]},

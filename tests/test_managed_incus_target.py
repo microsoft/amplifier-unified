@@ -216,6 +216,37 @@ def test_private_candidate_cannot_be_used_by_another_owner_or_public_json(engine
         controller.dispatch({**req, '_engine_owner': record['owner']})
 
 
+def test_engine_qualification_uses_resources_instead_of_ordinary_count_quotas(engine, monkeypatch):
+    identity = started(engine)
+    record = controller.read(engine.path / 'update.json')
+    base = controller.state()
+    current = controller.backend_policy.snapshot(base, record['backendIdentity'], record['candidate'])
+    limits = {'maxRunning': 1, 'maxInstances': 1, 'minFreeBytes': 8 * 1024**3}
+    controller.backend_policy.save(base, record['backendIdentity'], record['candidate'], current['revision'], limits)
+    original = target.worker.execute_call
+    observed = []
+    def effect(payload, **kwargs):
+        if payload['action'] == 'start':
+            observed.append(payload['incus'])
+            assert payload['incus']['maxRunning'] == payload['incus']['maxInstances'] == 0
+            assert payload['incus']['minFreeBytes'] == limits['minFreeBytes']
+            assert host.snapshot()['reserved']['count'] == 1
+        return original(payload, **kwargs)
+    monkeypatch.setattr(target.worker, 'execute_call', effect)
+    assert target.advance(identity)['progressed']
+    assert observed
+    assert controller.backend_policy.snapshot(base, record['backendIdentity'], record['candidate'])['limits'] == limits
+
+
+def test_engine_qualification_still_waits_for_real_memory_pressure(engine):
+    identity = started(engine)
+    current = host.snapshot()
+    host.save(current['revision'], {'minAvailableMemoryMiB': 30000})
+    assert target.advance(identity)['waiting'] == 'waiting'
+    assert engine.effects == []
+    assert host.snapshot()['reserved']['count'] == 0
+
+
 def test_wrong_observation_never_releases_uncertain_owner(engine, monkeypatch):
     identity = started(engine)
     target.advance(identity)

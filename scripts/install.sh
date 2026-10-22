@@ -29,10 +29,29 @@ anonymous_downloads() {
   export GIT_CONFIG_KEY_3=core.askPass GIT_CONFIG_VALUE_3=''
 }
 if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then anonymous_downloads; fi
-case "$(uname -s)" in Darwin|Linux) ;; *) echo 'Use macOS, Linux, or a Linux distribution in WSL with systemd enabled.' >&2; exit 1 ;; esac
+install_os="$(uname -s)"
+case "$install_os" in Darwin|Linux) ;; *) echo 'Use macOS, Linux, or a Linux distribution in WSL with systemd enabled.' >&2; exit 1 ;; esac
 if [ "$(id -u)" = 0 ]; then echo 'Run this as your regular user, without sudo.' >&2; exit 1; fi
-command -v curl >/dev/null || { echo 'Install curl, then run this command again.' >&2; exit 1; }
-command -v git >/dev/null && git --version >/dev/null 2>&1 || { echo 'Git is needed for Amplifier components. On macOS, run xcode-select --install, then try again.' >&2; exit 1; }
+missing_tools=()
+for install_tool in curl git; do
+  if ! command -v "$install_tool" >/dev/null 2>&1 || ! "$install_tool" --version >/dev/null 2>&1; then
+    missing_tools+=("$install_tool")
+  fi
+done
+if [ "${#missing_tools[@]}" -gt 0 ]; then
+  echo "Before installing Amplifier, this computer needs: ${missing_tools[*]}." >&2
+  if [ "$install_os" = Darwin ]; then
+    echo 'Install the Apple command line tools: xcode-select --install' >&2
+  elif command -v apt-get >/dev/null 2>&1; then
+    echo 'On Ubuntu/Debian, run: sudo apt-get update && sudo apt-get install -y curl git ca-certificates' >&2
+  elif command -v dnf >/dev/null 2>&1; then
+    echo 'Run: sudo dnf install curl git ca-certificates' >&2
+  else
+    echo 'Install curl, Git, and CA certificates with your Linux package manager.' >&2
+  fi
+  echo 'Then run the Amplifier installer again as your normal user, without sudo.' >&2
+  exit 1
+fi
 if [ "$version" != latest ] && ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo 'Choose a stable release number, such as 0.20.101.' >&2; exit 2; fi
 install_work="$(mktemp -d "${TMPDIR:-/tmp}/amplifier-install.XXXXXX")"
 install_log="$(mktemp "${TMPDIR:-/tmp}/amplifier-install-log.XXXXXX")"
@@ -44,10 +63,21 @@ run() {
 echo 'Preparing Amplifier…'
 if command -v uv >/dev/null 2>&1; then
   uv_command="$(command -v uv)"
+elif [ -x "$HOME/.local/bin/uv" ]; then
+  uv_command="$HOME/.local/bin/uv"
+elif [ -x "$HOME/.cargo/bin/uv" ]; then
+  uv_command="$HOME/.cargo/bin/uv"
 else
   run curl --proto '=https' --tlsv1.2 -fsSL https://astral.sh/uv/install.sh -o "$install_work/uv.sh"
   run env UV_INSTALL_DIR="$HOME/.local/bin" UV_NO_MODIFY_PATH=1 sh "$install_work/uv.sh"
   uv_command="$HOME/.local/bin/uv"
+fi
+# UV_NO_MODIFY_PATH deliberately avoids shell startup edits. The launcher and
+# its generated service must nevertheless inherit the helper's lexical path.
+export PATH="$(dirname "$uv_command"):$PATH"
+if ! run "$uv_command" --version; then
+  echo 'Amplifier could not run its setup helper (uv). Review the installation log before retrying.' >&2
+  exit 1
 fi
 release_base=https://github.com/microsoft/amplifier-unified/releases
 if [ "$version" = latest ]; then
@@ -71,6 +101,7 @@ if ! run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$whee
    run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel")
 fi
 tool_bin="$("$uv_command" tool dir --bin)"
+export PATH="$tool_bin:$PATH"
 echo 'Starting your service…'
 if $no_open; then
   run "$tool_bin/amplifier-unified" --no-open
