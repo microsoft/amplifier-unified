@@ -15,6 +15,10 @@ on:
         description: Only attachment consumption, adjacent host contracts and the production build
         type: boolean
         default: false
+      multi_quote:
+        description: Only fixed multi-quote source, negative-control and installed-wheel checks
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -37,7 +41,11 @@ jobs:
       - name: Reject mixed attachment selections
         if: ${{ inputs.attachment_consumption && inputs.app004_qualification }}
         run: exit 1
+      - name: Reject mixed multi-quote selections
+        if: ${{ inputs.multi_quote && (inputs.attachment_consumption || inputs.app004_qualification || inputs.mcp_boundary) }}
+        run: exit 1
       - name: Record intended coverage before dependency setup
+        if: ${{ !inputs.multi_quote }}
         run: >-
           python scripts/browser_check_runner.py
           --plan frontend/tests/browser-checks.json
@@ -111,6 +119,7 @@ jobs:
           set -o pipefail
           node --test frontend/tests/connection-notice.test.mjs 2>&1 | tee output/browser-checks/attachment-client.tap
       - name: Run all extended browser scenarios serially
+        if: ${{ !inputs.multi_quote }}
         run: >-
           uv run --no-sync python scripts/browser_check_runner.py
           --plan frontend/tests/browser-checks.json
@@ -118,6 +127,9 @@ jobs:
           --budget-seconds 1500
           ${{ inputs.app004_qualification && '--app004-qualification' || '' }}
           ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
+      - name: Run fixed multi-quote source and installed proof
+        if: ${{ inputs.multi_quote }}
+        run: uv run --no-sync python scripts/multi_quote_checks.py --output output/multi-quote --installed
       - name: Preserve failed attachment contracts
         if: ${{ always() && inputs.attachment_consumption && (steps.attachment-contracts.outcome != 'success' || steps.attachment-client-contracts.outcome != 'success') }}
         run: exit 1
@@ -132,6 +144,7 @@ jobs:
             output/state-transport-browser/
             output/scoped-navigation/
             output/selected-context/
+            output/multi-quote/
           if-no-files-found: warn
   mcp-boundary:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary }}
@@ -148,7 +161,7 @@ jobs:
           echo 'MCP boundary and APP004 qualification are separate selections; neither proof was run.'
           exit 1
       - name: Reject mixed MCP and attachment selection
-        if: ${{ inputs.attachment_consumption }}
+        if: ${{ inputs.attachment_consumption || inputs.multi_quote }}
         run: exit 1
       - name: Record the fixed proof before setup
         run: |

@@ -22,8 +22,10 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--installed', action='store_true')
     args = parser.parse_args()
-    if ROOT != Path('/workspace') or os.environ.get('UV_OFFLINE') != '1':
-        raise SystemExit('Run only in the owned offline managed guest; never on the host.')
+    managed = ROOT == Path('/workspace') and os.environ.get('UV_OFFLINE') == '1'
+    hosted = os.environ.get('GITHUB_ACTIONS') == 'true' and ROOT == Path(os.environ.get('GITHUB_WORKSPACE', ''))
+    if not (managed or hosted):
+        raise SystemExit('Run only in the owned managed guest or the fixed GitHub workflow; never on the host.')
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     results = []
@@ -51,7 +53,7 @@ def main():
 
     # Managed source exports deliberately omit .git. The host snapshot receipt
     # supplies commit/tree identity; this manifest measures actual guest bytes.
-    excluded = {'.git', '.venv', 'node_modules', '__pycache__', '.pytest_cache'}
+    excluded = {'.git', '.venv', 'node_modules', '__pycache__', '.pytest_cache', 'output'}
     source = {}
     for folder, dirs, files in os.walk(ROOT):
         dirs[:] = [name for name in dirs if name not in excluded]
@@ -92,12 +94,21 @@ def main():
     if build == 0:
         run('source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'], env=browser_env)
     if args.installed and build == 0:
-        wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', '--offline', '--out-dir', str(output / 'wheel')])
+        wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', *(['--offline'] if managed else []), '--out-dir', str(output / 'wheel')])
         if wheel_code == 0:
             wheel, = (output / 'wheel').glob('*.whl')
-            outside = output / 'installed'; outside.mkdir()
+            outside = Path(os.environ.get('RUNNER_TEMP', '/artifacts')) / ('multi-quote-installed-' + output.name)
+            outside.mkdir()
             python = outside / 'venv/bin/python'
-            run('installed-venv', ['uv', 'venv', '--python', sys.executable, '--system-site-packages', str(outside / 'venv')])
+            run('installed-venv', ['uv', 'venv', '--python', sys.executable, str(outside / 'venv')])
+            exported, _ = run('locked-dependency-export', ['uv', 'export', '--locked', '--no-dev',
+                '--no-emit-project', '--format', 'requirements-txt', '--output-file', str(outside / 'dependencies.txt')])
+            if exported:
+                return 1
+            dependencies, _ = run('installed-dependencies', ['uv', 'pip', 'install', '--python', str(python),
+                '--requirement', str(outside / 'dependencies.txt')])
+            if dependencies:
+                return 1
             install, _ = run('wheel-install', ['uv', 'pip', 'install', '--python', str(python), '--no-deps', '--reinstall-package', 'amplifier-unified', str(wheel)])
             if install == 0:
                 expected = {}
