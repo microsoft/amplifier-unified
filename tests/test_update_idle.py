@@ -194,9 +194,9 @@ async def test_ready_without_runtime_operation_api_is_idle(prepared, runtime):
         service.runtime = runtime
         service._session()['status'] = 'ready'
         assert not manager.busy()
-        service._session()['execution'] = {'turns': [{'phase': 'completed'}]}
+        service._session()['execution'] = {'turns': [{'id': 'completed-turn', 'phase': 'completed'}]}
         assert not manager.busy()
-        service._session()['execution']['turns'].append({'phase': 'running'})
+        service._session()['execution']['turns'].append({'id': 'running-turn', 'phase': 'running'})
         assert manager.busy()
     finally:
         service.runtime = original
