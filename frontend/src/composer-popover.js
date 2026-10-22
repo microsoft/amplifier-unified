@@ -7,7 +7,7 @@ export function useComposerPopover(open,ref){
  // On a restored open menu, the shell root may not exist during render yet.
  // Never fall back to an inline fixed child of the conversation container:
  // those viewport coordinates would be interpreted relative to that container.
- useLayoutEffect(()=>{if(open)setHost(document.getElementById('amp-one'))},[open]);
+ useLayoutEffect(()=>{if(open&&typeof document!=='undefined')setHost(document.getElementById('amp-one'))},[open]);
  useLayoutEffect(()=>{
   if(!open||!host)return;
   const panel=panelRef.current,anchor=ref.current?.querySelector('button');
@@ -24,6 +24,8 @@ export function useComposerPopover(open,ref){
   window.visualViewport?.addEventListener('resize',place);window.visualViewport?.addEventListener('scroll',place);
   return()=>{observer.disconnect();window.removeEventListener('resize',place);window.removeEventListener('scroll',place,true);window.visualViewport?.removeEventListener('resize',place);window.visualViewport?.removeEventListener('scroll',place)};
  },[open,ref,host]);
- const renderPopover=content=>host?createPortal(content,host):null;
+ // Non-DOM renderers retain the component tree; browsers still wait for the
+ // shell host and must never render a fixed menu inline in the conversation.
+ const renderPopover=content=>typeof document==='undefined'?content:host?createPortal(content,host):null;
  return {style,panelRef,renderPopover};
 }

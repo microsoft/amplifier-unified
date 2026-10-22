@@ -36,7 +36,8 @@ def plan(output, installed=False):
     names = INSTALLED if installed else BROWSERS
     rows = [] if installed else [{'id': 'composer-units', 'command': ['node', '--test',
         'tests/composer.test.mjs', 'tests/composer-ownership.test.mjs',
-        'tests/markdown-composer.test.mjs', 'tests/message-delivery.test.mjs']}]
+        'tests/markdown-composer.test.mjs', 'tests/message-delivery.test.mjs',
+        'tests/chat-controls.test.mjs', 'tests/bundle-controls.test.mjs']}]
     rows += [{'id': name, 'command': ['node', f'tests/{name}-browser.mjs']} for name in names]
     for row in rows:
         folder = str(output / row['id'])

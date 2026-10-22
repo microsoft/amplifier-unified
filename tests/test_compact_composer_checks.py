@@ -19,6 +19,8 @@ def test_fixed_source_and_installed_selections(tmp_path):
     assert [r['id'] for r in installed['scenarios']] == [
         'compact-composer', 'composer-options', 'composer-primary-action', 'message-delivery']
     assert all(r['command'][0] == 'node' for r in source['scenarios'])
+    assert source['scenarios'][0]['command'][-2:] == [
+        'tests/chat-controls.test.mjs', 'tests/bundle-controls.test.mjs']
     assert all('AMPLIFIER_TEST_ARTIFACTS' in r['env'] for r in installed['scenarios'])
 
 
