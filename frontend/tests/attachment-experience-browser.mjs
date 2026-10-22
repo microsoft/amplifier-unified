@@ -120,7 +120,7 @@ try{
   const {context,page}=await contextFor({width:1280,height:900},'light');
   try{
    const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Never send this draft');const owner=(await state(page)).selectedSessionId;const data=await png(page,40,24);let admissions=0;page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/api/actions')){try{if(r.postDataJSON()?.action==='attachment.add')admissions++}catch{}}});
-   for(const [index,selector] of ['.a-conversation','.a-messages','.a-composer','.a-markdown-composer','.a-compose-tools button','.a-work-header','.a-work-header button'].entries()){
+   for(const [index,selector] of ['.a-conversation','.a-messages','.a-composer','.a-markdown-composer','.a-composer button[aria-label="Add attachments"]','.a-work-header','.a-work-header button'].entries()){
     const start=admissions;const name='drop-'+index+'.png';const files=[{name,base64:data.toString('base64')}];await drops(page,selector,files,'dragenter');await expect(page.locator('[data-part="chat-file-drop"]')).toBeVisible();await drops(page,selector,files);
     await expect.poll(async()=>(await inspect(page)).attachments[owner]?.filter(x=>x.name===name).length).toBe(1);assert.equal(admissions-start,1,'Exactly one upload despite nested handlers');await expect(page.locator('[data-part="chat-file-drop"]')).toHaveCount(0);await expect(composer).toHaveDraft('Never send this draft');
    }
