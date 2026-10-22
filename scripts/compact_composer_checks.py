@@ -94,8 +94,13 @@ def installed(source):
     command(['uv', 'export', '--locked', '--no-emit-project', '--no-dev', '--format', 'requirements-txt', '--output-file', str(requirements)], OUTPUT / 'wheel-export.log', env=env)
     command(['uv', 'venv', '--python', sys.executable, str(venv)], OUTPUT / 'wheel-venv.log', env=env)
     python = venv / 'bin/python'
-    command(['uv', 'pip', 'install', '--python', str(python), '--only-binary', 'amplifier-core', '-r', str(requirements)], OUTPUT / 'wheel-dependencies.log', env=env)
+    # Export is the complete resolved lock. Re-resolving a dependency's original
+    # Git @main declaration conflicts with its exact, already locked source.
+    command(['uv', 'pip', 'install', '--python', str(python), '--no-deps',
+             '--only-binary', 'amplifier-core', '-r', str(requirements)],
+            OUTPUT / 'wheel-dependencies.log', env=env)
     command(['uv', 'pip', 'install', '--python', str(python), '--no-deps', str(wheel)], OUTPUT / 'wheel-install.log', env=env)
+    command(['uv', 'pip', 'check', '--python', str(python)], OUTPUT / 'wheel-dependency-check.log', env=env)
     actual = Path(subprocess.check_output([str(python), '-I', '-c', 'import amplifier_web;from pathlib import Path;print(Path(amplifier_web.__file__).resolve().parent)'], cwd=work, env=env, text=True).strip())
     assert actual.is_relative_to(venv) and not actual.is_relative_to(ROOT)
     with zipfile.ZipFile(wheel) as archive:
