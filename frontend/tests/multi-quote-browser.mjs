@@ -56,7 +56,10 @@ try{
  const afterScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
  const scrollEvents=await page.evaluate(()=>[...window.quoteScroll,{event:'after',...window.quoteGeometry()}]);
  if(proof)writeFileSync(join(proof,'collect-scroll.json'),JSON.stringify({beforeScroll,afterScroll,scrollEvents},null,2));
- assert.ok(Math.abs(afterScroll-beforeScroll)<=1,`Collecting moved the reading position: ${beforeScroll} -> ${afterScroll}; ${JSON.stringify(scrollEvents)}`);
+ // Lazy content above the viewport can change scrollTop while the existing
+ // reader-anchor controller correctly keeps the source at the same pixel.
+ // The visible anchor, not an absolute scroll counter, is the promised result.
+ assert.ok(Math.abs(scrollEvents.at(-1).buttonTop-scrollEvents[0].buttonTop)<=1,`Collecting moved the visible source: ${JSON.stringify(scrollEvents)}`);
  assert.ok(await page.evaluate(()=>document.activeElement===window.beforeQuoteFocus),'Collecting must not move focus');
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('After all references');
  assert.equal((await observe()).sends.length,0,'Collecting must not send');
