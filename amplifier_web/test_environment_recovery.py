@@ -318,9 +318,63 @@ def project(app, row, request):
             else:
                 changes['status'] = 'retired'
     updated = owner.save(app.data_dir, row, **changes)
-    if verified and result['status'] in {'stopped', 'absent'} and (not updated.get('preparationPending') or updated.get('preparedDependencies')):
+    if (verified and result['status'] in {'stopped', 'absent'}
+            and result['observation'].get('admissionSettled') is True
+            and (not updated.get('preparationPending') or updated.get('preparedDependencies'))):
         owner.host_resources.settle(updated, release=True)
     return updated
+
+
+def reservation_candidate(app, rows):
+    """Rotate one extra native probe across this bounded page, without authority."""
+    from . import task_environments as owner
+    candidates = []
+    for row in rows:
+        if (row.get('status') == 'retired' or row.get('testMachine')
+                or row.get('preparationPending') and not row.get('preparedDependencies')):
+            continue
+        try:
+            if owner.host_resources.held(row):
+                candidates.append(row['id'])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    if not candidates:
+        return None
+    previous = getattr(app, '_last_reservation_probe', None)
+    index = (candidates.index(previous) + 1) % len(candidates) if previous in candidates else 0
+    app._last_reservation_probe = candidates[index]
+    return candidates[index]
+
+
+def recover_reservation(app, row, config, observed):
+    """The caller holds the environment lock; release compute, never effects.
+
+    Ordinary inventory is only a trigger. Exact native reconciliation must also
+    prove the original launch settled. Retain a separate observation before
+    releasing the lease; an uncertain check/removal remains uncertain.
+    """
+    from . import task_environments as owner
+    if (config.get('remoteRunner') or observed.get('ok') is not True
+            or (observed.get('status') not in {'stopped', 'removed', 'absent', 'unknown'}
+                and row.get('environmentState') != 'unknown')
+            or row.get('pendingRequest')
+            or row.get('preparationPending') and not row.get('preparedDependencies')
+            or not owner.host_resources.held(row)):
+        return row
+    if observed.get('universeId', row.get('universeId')) != row.get('universeId'):
+        raise ValueError('The observed environment identity changed.')
+    result = owner.invoke(config, app.data_dir, row, 'reconcile', {})
+    if (result.get('ok') is not True or not verify(row, result)
+            or result.get('status') not in {'stopped', 'absent'}
+            or result['observation'].get('admissionSettled') is not True):
+        return row
+    if owner.get(app.data_dir, row['sessionId'], row['id']) != row:
+        raise ValueError('The environment changed during capacity inspection.')
+    proof = {'version': 1, 'state': 'observed', 'environmentStatus': result['status'],
+             'observation': result['observation'], 'observedAt': time.time()}
+    updated = owner.save(app.data_dir, row, reservationRecovery=proof)
+    owner.host_resources.settle(updated, release=True)
+    return owner.save(app.data_dir, updated, reservationRecovery={**proof, 'state': 'released'})
 
 
 def repair(app, row):
