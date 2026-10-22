@@ -12,13 +12,56 @@ pytest.importorskip('amplifier_module_context_simple')
 pytest.importorskip('amplifier_module_tool_filesystem')
 pytest.importorskip('amplifier_module_tool_apply_patch')
 
+from test_collaborative_workspaces import app
 
-@pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested'])
-async def test_native_child_file_reads_are_not_inherited(tmp_path, monkeypatch, mode):
-    from amplifier_foundation.bundle import Bundle, BundleModuleResolver
-    from amplifier_module_loop_live.runtime import Runtime
+
+async def install_host_access(parent, app):
+    """Keep the real worker and host Work checks around this file-policy probe."""
     from amplifier_web.app_guidance import install_app_access
     from amplifier_web.runtime_worker import Worker
+    sid = parent.coordinator.session_id
+    generation = app._session(sid)['collaborationGeneration']
+    worker = Worker()
+    worker.session = parent
+    worker.runtime = SimpleNamespace(
+        generation={'id': generation['id'], 'input_ids': list(generation['inputIds'])},
+        closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
+    async def bridge(operation, arguments):
+        assert operation == 'work.effect.check'
+        result = await app.app_bridge(operation, arguments, sid)
+        assert result['applicable'] is False and result['allowed'] is True
+        assert result['effectAuthorized'] is False  # File policy remains authoritative.
+        return result
+    worker.bridge = bridge
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+
+
+async def execute_tool(coordinator, name, arguments):
+    """Use the actual loop's hooks, cancellation and per-task dispatch binding."""
+    from amplifier_core.message_models import ToolCall
+    from amplifier_module_loop_streaming import StreamingOrchestrator
+    from uuid import uuid4
+    tools = coordinator.get('tools')
+    observed = []
+    class Capture:
+        def __getattr__(self, attribute):
+            return getattr(tools[name], attribute)
+        async def execute(self, value):
+            result = await tools[name].execute(value)
+            observed.append(result)
+            return result
+    await StreamingOrchestrator({})._execute_tool_only(
+        ToolCall(id=str(uuid4()), name=name, arguments=arguments),
+        {**tools, name: Capture()}, coordinator.hooks, None, coordinator)
+    assert len(observed) == 1
+    return observed[0]
+
+
+@pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested'])
+async def test_native_child_file_reads_are_not_inherited(tmp_path, monkeypatch, app, mode):
+    from amplifier_foundation.bundle import Bundle, BundleModuleResolver
+    from amplifier_module_loop_live.runtime import Runtime
     from amplifier_web.host.children import install_children, _PERSISTENT
     from amplifier_web.host.storage import SessionStore
     from amplifier_web.host.approvals import Approvals
@@ -37,26 +80,22 @@ async def test_native_child_file_reads_are_not_inherited(tmp_path, monkeypatch, 
     prepared = fixture.ProbePrepared(plan, BundleModuleResolver(paths),
         Bundle(name='fixture', session=plan['session'], tools=plan['tools'], agents=plan['agents']))
     approvals = Approvals(None, AsyncMock(return_value='deny'))
-    parent = await prepared.create_session(session_id='root', approval_system=approvals)
+    parent = await prepared.create_session(session_id=app.state['sessions'][0]['id'], approval_system=approvals)
     parent.coordinator.register_capability('session.working_dir', str(tmp_path))
-    worker = Worker()
-    worker.session = parent
-    worker.runtime = SimpleNamespace(generation={'id': 'root-generation'})
-    worker.bridge = AsyncMock(return_value={})
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_host_access(parent, app)
     path = tmp_path / 'file.txt'
     path.write_text('original\n')
-    await parent.coordinator.get('tools')['read_file'].execute({'file_path': 'file.txt'})
-    registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path / 'children'), approvals)
+    assert (await execute_tool(parent.coordinator, 'read_file', {'file_path': 'file.txt'})).success
+    registry = await install_children(parent, prepared, Runtime(parent.coordinator.session_id), SessionStore(tmp_path / 'children'), approvals)
     guards = []
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         guards.append(coordinator.get_capability('web.file_source_guard'))
         assert guards[-1] is not parent.coordinator.get_capability('web.file_source_guard')
         update = {'type': 'update_file', 'path': 'file.txt', 'diff': '@@\n-original\n+child'}
-        result = await tools['apply_patch'].execute(update)
+        result = await execute_tool(coordinator, 'apply_patch', update)
         assert not result.success and result.error['code'] == 'file_source_unread'
-        assert (await tools['read_file'].execute({'file_path': 'file.txt'})).success
-        assert (await tools['apply_patch'].execute(update)).success
+        assert (await execute_tool(coordinator, 'read_file', {'file_path': 'file.txt'})).success
+        assert (await execute_tool(coordinator, 'apply_patch', update)).success
         # Restore bytes externally only for the next independently mounted child.
         path.write_text('original\n')
         if mode == 'nested' and coordinator.session_id == 'child':
@@ -74,7 +113,7 @@ async def test_native_child_file_reads_are_not_inherited(tmp_path, monkeypatch, 
         await parent.cleanup()
 
 
-async def test_resumed_native_child_retains_saved_write_ceiling_after_parent_grant(tmp_path, monkeypatch):
+async def test_resumed_native_child_retains_saved_write_ceiling_after_parent_grant(tmp_path, monkeypatch, app):
     """A new root grant permits a fresh child, not escalation of a saved child.
 
     Uses actual Core/Foundation initialization, checkpoint and resume, with a
@@ -109,8 +148,8 @@ async def test_resumed_native_child_retains_saved_write_ceiling_after_parent_gra
 
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         target = approved / (prompt + '.txt')
-        result = await tools['write_file'].execute({'file_path': str(target), 'content': prompt})
-        sibling_result = await tools['write_file'].execute({
+        result = await execute_tool(coordinator, 'write_file', {'file_path': str(target), 'content': prompt})
+        sibling_result = await execute_tool(coordinator, 'write_file', {
             'file_path': str(sibling / (prompt + '.txt')), 'content': 'must not exist'})
         observations.append((prompt, bool(result.success), target.exists(), bool(sibling_result.success)))
         if not result.success:
@@ -133,18 +172,12 @@ async def test_resumed_native_child_retains_saved_write_ceiling_after_parent_gra
                 'agents': {'worker': {'instruction': 'Write only within the mounted permission'}}}
         prepared = fixture.ProbePrepared(plan, BundleModuleResolver(paths),
             Bundle(name='fixture', session=plan['session'], tools=plan['tools'], agents=plan['agents']))
-        parent = await prepared.create_session(session_id='root', approval_system=approvals)
+        parent = await prepared.create_session(session_id=app.state['sessions'][0]['id'], approval_system=approvals)
         parent.coordinator.register_capability('session.working_dir', str(workspace))
         # Production access installation propagates the file guard to both
         # newly created and resumed native child coordinators.
-        from amplifier_web.app_guidance import install_app_access
-        from amplifier_web.runtime_worker import Worker
-        worker = Worker()
-        worker.session = parent
-        worker.runtime = SimpleNamespace(generation={'id': 'root-generation'})
-        worker.bridge = AsyncMock(return_value={})
-        await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
-        registry = await install_children(parent, prepared, Runtime('root'), store, approvals)
+        await install_host_access(parent, app)
+        registry = await install_children(parent, prepared, Runtime(parent.coordinator.session_id), store, approvals)
         return parent, registry
 
     parent, registry = await root([str(workspace)])

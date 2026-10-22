@@ -118,8 +118,18 @@ async def test_task_and_schedule_runtime_preparation_remain_fenced(tmp_path,acti
         record['phase']='unknown';app.worktrees.save(record);app.worktrees.sync()
         for job in list(app.worktrees.jobs):job.cancel()
         await asyncio.gather(*list(app.worktrees.jobs),return_exceptions=True)
-        with pytest.raises(AppError,match='handoff'):
-            await app.dispatch(action,{'sessionId':sid,**args})
+        if action == 'task.get':
+            # Saved reads remain passive even while mount authority is unknown.
+            result = await app.dispatch(action, {'sessionId': sid, **args})
+            assert result['accepted'] is True
+            assert result['result']['status'] == 'unavailable'
+            assert result['result']['task'] is None
+            assert result['result']['coverage'] == 'unknown'
+            assert app.worktrees.read(sid, receipt['id'])['phase'] == 'unknown'
+        else:
+            with pytest.raises(AppError,match='handoff'):
+                await app.dispatch(action, {'sessionId':sid,**args},
+                                   command_id='handoff-' + action)
         assert sid not in runtime.workers
     finally:
         runtime.release.set();await app.close()
