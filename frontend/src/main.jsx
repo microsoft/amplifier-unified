@@ -238,7 +238,9 @@ function App(){
     return {accepted:false,superseded:true,error:'The view changed. Open the reference from its original reply.'};
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(result.state)acceptState(result.state);
-   else await awaitState(result);
+   // Exact annotation receipts settle locally; streamed shared state follows
+   // independently and must not hold this control behind unrelated work.
+   else if(action!=='message.reaction')await awaitState(result);
    return result;
   };
   // Browse and chat selections share intent order. A later optimistic browse

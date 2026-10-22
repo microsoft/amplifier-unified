@@ -1,4 +1,5 @@
 import {readComposerDraft} from './composer-test-helpers.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -17,7 +18,7 @@ const control=async(op)=>{const response=await page.request.post(url+'/fixture/r
 const pendingRoutes=new Set(),measurements=[];
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
- await page.goto(url);await page.waitForSelector('#amp-one');
+ await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
  const draft=page.getByRole('textbox',{name:'Message Amplifier'});await draft.fill('Preserve this draft');
  const original=page.locator('.a-message').filter({hasText:'Saved message 20:'});
  await original.getByRole('button',{name:'Reply to message',exact:true}).click();
@@ -32,7 +33,7 @@ try{
  await page.getByLabel('Quoted reply',{exact:true}).waitFor({state:'hidden'});
  await sent.getByRole('button',{name:'React to message',exact:true}).click();await sent.getByRole('button',{name:'Heart',exact:true}).click();await sent.getByRole('button',{name:'Remove Heart reaction',exact:true}).waitFor();
  // A separate client receives the same reaction, but not another client's draft.
- const second=await context.newPage();await second.goto(url);await second.waitForSelector('#amp-one');
+ const second=await context.newPage();await second.goto(url);await second.waitForSelector('#amp-one');await showFixtureConversation(second);
  const sent2=second.locator('.a-message').filter({hasText:'Preserve this draft'});await sent2.getByRole('button',{name:'Remove Heart reaction',exact:true}).waitFor();
  await sent2.getByRole('button',{name:'Remove Heart reaction',exact:true}).click();await sent.getByRole('button',{name:'Remove Heart reaction',exact:true}).waitFor({state:'hidden'});
  for(let i=0;i<4;i++){await draft.fill('Later message '+i);await page.getByRole('button',{name:'Send message',exact:true}).click();await page.waitForFunction(text=>{const s=window.amplifier.getState(),c=s.sessions.find(x=>x.id===s.selectedSessionId);return c?.status==='idle'&&c.messages.some(m=>m.text===text)},'Later message '+i)}

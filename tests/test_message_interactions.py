@@ -157,6 +157,42 @@ async def test_reaction_commits_and_publishes_while_generation_is_blocked(app):
         await send
 
 
+async def test_passive_reaction_receipt_is_exact_and_never_replays(app):
+    from amplifier_web.message_interactions import reaction_status
+    args = {**target(app), 'emoji': '\u2764\ufe0f', 'present': True}
+    read = {**args, 'commandId': 'receipt-only', 'clientId': 'one'}
+    assert reaction_status(app, read)['status'] == 'unknown'
+    receipt = await call(app, 'message.reaction', args, command_id='receipt-only')
+    await call(app, 'message.reaction', {**args, 'present': False}, client='two')
+    before = app.state['revision']
+    value = reaction_status(app, read)
+    assert value['status'] == 'accepted' and value['receipt']['result'] == receipt['result']
+    assert value['current']['reactions'] == [] and value['revision'] > receipt['result']['annotationRevision']
+    assert app.state['revision'] == before and not app.runtime.sent
+    for changed in [{'present': False}, {'messageId': 'other'}, {'clientId': 'two'}, {'emoji': '\u2705'}]:
+        with pytest.raises(AppError, match='does not belong'):
+            reaction_status(app, {**read, **changed})
+
+
+async def test_reaction_context_is_caller_bound_bounded_and_passive(app):
+    args = {**target(app), 'emoji': '\u2705', 'present': True}
+    await call(app, 'message.reaction', args)
+    before = copy.deepcopy(app._session()['messages'])
+    context = await app.app_bridge('message.reactions.context', {}, args['sessionId'])
+    assert context['sessionId'] == args['sessionId']
+    assert context['items'][0]['messageId'] == args['messageId']
+    assert context['items'][0]['reactions'] == ['\u2705']
+    assert app._session()['messages'] == before and not app.runtime.sent
+    from amplifier_web.message_interactions import reaction_context
+    class MetadataOnly(dict):
+        def get(self, key, *args):
+            assert key != 'messages', 'Do not trigger lazy transcript hydration'
+            return super().get(key, *args)
+    bounded = reaction_context(MetadataOnly(id='s', messageAnnotations={
+        f'm{index}': {'reactions': ['\u2705']} for index in range(1000)}))
+    assert len(bounded['items']) == 32 and bounded['omittedMessageCount'] == 968
+
+
 async def test_restart_history_projection_and_client_selection_preserve_metadata(app):
     original = app._session()
     result = await quote(app)

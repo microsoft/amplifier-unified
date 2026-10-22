@@ -4672,6 +4672,10 @@ class AppService:
             return self.observations.authorize_admission(session_id, args)
         if operation == 'memory.context':
             return await self.recall.personalization.context(session_id, expected=args.get('expected'))
+        if operation == 'message.reactions.context':
+            from .message_interactions import reaction_context
+            async with self.lock:
+                return reaction_context(self._session(session_id, hydrate=False))
         if operation == "questions.admit":
             async with self.lock:
                 self._session(session_id)

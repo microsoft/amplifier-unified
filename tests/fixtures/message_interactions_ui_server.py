@@ -33,6 +33,7 @@ async def main(home, port):
     app = await fixture.main(home)
     app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
     service = app['service']
+    await service.dispatch('view.update', {'patch': {'setupJourney': 'done', 'panel': None}})
     session = service._session()
     for index in range(75):
         service._message(session, 'user' if index % 2 == 0 else 'assistant', f'Saved message {index}: a reference point.')
