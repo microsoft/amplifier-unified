@@ -100,6 +100,8 @@ try{
  await openSettingsPage(page,'app-bundles');
  await openChatAdvancedPage(page,'Model & tools');
  await page.getByRole('dialog',{name:'Model & tools',exact:true}).locator('summary').filter({hasText:/^Conversation modules$/}).click();
+ // Details are passive; explicitly inspect the conversation before editing loaded modules.
+ await page.getByRole('dialog',{name:'Model & tools',exact:true}).getByRole('button',{name:'Load configuration',exact:true}).click();
  await page.locator('#filter-loaded-modules').fill('tool-*');
  assert.equal(await page.locator('.a-module-settings .a-collection-row').count(),1);
  await page.getByRole('button',{name:'tool-filesystem tools',exact:true}).click();
