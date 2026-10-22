@@ -44,6 +44,7 @@ import {withArtifactRows} from './artifact-placement';
 import {ReplyPreview,MessageFocus} from './message-interactions';
 import {MessageEntry,newestMessageIds,completedTurnEnds} from './message-actions';
 import {PeerPresentation,PeerRun} from './peer-message';
+import {chatArtifacts} from './canvas-library';
 import {peerRuns} from './peer-groups.js';
 import {usePeerPreview,PeerPreviewCanvas} from './peer-preview';
 import {WorkspaceRail,AgentCanvas,CanvasToggle,SessionHistoryControls} from './shell-panels';
@@ -372,7 +373,11 @@ function App(){
  const workPlacement=useMemo(()=>turnPlacements(messages,execution),[messages,execution]),newest=useMemo(()=>newestMessageIds(messages),[messages]);
  const rawConversationRows=useMemo(()=>withArtifactRows(conversationWorkRows(messages,workPlacement)),[messages,workPlacement]);
  const interim=useInterimReplies(rawConversationRows,execution,shell.composition?.presentation?.collapseInterimReplies===true,session?.id,messagesPane,state?.view?.executionExpanded,act);
- const conversationRows=useMemo(()=>peerRuns(interim.rows),[interim.rows]);
+ const artifactBoundaries=useMemo(()=>new Set([
+  ...chatArtifacts(state||{}).flatMap(row=>(row.publications||[{messageId:row.messageId}]).map(link=>link.messageId)),
+  ...(session?.execution?.imageGeneration||[]).map(job=>job.messageId),
+ ]),[state?.canvasArtifacts,state?.selectedSessionId,state?.selectedWorkspaceId,session?.execution?.imageGeneration]);
+ const conversationRows=useMemo(()=>peerRuns(interim.rows,artifactBoundaries),[interim.rows,artifactBoundaries]);
  const [recordingTarget,setRecordingTarget]=useState(null);
  useLayoutEffect(()=>{
   if(!recordingTarget)return;

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {peerRuns} from '../src/peer-groups.js';
+import {withArtifactRows} from '../src/artifact-placement.js';
 const peer=(id,source='a',extra={})=>({kind:'message',id,message:{id,role:'user',inputOrigin:'peer',text:'same',attribution:{caption:'Sent by Amplifier from another chat',peer:{sourceId:source,available:true}},...extra}});
 const ordinary=(kind,id)=>({kind,id,message:{id,role:'assistant'}});
 test('peer runs retain exact originals and A-B-A order',()=>{
@@ -23,4 +24,15 @@ test('folded interim Work stays a boundary and absent coverage never joins',()=>
 test('attention facts stay in originals; no prose inference',()=>{
  const input=[peer('1','a',{text:'approved success'}),peer('2','b',{delivery:{status:'failed'}})];
  assert.deepEqual(peerRuns(input)[0].rows,input);
+});
+test('real artifact-placement pipeline: empty slots group, actual outputs split',()=>{
+ const originals=[peer('1'),peer('2','b'),peer('3')];
+ const rows=withArtifactRows(originals);
+ assert.equal(peerRuns(rows,new Set()).length,1);
+ assert.deepEqual(peerRuns(rows,new Set())[0].rows,originals);
+ const actual=peerRuns(rows,new Set(['1']));
+ assert.deepEqual(actual.map(row=>row.kind),['message','artifacts','peers']);
+ assert.deepEqual(actual[2].rows,originals.slice(1));
+ // Missing coverage is conservative, not a declaration that artifacts are empty.
+ assert.equal(peerRuns(rows).filter(row=>row.kind==='peers').length,0);
 });
