@@ -378,7 +378,7 @@ test('fresh human acceptance without counterevidence remains current, not indepe
  const root=await mount(async action=>accepted(action==='workspace.work.list'?page([row]):detail(row,{item:raw})));
  await inspect(root);
  const facts=root.root.findByProps({className:'a-shared-facts'}),labels=facts.findAllByType('dt'),values=facts.findAllByType('dd');
- assert.equal(text(values[labels.findIndex(node=>text(node)==='Human decision')]),'Accepted');
+ assert.equal(text(values[labels.findIndex(node=>text(node)==='Human decision')]),'accepted');
  assert.doesNotMatch(text(root.toJSON()),/no longer current|later counterevidence retained/i);
  assert.match(text(root.toJSON()),/not verified|unverified/i);
 });
