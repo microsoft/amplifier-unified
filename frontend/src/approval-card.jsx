@@ -52,6 +52,7 @@ function CapabilityApprovalCard({approval,sessionId,dispatch,freshnessKey}){
   <strong>{request?.canDecide?'Allow configuration changes?':'Configuration request'}</strong>
   <p>{request?.reason||approval.prompt||approval.description}</p>
   <p role="status">{request?.detail||approval.detail||'Checking current permission…'}</p>
+  {approval.deliveryError&&<p role="status">{approval.deliveryError}</p>}
   {request?.effects?.length>0?<div><ul>{request.effects.map(effect=><li key={effect}>{snapshot.effects[effect]||effect}</li>)}</ul><p>Scopes: {request.scopes.join(', ')}. This conversation only, until Stop, revocation, or expiry.</p></div>:approval.details&&<pre>{typeof approval.details==='string'?approval.details:JSON.stringify(approval.details,null,2)}</pre>}
   {request&&request.status!=='unavailable'&&<p>{request.expiresAt?`Expires: ${new Date(request.expiresAt*1000).toLocaleString()}`:'No time-based expiry was specified.'}</p>}
   {(request?.canDecide||comment)&&<label className="a-field">Note to Amplifier (optional)

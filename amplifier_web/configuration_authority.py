@@ -150,6 +150,10 @@ class ConfigurationAuthority:
             if not grant or grant.get('sessionId') != session['id']:
                 reason = 'request_unavailable'
             elif grant['status'] != 'pending':
+                if grant['status'] == 'active' and self.valid(grant, session) and not card.get('_hostRestarted'):
+                    # Full access owns delivery to a still-live native waiter.
+                    # Keep its unresolved delivery state, without asking again.
+                    continue
                 # A saved decision is not a pending request even when its worker
                 # acknowledgement was lost. Never revoke that grant here.
                 card.update(status={'active': 'allow', 'denied': 'deny'}.get(grant['status'], grant['status']))

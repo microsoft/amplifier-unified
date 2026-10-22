@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -29,6 +30,8 @@ try{
   assert.equal(response.status(),200,await response.text());return response.json();
  };
  await page.goto(url);
+ await showFixtureConversation(page);
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:null}}));
  const initial=await inspect(),sid=initial.sessionId;
  assert.deepEqual(initial.starts,[]);
  assert.equal(initial.attention.length,1);assert.equal(initial.navigation.label,'Approval requested');
@@ -47,6 +50,8 @@ try{
  await page.screenshot({path:join(output,'desktop.png'),animations:'disabled'});
  // Another tab sees the same owner and cannot revive the dismissed request.
  await other.goto(url);
+ await showFixtureConversation(other);
+ await other.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:null}}));
  const observed=(await call('capability.read',{sessionId:sid,id:'capability:old'},'read-old')).result.request;
  await old.getByRole('button',{name:'Dismiss old request'}).focus();
  await page.keyboard.press('Enter');
