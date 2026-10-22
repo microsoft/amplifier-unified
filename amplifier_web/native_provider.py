@@ -80,10 +80,15 @@ class NativeProviderHost:
                             or self.selected_identity() != binding["identity"]
                             or generation.get("id") != binding["generationId"]):
                         raise ValueError("Native send admission binding changed")
+                    if any(all(row.get(key) == value for key, value in binding.items())
+                           and row["operation"] == operation
+                           and (operation == "response.create" or row["input_id"] == identity["input_id"])
+                           for row in rows):
+                        raise ValueError("Native send already exists for this admission binding")
                     # Never evict an unresolved send to make room for another.
                     if len(rows) >= 128:
                         terminal = next((row for row in rows if row["outcome"] in
-                                         {"not_sent", "completed"}), None)
+                                         {"not_sent", "completed", "applied", "failed"}), None)
                         if terminal is None:
                             raise ValueError("Native send receipt capacity requires reconciliation")
                         rows.remove(terminal)
@@ -91,6 +96,7 @@ class NativeProviderHost:
                     rows.append(row)
                     if operation == "response.create":
                         state.update(requestId=attempt_id, generationId=generation_id,
+                                     admittedCallId=admitted_call_id,
                                      identity=copy.deepcopy(binding["identity"]), outcome="submitting")
                 else:
                     if (len(matches) != 1 or any(matches[0].get(key) != value for key, value in identity.items())
@@ -101,27 +107,57 @@ class NativeProviderHost:
                         raise ValueError("Native terminal does not match an unresolved unsent operation")
                     row = matches[0]
                     row.update(outcome="not_sent", reason=data["reason"])
-                    if operation == "response.create" and state.get("requestId") == attempt_id:
+                    if (operation == "response.create" and state.get("requestId") == attempt_id
+                            and state.get("admittedCallId") == admitted_call_id):
                         state.update(outcome="not_sent", reason=data["reason"])
                 row["updatedAt"] = time.time()
             else:
-                owned = [row for row in rows if row["attemptId"] == attempt_id
+                owned = [row for row in rows if all(row.get(key) == value for key, value in binding.items())
                          and row["outcome"] in {"submitting", "sent", "running", "pending"}]
-                if kind == "steering.sent":
+                if kind.startswith("steering."):
                     owned = [row for row in owned if row["operation"] == "response.steer"
-                             and row["input_id"] == data.get("input_id")
-                             and row["response_id"] == data.get("response_id")]
+                             and row["input_id"] == data.get("input_id")]
                 elif kind in {"native.request", "native.response.created", "native.completed"}:
                     owned = [row for row in owned if row["operation"] == "response.create"]
                 phases = {"native.request": "sent", "steering.sent": "sent",
                           "native.response.created": "running", "native.completed": "completed",
-                          "native.outcome_unknown": "unknown"}
+                          "native.outcome_unknown": "unknown", "steering.accepted": "pending",
+                          "steering.applied": "applied", "steering.failed": "failed"}
                 if kind in phases:
+                    if kind != "native.outcome_unknown" and len(owned) != 1:
+                        raise ValueError("Native phase lacks an exact unresolved send")
+                    response = data.get("response_id")
+                    if kind in {"native.response.created", "native.completed", "steering.sent",
+                                "steering.accepted", "steering.applied"}:
+                        if not isinstance(response, str) or not response or len(response) > 200:
+                            raise ValueError("Native phase lacks an exact response identity")
+                    if kind == "native.completed":
+                        if (response != owned[0].get("currentResponseId")
+                                or type(data.get("pending_steering", False)) is not bool):
+                            raise ValueError("Native completion does not match its observed response")
+                    if kind in {"steering.sent", "steering.accepted"}:
+                        if response != owned[0]["response_id"]:
+                            raise ValueError("Native steering parent changed")
+                    if kind == "steering.applied":
+                        if (owned[0]["outcome"] != "pending" or response == owned[0]["response_id"]
+                                or not data.get("steer_id") or data.get("steer_id") != owned[0].get("steerId")):
+                            raise ValueError("Native steering successor is not its accepted input")
+                    if kind == "steering.accepted":
+                        steer_id = data.get("steer_id")
+                        if (owned[0]["outcome"] != "sent" or not isinstance(steer_id, str)
+                                or not steer_id or len(steer_id) > 200):
+                            raise ValueError("Native steering acceptance is not bound")
+                        owned[0]["steerId"] = steer_id
+                    if kind == "steering.failed" and owned[0]["outcome"] not in {"sent", "pending"}:
+                        raise ValueError("Native steering failure precedes send")
                     for row in owned:
+                        if kind == "native.response.created":
+                            row["currentResponseId"] = response
                         row["outcome"] = ("pending" if kind == "native.completed"
                                           and data.get("pending_steering") else phases[kind])
                         row["updatedAt"] = time.time()
-                    if state.get("requestId") == attempt_id and owned:
+                    if (kind.startswith("native.") and state.get("requestId") == attempt_id
+                            and state.get("admittedCallId") == admitted_call_id and owned):
                         state["outcome"] = owned[0]["outcome"]
                         if kind in {"native.response.created", "native.completed"}:
                             state["responseId"] = data.get("response_id")

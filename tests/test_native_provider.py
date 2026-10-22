@@ -303,11 +303,71 @@ async def test_known_entered_or_terminal_send_cannot_be_relabelled_unsent(tmp_pa
         attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget-call')
     record = send_record()
     await callback('native.submitting', record)
+    if phase == 'native.completed':
+        await callback('native.response.created', {'response_id': 'reply'})
     await callback(phase, {'response_id': 'reply'})
     before = host.path.read_bytes()
     with pytest.raises(ValueError):
         await callback('native.not_sent', {**record, 'reason': 'rejected'})
     assert host.path.read_bytes() == before
+
+
+async def test_native_phase_cannot_cross_distinct_budget_bindings(tmp_path):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    first = host.bind_send_lifecycle(attempt_id='same-attempt', generation_id='generation-1',
+                                     admitted_call_id='first-budget')
+    second = host.bind_send_lifecycle(attempt_id='same-attempt', generation_id='generation-1',
+                                      admitted_call_id='second-budget')
+    await first('native.submitting', send_record(send_id='first-send'))
+    await second('native.submitting', send_record(send_id='second-send'))
+    await first('native.response.created', {'response_id': 'first-response'})
+    await first('native.completed', {'response_id': 'first-response'})
+    assert [row['outcome'] for row in host.state['sends']] == ['completed', 'submitting']
+    assert host.state['outcome'] == 'submitting' and host.state['admittedCallId'] == 'second-budget'
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError, match='already exists'):
+        await second('native.submitting', send_record(send_id='third-send'))
+    assert host.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('data', [{}, {'response_id': 'wrong'},
+                                  {'response_id': 'right', 'pending_steering': 'false'}])
+async def test_native_completion_requires_observed_response_and_typed_terminal(tmp_path, data):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    callback = host.bind_send_lifecycle(
+        attempt_id='attempt', generation_id='generation-1', admitted_call_id='budget')
+    await callback('native.submitting', send_record())
+    await callback('native.response.created', {'response_id': 'right'})
+    before = host.path.read_bytes()
+    with pytest.raises(ValueError):
+        await callback('native.completed', data)
+    assert host.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('resolution', ['applied', 'failed'])
+async def test_sent_steering_resolution_survives_restart_without_changing_parent(tmp_path, resolution):
+    c = Coordinator(fake())
+    host = NativeProviderHost(c, c.loop, tmp_path)
+    host.identity = host.selected_identity()
+    host.state.update(requestId='parent-attempt', outcome='running', responseId='parent')
+    callback = host.bind_send_lifecycle(
+        attempt_id='steer-attempt', generation_id='generation-1', admitted_call_id='budget')
+    record = send_record('response.steer')
+    await callback('native.submitting', record)
+    await callback('steering.sent', {'input_id': 'input-one', 'response_id': 'parent'})
+    if resolution == 'applied':
+        await callback('steering.accepted', {
+            'input_id': 'input-one', 'response_id': 'parent', 'steer_id': 'steer-one'})
+        await callback('steering.applied', {
+            'input_id': 'input-one', 'response_id': 'successor', 'steer_id': 'steer-one'})
+    else:
+        await callback('steering.failed', {'input_id': 'input-one'})
+    assert host.state['outcome'] == 'running' and host.state['requestId'] == 'parent-attempt'
+    assert NativeProviderHost(c, c.loop, tmp_path).state['sends'][0]['outcome'] == resolution
 
 
 @pytest.mark.asyncio
