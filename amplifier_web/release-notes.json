@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.27.0",
+      "title": "Quote passages directly and build clearer replies",
+      "changes": [
+        "Select text in a message and add it directly to your reply. Formatted passages that cannot be matched exactly offer an explained source-selection fallback.",
+        "Collect several excerpts in compact quote cards, open their original source, and move or remove them while keeping your commentary and attachments. Controls remain reachable in narrow windows and long drafts.",
+        "Keep completed selection controls dismissed after scrolling or resizing, and preserve a newer selection when an earlier quote finishes being added.",
+        "Extend the supported reply action to accept ordered excerpts while preserving existing single-passage requests and exact saved source references.",
+        "Bring release checks up to date with current Canvas, dependency-storage, startup and worker fixture behavior."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.26.0",
       "title": "Keep managers focused and prepare isolated checks more efficiently",
       "changes": [
