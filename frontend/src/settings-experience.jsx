@@ -97,7 +97,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
    {page!=='updates'&&<AttentionReview state={state} act={act} page={page}/>}
    {page==='ai-connections'&&<SetupJourney state={state} act={act} dispatch={dispatch||act} onBeforeStart={drafts.confirmClose}/>}
    {drafts.count>0&&<p className="a-alert" role="status">You have unsaved settings changes. They are kept while Settings stays open.</p>}
-   {state.management?.error&&page!=='add-bundles'&&<div className="a-alert" role="alert">{state.management.error}</div>}
+   {state.management?.error&&page!=='add-bundles'&&page!=='updates'&&<div className="a-alert" role="alert">{state.management.error}</div>}
    <>{[...editors.current].map(([key,editorPage])=><SettingsPageContext.Provider key={key} value={editorPage}><SettingsLayoutContext.Provider value={{compact,active:key===active&&!index,footer}}><div className="a-settings-page-content" hidden={key!==active}>{renderPage(editorPage)}</div></SettingsLayoutContext.Provider></SettingsPageContext.Provider>)}</>
   </div>
   {!compact&&headerTarget&&createPortal(help,headerTarget)}
