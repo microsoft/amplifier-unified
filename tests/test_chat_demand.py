@@ -201,7 +201,7 @@ async def test_unchanged_conversation_catalog_does_not_publish(tmp_path, monkeyp
         async def resolve(*args, **kwargs):
             return {'providers': [{'id': 'one', 'sharedCatalogKey': 'key'}],
                     'effective': {'instance': 'one', 'model': 'model'},
-                    'catalogs': {'key': {'phase': 'ready', 'models': ['model'], 'metadata': {'info': {}}}}}
+                    'catalogs': {'key': {'phase': 'ready', 'models': ['model'], 'metadata': {'info': {}}, 'supported': True}}}
         monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
         calls = []
         original = service._publish_changes
