@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.20.214"
+version = "0.21.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

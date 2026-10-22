@@ -1,5 +1,23 @@
 # Standard UX inventory and execution plan
 
+## Expired configuration request follow-up (October 22)
+
+`approval-lifecycle` is an additive extended-browser owner in
+`frontend/tests/browser-checks.json`. Its report and screenshots are retained
+under `output/browser-checks/approval-lifecycle`; the runner also retains the
+exact command, source/plan/build identities, raw outcome and process cleanup.
+The journey covers cold stale/current requests, passive scope review, exact
+dismissal without work startup, late scope/expiry changes, two clients,
+adjacent requests, reload/private drafts and narrow keyboard-reachable controls.
+`tests/test_capability_lifecycle.py` owns authority and native-waiter boundaries;
+the existing `approval-layout` owner remains separate and unchanged.
+
+This adds ownership, not a new release gate or a passing test claim. Original
+incident causes/effects remain unknown, synthetic runtime checks do not qualify
+real-provider behavior, and the frozen inventory/counts/hash remain unchanged.
+See [configuration authority](../workspaces/configuration-authority.md) for the
+request/grant and dismissal boundaries.
+
 ## Completion-hook response follow-up (October 18)
 
 **RESPONSE-833** covers two ordinary answers with an internal completion check
