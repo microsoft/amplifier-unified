@@ -20,9 +20,13 @@ from browser_check_runner import run_scenarios
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'output/canvas-qualification'
 PUBLIC = ROOT / 'output/canvas-qualification-public'
-BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs')
+BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs',
+            'destination-history-browser.mjs', 'automation-hub-browser.mjs')
 UNITS = ('canvas-overview.test.mjs', 'shell-panels.test.mjs', 'work-shell.test.mjs',
-         'canvas-reload-guard.test.mjs', 'canvas-app-viewer.test.mjs', 'navigation-demand.test.mjs')
+         'canvas-reload-guard.test.mjs', 'canvas-app-viewer.test.mjs', 'navigation-demand.test.mjs',
+         'destination-history.test.mjs', 'destination-history-ui.test.mjs', 'api.test.mjs',
+         'settings-drafts.test.mjs', 'automation-hub.test.mjs', 'schedule-editor.test.mjs',
+         'submission-reset.test.mjs')
 
 
 def sha(path):
@@ -162,6 +166,12 @@ def run():
         if not stage('browser-preflight', ['node', 'tests/canvas-readiness.mjs'], seconds=30):
             raise RuntimeError('Browser unavailable')
         stage('units', ['node', '--test', *['tests/' + name for name in UNITS]], seconds=120)
+        stage('selector-contracts', [python, '-m', 'pytest', '-q',
+              'tests/test_release_qualification.py::test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate',
+              'tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget',
+              'tests/test_browser_check_runner.py::test_attachment_focus_workflow_retains_failures_and_default_coverage',
+              'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage'],
+              seconds=120)
         if not stage('build', ['npm', 'run', 'build'], seconds=180):
             raise RuntimeError('Production build failed')
         write(OUT / 'static.json', payload(ROOT / 'amplifier_web/static'))
@@ -169,7 +179,8 @@ def run():
         for name in BROWSERS:
             label = 'source-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], seconds=240,
-                  env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'), 'AMPLIFIER_TEST_PYTHON': python})
+                  env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'),
+                       'AMPLIFIER_TEST_OUTPUT': str(OUT / label / 'artifacts'), 'AMPLIFIER_TEST_PYTHON': python})
         if not stage('wheel-build', ['uv', 'build', '--wheel', '--project', str(ROOT), '--out-dir', str(OUT / 'dist')], seconds=180):
             raise RuntimeError('Wheel build failed')
         if not stage('installed-setup', [python, str(Path(__file__).resolve()), 'prepare-installed'], seconds=300):
@@ -179,6 +190,7 @@ def run():
             label = 'installed-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], root=harness, seconds=240,
                   env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'),
+                       'AMPLIFIER_TEST_OUTPUT': str(OUT / label / 'artifacts'),
                        'AMPLIFIER_TEST_PYTHON': str(OUT / 'installed-venv/bin/python'), 'PYTHONPATH': '',
                        'AMPLIFIER_SHELL_NODE_MODULES': str(harness / 'frontend/node_modules')})
         stage('installed-final-identity', [python, str(Path(__file__).resolve()), 'verify-installed'], seconds=30)

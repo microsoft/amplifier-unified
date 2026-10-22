@@ -510,7 +510,7 @@ class RuntimeManager:
                         candidate.unlink(missing_ok=True)
                     except OSError:
                         pass  # Preserve the original failed setup diagnosis.
-        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
+        row = {"process": proc, "emit": emit, "runtimeOwnerId": str(uuid.uuid4()), "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
@@ -844,6 +844,11 @@ class RuntimeManager:
                         # Closing a process for maintenance is not a user Stop.
                         normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
+                        if normalized[0] == 'worker.updated' and not normalized[1].get('activityOnly'):
+                            # Only lifecycle receipts on this process's pipe
+                            # bind its native jobs/children. Progress and peer
+                            # chats cannot acquire that execution ownership.
+                            normalized[1]['runtimeOwnerId'] = row['runtimeOwnerId']
                         await row["emit"](*normalized)
             code = await row["process"].wait()
             if not row["closing"] and not reported_error:
@@ -888,10 +893,11 @@ class RuntimeManager:
                                              else RuntimeError("Amplifier worker disconnected"))
 
     async def _execution_ended(self, sid, row, status):
-        """Only a confirmed process exit settles independent background calls."""
+        """Only confirmed process exit settles its native children/background calls."""
         if row.get("executionEnded"): return
         shutdown = row.get('stop_reason') == 'shutdown'
         await row["emit"]("runtime.ended", {"sessionId": sid, "status": 'interrupted' if shutdown else status,
+            **({'runtimeOwnerId': row['runtimeOwnerId']} if row.get('runtimeOwnerId') else {}),
             **({'reason': 'shutdown'} if shutdown else {}), "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
         # The reader can be cancelled while delivery waits for the service
         # lock. Only successful delivery suppresses the stop-path retry.

@@ -555,7 +555,11 @@ def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate()
     assert 'always()' in upload['if'] and upload['with']['if-no-files-found'] == 'error'
     source = (ROOT / 'scripts/canvas_qualification.py').read_text()
     assert 'from browser_check_runner import run_scenarios' in source
-    assert "BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs')" in source
+    assert "BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs'," in source
+    assert "'destination-history-browser.mjs', 'automation-hub-browser.mjs')" in source
+    assert job['steps'][1]['env']['MIXED'] == (
+        '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption '
+        '|| inputs.destination_history || inputs.settings_close_diagnostic }}')
     assert "raise ValueError('Qualification already started; no replay')" in source
     assert "'installed-harness'" in source and "'installed-identity.json'" in source
     assert "assert static == json.loads((OUT / 'static.json').read_text())" in source
@@ -565,9 +569,14 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
     inputs = workflow['on']['workflow_dispatch']['inputs']
-    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption', 'canvas_qualification'}
+    assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
+                           'canvas_qualification', 'destination_history', 'settings_close_diagnostic'}
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
+    assert inputs['settings_close_diagnostic']['type'] == 'boolean'
+    assert inputs['settings_close_diagnostic']['default'] == 'false'
+    assert inputs['destination_history']['type'] == 'boolean'
+    assert inputs['destination_history']['default'] == 'false'
     assert inputs['attachment_consumption']['type'] == 'boolean'
     assert inputs['attachment_consumption']['default'] == 'false'
     assert inputs['app004_qualification']['type'] == 'boolean'
@@ -577,10 +586,22 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.canvas_qualification }}'
+    assert job['if'] == '${{ !inputs.mcp_boundary && !inputs.canvas_qualification && !inputs.destination_history && !inputs.settings_close_diagnostic }}'
     assert job['timeout-minutes'] == '30'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.canvas_qualification }}"
+    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.mcp_boundary && !inputs.canvas_qualification && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
+    history = workflow['jobs']['destination-history']
+    assert history['if'] == '${{ inputs.destination_history || inputs.settings_close_diagnostic }}'
+    assert history['steps'][0] == {
+        'name': 'Require the fixed navigation selection for diagnostic mode',
+        'if': '${{ inputs.settings_close_diagnostic && !inputs.destination_history }}',
+        'run': 'exit 1',
+    }
+    assert history['steps'][1] == {
+        'name': 'Reject mixed navigation selections',
+        'if': '${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification }}',
+        'run': 'exit 1',
+    }
     # Both opt-ins must fail visibly before setup, not silently drop APP004.
     incompatible = mcp['steps'][1]
     assert incompatible['name'] == 'Reject incompatible browser proof selections'

@@ -97,7 +97,8 @@ test('chat details review only the displayed failure through the shared action',
 test('header sidebar toggle, workspace drill-in and chat selection use shared actions',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
  await renderAct(async()=>{root=create(React.createElement(React.Fragment,null,
-  React.createElement(WorkHeader,{state,act,presentation:{}}),
+  React.createElement(WorkNavigationContext.Provider,{value:{history:null,visitHistory(){}}},
+   React.createElement(WorkHeader,{state,act,presentation:{}})),
   React.createElement(WorkspaceRail,{state,act})))});
  assert.equal(root.root.findByType(WorkspaceRail).findAllByProps({'aria-label':'Close navigation'}).length,0);
  await renderAct(async()=>root.root.findByProps({'aria-label':'Close navigation'}).props.onClick());

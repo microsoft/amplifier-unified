@@ -108,6 +108,16 @@ async def main(home):
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 
     app.router.add_get("/fixture", inspect)
+    if '--navigation-history' in sys.argv:
+        async def history_message(request):
+            service = app['service']
+            session = service._session((await request.json())['sessionId'])
+            await service.on_runtime_event('assistant.message', {
+                'sessionId': session['id'], 'text': 'Open the related conversation.',
+                'generationId': 'history-fixture-generation',
+            })
+            return web.json_response({'messageId': session['messages'][-1]['id']})
+        app.router.add_post('/fixture/history-message', history_message)
     if '--startup-failure' in sys.argv:
         async def fail_startup(request):
             runtime.start_gate.set()
