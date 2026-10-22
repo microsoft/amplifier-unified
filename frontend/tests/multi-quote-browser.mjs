@@ -44,9 +44,11 @@ try{
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Between the passages');
  const second=await passage('```py','\n\nlast passage');await expect(quotes).toHaveCount(2);
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Before the whole message');
- await b.scrollIntoViewIfNeeded();const beforeScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
- await b.getByRole('button',{name:'Reply to message',exact:true}).click();await expect(quotes).toHaveCount(3);
- assert.ok(Math.abs(await page.locator('.a-messages').evaluate(n=>n.scrollTop)-beforeScroll)<=1,'Collecting moved the reading position');
+ const wholeButton=b.getByRole('button',{name:'Reply to message',exact:true});
+ await wholeButton.scrollIntoViewIfNeeded();const beforeScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
+ await wholeButton.click();await expect(quotes).toHaveCount(3);
+ const afterScroll=await page.locator('.a-messages').evaluate(n=>n.scrollTop);
+ assert.ok(Math.abs(afterScroll-beforeScroll)<=1,`Collecting moved the reading position: ${beforeScroll} -> ${afterScroll}`);
  assert.notEqual(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'Message Amplifier');
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('After all references');
  assert.equal((await observe()).sends.length,0,'Collecting must not send');

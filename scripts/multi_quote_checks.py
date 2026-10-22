@@ -92,7 +92,7 @@ def main():
     if build == 0:
         run('source-browser', ['node', 'frontend/tests/multi-quote-browser.mjs'], env=browser_env)
     if args.installed and build == 0:
-        wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', '--no-build-isolation', '--out-dir', str(output / 'wheel')])
+        wheel_code, _ = run('wheel-build', ['uv', 'build', '--wheel', '--offline', '--out-dir', str(output / 'wheel')])
         if wheel_code == 0:
             wheel, = (output / 'wheel').glob('*.whl')
             outside = output / 'installed'; outside.mkdir()
