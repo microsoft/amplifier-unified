@@ -41,6 +41,40 @@ async def test_exact_inline_selection_hide_and_reload_do_not_create_versions(app
     app.clients.attach('reload', resume='one')
     assert any(c['id'] == first['resourceId'] and c['presentation'] == 'saved' for c in choices(app, 'reload'))
     assert app.state['canvasArtifacts'] == original
+
+
+async def test_stateful_transition_refusal_retains_frame_and_explicit_ui_reset(app):
+    first = await published(app, '<input value="saved">', 'html')
+    await command(app, 'canvas.views.status', {**target(first), 'status': 'ready'})
+    args = {'id': first['resourceId'], 'version': 1, 'messageId': 'inline-message', 'presentation': 'inline'}
+    with pytest.raises(AppError) as refused:
+        await command(app, 'canvas.select', args)
+    assert refused.value.code == 'canvas_preview_reset_required'
+    assert view(app)['generation'] == first['generation']
+    with pytest.raises(AppError, match='explicit user'):
+        await command(app, 'canvas.select', {**args, 'resetPreview': True}, origin='agent')
+    await command(app, 'canvas.select', {**args, 'resetPreview': True}, origin='ui')
+    opened = (await command(app, 'canvas.views.inline', {'resourceId': first['resourceId'],
+        'version': 1, 'messageId': 'inline-message', 'previewId': 'stateful', 'presentationRequest': True}))['result']
+    with pytest.raises(AppError) as refused:
+        await command(app, 'canvas.select', {**args, 'presentation': 'canvas'})
+    assert refused.value.code == 'canvas_preview_reset_required'
+    assert view(app, opened['viewId'])['resourceId'] == first['resourceId']
+    await command(app, 'canvas.select', {**args, 'presentation': 'canvas', 'resetPreview': True}, origin='ui')
+    with pytest.raises(AppError, match='Unknown'):
+        view(app, opened['viewId'])
+
+
+async def test_late_inline_mount_does_not_recreate_released_presentation(app):
+    first = await published(app)
+    args = {'id': first['resourceId'], 'version': 1, 'messageId': 'inline-message'}
+    await command(app, 'canvas.select', {**args, 'presentation': 'inline'})
+    await command(app, 'canvas.select', {**args, 'presentation': 'canvas'})
+    with pytest.raises(AppError, match='presentation changed'):
+        await command(app, 'canvas.views.inline', {'resourceId': first['resourceId'], 'version': 1,
+             'messageId': 'inline-message', 'previewId': 'late', 'presentationRequest': True})
+    with app.clients.bind('one'):
+        assert not app.canvas_views.record().get('inline')
     with pytest.raises(AppError, match='published'):
         await command(app, 'canvas.select', {**args, 'messageId': 'wrong', 'presentation': 'inline'})
 
