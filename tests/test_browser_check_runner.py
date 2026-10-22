@@ -442,8 +442,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     tool_previews = 'tests/tool-previews-browser.mjs'
     assert tool_previews in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', tool_previews] for row in plan['scenarios']) == 1
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews}) == 145
-    assert len(readiness_scripts | extended_scripts) == 150
+    attachment_experience = 'tests/attachment-experience-browser.mjs'
+    assert attachment_experience in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', attachment_experience] for row in plan['scenarios']) == 1
+    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience}) == 145
+    assert len(readiness_scripts | extended_scripts) == 151
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
