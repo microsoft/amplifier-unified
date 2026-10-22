@@ -238,6 +238,7 @@ class RuntimeManager:
         self._closed = False
         self._retired = {}
         self._execution_state = None
+        self._configuration_revision = lambda: 0
         self.home = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
@@ -245,6 +246,10 @@ class RuntimeManager:
     def bind_execution_state(self, read):
         """Host-owned synchronous authority; never supplied by a model command."""
         self._execution_state = read
+
+    def bind_configuration_revision(self, read):
+        """Capture host configuration provenance before asynchronous preparation."""
+        self._configuration_revision = read
 
     def _check_execution(self, sid, session=None, *, allow_fenced=False):
         if self._execution_state is None:
@@ -373,6 +378,7 @@ class RuntimeManager:
             raise RuntimeHostClosingError()
         sid = session["id"]
         self._check_execution(sid, session)
+        configuration_revision = self._configuration_revision()
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
@@ -510,7 +516,7 @@ class RuntimeManager:
                         candidate.unlink(missing_ok=True)
                     except OSError:
                         pass  # Preserve the original failed setup diagnosis.
-        row = {"process": proc, "emit": emit, "runtimeOwnerId": str(uuid.uuid4()), "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
+        row = {"process": proc, "emit": emit, "runtimeOwnerId": str(uuid.uuid4()), "configurationRevision": configuration_revision, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
@@ -759,6 +765,7 @@ class RuntimeManager:
                         row["ready"].set_result(data.get("report", {}))
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
+                        "runtimeOwnerId": row['runtimeOwnerId'], "configurationRevision": row['configurationRevision'],
                         "report": data.get("report", {})})
                 elif data.get("type") == "runtime.ownership":
                     row['yielded'] = data.get('status') == 'yielded'

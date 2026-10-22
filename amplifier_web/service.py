@@ -775,6 +775,8 @@ class AppService:
         self.cold_display.track_restored()
         from .status_emitter import create as create_status_emitter
         self.status_emitter = create_status_emitter(self)
+        from .conversation_models import bind_runtime
+        bind_runtime(self)
 
     def default_theme(self):
         for name in ("unified.amplifier.css", "default-theme.css"):
@@ -1722,6 +1724,8 @@ class AppService:
         if runtime is not None and hasattr(runtime, "home"):
             runtime.home = self.data_dir
         self.worktrees.bind_runtime()
+        from .conversation_models import bind_runtime
+        bind_runtime(self)
         self.state["runtime"]["available"] = runtime is not None
         if hasattr(runtime, "retention"):
             self.state["runtime"]["retention"] = dict(runtime.retention.settings)
@@ -4343,9 +4347,8 @@ class AppService:
                 elif session["status"] != "starting":
                     session.pop("progress", None)
                 if payload.get("report"):
-                    session["runtimeReport"] = payload["report"]
-                    if payload["report"].get("root_bundle"):
-                        session["bundle"] = payload["report"]["root_bundle"]
+                    from .conversation_models import accept_report
+                    accept_report(self, session, payload)
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
