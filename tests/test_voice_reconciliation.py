@@ -170,7 +170,7 @@ async def test_live_session_uses_role_seed_and_provider_specific_prompt():
     await call.create('v=0', 'live')
     config = call.manager.request.call_args.kwargs['json']['session']
     assert config['input'][0]['content'][0]['text'] == 'Remember blue.'
-    assert 'Backchannel policy:' in config['instructions'] and 'Do not delegate to the backend when:' in config['instructions']
+    assert 'Backchannel policy:' in config['instructions'] and 'Do not generate <|SpawnThinking|> when:' in config['instructions']
     assert 'amplifier_delegate' not in config['instructions'] and 'Remember blue.' not in config['instructions']
     call.final.set(); await call.close()
 
