@@ -56,8 +56,8 @@ def _desktop_ceiling(policies):
 def _restrict_child_tools(rows, policies, working_dir, modules):
     """Permission lists are boundaries, not additive configuration lists."""
     writers = [row for row in rows if row.get("module") in modules]
-    if not writers:
-        return
+    if not writers and modules != {"tool-image"}:
+        return {}
     from .config import expand_environment
     root = Path(working_dir or Path.cwd()).expanduser().resolve()
 
@@ -85,13 +85,19 @@ def _restrict_child_tools(rows, policies, working_dir, modules):
                 for path in paths(policy.get(denied, []))))
     if any(policy.get("allow_paid") is False for policy in policies):
         restrictions["allow_paid"] = False
+    if modules == {"tool-image"} and any(policy.get("routing_blocked") is True for policy in policies):
+        restrictions["routing_blocked"] = True
+        # Explicit compatibility backends also obey allow_paid. A child must
+        # not escape a routing denial by switching to that older dispatch path.
+        restrictions["allow_paid"] = False
     # Changing a declaration's instance ID must not bypass the parent boundary.
     for row in writers:
         row.setdefault("config", {}).update(copy.deepcopy(restrictions))
+    return restrictions
 
 
 def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None, working_dir=None,
-               retained_image_tools=None):
+               retained_image_tools=None, retained_image_policy=None):
     """Compose immutable agent settings and honor explicit inheritance policies."""
     from amplifier_foundation import deep_merge
     parent, overlay = copy.deepcopy(parent), copy.deepcopy(overlay)
@@ -117,7 +123,15 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
                              for key in ("read_only", "gate_writes")}
                             for row in overlay.get("tools", [])
                             if isinstance(row, dict) and row.get("module") == "tool-computer-use")
-    image_policies = []
+    image_policies = [parent.get("_unified_image_policy", {})]
+    if retained_image_policy is not None:
+        image_policies.append(retained_image_policy)
+    if any(not isinstance(policy, dict) for policy in image_policies):
+        raise ValueError("Inherited image policy must be a dictionary.")
+    for policy in image_policies:
+        if any(key in policy and type(policy[key]) is not bool
+               for key in ("allow_paid", "routing_blocked")):
+            raise ValueError("Inherited image policy flags must be booleans.")
     file_policies = []
     patch_policies = []
     search_configs = []
@@ -133,10 +147,13 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
                 raise ValueError("File tool configuration must be dictionaries.")
             policy = {key: copy.deepcopy(value) for key, value in config.items()
                       if key in {"allowed_read_paths", "allowed_write_paths", "denied_read_paths", "denied_write_paths"}}
-            if row["module"] == "tool-image" and (index != 2 or "allow_paid" in config):
-                # Mounted/replacement declarations are disabled unless literally
-                # True. Only an overlay omission means inherit the parent grant.
-                policy["allow_paid"] = config.get("allow_paid") is True
+            if row["module"] == "tool-image":
+                if index != 2 or "allow_paid" in config:
+                    # Mounted/replacement declarations are disabled unless literally
+                    # True. Only an overlay omission means inherit the parent grant.
+                    policy["allow_paid"] = config.get("allow_paid") is True
+                if config.get("routing_blocked") is True:
+                    policy["routing_blocked"] = True
             if row["module"] == "tool-apply-patch":
                 patch_policies.append(policy)
             else:
@@ -178,7 +195,11 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
         result["tools"] = [row for row in result.get("tools", []) if row.get("module") != "tool-image"]
     _restrict_child_tools(result.get("tools", []), file_policies, working_dir, {"tool-filesystem"})
     _restrict_child_tools(result.get("tools", []), [*file_policies, *patch_policies], working_dir, {"tool-apply-patch"})
-    _restrict_child_tools(result.get("tools", []), image_policies, working_dir, {"tool-image"})
+    # Carry only the effective restrictions, even through an image-free child.
+    # Compose from ancestor/saved authority, not an overlay's internal marker.
+    # Paths become absolute here so a later child's cwd cannot relocate them.
+    result["_unified_image_policy"] = _restrict_child_tools(
+        result.get("tools", []), image_policies, working_dir, {"tool-image"})
     from ..read_policy import policy_paths, restrict_search
     for row in result.get("tools", []):
         if row.get("module") == "tool-search":
@@ -387,9 +408,13 @@ class Children:
         working_dir = getattr(parent.coordinator, "get_capability", lambda _: None)("session.working_dir")
         cwd = Path(working_dir or Path.cwd())
         retained_plan = (session_metadata or {}).get("mount_plan") if resumed else None
+        retained_image_policy = retained_plan.get("_unified_image_policy", {}) if isinstance(retained_plan, dict) else {}
+        if not isinstance(retained_image_policy, dict):
+            raise ValueError("Saved child image policy must be a dictionary.")
         plan = child_plan(parent.coordinator.config, overlay, tool_inheritance=tool_inheritance,
                           hook_inheritance=hook_inheritance, working_dir=cwd,
-                          retained_image_tools=retained_plan.get("tools", []) if isinstance(retained_plan, dict) else None)
+                          retained_image_tools=retained_plan.get("tools", []) if isinstance(retained_plan, dict) else None,
+                          retained_image_policy=retained_image_policy)
         if isinstance(retained_plan, dict):
             # A resumed child must not lose its prior write ceiling merely
             # because its immediate parent currently omits the tool.
