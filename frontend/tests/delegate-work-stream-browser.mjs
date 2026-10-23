@@ -3,6 +3,7 @@
 // canonical detail resolution or cold reopen; test_delegate_work_stream.py owns
 // that independent boundary. Run against built assets in the owned test instance:
 // node tests/delegate-work-stream-browser.mjs (from frontend/).
+// --mobile-only selects 390x844 for all scenes; it does not skip any assertions.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -11,10 +12,61 @@ import {mkdirSync,writeFileSync} from 'node:fs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const mobileOnly=process.argv.includes('--mobile-only');
+const desktop={width:1280,height:1000},mobile={width:390,height:844};
+const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mobile]];
 // Word ranges detect the one-letter-per-line regression that an element box
 // inside the viewport cannot detect. Hit tests also reject floating overlays.
-function measureOwner(element) {
+function measureOwner(element,probe) {
+  if(probe) {
+    // Preserve the existing recenter, then sample in that same browser task.
+    // Two bounded animation frames expose movement; they do NOT prove settlement.
+    if(probe.recenter)element.scrollIntoView({block:'center',inline:'nearest'});
+    const samples=[],sample=phase=>samples.push({stage:probe.stage,phase,
+      expectedRestoredStyle:probe.restoredStyle,...measureOwner(element)});
+    sample('immediate');
+    if(!probe.frames)return samples;
+    return new Promise(resolve=>{
+      let frame,done=false;
+      const finish=error=>{
+        if(done)return;done=true;clearTimeout(timer);cancelAnimationFrame(frame);
+        if(error)samples.push({stage:probe.stage,diagnosticError:String(error).slice(0,500)});
+        resolve(samples);
+      };
+      const timer=setTimeout(()=>finish('Animation-frame diagnostic deadline exceeded'),2000);
+      frame=requestAnimationFrame(()=>{
+        try {
+          sample('animation-frame-1');
+          frame=requestAnimationFrame(()=>{
+            try{sample('animation-frame-2');finish()}catch(error){finish(error)}
+          });
+        }catch(error){finish(error)}
+      });
+    });
+  }
+  // Only geometry and bounded element identifiers from this synthetic fixture:
+  // never page HTML, message bodies, storage, or app/private runtime state.
+  const attribute=(node,key)=>node?.getAttribute(key)?.slice(0,256)??null;
+  const identity=node=>node?{tag:node.tagName,id:attribute(node,'id'),class:attribute(node,'class'),
+    part:attribute(node,'data-part'),role:attribute(node,'role'),
+    operationId:attribute(node.closest('[data-node-id]'),'data-node-id'),
+    workEntry:attribute(node.closest('[data-work-entry]'),'data-work-entry')}:null;
+  const geometry=node=>{
+    if(!node)return null;
+    const css=getComputedStyle(node);
+    return {identity:identity(node),rect:node.getBoundingClientRect().toJSON(),
+      inlineStyle:node.getAttribute('style'),computed:{display:css.display,
+        visibility:css.visibility,position:css.position,zIndex:css.zIndex,
+        pointerEvents:css.pointerEvents,overflowX:css.overflowX,overflowY:css.overflowY,
+        overflowAnchor:css.overflowAnchor,maxWidth:css.maxWidth,overflowWrap:css.overflowWrap}};
+  };
   const button=element.closest('button'),bounds=button.getBoundingClientRect();
+  const pane=element.closest('[data-part="messages"]'),paneRect=pane?.getBoundingClientRect();
+  const paneClient=pane?{left:paneRect.left+pane.clientLeft,top:paneRect.top+pane.clientTop,
+    right:paneRect.left+pane.clientLeft+pane.clientWidth,
+    bottom:paneRect.top+pane.clientTop+pane.clientHeight}:null;
+  const jump=element.closest('[data-part="conversation"]')?.querySelector('.a-chat-jump');
+  const hitSamples=[];
   const words=[],problems=[],walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
   for(let text=walker.nextNode();text;text=walker.nextNode()) {
     for(const match of text.textContent.matchAll(/[\p{L}\p{N}]+/gu)) {
@@ -28,19 +80,43 @@ function measureOwner(element) {
            rect.top<Math.max(0,bounds.top)-1||rect.bottom>Math.min(innerHeight,bounds.bottom)+1)
           problems.push(`clipped word: ${match[0]}`);
         for(const fraction of [0.2,0.5,0.8]) {
-          const hit=document.elementFromPoint(rect.left+rect.width*fraction,rect.top+rect.height/2);
+          const x=rect.left+rect.width*fraction,y=rect.top+rect.height/2;
+          const hit=document.elementFromPoint(x,y);
           if(!hit||!button.contains(hit))problems.push(`covered word: ${match[0]}`);
+          hitSamples.push({word:match[0],wordOffset:match.index,fraction,x,y,
+            hit:identity(hit),hitRect:hit?.getBoundingClientRect().toJSON()??null,
+            nearestButton:identity(hit?.closest('button')),
+            insideJumpControl:!!hit&&!!jump&&jump.contains(hit),
+            insideButton:!!hit&&button.contains(hit),
+            insidePane:paneClient?x>=paneClient.left&&x<=paneClient.right&&y>=paneClient.top&&y<=paneClient.bottom:null});
         }
       }
       words.push({text:match[0],lines:lines.size,rects:rects.map(r=>({x:r.x,y:r.y,width:r.width,height:r.height}))});
     }
   }
   if(!words.length)problems.push('No owner words measured');
-  return {text:element.textContent,words,problems};
+  return {text:element.textContent,words,problems,hitSamples,at:performance.now(),
+    connected:element.isConnected,viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},
+    owner:geometry(element),button:geometry(button),pane:pane?{...geometry(pane),
+      clientRect:paneClient,scrollTop:pane.scrollTop,scrollLeft:pane.scrollLeft,
+      scrollHeight:pane.scrollHeight,clientHeight:pane.clientHeight}:null,
+    jumpContainer:geometry(jump),jumpControl:geometry(jump?.querySelector('button'))};
 }
 const fixture = spawn(root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
   {stdio: ['ignore', 'pipe', 'inherit']});
-let browser,page;
+let browser,page,diagnosticOwner,restoredOwnerStyle,lastOwnerMeasurement;
+const ownerDiagnostics=[];
+const saveOwnerDiagnostics=()=>writeFileSync(root+'test-results/delegate-work-stream-owner-diagnostics.json',
+  JSON.stringify({scope:'synthetic fixture only; frame samples are not proof of settled layout',
+    samples:ownerDiagnostics,lastPoll:lastOwnerMeasurement??null},null,2));
+const recordOwnerDiagnostics=async(stage,{recenter=false,frames=false}={})=>{
+  const samples=await diagnosticOwner.evaluate(measureOwner,
+    {stage,recenter,frames,restoredStyle:restoredOwnerStyle});
+  ownerDiagnostics.push(...samples);
+  saveOwnerDiagnostics();
+  const failed=samples.find(sample=>sample.diagnosticError);
+  if(failed)throw Error(failed.diagnosticError);
+};
 try {
   const ready = await new Promise((resolve, reject) => {
     let text = '';
@@ -103,7 +179,7 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   mkdirSync(root + 'test-results', {recursive: true});
-  for (const [name, viewport] of [['desktop', {width: 1280, height: 1000}], ['mobile', {width: 390, height: 844}]]) {
+  for (const [name, viewport] of viewports) {
     await page.setViewportSize(viewport);
     await page.goto(url);
     await showFixtureConversation(page);
@@ -160,6 +236,10 @@ try {
     const readability=[];
     for(const operation of operations) {
       const owner=operation.locator(':scope > button > .a-work-actor');
+      await diagnosticOwner?.dispose();
+      diagnosticOwner=await owner.elementHandle();
+      restoredOwnerStyle=await owner.getAttribute('style');
+      lastOwnerMeasurement=null;
       await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
       // Wait for layout/scroll settlement without relying on a fixed sleep.
       await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
@@ -167,17 +247,25 @@ try {
     }
     if(name==='mobile') {
       const owner=operations[0].locator(':scope > button > .a-work-actor');
+      await diagnosticOwner?.dispose();
+      diagnosticOwner=await owner.elementHandle();
+      restoredOwnerStyle=await owner.getAttribute('style');
+      lastOwnerMeasurement=null;
       await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
       await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
       // Negative controls: the same oracle must reject both the old narrow
       // column symptom and text covered by another UI element.
       const style=await owner.getAttribute('style');
+      restoredOwnerStyle=style;
       await owner.evaluate(element=>{element.style.maxWidth='8px';element.style.overflowWrap='anywhere'});
       const split=await owner.evaluate(measureOwner);
       assert.ok(split.problems.some(value=>value.startsWith('split word:')),'Readability check must detect split owner words');
       await owner.evaluate((element,style)=>style===null?element.removeAttribute('style'):element.setAttribute('style',style),style);
-      await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
-      await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
+      await recordOwnerDiagnostics('width-restored-and-recentered',{recenter:true,frames:true});
+      await expect.poll(async()=>{
+        lastOwnerMeasurement=await owner.evaluate(measureOwner);
+        return lastOwnerMeasurement.problems;
+      }).toEqual([]);
       await owner.evaluate(element=>{
         const rect=element.getBoundingClientRect(),cover=document.createElement('div');
         cover.id='readability-negative-cover';
@@ -189,8 +277,12 @@ try {
       await page.locator('#readability-negative-cover').evaluate(element=>element.remove());
       // Restore the inspected position after the artificial reflow/overlay.
       // The app may have applied its reading anchor while this control ran.
-      await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
-      await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
+      await recordOwnerDiagnostics('cover-removed-and-recentered',{recenter:true,frames:true});
+      await expect.poll(async()=>{
+        lastOwnerMeasurement=await owner.evaluate(measureOwner);
+        return lastOwnerMeasurement.problems;
+      }).toEqual([]);
+      saveOwnerDiagnostics();
       writeFileSync(root+'test-results/delegate-work-stream-negative-controls.json',JSON.stringify({split,covered},null,2));
       await page.screenshot({path:root+'test-results/delegate-work-stream-mobile-owner.png'});
     }
@@ -211,7 +303,7 @@ try {
   // The already-open page can read published observer records before control
   // returns; observe that boundary before triggering it, including warm reads.
   await control({op:'delegate-observer',instruction,reply,olderRecords:true});
-  await page.setViewportSize({width:1280,height:1000});
+  await page.setViewportSize(mobileOnly?mobile:desktop);
   await page.reload();
   await showFixtureConversation(page);
   const observed=page.locator('[data-group-id="observer-turn@observer-question"]');
@@ -253,7 +345,7 @@ try {
     execution:{turns:[{id:turnId,anchorMessageId:'question',phase:'completed',startedAt:start,endedAt:start+8}],
       nodes:[orphanRequest,orphanWorker,orphanOperation]}
   }}});
-  for(const [name,viewport] of [['desktop',{width:1280,height:1000}],['mobile',{width:390,height:844}]]) {
+  for(const [name,viewport] of viewports) {
     await page.setViewportSize(viewport);
     await page.reload();await showFixtureConversation(page);
     const work=page.locator(`[data-group-id="${turnId}@question"]`),toggle=work.locator(':scope > button');
@@ -285,6 +377,12 @@ try {
   console.log('PASS: synthetic interleaving/layout/actor attribution plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
 } catch(error) {
   if(page&&!page.isClosed()) {
+    // Do not recenter, hide overlays, or change styles to obtain failure evidence.
+    if(diagnosticOwner)await recordOwnerDiagnostics('failure').catch(diagnosticError=>{
+      ownerDiagnostics.push({stage:'failure',diagnosticError:diagnosticError.message});
+      saveOwnerDiagnostics();
+      console.error('Owner diagnostic capture failed:',diagnosticError.message);
+    });
     await page.screenshot({path:root+'test-results/delegate-work-stream-failure.png'}).catch(()=>{});
   }
   throw error;
