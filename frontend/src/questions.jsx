@@ -9,9 +9,10 @@ function ReviewArtifact({reference,question,state,dispatch,onExpandedChange}){
   questionBinding={{questionId:question.id,questionContentRevision:question.contentRevision||1}} onExpandedChange={onExpandedChange}/>;
 }
 
-function QuestionCard({question,sessionId,state,dispatch,onPreviewChange}){
+function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history}){
  const q=question,draftKey=JSON.stringify(['amplifier.questionDraft.v1',state.client?.hostInstanceId||globalThis.location?.origin||'local',sessionId,q.id,q.contentRevision||1]);
  const [text,setText]=useState(()=>{try{return q.status==='pending'?(sessionStorage.getItem(draftKey)||'').slice(0,8000):''}catch{return ''}});
+ const [alternativeOpen,setAlternativeOpen]=useState(()=>!!text);
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[draftWarning,setDraftWarning]=useState('');
  const pending=useRef(false),request=useRef(null);
  const label=q.prompt.replace(/[#*_`]/g,'').slice(0,200),fileContext=useMemo(()=>({sessionId,act:dispatch}),[sessionId,dispatch]);
@@ -46,13 +47,27 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange}){
   catch(error){setError(error.message)}finally{pending.current=false;setBusy(false)}
  }
  const delivery=q.delivery?.status;
- return <article className="a-question" aria-label={`Question ${q.id}`} data-question-id={q.id}>
-  <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
+ const original=<>
   <Markdown text={q.prompt} className="a-question-prompt" userContent fileContext={fileContext}/>
   <Markdown text={q.dependency} className="a-caption a-question-dependency" userContent fileContext={fileContext}/>
-  {!!q.artifacts?.length&&<div className="a-question-artifacts" aria-label="Documents for this decision">{q.artifacts.map(ref=><ReviewArtifact key={`${ref.id}:${ref.version}`} reference={ref} question={q} state={state} dispatch={dispatch}
+ </>;
+ const answerEditor=<>
+  <label className="a-question-text">Your answer<textarea aria-label={`Your answer: ${label}`} value={text} rows={2} maxLength={8000} onChange={event=>editText(event.target.value)}/></label>
+  <div className="a-dialog-actions"><button className="a-primary" data-action="question.answer" disabled={busy||!text.trim()}>{busy?'Saving answer…':'Submit answer'}</button></div>
+ </>;
+ return <details className="a-question-item" open={history?undefined:true}>
+  <summary className="a-question-summary" hidden={!history} aria-label={`${q.status==='answered'?'Answered':'Closed'} question: ${label}`}>
+   <strong>{q.status==='answered'?'Answered':'Closed question'}</strong>
+   <span><ReactMarkdown allowedElements={['strong','em','del','code','br']} unwrapDisallowed skipHtml>{q.answer?.text||q.prompt}</ReactMarkdown></span>
+  </summary>
+  <article className="a-question" aria-label={`Question ${q.id}`} data-question-id={q.id}>
+  <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
+  {q.status==='pending'?<div key="prompt">{original}</div>:<div key="answer" className="a-question-result" role="status">
+   {q.status==='answered'?<><strong>Your answer:</strong><Markdown text={q.answer.text} userContent fileContext={fileContext}/><small>{delivery==='accepted'?'Answer saved and delivered to Amplifier.':delivery==='sending'?'Answer saved. Confirming delivery…':delivery==='rejected'?'Answer saved. Amplifier could not accept it.': 'Answer saved. Delivery is unconfirmed; it has not been sent again.'}</small>{q.delivery?.message&&delivery!=='accepted'&&<p>{q.delivery.message}</p>}</>:<small>{q.status==='superseded'?'Replaced by a newer question.':'Question cancelled without an answer.'}</small>}
+  </div>}
+  {!!q.artifacts?.length&&<div key="review-artifacts" className="a-question-artifacts" aria-label="Documents for this decision">{q.artifacts.map(ref=><ReviewArtifact key={`${ref.id}:${ref.version}`} reference={ref} question={q} state={state} dispatch={dispatch}
    onExpandedChange={expanded=>onPreviewChange(q.id,`${ref.id}:${ref.version}`,expanded)}/>)}</div>}
-  {q.status==='pending'?<form onSubmit={event=>submit(event)} aria-label={`Answer: ${label}`}>
+  {q.status==='pending'?<form key="decision" onSubmit={event=>submit(event)} aria-label={`Answer: ${label}`}>
    <fieldset disabled={busy}><legend className="a-sr-only">{label}</legend>
     {q.options.map((choice,index)=><div key={choice.id}>
      <button type="button" className="a-question-option" data-action="question.answer" aria-describedby={choice.description?`${q.id}-choice-${index}-description`:undefined} onClick={event=>submit(event,choice.id)}>
@@ -60,16 +75,19 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange}){
      </button>
      {choice.description&&<div id={`${q.id}-choice-${index}-description`} className="a-question-option-description"><Markdown text={choice.description} userContent fileContext={fileContext}/></div>}
     </div>)}
-    {q.allowFreeText&&<label className="a-question-text">{q.options.length?'Or write your own answer':'Your answer'}<textarea aria-label={`Your answer: ${label}`} value={text} rows={2} maxLength={8000} onChange={event=>editText(event.target.value)}/></label>}
+    {q.allowFreeText&&(q.options.length?<details className="a-question-alternative" open={alternativeOpen} onToggle={event=>setAlternativeOpen(event.currentTarget.open)}>
+     <summary>Write a different answer</summary>{answerEditor}
+    </details>:answerEditor)}
    </fieldset>
-   <div className="a-dialog-actions">{q.allowFreeText&&<button className="a-primary" data-action="question.answer" disabled={busy||!text.trim()}>{busy?'Saving answer…':'Submit answer'}</button>}{!q.required&&<button className="a-soft" type="button" data-action="question.cancel" disabled={busy} onClick={skip}>Skip question</button>}</div>
-   {q.required&&<p className="a-caption">This step waits for your answer. Other work can continue.</p>}
-  </form>:<div className="a-question-result" role="status">
-   {q.status==='answered'?<><strong>Your answer:</strong><Markdown text={q.answer.text} userContent fileContext={fileContext}/><small>{delivery==='accepted'?'Answer saved and delivered to Amplifier.':delivery==='sending'?'Answer saved. Confirming delivery…':delivery==='rejected'?'Answer saved. Amplifier could not accept it.': 'Answer saved. Delivery is unconfirmed; it has not been sent again.'}</small>{q.delivery?.message&&delivery!=='accepted'&&<p>{q.delivery.message}</p>}</>:<small>{q.status==='superseded'?'Replaced by a newer question.':'Question cancelled without an answer.'}</small>}
-  </div>}
+   {!q.required&&<div className="a-dialog-actions"><button className="a-soft" type="button" data-action="question.cancel" disabled={busy} onClick={skip}>Skip question</button></div>}
+   {q.required&&<details className="a-question-context"><summary>Question context</summary><p className="a-caption">This step waits for your answer. Other work can continue.</p></details>}
+  </form>:<details key="original" className="a-question-original">
+   <summary>Original question &amp; provenance</summary>{original}
+   {q.answer&&<p className="a-caption">Answer to question revision {q.answer.questionRevision}.</p>}
+  </details>}
   {error&&<p role="alert">{error}</p>}
   {draftWarning&&<p role="status">{draftWarning}</p>}
- </article>;
+ </article></details>;
 }
 
 export function activeQuestions(session){
@@ -100,6 +118,6 @@ export function Questions({session,state={},dispatch,history=false,reviewState})
   ?previews[q.id].owner===owner
   :history?!active.includes(q):active.includes(q));
  if(!questions.length)return null;
- const cards=questions.map(q=><QuestionCard key={`${q.id}:${q.contentRevision||1}`} question={q} sessionId={session.id} state={state} dispatch={dispatch} onPreviewChange={onPreviewChange}/>);
+ const cards=questions.map(q=><QuestionCard key={`${q.id}:${q.contentRevision||1}`} question={q} sessionId={session.id} state={state} dispatch={dispatch} onPreviewChange={onPreviewChange} history={history}/>);
  return history?<details className="a-question-history"><summary>Answers and closed questions ({questions.length})</summary><div className="a-questions">{cards}</div></details>:<section tabIndex={-1} className="a-questions" data-part="questions" aria-label="Questions for you">{cards}</section>;
 }

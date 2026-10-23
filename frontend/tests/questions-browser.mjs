@@ -62,6 +62,12 @@ try{
    await questions.click();await expect(questions.locator('..')).toHaveAttribute('open','');
   }
    await page.locator('.a-question-history > summary').click();
+   // Each historical answer stays compact until explicitly opened.
+   const entries=page.locator('.a-question-history .a-question-item');
+   for(const entry of await entries.all()){
+    await expect(entry).not.toHaveAttribute('open','');
+    await entry.locator(':scope > summary').click();
+   }
  };
  const close=async()=>{
   // Closing is optimistic; do not reload until the closed panel is saved.
@@ -78,12 +84,35 @@ try{
  await expect(card(ready.required)).toBeVisible();
  const uniqueQuestions=async()=>{for(const id of [ready.required,ready.optional,ready.skipped])await expect(card(id)).toHaveCount(1)};
  await uniqueQuestions();
+ const alternative=card(ready.required).locator('.a-question-alternative');
+ if(process.env.AMPLIFIER_QUESTIONS_NEGATIVE==='v2-density'){
+  // Deliberately restore the old expanded editor: the approved-density oracle
+  // below must fail, independently of Markdown/version/security assertions.
+  await alternative.evaluate(element=>{element.open=true});
+ }
+ await expect(alternative).not.toHaveAttribute('open','');
+ await expect(card(ready.required).getByRole('textbox')).toBeHidden();
+ for(const width of [1280,390,320]){
+  await page.setViewportSize({width,height:900});
+  await card(ready.required).scrollIntoViewIfNeeded();
+  await expect(card(ready.required).getByRole('textbox')).toBeHidden();
+  assert.ok(await card(ready.required).evaluate(element=>element.scrollWidth<=element.clientWidth+1),'Choice question fits narrow view');
+  if(output)await page.screenshot({path:join(output,`question-choice-collapsed-${width}.png`)});
+ }
+ await page.setViewportSize({width:1280,height:900});
+ await card(ready.required).getByText('Question context',{exact:true}).click();
  await expect(card(ready.required).getByText('This step waits for your answer. Other work can continue.')).toBeVisible();
+ await card(ready.required).getByText('Question context',{exact:true}).click();
  assert.equal(await card(ready.required).getByRole('button',{name:'Skip question'}).count(),0);
  // A neighboring handoff must not reuse the questions component identity.
  // Keep the strict, unscoped question selectors: duplicate cards are a defect.
  const questionDraft='Keep this question draft through neighboring updates';
+ await alternative.locator(':scope > summary').click();
  await card(ready.required).getByRole('textbox').fill(questionDraft);
+ await alternative.locator(':scope > summary').click();
+ await expect(card(ready.required).getByRole('textbox')).toBeHidden();
+ await alternative.locator(':scope > summary').click();
+ await expect(card(ready.required).getByRole('textbox')).toHaveValue(questionDraft);
  const draftSaved=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='view.update'&&response.request().postDataJSON()?.args?.patch?.draft==='Keep this unsent message');
  await composer().fill('Keep this unsent message');await draftSaved;
  await uniqueQuestions();await expect(card(ready.required).getByRole('textbox')).toHaveValue(questionDraft);
@@ -93,6 +122,8 @@ try{
  await expect(handoff).toHaveCount(1);await expect(handoff).toBeVisible();await uniqueQuestions();
  await expect(card(ready.required).getByRole('textbox')).toHaveValue(questionDraft);
  await page.reload();await expect(card(ready.required)).toBeVisible();await uniqueQuestions();
+ await expect(card(ready.required).locator('.a-question-alternative')).toHaveAttribute('open','');
+ await expect(card(ready.required).getByRole('textbox')).toHaveValue(questionDraft);
  await expect(handoff).toHaveCount(1);await expect(handoff).toBeVisible();
  await expect(composer()).toHaveDraft('Keep this unsent message');
  await handoff.getByRole('button',{name:'Not now',exact:true}).click();
@@ -294,6 +325,25 @@ try{
  await expect(q).toHaveCount(0);
  await mountedFrame.dispose();
  await history();await expect(card(review.question.id).locator('.a-question-result strong').filter({hasText:'Proceed'})).toBeVisible();
+ const answeredCard=card(review.question.id);
+ await expect(answeredCard.locator('.a-question-original')).not.toHaveAttribute('open','');
+ await expect(answeredCard.locator('.a-question-prompt')).toBeHidden();
+ const answerFirst=await answeredCard.evaluate(element=>{
+  const answer=element.querySelector('.a-question-result'),refs=element.querySelector('.a-question-artifacts');
+  return !!(answer.compareDocumentPosition(refs)&Node.DOCUMENT_POSITION_FOLLOWING);
+ });
+ assert.equal(answerFirst,true,'Saved answer comes before review cards and original prose');
+ await expect(answeredCard.locator('.a-compact-artifact')).toHaveCount(2);
+ for(const width of [1280,390,320]){
+  await page.setViewportSize({width,height:900});
+  await answeredCard.scrollIntoViewIfNeeded();
+  assert.ok(await answeredCard.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'Answered card fits narrow view');
+  if(output)await page.screenshot({path:join(output,`question-answer-first-${width}.png`)});
+ }
+ await answeredCard.getByText('Original question & provenance',{exact:true}).click();
+ await expect(answeredCard.locator('.a-question-prompt h1')).toHaveText('Choose the peer presentation');
+ await expect(answeredCard.getByText('Answer to question revision 1.',{exact:true})).toBeVisible();
+ await answeredCard.getByText('Original question & provenance',{exact:true}).click();
  const savedQuestion=(await check()).questions.find(row=>row.id===review.question.id);
  assert.equal(savedQuestion.answer.text,answerDraft);assert.equal(savedQuestion.answer.questionRevision,1);
  assert.equal(savedQuestion.answer.artifacts[0].version,1);
