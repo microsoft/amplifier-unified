@@ -149,10 +149,10 @@ function WorkBrowser({host,workspaceHost,state,act,dispatch,presentation,resourc
   </>}
  </>}</WorkLandingFrame>;
 }
-export function WorkSurface({shell,state,act,dispatch}){
+export function WorkSurface({shell,state,act,dispatch,navigationRef}){
  const chats=shell.composition.instances.find(row=>row.package==='builtin.chats'),workspaces=shell.composition.instances.find(row=>row.package==='builtin.workspaces');
  if(!chats)return <div className="a-work-browser"><p>Your custom navigation is available in the sidebar. This browser uses the standard Chats component.</p><a href="?shell=recovery">Open with standard navigation</a></div>;
- return <WorkspaceSettingsBoundary state={state} act={act}>{visible=><WorkspaceResourcesOwner key={visible.client?.id||'local'} state={visible} act={act}>{resourceSlot=><div className="a-work-browser-host" hidden={workSurface(visible)==='chat'}>{workSurface(visible)==='home'?<AdaptiveWorkHome host={shell.hostFor(chats)} state={visible} act={act} presentation={shell.composition.presentation}/>:<WorkBrowser key={workSurface(visible)+':'+(visible.view.workWorkspaceId||'')} presentation={shell.composition.presentation} host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={visible} act={act} dispatch={dispatch} resourceSlot={resourceSlot}/>}</div>}</WorkspaceResourcesOwner>}</WorkspaceSettingsBoundary>;
+ return <WorkspaceSettingsBoundary state={state} act={act} dispatch={dispatch} navigationRef={navigationRef}>{visible=><WorkspaceResourcesOwner key={visible.client?.id||'local'} state={visible} act={act}>{resourceSlot=><div className="a-work-browser-host" hidden={workSurface(visible)==='chat'}>{workSurface(visible)==='home'?<AdaptiveWorkHome host={shell.hostFor(chats)} state={visible} act={act} presentation={shell.composition.presentation}/>:<WorkBrowser key={workSurface(visible)+':'+(visible.view.workWorkspaceId||'')} presentation={shell.composition.presentation} host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={visible} act={act} dispatch={dispatch} resourceSlot={resourceSlot}/>}</div>}</WorkspaceResourcesOwner>}</WorkspaceSettingsBoundary>;
 }
 
 // Live controls stay outside the conversation, which is hidden during browsing.

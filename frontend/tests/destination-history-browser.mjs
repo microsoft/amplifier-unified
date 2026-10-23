@@ -687,6 +687,49 @@ try{
  await expect.poll(async()=>(await state()).canvas.id).toBe(successor.id);
  assert.deepEqual(await saved(),settingsTrail);
  await action('canvas.visibility',{open:false});
+ // Workspace settings has its own private editor registry. Local navigation
+ // must consult it before the host changes the route or history branches.
+ await headerHome.click();
+ await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace.id,workWorkspaceTab:'details',workWorkspaceSettings:'providers'}});
+ await action('session.select',{id:b});await back.click();
+ await expect.poll(async()=>(await state()).view.workSurface).toBe('workspace');
+ const workspaceSettings=page.getByRole('region',{name:'Workspace configuration'});
+ await expect(workspaceSettings).toBeVisible();
+ await workspaceSettings.getByRole('button',{name:'Add provider',exact:true}).click();
+ await workspaceSettings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();
+ const workspaceEdit=workspaceSettings.locator('[id$="provider-config"]');
+ await workspaceEdit.fill('{"unsaved-workspace-navigation":');
+ const workspaceDirtyTrail=await saved(),workspaceCommands=[];
+ assert.ok(workspaceDirtyTrail.cursor<workspaceDirtyTrail.entries.length-1,'Retain a real Forward branch');
+ const recordWorkspaceCommand=request=>{
+  if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')workspaceCommands.push(request.postDataJSON());
+ };
+ page.on('request',recordWorkspaceCommand);
+ for(const trigger of [
+  ()=>back.click(),()=>forward.click(),
+  async()=>{await menu.click();await placeRow(page,{kind:'home'}).click()},
+  ()=>headerHome.click(),()=>page.getByRole('button',{name:'Amplifier Home',exact:true}).click(),
+  ()=>page.getByRole('group',{name:'Workspace view',exact:true}).getByRole('button',{name:'Files',exact:true}).click(),
+ ]){
+  await trigger();
+  const prompt=page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true});
+  await expect(prompt).toBeVisible();
+  assert.equal((await state()).view.workSurface,'workspace','Prompt must precede shared navigation');
+  assert.deepEqual(await saved(),workspaceDirtyTrail,'Prompt must precede trail/MRU mutation');
+  await prompt.getByRole('button',{name:'Keep settings open',exact:true}).click();
+  await expect(prompt).toHaveCount(0);
+  await expect(workspaceEdit).toHaveValue('{"unsaved-workspace-navigation":');
+  assert.deepEqual(await saved(),workspaceDirtyTrail,'Cancellation retains visit keys/cursor/Forward/MRU');
+ }
+ assert.equal(workspaceCommands.some(command=>['session.select','session.draft','workspace.select'].includes(command.action)||command.action==='view.update'&&['workSurface','workWorkspaceTab'].some(key=>Object.hasOwn(command.args.patch||{},key))),false,'Cancelled local navigation never reached the host');
+ await menu.click();await placeRow(page,{kind:'home'}).click();
+ await page.getByRole('alertdialog').getByRole('button',{name:'Discard changes',exact:true}).click();
+ await expect.poll(async()=>(await state()).view.workSurface).toBe('home');
+ await expect.poll(async()=>(await saved()).recent[0].kind).toBe('home');
+ page.off('request',recordWorkspaceCommand);
+ await writeFile(path.join(out,'workspace-settings-history-guard.json'),JSON.stringify({cancelledRoutes:6,sharedRouteHeld:true,historyAndForwardHeld:true,discardNavigated:true,privateDraftSent:workspaceCommands.some(command=>JSON.stringify(command).includes('unsaved-workspace-navigation'))},null,2));
+ assert.equal(workspaceCommands.some(command=>JSON.stringify(command).includes('unsaved-workspace-navigation')),false);
+ await action('session.select',{id:b});
  // Keep the existing chrome spacing and New chat geometry; do not mistake
  // deduplication for permission to redesign the sidebar or shrink touch targets.
  const layoutMeasurements=[],longTitle='Beta — a deliberately long chat title for reviewing navigation without losing the current working context',
