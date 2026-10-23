@@ -6,12 +6,12 @@ import {mkdir} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/voice_work_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser;
+let browser,page;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),30000);fixture.once('exit',()=>{clearTimeout(timer);reject(Error('Fixture exited'))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data.url)}}catch{}})});
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+ page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const pane=page.locator('.a-messages'),row=id=>pane.locator(`[data-message-id="${id}"]`);
  const group=input=>pane.locator(`[data-voice-work-group="true"][data-work-input-id="${input}"]`);
@@ -108,7 +108,11 @@ try{
  }
 
  // Exercise a real older browser-detail page, not just scrolling a short DOM.
- await fixturePost('scrollback');await page.reload();await showFixtureConversation(page);await workReady();
+ await fixturePost('scrollback');await page.reload();await showFixtureConversation(page);
+ // The earlier explicit reveal restores a focused window across reload.
+ // Return through the real control before testing recent→older paging.
+ const latest=page.getByRole('button',{name:'Return to latest',exact:true});
+ await expect(latest).toBeVisible();await latest.click();await workReady();
  await expect(row('voice-user')).toHaveCount(0);
  for(let attempt=0;attempt<5&&await row('voice-user').count()===0;attempt++){
   const older=page.getByRole('button',{name:'Load earlier conversation',exact:true});
@@ -125,8 +129,17 @@ try{
  await summary.click();await expect(summary).toHaveAttribute('aria-expanded','false');
  await page.setViewportSize({width:390,height:844});await summary.focus();await page.keyboard.press('Space');
  await expect(summary).toHaveAttribute('aria-expanded','true');await expect(row('backend-result').locator('strong')).toBeVisible();
+ await row('backend-result').scrollIntoViewIfNeeded();await expect(row('backend-result').locator('strong')).toBeInViewport();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  if(process.env.EVIDENCE_DIR)await page.screenshot({path:process.env.EVIDENCE_DIR+'/voice-work-mobile.png'});
  const after=await inspect();assert.equal(after.historyUnchanged,true);assert.equal(after.runtimeSends,0);assert.deepEqual(errors,[]);
  console.log('PASS: first-chunk voice grouping before paint, exact owning work groups, nested final text/actions, no duplicate/orphan drops, spoken/typed/unknown separation, keyboard reveal/reload/paged scrollback/mobile, unchanged original history and zero model sends.');
+}catch(error){
+ if(page)console.error('Synthetic fixture diagnostic: '+JSON.stringify(await page.evaluate(()=>{
+  const state=window.amplifier?.getState(),session=state?.sessions?.find(row=>row.id===state.selectedSessionId),pane=document.querySelector('.a-messages');
+  return {projection:pane?.dataset.workProjection,busy:pane?.getAttribute('aria-busy'),messageWindow:session?.messageWindow,
+   executionWindow:session?.executionWindow,messageCount:session?.messages?.length,focus:state?.view?.messageFocus,
+   historyControls:document.querySelector('.a-session-history')?.textContent,workGroups:pane?.querySelectorAll('[data-voice-work-group]').length};
+ }).catch(()=>({pageUnavailable:true}))));
+ throw error;
 }finally{await browser?.close();fixture.kill('SIGTERM');}

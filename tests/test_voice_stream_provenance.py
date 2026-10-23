@@ -38,11 +38,16 @@ async def test_worker_first_voice_chunk_keeps_delivered_owner_through_browser_pr
         app.state['voice'].update(status='connected', sessionId=sid)
         # A newer queued input is not the owner of already-running output.
         session['execution'] = {'nodes': [], 'turns': [], 'currentTurnId': 'typed-queued'}
-        snapshots = []
+        canonical, snapshots = [], []
 
         async def emit(kind, payload):
             await app.on_runtime_event(kind, payload)
             if kind == 'assistant.delta':
+                canonical.append((session['streaming'], session.get('streamingInputId')))
+                # Stream mutations are coalesced before receiving a durable
+                # revision. Observe the same flush used by external reads,
+                # rather than a cached projection of the previous revision.
+                await app._flush_pending_progress()
                 visible = next(row for row in app.browser_state()['sessions'] if row['id'] == sid)
                 snapshots.append((visible['streaming'], visible.get('streamingInputId')))
 
@@ -70,7 +75,7 @@ async def test_worker_first_voice_chunk_keeps_delivered_owner_through_browser_pr
         manager = RuntimeManager()
         manager.workers[sid] = row
         await manager._read(sid, row)
-        assert snapshots == [
+        assert canonical == snapshots == [
             ('First voice chunk', 'voice:call:one'),
             ('First voice chunk and more', 'voice:call:one'),
             ('Typed while the call remains connected', 'typed-current'),
