@@ -222,3 +222,26 @@ async def test_reviewed_backpressured_test_never_wakes_on_queue_tick(app, queue,
     assert wait['status'] == 'claimed' and wait['open'] is False
     assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (wait['continuationId'],)).fetchone()
     assert [action for action, _ in backend].count('execute') == 1
+
+
+async def test_later_test_outcome_revision_is_not_hidden_by_review(app, queue, backend):
+    args, notification_id = await ready(app, queue)
+    await acknowledge(app, args)
+    receipt = record(queue, app)
+    # Exercise the shared host outcome publisher with a newer exact observation;
+    # this is not a second test execution or an inference from cleanup success.
+    revision = args['outcomeRevision'] + 1
+    receipt['terminalOutcome'] = {**receipt['terminalOutcome'], 'outcomeRevision': revision,
+        'outcome': 'unknown', 'qualified': False, 'text': 'A later host observation requires review.'}
+    receipt['outcomeRevision'] = revision
+    app.collaboration.enqueue_continuation(receipt)
+    next_id = app.collaboration.continuation_identity(receipt['subscription'], revision)
+    assert app.collaboration.receipt(notification_id)['delivery'] == 'suppressed'
+    assert app.collaboration.receipt(next_id)['delivery'] == 'queued'
+    page = (await app.dispatch('workspace.tests.result', {**scope(app), 'requestId': 'check'}))['result']
+    latest = page['check']['notificationReview']
+    assert not latest['acknowledged'] and latest['review']['args']['outcomeRevision'] == revision
+    with pytest.raises(AppError, match='exact result changed'):
+        await acknowledge(app, args, 'old-review')
+    assert app.collaboration.receipt(next_id)['delivery'] == 'queued'
+    assert [action for action, _ in backend].count('execute') == 1
