@@ -15,6 +15,33 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const mobileOnly=process.argv.includes('--mobile-only');
 const desktop={width:1280,height:1000},mobile={width:390,height:844};
 const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mobile]];
+const navigationEntries=[];
+async function enterStreamConversation(page,expectedSessionId,stage) {
+  // Keep the shared Home-to-chat setup and desktop pinned preference intact.
+  await showFixtureConversation(page);
+  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+  assert.equal(selected,expectedSessionId,'Fixture must retain its selected chat');
+  const narrow=await page.evaluate(()=>matchMedia('(max-width: 900px)').matches);
+  const navigation=page.locator('#workspace-navigation');
+  let closed=false;
+  if(narrow) {
+    await expect(navigation).toHaveAttribute('role','dialog');
+    if(await navigation.getAttribute('aria-modal')==='true') {
+      await page.getByRole('button',{name:'Close navigation',exact:true}).click();
+      closed=true;
+    }
+    await expect(navigation).toBeHidden();
+    await expect(page.locator('#navigation-toggle')).toHaveAttribute('aria-expanded','false');
+  }
+  const pane=page.locator('[data-part="messages"]');
+  await expect(pane).toBeVisible();
+  await expect(pane).toHaveAttribute('data-session-id',selected);
+  const after=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+  assert.equal(after,selected,'Closing navigation must not select another chat');
+  navigationEntries.push({stage,viewport:page.viewportSize(),selectedBefore:selected,
+    selectedAfter:after,narrow,closed,navigationHidden:await navigation.isHidden()});
+  writeFileSync(root+'test-results/delegate-work-stream-navigation-entry.json',JSON.stringify(navigationEntries,null,2));
+}
 // Word ranges detect the one-letter-per-line regression that an element box
 // inside the viewport cannot detect. Hit tests also reject floating overlays.
 function measureOwner(element,probe) {
@@ -182,7 +209,7 @@ try {
   for (const [name, viewport] of viewports) {
     await page.setViewportSize(viewport);
     await page.goto(url);
-    await showFixtureConversation(page);
+    await enterStreamConversation(page,alpha,`stream-${name}`);
     await page.getByRole('textbox', {name: 'Message Amplifier'}).waitFor();
     const work = page.locator(`[data-group-id="${turnId}@question"]`);
     const toggle = work.locator(':scope > button');
@@ -305,7 +332,7 @@ try {
   await control({op:'delegate-observer',instruction,reply,olderRecords:true});
   await page.setViewportSize(mobileOnly?mobile:desktop);
   await page.reload();
-  await showFixtureConversation(page);
+  await enterStreamConversation(page,alpha,'observer');
   const observed=page.locator('[data-group-id="observer-turn@observer-question"]');
   const observedToggle=observed.locator(':scope > button');
   await expect(observedToggle).toBeVisible();
@@ -347,7 +374,7 @@ try {
   }}});
   for(const [name,viewport] of viewports) {
     await page.setViewportSize(viewport);
-    await page.reload();await showFixtureConversation(page);
+    await page.reload();await enterStreamConversation(page,alpha,`nested-${name}`);
     const work=page.locator(`[data-group-id="${turnId}@question"]`),toggle=work.locator(':scope > button');
     await expect(toggle).toBeVisible();
     if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
