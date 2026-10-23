@@ -110,23 +110,23 @@ class WorkWindows:
         # while transcript/window navigation never broadens the event source.
         return hashlib.sha256(repr(tuple(source.get(key) for key in IDENTITY_FIELDS)).encode()).hexdigest()
 
-    def _notify(self, identity):
+    def _notify(self, identity, *, notify=True):
         projections = getattr(self.service, 'projections', None)
         if projections is not None:
             projections.detail_bodies.pop(identity, None)
         event = getattr(self.service, 'event_log_view', None)
-        if event is not None:
+        if event is not None and notify:
             event._notify_work(identity)
 
-    def _state(self, identity, value):
+    def _state(self, identity, value, *, notify=True):
         self.status.pop(identity, None)
         self.status[identity] = value
         while len(self.status) > MAX_PAGES:
             retired, _ = self.status.popitem(last=False)
             self.retry_at.pop(retired, None)
-        self._notify(identity)
+        self._notify(identity, notify=notify)
 
-    def invalidate(self, identities=None):
+    def invalidate(self, identities=None, *, notify=True):
         for identity in set(self.current) | set(self.pending) | set(self.epochs):
             if identities is None or identity in identities:
                 self.epoch += 1
@@ -136,7 +136,8 @@ class WorkWindows:
                     self.epochs.popitem(last=False)
                 current = self.status.get(identity)
                 if current and current.get('current'):
-                    self._state(identity, {**current, 'current': False, 'status': 'loading'})
+                    self._state(identity, {**current, 'current': False, 'status': 'loading'},
+                                notify=notify)
 
     def request(self, identity):
         if self.closed or getattr(self.service, 'closed', False):

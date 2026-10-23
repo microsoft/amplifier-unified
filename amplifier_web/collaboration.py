@@ -104,7 +104,7 @@ def definitions(schema, string):
         }, ["sessionId"])),
         "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
             **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
-        "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
+        "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result or workspace.tests.read/result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request. scope=all never widens request-participant/workspace authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
@@ -250,7 +250,8 @@ class Collaboration:
         actor = PRINCIPAL.get()
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         if origin not in {"ui", "user"} and actor and actor != native:
-            self.error("A child cannot borrow its root's collaboration authority.")
+            from .coordination_guidance import ROOT_SCOPE_MESSAGE
+            self.error(ROOT_SCOPE_MESSAGE)
         if source.get("sessionKind", "root") != "root":
             self.error("Collaboration belongs to ordinary root conversations.")
         return source

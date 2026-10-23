@@ -208,11 +208,6 @@ try{
  assert.equal(targets.runners.length,0);
  await targetsRegion.getByRole('heading',{name:'Connected test machines',exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/connection-check-narrow.png'});
- await page.setViewportSize({width:1100,height:900});
- await expect(targetsRegion.getByText('Waiting for room on this test machine. Existing work can continue.',{exact:true})).toBeVisible();
- await targetsRegion.getByRole('heading',{name:'Connected test machines',exact:true}).scrollIntoViewIfNeeded();
- await page.screenshot({path:'/tmp/connection-check-desktop.png'});
- await page.setViewportSize({width:390,height:844});
  await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'testing');
  await expect(targetsRegion.getByText('Waiting for room on this test machine. Existing work can continue.',{exact:true})).toBeVisible();
  assert.equal(targetWrites,1);
@@ -260,8 +255,24 @@ try{
  await expect(targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true})).toHaveValue('0');
  await targetsRegion.scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/registered-test-machines-browser.png',fullPage:true});
+ // Capture the optional desktop evidence after the cold-reopen assertions.
+ // Resizing Settings changes browser history asynchronously; do not combine
+ // that separate transition with the reload under test.
+ await page.setViewportSize({width:1100,height:900});
+ await expect(targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true})).toBeVisible();
+ await targetsRegion.getByRole('heading',{name:'Connected test machines',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:'/tmp/connection-check-desktop.png'});
 
  assert.deepEqual(errors,[]);
  console.log('PASS: global settings without a runner, zero override, lost-acknowledgement readback without replay, stale writer protection, preserved draft, narrow layout and cold reopen');
-}catch(error){failure=error;throw error}
+}catch(error){
+ failure=error;
+ await page?.screenshot({path:'/tmp/testing-settings-failure.png',fullPage:true}).catch(()=>{});
+ const state=await page?.evaluate(()=>({url:location.href,panel:window.amplifier?.getState()?.view?.panel,
+  route:document.querySelector('.a-settings-experience')?.dataset.settingsRoute,
+  compact:document.querySelector('.a-settings-experience')?.dataset.compact,
+  buttons:[...document.querySelectorAll('.a-settings-mobile-head button')].map(item=>item.getAttribute('aria-label'))})).catch(()=>null);
+ console.error(JSON.stringify({pageErrors:errors,settingsState:state}));
+ throw error;
+}
 finally{await finishFixture({label:'Testing settings fixture',close:[['Testing settings browser',()=>browser?.close()]],stop,originalError:failure})}

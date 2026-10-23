@@ -217,12 +217,55 @@ async def test_missing_member_has_no_preview_and_missing_caller_does_not_refresh
 
 async def test_child_principal_and_internal_caller_cannot_borrow_brief(app):
     source, value = await roster(app)
-    with pytest.raises(AppError, match='child cannot borrow'):
+    before = app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall()
+    with pytest.raises(AppError, match='child cannot borrow') as refused:
         await app.app_bridge('dispatch', {'action': 'assignment.brief',
             'args': {'sessionId': source['id']}, '_runtimeSessionId': 'child-worker'}, source['id'])
+    assert 'return the requested action, completed effects' in str(refused.value)
+    assert 'Do not retry with a root ID' in str(refused.value)
+    assert 'does not add a requirement for new user approval' in str(refused.value)
+    assert refused.value.status == 403
+    assert app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall() == before
     source['sessionKind'] = 'internal'
     with pytest.raises(AppError, match='ordinary root'):
         await brief(app, source)
+
+
+async def test_current_orientation_offers_one_passive_brief_without_reading_roster(app, monkeypatch):
+    from amplifier_web.coordination_delivery import CoordinationDelivery
+    from test_coordination_delivery import Previous, request, observation, bound_transport
+    from amplifier_web import assignment_brief
+    source, value = await roster(app, 4)
+    before = app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall()
+    with monkeypatch.context() as guard:
+        guard.setattr(assignment_brief, 'read', Mock(side_effect=AssertionError('No automatic roster read')))
+        guard.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('No history hydration')))
+        async def bridge(operation, args):
+            return await app.app_bridge(operation, {**args, **bound_transport(source)}, source['id'])
+        delivery = CoordinationDelivery(Previous(), bridge)
+        first = await delivery.prepare(request(), None)
+        second = await delivery.prepare(first, None)
+        summary = observation(second)['assignment']
+        assert summary['memberCount'] == 4
+        assert 'members' not in summary
+        ref = summary['briefRef']
+        assert ref == {'action': 'assignment.brief', 'args': {'sessionId': source['id']}}
+        assert len(json.dumps(ref).encode()) < 200
+        assert sum(bool((m.metadata or {}).get('coordinationObservation')) for m in second.messages) == 1
+        delivery.commit(second)
+    assert app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall() == before
+    assert not app.runtime.inputs
+    result = await agent_action(app, source, ref['action'], ref['args'], 'follow-brief-ref')
+    assert len(result['result']['members']) == 4
+
+
+async def test_brief_orientation_does_not_offer_root_action_to_child_or_unassigned_chat(app):
+    source, other = app.state['sessions']
+    await roster(app)
+    child = await app.app_bridge('coordination.current', {'_runtimeSessionId': 'child-worker'}, source['id'])
+    assert 'briefRef' not in child['assignment']
+    independent = await app.app_bridge('coordination.current', {'_runtimeSessionId': other['id']}, other['id'])
+    assert independent['assignment'] is None
 
 
 async def test_cold_control_payload_is_not_materialized_to_build_a_brief(app, monkeypatch):

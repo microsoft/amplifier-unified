@@ -1,5 +1,6 @@
 """Let only a move's originating turn reach its existing native boundary."""
 from .management import Management
+from .model_admission_identity import input_id
 
 
 def worker_instance(service, sid):
@@ -45,7 +46,7 @@ def finishing_turn(service, session, call):
                 or binding.get('generationId') != active['id']
                 or record.get('sourceGenerationId') != active['id']
                 or binding.get('inputIds') != active.get('inputIds')
-                or call.get('turnId') not in record.get('sourceInputIds', [])
+                or input_id(call) not in record.get('sourceInputIds', [])
                 or binding.get('configurationRevision') != session.get('configurationPendingRevision', 0)
                 or session.get('executionRevision', 0) != record.get('executionRevision')
                 or session.get('workspace') != record.get('historyHome')

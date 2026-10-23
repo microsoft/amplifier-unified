@@ -151,7 +151,7 @@ def write(path, value):
 
 
 @contextmanager
-def locked():
+def locked(*, blocking=True):
     import fcntl
     root = directory()
     if any(p.is_symlink() for p in (root, *root.parents)):
@@ -165,7 +165,7 @@ def locked():
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise ValueError('The machine resource lock is unsafe.')
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         yield root
     finally:
         os.close(fd)
@@ -277,11 +277,11 @@ def reserve(row, target):
         return value
 
 
-def held(row):
+def held(row, *, blocking=True):
     """Inspect one exact existing lease; never initialize a machine authority."""
     if not identity() or not directory().exists():
         return False
-    with locked() as root:
+    with locked(blocking=blocking) as root:
         original = binding(row)
         saved = read(root / ('lease-' + digest(original) + '.json'))
         if saved is None:
@@ -298,7 +298,7 @@ def held(row):
         return True
 
 
-def settle(row, *, release=False, phase='running'):
+def settle(row, *, release=False, phase='running', blocking=True):
     """Only the canonical owner calls this after confirmed effects/cleanup."""
     receipt = row.get('hostReservation', {})
     if not receipt.get('admitted'):
@@ -307,13 +307,13 @@ def settle(row, *, release=False, phase='running'):
         # Do not initialize authority for historical or remote-only resources.
         if not release or not identity() or not directory().exists():
             return
-        with locked() as root:
+        with locked(blocking=blocking) as root:
             receipt = read(root / ('lease-' + digest(binding(row)) + '.json'), {})
         if not receipt.get('admitted'):
             return
     if receipt.get('machineId') != identity() or receipt.get('binding') != binding(row):
         raise ValueError('The machine reservation belongs to another owner or host.')
-    with locked() as root:
+    with locked(blocking=blocking) as root:
         path = root / ('lease-' + digest(binding(row)) + '.json')
         existing = read(path)
         if existing is None:
