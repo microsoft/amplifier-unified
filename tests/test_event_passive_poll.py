@@ -134,14 +134,45 @@ async def test_scoped_and_unknown_publications_invalidate_only_their_receipts(ob
     assert not view._clean_inputs
 
 
-async def test_ingress_invalidates_even_when_event_is_ignored(observed):
-    service, view, _, _ = observed
+async def test_ignored_worker_activity_preserves_passive_receipt_and_session(observed):
+    service, view, current, _ = observed
     await view.refresh('app')
-    # This activity-only update has no corresponding worker; the ingress returns
-    # without publishing, but cannot leave an earlier passive receipt trusted.
+    receipt = view._clean_inputs['app']
+    before = copy.deepcopy(current[0])
+    # Orphan activity has no lifecycle authority: reject it before mutation or
+    # invalidation. The full stale/settled-run matrix lives in worker_lifecycle.
     await AppService.on_runtime_event(service, 'worker.updated',
         {'rootSessionId': 'app', 'id': 'missing', 'activityOnly': True})
-    assert not view._clean_inputs
+    assert view._clean_inputs['app'] is receipt
+    assert current[0] == before
+
+
+async def test_current_worker_activity_invalidates_only_owner_before_deferred_publish(app_factory):
+    app = app_factory()
+    owner = app._new_session({'title': 'Activity owner'})
+    other = app._new_session({'title': 'Unrelated owner'})
+    app.state.update(sessions=[owner, other], selectedSessionId=owner['id'])
+    await app.on_runtime_event('worker.updated', {
+        'rootSessionId': owner['id'], 'id': 'child', 'runId': 'current', 'status': 'running'})
+    view = app.event_log_view
+    for row in (owner, other):
+        await view.refresh(row['id'])
+    owner_receipt = view._clean_inputs[owner['id']]
+    other_receipt = view._clean_inputs[other['id']]
+    other_before = copy.deepcopy(other)
+    revision = app.state['revision']
+    await app.on_runtime_event('worker.updated', {
+        'rootSessionId': owner['id'], 'id': 'child', 'runId': 'current',
+        'activityOnly': True, 'phase': 'retrying', 'detail': 'Retrying', 'updatedAt': 22})
+    # Real ingress and progress batching, with no yield to its deferred publisher.
+    assert app.state['revision'] == revision and app._progress_dirty
+    assert app._progress_publish_task is not None and not app._progress_publish_task.done()
+    assert owner['workers'][0]['phase'] == 'retrying'
+    assert owner['workers'][0]['status'] == 'running'
+    assert view._clean_inputs.get(owner['id']) is not owner_receipt
+    assert owner['id'] not in view._clean_inputs
+    assert view._clean_inputs[other['id']] is other_receipt
+    assert other == other_before
 
 
 async def test_new_owner_with_same_identity_cannot_reuse_or_be_pinned(observed, monkeypatch):
