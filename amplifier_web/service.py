@@ -4838,11 +4838,13 @@ class AppService:
         if operation == "coordination.current":
             from .workspace_awareness import packet
             from .collaboration import PRINCIPAL
+            from .coordination_guidance import assignment_orientation
+            session = self._session(session_id, hydrate=False)
             reference = self._session(session_id, hydrate=False).get("coordinationReference", {
                 "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
                 "detail": "No retained collaboration reference; discover current coordination.context."})
             return {**reference, 'awareness': packet(self, session_id, principal=PRINCIPAL.get()),
-                    'assignment': self.assignments.summary(self._session(session_id, hydrate=False)),
+                    'assignment': assignment_orientation(session, self.assignments.summary(session), PRINCIPAL.get()),
                     'work': self.work_invocation.current(session_id)}
         def visual_origin(explicit=None):
             if input_origin is None:
