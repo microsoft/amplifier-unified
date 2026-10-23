@@ -145,7 +145,7 @@ async def test_wrong_envelope_cannot_mutate_real_app_then_corrected_request_can(
         result = await tool.execute({'operation': 'dispatch', 'args': action})
         assert result.success
         assert app._session()['title'] == 'Renamed'
-        bridge.assert_awaited_once_with('dispatch', {**action, 'responseMode': 'receipt'})
+        bridge.assert_awaited_once_with('dispatch', action)
     finally:
         await app.close()
 
