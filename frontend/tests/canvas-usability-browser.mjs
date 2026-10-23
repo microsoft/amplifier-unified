@@ -19,7 +19,8 @@ try{
  // Overflow must reveal selected tabs without moving the surrounding page.
  const ids=[];
  for(let i=0;i<8;i++){await action('canvas.show',{kind:'markdown',title:'Document '+i+' with a long descriptive name',content:'# Note '+i});ids.push(await page.evaluate(()=>window.amplifier.getState().canvas.id))}
- const visibleTab=()=>expect.poll(()=>page.locator('.a-canvas-tabs').evaluate(strip=>{const active=strip.querySelector('.is-active');const a=active.getBoundingClientRect(),s=strip.getBoundingClientRect();return a.left>=s.left-1&&a.right<=s.right+1})).toBe(true);
+ const documentTabs=page.getByRole('tablist',{name:'Canvas views'}).locator('.a-canvas-document-tabs');
+ const visibleTab=()=>expect.poll(()=>documentTabs.evaluate(strip=>{const active=strip.querySelector('[role="tab"][aria-selected="true"]');const a=active.getBoundingClientRect(),s=strip.getBoundingClientRect();return a.left>=s.left-1&&a.right<=s.right+1})).toBe(true);
  await visibleTab();
  await action('canvas.select',{id:ids[0]});await visibleTab();
  await action('canvas.select',{id:ids[7]});await visibleTab();
@@ -31,13 +32,21 @@ try{
  await panel.getByRole('button',{name:'Download canvas source',exact:true}).click();
  assert.equal((await downloadEvent).suggestedFilename(),'Document 7 with a long descriptive name.md');
 
- // File names stay available without opening Canvas options.
+ // Document tabs keep their friendly title; Details retains the exact file identity.
  const state=await page.evaluate(()=>window.amplifier.getState());
  const workspace=state.workspaces.find(w=>w.id===state.selectedWorkspaceId).path;
  const {writeFile}=await import('node:fs/promises');
  await writeFile(workspace+'/actual-name.md','# File content');
  await action('canvas.show',{kind:'auto',path:workspace+'/actual-name.md',title:'Friendly file title'});
- await expect(page.getByRole('tab',{selected:true})).toHaveAttribute('title','actual-name.md');
+ await expect(documentTabs.getByRole('tab',{selected:true})).toHaveAttribute('title','Friendly file title');
+ const filePath=panel.locator('.a-canvas-file-path');
+ const details=panel.getByRole('button',{name:'Canvas details',exact:true});
+ await details.click();await expect(filePath).toBeHidden();
+ await details.click();await expect(filePath).toBeVisible();
+ await filePath.locator('summary').click();
+ await expect(filePath.locator('code')).toHaveText(workspace+'/actual-name.md');
+ await expect(filePath.getByRole('button',{name:'Copy absolute path',exact:true})).toBeEnabled();
+ await expect(filePath.getByRole('button',{name:'Copy relative path',exact:true})).toBeEnabled();
  // A sent Markdown attachment opens a preview and retains its download.
  await action('attachment.add',{sessionId:state.selectedSessionId,name:'Review notes.md',base64:Buffer.from('# Attached review\n\nThe original text.').toString('base64')});
  const attachment=await page.evaluate(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).draftAttachments[0]);
@@ -57,5 +66,5 @@ try{
  assert.ok(extent.height>extent.viewport&&extent.top>0,'Tall diagram must be scrollable to its bottom');
  await page.screenshot({path:'/tmp/unified-canvas-usability97.png'});
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({activeTabs:true,narrowTabs:true,filenameHover:true,titledDownloads:true,markdownAttachment:true,reload:true,graphvizDecoded:true,tallMermaidScrollable:true,browserErrors:0}));
+ console.log(JSON.stringify({activeTabs:true,narrowTabs:true,filenameDetails:true,titledDownloads:true,markdownAttachment:true,reload:true,graphvizDecoded:true,tallMermaidScrollable:true,browserErrors:0}));
 }finally{await browser?.close();fixture.kill('SIGTERM')}

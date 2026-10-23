@@ -186,6 +186,12 @@ async def install_app_access(coordinator, bridge):
                 try:
                     result = await self._work_check(self.mounted_name, arguments)
                     if not isinstance(result, dict) or result.get('allowed') is not True:
+                        failure = result.get('checkFailure') if isinstance(result, dict) else None
+                        if failure in ('timeout', 'connection'):
+                            reason = 'timed out' if failure == 'timeout' else 'lost its connection'
+                            return ToolResult(success=False, error={
+                                'code': 'work_check_timeout' if failure == 'timeout' else 'work_check_unavailable',
+                                'message': f'The host execution check {reason} before it completed. The tool was not run.'})
                         return ToolResult(success=False, error={
                             'code': 'work_precondition_unavailable',
                             'message': 'Current Work requirements or host execution scope are unavailable.'})
