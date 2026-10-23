@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import copy
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -20,6 +21,7 @@ except ImportError:  # Executed directly inside the isolated runtime.
 # Reserve a dedicated protocol descriptor before module imports. CLI displays and
 # provider logs are routed to stderr, never mistaken for model/app events.
 _PROTOCOL = None
+WORK_EFFECT_TIMEOUT = 1.5
 
 
 def configure_protocol():
@@ -48,6 +50,7 @@ class Worker:
         self.shutdown = asyncio.Event()
         self.telemetry = None
         self.controls = None
+        self.control_invocations = {}
         self.naming = None
         self.naming_park_task = None
         self.workspace = None
@@ -67,6 +70,7 @@ class Worker:
         self.context_bindings = {}
         self.context_inputs = []
         self.root_generation_outcome = None
+        self.failed_generation = None
         if __package__:
             from .response_completion import ResponseBlocks
         else:
@@ -175,24 +179,66 @@ class Worker:
             return existing
         # Workers inherit the originating inputs at assignment, never
         # another client's later input or another coordinator's receipts.
+        canonical_inputs = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids')
         assigned = None if coordinator is self.session.coordinator else list(
-            assignment[0] if assignment is not None else self.context_inputs)
+            assignment[0] if assignment is not None else canonical_inputs or [])
+        assigned_generation = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('id')
         assigned_context = None if assigned is None else copy.deepcopy(
             assignment[1] if assignment is not None else {i: self.context_bindings[i] for i in assigned if i in self.context_bindings})
         assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': assigned_context.get(i, {}).get('clientId')} for i in assigned]
         assigned_clients = None if assigned_bindings is None else [b['clientId'] for b in assigned_bindings]
+        def origin_scope():
+            runtime = getattr(self, 'runtime', None)
+            generation = getattr(runtime, 'generation', None) or {}
+            gate = getattr(self, 'activation_gate', None)
+            # The canonical generation holds every delivered input. Never turn
+            # the bounded visual-context tail into complete Work membership.
+            ids = generation.get('input_ids') if assigned is None else assigned
+            if (not runtime or not generation.get('id') or not gate or not gate.current_valid
+                    or runtime.closed or runtime.stop_requested
+                    or coordinator.cancellation.is_cancelled or not isinstance(ids, list)
+                    or assigned is not None and generation.get('id') != assigned_generation):
+                return None
+            return {'rootSessionId': self.session.coordinator.session_id,
+                    'runtimeSessionId': coordinator.session_id, 'generationId': generation['id'],
+                    'inputIds': list(ids) if len(ids) <= 16 else [],
+                    'inputCoverage': 'complete' if len(ids) <= 16 else 'overflow',
+                    'stopRevision': self.stop_revision}
+        coordinator.register_capability('web.work_origin_scope', origin_scope)
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
             # Neither approval nor generation identity is model-supplied.
             args = {key: value for key, value in args.items()
-                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait"}}
+                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait", "_workOrigin",
+                                   "_workDispatchGuarded"}}
             if assigned is None:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
                 args["_generationId"] = generation.get("id")
-            args = {**args, '_runtimeSessionId': coordinator.session_id, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
-                                             if assigned_clients is None else assigned_clients)}
+            all_inputs = ((getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids', [])
+                          if assigned is None else assigned)
+            # Transport the full bounded set, not the visual-context tail.
+            # The host independently compares its complete generation and
+            # reports overflow; an empty envelope is never evidence of none.
+            bound_ids = all_inputs if isinstance(all_inputs, list) and len(all_inputs) <= 16 else []
+            bound_context = self.context_bindings if assigned is None else assigned_context
+            args = {**args, '_runtimeSessionId': coordinator.session_id,
+                    '_inputBindings': [{'inputId': i, 'clientId': bound_context.get(i, {}).get('clientId')} for i in bound_ids],
+                    '_inputClients': [bound_context.get(i, {}).get('clientId') for i in bound_ids]}
+            if operation in {'dispatch', 'work.effect.check'}:
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task())
+                check = coordinator.get_capability('web.work_effect_origin')
+                # The executing task, not model-supplied IDs, supplies this
+                # observation. The service independently owns applicability.
+                if dispatch and callable(check):
+                    tool_name = args.get('toolName') if operation == 'work.effect.check' else 'app_control'
+                    tool_input = args.get('toolInput') if operation == 'work.effect.check' else {
+                        'operation': operation, 'args': {k: v for k, v in args.items() if not k.startswith('_')}}
+                    args['_workOrigin'] = await check({**dispatch, 'tool_name': tool_name, 'tool_input': tool_input})
+                if operation == 'work.effect.check':
+                    programmatic = coordinator.get_capability('web.work_programmatic_guarded')
+                    args['_workDispatchGuarded'] = bool(callable(programmatic) and programmatic())
             if operation.startswith('context.'):
                 context = self.context_bindings if assigned_context is None else assigned_context
                 bindings = [context[i] for i in ids if i in context]
@@ -240,6 +286,45 @@ class Worker:
         register = getattr(coordinator, "register_capability", None)
         if callable(register):
             register('web.app_access.bridge', bridge)
+            async def effect_check(name, arguments):
+                dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task())
+                control = self.control_invocations.get(asyncio.current_task())
+                runtime, gate = self.runtime, self.activation_gate
+                generation = getattr(runtime, 'generation', None)
+                epoch, before = self.stop_revision, copy.deepcopy(arguments)
+                inputs = copy.deepcopy((generation or {}).get('input_ids'))
+                def current_control():
+                    return (control is not None and control['valid']()
+                        and self.control_invocations.get(asyncio.current_task()) is control
+                        and control['coordinator'] is coordinator and control['name'] == name
+                        and control['arguments'] == arguments)
+                if (not gate or not gate.current_valid or not runtime
+                        or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled):
+                    return {'allowed': False, 'effectAuthorized': False}
+                if control is not None:
+                    if not current_control():
+                        return {'allowed': False, 'effectAuthorized': False}
+                    identity = control['callId']
+                elif dispatch and generation:
+                    identity = dispatch.get('tool_call_id')
+                else:
+                    return {'allowed': False, 'effectAuthorized': False}
+                try:
+                    result = await asyncio.wait_for(bridge('work.effect.check', {
+                        'toolName': name, 'toolInput': before, 'toolCallId': identity}), WORK_EFFECT_TIMEOUT)
+                except (TimeoutError, ConnectionError):
+                    return {'allowed': False, 'effectAuthorized': False}
+                if (self.runtime is not runtime or runtime.generation is not generation
+                        or (generation or {}).get('input_ids') != inputs
+                        or not gate.current_valid or self.stop_revision != epoch
+                        or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled
+                        or (not current_control() if control is not None else
+                            getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task()) is not dispatch
+                            or dispatch.get('tool_call_id') != identity)
+                        or json.dumps(arguments, sort_keys=True) != json.dumps(before, sort_keys=True)):
+                    return {'allowed': False, 'effectAuthorized': False}
+                return result
+            register('web.work_effect_check', effect_check)
             async def install_child_access(child_coordinator):
                 from amplifier_web.app_guidance import install_app_access
                 await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
@@ -277,6 +362,7 @@ class Worker:
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
         if root_generation and event.get('type') == 'generation.started':
             self.root_generation_outcome = None
+            self.failed_generation = None
             self.response_blocks.reset()
             self.terminal_response_refs = None
         if root_generation and event.get('type') == 'assistant.message':
@@ -287,6 +373,9 @@ class Worker:
                 'generation.failed': 'error',
                 'generation.detached': 'interrupted',
             }[event['type']]
+            self.failed_generation = (
+                {key: event.get(key) for key in ('generation_id', 'input_ids', 'error_type', 'error_category', 'error_stage')}
+                if event['type'] == 'generation.failed' else None)
         if self.controls:
             from amplifier_web.scheduled_input import finish as finish_scheduled_input
             finish_scheduled_input(self.controls, event)
@@ -489,10 +578,21 @@ class Worker:
                 return
             await asyncio.sleep(2)
 
+    async def commit_replacement(self, replacement, *, deferred, stop_revision):
+        if deferred:
+            await self.bridge('configuration.nextMessage.admit', {})
+            # A Stop command can be processed after the host sent Allow but
+            # before this continuation runs. No await separates this local
+            # fence from deleting the journal.
+            if self.stop_revision != stop_revision or self.shutdown.is_set():
+                raise RuntimeError('Bundle application was stopped before commit.')
+        replacement.commit()
+
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         progress = None
         startup_capture = None
         replacement = None
+        stop_revision = self.stop_revision
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Loading your bundle and app behaviors; downloading or installing modules as needed."})
@@ -543,7 +643,8 @@ class Worker:
             recover_pending(self.home, workspace, config['id'])
             if config.get('bundleReplacement') is not None:
                 from amplifier_web.bundle_selection import begin_replacement
-                replacement, resolved_root = await begin_replacement(self.home, workspace, config)
+                replacement, resolved_root = await begin_replacement(self.home, workspace, config,
+                    admit=lambda: self.bridge('configuration.nextMessage.admit', {}))
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -571,7 +672,8 @@ class Worker:
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
-                preserve_configuration=config.get('_preserveConfiguration') is True)
+                preserve_configuration=config.get('_preserveConfiguration') is True,
+                tool_invocation=self.tool_invocation)
             self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {
                 "call": row, "waitForCapacity": True, "_runtimeSessionId": self.session.session_id,
                 "_generationId": (getattr(self.runtime, 'generation', None) or {}).get('id')})
@@ -632,6 +734,7 @@ class Worker:
             from amplifier_web.loaded_provenance import capture_mount
             self.provenance_mount = capture_mount(self.session)
             await self.ownership.register()
+            self.capture_manager_failures()
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
             self.parked_history_stamp = self.history_stamp()
@@ -644,7 +747,8 @@ class Worker:
             public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
                 "tools", "agents", "provider_choices", "selection", "effective_selection", "delegationRouting", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
             if replacement:
-                replacement.commit()
+                await self.commit_replacement(replacement,
+                    deferred=config.get('bundleReplacement', {}).get('deferred'), stop_revision=stop_revision)
                 replacement = None
             from amplifier_web.support_diagnostics import runtime_versions
             public["support"] = runtime_versions()
@@ -847,12 +951,99 @@ class Worker:
         finally:
             self.remounting = False
 
+    def tool_invocation(self, controls, coordinator, name, tool, identity):
+        """Bind an explicit control to its acquired owner, never a model actor."""
+        runtime, session, gate = self.runtime, self.session, self.activation_gate
+        handle, activation, epoch = self.shared_handle, self.activation, self.stop_revision
+        generation = getattr(runtime, 'generation', None)
+        inputs = copy.deepcopy((generation or {}).get('input_ids'))
+        task = asyncio.current_task()
+        root = session.coordinator
+        def valid():
+            children = root.get_capability('live.children')
+            child = children.sessions.get(coordinator.session_id) if children else None
+            return (self.controls is controls and controls.coordinator is root and session.coordinator is root
+                and controls.runtime is runtime and self.runtime is runtime and self.session is session
+                and (coordinator is root or child is not None and child.coordinator is coordinator)
+                and asyncio.current_task() is task and self.activation_gate is gate
+                and gate is not None and gate.current_valid
+                and handle is not None and self.shared_handle is handle and self.activation is activation
+                and not self.parked and not self.ownership.yielding and not self.remounting
+                and self.stop_revision == epoch and runtime.generation is generation
+                and (generation or {}).get('input_ids') == inputs
+                and not runtime.closed and not runtime.stop_requested
+                and not coordinator.cancellation.is_cancelled
+                and (coordinator.get('tools') or {}).get(name) is tool)
+        @contextmanager
+        def bind(arguments):
+            if not valid() or task in self.control_invocations:
+                raise ValueError('The tool control execution owner changed before invocation.')
+            scope = {'valid': valid, 'coordinator': coordinator, 'name': name,
+                     'arguments': copy.deepcopy(arguments), 'callId': identity}
+            self.control_invocations[task] = scope
+            try:
+                yield
+            finally:
+                self.control_invocations.pop(task, None)
+        return bind
+
     def bind_activation(self):
         """Bind the current capability to a command task, never to a global writer."""
 
         if self.parked or self.shared_handle is None:
             raise RuntimeError("The session is parked and has no active shared writer.")
         return self.activation_gate.bind(self.activation)
+
+    def capture_manager_failures(self):
+        """Observe the real loop exception before Core converts it to text.
+
+        Do not change the loop's catch, classification, cancellation or return.
+        A later generic execution exit still owns shutdown as before.
+        """
+        from functools import wraps
+        loop = self.session.coordinator.get("orchestrator")
+        original = getattr(loop, "execute", None)
+        if not callable(original) or getattr(original, "_web_failure_capture", False):
+            return
+        @wraps(original)
+        async def execute(*args, **kwargs):
+            epoch = self.stop_revision
+            try:
+                return await original(*args, **kwargs)
+            except Exception as error:
+                try:
+                    from amplifier_web.support_diagnostics import exception_chain, terminal_exception_capture
+                    terminal = self.failed_generation or {}
+                    # Only the exact known loop wrapper with its original cause
+                    # is supported. Never parse flattened exception messages.
+                    if (type(error).__module__ == 'amplifier_module_loop_live.failures'
+                            and type(error).__name__ == 'ManagerTurnError'
+                            and isinstance(getattr(error, 'failure', None), dict)
+                            and all(error.failure.get(key) == terminal.get(key) for key in
+                                    ('error_type', 'error_category', 'error_stage'))
+                            and terminal.get('error_category') == 'unknown'
+                            and terminal.get('error_stage') == 'manager_turn'
+                            and error.__cause__ is not None and self.stop_revision == epoch
+                            and not self.runtime.stop_requested
+                            and not self.remounting and not self.ownership.yielding):
+                        capture = terminal_exception_capture({
+                            'generationId': terminal.get('generation_id'), 'inputIds': terminal.get('input_ids'),
+                            'errorType': terminal.get('error_type'), 'exceptionChain': exception_chain(error)})
+                        if capture:
+                            publish({'type': 'runtime.error', 'error': 'The manager turn failed. Work was not replayed.',
+                                     'terminalFailure': capture})
+                except Exception:
+                    # Observation is optional: closed transport or unsupported
+                    # metadata must not replace the original loop exception.
+                    pass
+                raise
+        execute._web_failure_capture = True
+        try:
+            loop.execute = execute
+        except (AttributeError, TypeError):
+            # Unsupported immutable plugins keep their original execution.
+            # Absence of this optional observation is not a diagnosed cause.
+            return
 
     def executed(self, task):
         if self.remounting or self.ownership.yielding:

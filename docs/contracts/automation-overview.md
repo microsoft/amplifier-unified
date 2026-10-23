@@ -12,6 +12,33 @@ remain distinct. Browsing neither loads conversation histories nor starts worker
 Refresh is explicit; there is no new polling loop. Create/manage opens the existing
 owner-local schedule controls and preserves other clients' selection and drafts.
 
+### Approved Option B presentation (October 19, 2026)
+
+The user selected **Upcoming & attention** and requested implementation in an
+isolated instance. The overview leads with the next enabled occurrence **on the
+loaded page**, then separates schedules needing attention from the other rows.
+It does not claim a complete agenda or global attention count from a bounded
+page. Cancelled, paused, blocked and uncertain work must not display a stored
+due time as an enabled future run. Last-run outcome stays separate from schedule
+state. Empty views omit pagination and give one clear creation entry.
+
+Create and Open owning chat use the existing `chat-work` route, focused on the
+owner's schedule controls instead of the general work configuration. The owner
+is explicit before review. The registered `runtimeDraft.section=schedules` target
+selects this same `chat-work` route and direction tab; it starts no execution.
+Manage saved task returns to the existing task controls when a same-task
+schedule lacks an active objective. Unsaved schedule details stay local to that browser
+tab and owner; cancel/back may retain those details, but never an activation
+preview, including when Advanced navigation merely hides the schedule page.
+Explicit Create selects a new-schedule draft, never the retained edit of an
+existing schedule. New and existing-target drafts remain separate in that tab;
+Open owning chat and Review may reopen retained edits but cannot retain approval.
+Editing or a changed owner binding invalidates review. A save consumes
+its one-use preview before awaiting the receipt; an uncertain response does not
+leave an automatic replay path. Other clients' selection and drafts are unchanged.
+These presentation changes add no scheduling authority, persistent schedule
+metadata, background polling, new executor or change to the rules below.
+
 A person may review an existing **new-task** schedule directly in this overview
 when its owner has exited. This is a host-owned human action, not peer-agent repair
 authority. Preview uses the owner's saved effective configuration without warming

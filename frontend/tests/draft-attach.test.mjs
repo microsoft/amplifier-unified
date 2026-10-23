@@ -11,7 +11,7 @@ async function fixture(run){
 test('attach restores unsaved drafts only into its new client before resolving',()=>fixture(async({storage,api})=>{
  const calls=[];globalThis.fetch=async(path,options)=>{calls.push({path,headers:options.headers,body:JSON.parse(options.body)});return new Response(JSON.stringify({accepted:true}))};
  await api.attachClient();await api.attachClient();assert.equal(calls.length,3);assert.equal(calls[0].body.resumeClientId,'previous');assert.equal(calls[0].body.clientId,api.clientId);assert.notEqual(api.clientId,'previous');
- assert.deepEqual(calls.slice(1).map(call=>call.body),[{action:'view.update',args:{sessionId:'chat',patch:{draft:'unsent text'}}},{action:'view.update',args:{sessionId:null,patch:{draft:''}}}]);
+ assert.deepEqual(calls.slice(1).map(call=>call.body),[{action:'view.update',args:{sessionId:'chat',patch:{draft:'unsent text',draftDocument:null}}},{action:'view.update',args:{sessionId:null,patch:{draft:'',draftDocument:null}}}]);
  for(const call of calls)assert.equal(call.headers['X-Amplifier-Client'],api.clientId);
  assert.equal(storage.getItem('amplifier.pendingDrafts.v1'),undefined);assert.equal(storage.getItem('amplifier.clientId'),api.clientId);
 }));

@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {showFixtureConversation,openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -20,6 +21,8 @@ try{
  page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);
+ await showFixtureConversation(page);
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:null}}));
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.fill('Configure the requested local file access');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
@@ -47,9 +50,10 @@ try{
  await expect(composer).toHaveDraft('Retain this private unfinished draft');
  await page.reload();
  await expect(composer).toHaveDraft('Retain this private unfinished draft');
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'runtime',runtimeDraft:{tab:'tools'}}}));
+ await openChatAdvancedPage(page,'Model & tools');
  const controls=page.getByRole('region',{name:'Configuration permissions'});
  await controls.getByText('Agent permissions for settings',{exact:true}).click();
+ await controls.getByRole('button',{name:'Refresh permissions',exact:true}).click();
  const row=controls.locator(`[data-grant-id="${grant.id}"]`);
  await expect(row).toContainText('Allowed');
  await page.screenshot({path:join(output,'desktop.png'),animations:'disabled'});

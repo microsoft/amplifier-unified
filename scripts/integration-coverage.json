@@ -63,7 +63,9 @@
         "tests/test_default_capability_policy.py",
         "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip",
         "tests/fixtures/provider_isolation_native.py",
-        "tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait"
+        "tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait",
+        "tests/test_work_origin.py",
+        "tests/test_work_native_effects.py"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -130,7 +132,18 @@
         "tests/test_handoff_model_admission.py",
         "tests/test_handoff_boundary.py",
         "tests/test_handoff_refusal.py",
-        "tests/test_model_admission_wait.py"
+        "tests/test_model_admission_wait.py",
+        "amplifier_web/workspace_work*.py",
+        "amplifier_web/coordination_delivery.py",
+        "amplifier_web/app_guidance.py",
+        "tests/test_work_origin.py",
+        "tests/test_work_native_effects.py",
+        "tests/test_work_invocation.py",
+        "tests/test_work_effects.py",
+        "tests/test_workspace_work.py",
+        "tests/test_coordination_delivery.py",
+        "tests/test_collaborative_workspaces.py",
+        "tests/test_peer_creation_operation.py"
       ]
     },
     "release-runtime": {
@@ -1090,6 +1103,20 @@
       "owner": "native",
       "prerequisite": "Core/Foundation, loop-live and context-simple; deterministic real native handoff and host model admission",
       "introducedBy": "#963"
+    },
+    {
+      "node": "tests/test_work_origin.py",
+      "kind": "test_module",
+      "owner": "native",
+      "prerequisite": "Actual Core/loop-live, native OpenAI adapter and tool-exec JavaScript runtime; controlled transport with exact worker-origin and nested-dispatch checks. Missing prerequisites or skipped cases fail the owner; no paid provider calls.",
+      "introducedBy": "#894"
+    },
+    {
+      "node": "tests/test_work_native_effects.py",
+      "kind": "test_module",
+      "owner": "native",
+      "prerequisite": "Actual Core/loop-live, native OpenAI adapter and tool-exec JavaScript runtime; controlled transport through real worker/AppService effect owners, including explicit reused-origin refusal before receipt deduplication. Missing prerequisites or skipped cases fail the owner; no paid provider calls.",
+      "introducedBy": "#894"
     }
   ]
 }

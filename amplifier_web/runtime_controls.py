@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import nullcontext
 from dataclasses import asdict, is_dataclass
 import inspect
 import json
@@ -18,17 +19,27 @@ SECTIONS = ("providers", "tools", "hooks")
 PLAN_KEYS = {*SECTIONS, "session", "agents", "spawn", "context", "instruction"}
 
 
-def public_config(value):
+def credential_field(key, *, module=None):
+    """Classify a configuration field with its owning module, never a bare key."""
+    return (any(term in str(key).lower() for term in
+                ("api_key", "secret", "password", "authorization", "cookie",
+                 "access_token", "refresh_token", "github_token", "copilot_agent_token"))
+            or module == "tool-team-pulse" and key == "key")
+
+
+def public_config(value, *, module=None, metadata=False):
     if is_dataclass(value):
         value = asdict(value)
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
-        return {str(key): REDACTED if any(term in str(key).lower() for term in
-                    ("api_key", "secret", "password", "authorization", "cookie", "access_token", "refresh_token", "github_token", "copilot_agent_token"))
-                else public_config(item) for key, item in value.items()}
+        return {str(key): REDACTED if credential_field(key, module=module)
+                else public_config(item, module=value.get("module") if key == "config" else None,
+                                   metadata=metadata)
+                for key, item in value.items()
+                if not (metadata and value.get("field_type") == "secret" and key in {"default", "value"})}
     if isinstance(value, (list, tuple)):
-        return [public_config(item) for item in value]
+        return [public_config(item, metadata=metadata) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
@@ -38,17 +49,39 @@ def identity(row):
     return row.get("instance_id") or row.get("id") or row.get("module")
 
 
-def restore_redactions(value, old):
+_MISSING_SETTING = object()
+
+
+def restore_redactions(value, old, *, _config=False):
     if value == REDACTED:
-        if old is None:
+        if old is _MISSING_SETTING:
             raise ValueError("A redacted value cannot be used for a new setting")
         return copy.deepcopy(old)
     if isinstance(value, dict):
-        return {key:restore_redactions(item, old.get(key) if isinstance(old, dict) else None)
+        if not _config and (isinstance(value.get("module"), str)
+                            or isinstance(old, dict) and isinstance(old.get("module"), str)) and (
+                not isinstance(old, dict) or identity(value) != identity(old)
+                or value.get("module") != old.get("module")
+                or value.get("source") != old.get("source")):
+            old = _MISSING_SETTING
+        return {key:restore_redactions(item, old.get(key, _MISSING_SETTING)
+                                      if isinstance(old, dict) else _MISSING_SETTING,
+                                      _config=_config or key == "config" and isinstance(value.get("module"), str))
                 for key,item in value.items()}
     if isinstance(value, list):
-        previous = {identity(row):row for row in old or [] if isinstance(row, dict) and identity(row)} if isinstance(old, list) else {}
-        return [restore_redactions(row, previous.get(identity(row)) if isinstance(row, dict) else None) for row in value]
+        # Only module collections can reorder by identity. Arrays inside a
+        # matched configuration retain their structural positions.
+        if _config or not any(isinstance(row, dict) and "module" in row
+                   for row in [*value, *(old if isinstance(old, list) else [])]):
+            return [restore_redactions(row, old[i] if isinstance(old, list) and i < len(old)
+                                       else _MISSING_SETTING, _config=_config) for i, row in enumerate(value)]
+        def previous(row):
+            matches = [item for item in old if isinstance(item, dict)
+                       and identity(item) == identity(row)
+                       and item.get("module") == row.get("module")
+                       and item.get("source") == row.get("source")] if isinstance(old, list) and identity(row) else []
+            return matches[0] if len(matches) == 1 else _MISSING_SETTING
+        return [restore_redactions(row, previous(row) if isinstance(row, dict) else _MISSING_SETTING) for row in value]
     return copy.deepcopy(value)
 
 
@@ -90,9 +123,10 @@ def validate_plan(plan):
 
 
 class RuntimeControls:
-    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False):
+    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False, tool_invocation=None):
         self.session, self.runtime, self.telemetry = session, runtime, telemetry
         self.preserve_configuration = preserve_configuration
+        self._tool_invocation = tool_invocation
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
@@ -216,7 +250,7 @@ class RuntimeControls:
                 enabled = row.get("enabled", True) and key not in snapshot.get(section, {}).get("disabled", [])
                 row["enabled"] = enabled
                 modules.append({"section": section, "module": row["module"], "id": key, "enabled": enabled,
-                                "source": row.get("source"), "config": public_config(row.get("config", {}))})
+                                "source": row.get("source"), "config": public_config(row.get("config", {}), module=row["module"])})
         provenance = {}
         if self.configurator:
             for section in ("tools", "providers", "hooks", "agents", "context", "behaviors"):
@@ -501,14 +535,14 @@ class RuntimeControls:
                     schema = await schema
                 from .provider_catalog import fingerprint
                 mounted=next((row for row in getattr(self.session,'config',{}).get('providers',[]) if (row.get('id') or row.get('instance_id') or row.get('module','').removeprefix('provider-'))==name),{})
-                catalog_key=fingerprint([self.catalog_revision,name,mounted or getattr(provider,'config',{}),public_config(info)])
+                catalog_key=fingerprint([self.catalog_revision,name,mounted or getattr(provider,'config',{}),public_config(info, metadata=True)])
                 shared={}
                 captured=self.coordinator.get_capability('web.provider_catalog')
                 if mounted and isinstance(captured,dict) and name in captured.get('keys',{}):
                     from .provider_catalog import configuration_key
                     current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
                     if current==captured['keys'][name]:shared['sharedCatalogKey']=current
-                rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info),"configSchema":public_config(schema),
+                rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info, metadata=True),"configSchema":public_config(schema, metadata=True),
                     "supports":{"models":callable(getattr(provider,"list_models",None)),
                                 "test":callable(getattr(provider,"list_models",None)),
                                 "login":callable(getattr(provider,"login",None))}})
@@ -703,6 +737,10 @@ class RuntimeControls:
             raise ValueError("Tool is not mounted")
         jsonschema.validate(arguments, getattr(tool,"input_schema",{}))
         call = str(uuid.uuid4())
+        # Capture the acquired worker owner before approval can await. Only the
+        # final, policy-approved arguments enter its short execution scope.
+        issuer = getattr(self, '_tool_invocation', None)
+        invocation = issuer(self, coordinator, name, tool, call) if issuer else lambda _: nullcontext()
         data = {"tool_name":name,"tool_call_id":call,"tool_input":arguments,"source":"user", "tool_obj":tool, **(provenance or {})}
         hooks = coordinator.hooks
         pre = await hooks.emit("tool:pre", data)
@@ -749,7 +787,8 @@ class RuntimeControls:
                     raise ValueError("The mounted shell does not support identity-bound input")
                 if checker is not None:
                     checker(*expected_process_owner)
-            result = await tool.execute(arguments)
+            with invocation(arguments):
+                result = await tool.execute(arguments)
             await hooks.emit("tool:post",{**data,"tool_result":result.model_dump() if hasattr(result,"model_dump") else result})
             if checkpoint:
                 await self.checkpoint()

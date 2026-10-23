@@ -58,7 +58,7 @@ async def preview(controls, workspace, bundle):
     return checked
 
 
-async def inspect_replacement(home, workspace, identity, bundle, *, selection=None, execution_workspace=None):
+async def inspect_replacement(home, workspace, identity, bundle, *, selection=None, execution_workspace=None, replace_saved_selection=False):
     """Resolve the proposed root without ever loading the unavailable old root."""
     from .host.config import load_config
     from .host.session import load_root_bundle, live_plan, ResolvedRoot
@@ -69,7 +69,7 @@ async def inspect_replacement(home, workspace, identity, bundle, *, selection=No
     plan, _ = live_plan(root[1].to_mount_plan())
     validate_plan(plan)
     state = Path(home)/'sessions'/identity/'control-state.json'
-    if state.exists():
+    if state.exists() and not replace_saved_selection:
         saved = json.loads(state.read_text())
         selection = saved.get('selection', selection)
     providers = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')
@@ -84,15 +84,21 @@ async def inspect_replacement(home, workspace, identity, bundle, *, selection=No
     return checked, ResolvedRoot(config, bundle, root, execution_workspace=execution_workspace)
 
 
-async def begin_replacement(home, workspace, config):
+async def begin_replacement(home, workspace, config, *, admit=None):
     """Called only after acquiring Foundation's writer lock for this session."""
     request = config['bundleReplacement']
     checked, resolved = await inspect_replacement(home, workspace, config['id'], request['bundle'],
-        selection=config.get('selection'), execution_workspace=config.get('workingDirectory'))
+        selection=request.get('selection') if request.get('replaceSavedSelection') else config.get('selection'),
+        execution_workspace=config.get('workingDirectory'),
+        replace_saved_selection=request.get('replaceSavedSelection', False))
     if any(checked.get(key) != request.get(key) for key in ('bundle', 'fingerprint', 'selection')):
         raise ValueError('The replacement configuration changed. Preview the selected bundle again.')
     if not checked['modelCompatible'] and not request.get('resetModel'):
         raise ValueError('The pinned model is unavailable. Choose the new bundle model explicitly.')
+    if request.get('deferred'):
+        if admit is None:
+            raise ValueError('The deferred bundle application has no host authority.')
+        await admit()
     journal = BundleTransaction(home, workspace, config['id'])
     journal.begin()
     try:

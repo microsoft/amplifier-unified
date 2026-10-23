@@ -52,6 +52,9 @@ try{
  await expect(panel.getByText('Environment: running',{exact:true})).toBeVisible();
  assert.equal(writes.length,2);assert.equal(writes[0].id,writes[1].id);assert.deepEqual(writes[0].args,writes[1].args);
  assert.equal((await facts()).callCounts.start,1,'Lost acknowledgement never starts a replacement');
+ await expect(panel.getByRole('form',{name:'Start test environment',exact:true})).toBeVisible();
+ const counts=(await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result.effectiveConcurrency;
+ assert.equal(counts.maxEnvironmentsPerChat,0,'Retained owner does not hide Start when the count ceiling is disabled');
  await panel.locator('[data-test-environment]').getByLabel('Check command',{exact:true}).fill('python check.py');
  await panel.getByRole('button',{name:'Run check',exact:true}).click();
  await expect.poll(async()=>(await facts()).callCounts.execute).toBe(1);
@@ -205,6 +208,40 @@ try{
   const value=await response.json();assert.equal(value.accepted,true);return value.result;
  };
  const scope={workspaceId:initial.workspaceId,sessionId:initial.sessionId};
+ // A separately named recovery completes after the queue recorded uncertainty.
+ await page.request.post(url+'/fixture/environment-mode',{data:{removeFailure:true,finishCleanupFailure:true}});
+ await invokeAction('workspace.tests.submit',{...scope,profileId:'linux-python',command:'python check.py',notify:false,requestId:'later-cleanup-check'},'later-cleanup-submit');
+ const queuedResult=()=>invokeAction('workspace.tests.result',{...scope,requestId:'later-cleanup-check'},'later-cleanup-result');
+ await expect.poll(async()=>(await queuedResult()).check.status,{timeout:20000}).toBe('unknown');
+ const originalResult=await queuedResult(),beforeRecovery=await facts();
+ const retained=beforeRecovery.resources.find(row=>row.id===originalResult.check.resourceId);
+ assert.equal(retained.environmentState,'stopped');
+ await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
+ await expect(panel.getByText('Check: unknown',{exact:true})).toBeVisible();
+ await page.request.post(url+'/fixture/environment-mode',{data:{removeFailure:false,finishCleanupFailure:false}});
+ const completed=await invokeAction('workspace.environments.finishCleanup',{...scope,id:retained.id,
+  expectedRevision:retained.revision,previousRequestId:retained.lastOperation.requestId,requestId:'separately-named-cleanup'},'separately-named-cleanup');
+ assert.equal(completed.request.state,'completed');
+ const afterRecovery=await facts();
+ await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
+ await expect(panel.getByText('Cleanup recovered. The environment was removed; the check was not repeated.',{exact:true})).toBeVisible();
+ await expect(panel.getByText('Check: unknown',{exact:true})).toHaveCount(0);
+ const recoveredResult=await queuedResult();
+ assert.equal(recoveredResult.check.status,'unknown','the original queue status remains retained');
+ assert.equal(recoveredResult.check.recoveredOutcome.outcome,'passed');
+ assert.equal(recoveredResult.check.recoveredOutcome.cleanup.requestId,'separately-named-cleanup');
+ assert.deepEqual(recoveredResult.operation,originalResult.operation);
+ assert.equal((await facts()).callCounts.execute,beforeRecovery.callCounts.execute,'recovery and reads never repeat the check');
+ assert.deepEqual((await facts()).requests,afterRecovery.requests,'reads do not rewrite operation history');
+ await panel.getByText('Cleanup recovered. The environment was removed; the check was not repeated.',{exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:output+'/queue-recovery-desktop.png'});
+ await page.setViewportSize({width:390,height:844});
+ await panel.getByText('Cleanup recovered. The environment was removed; the check was not repeated.',{exact:true}).scrollIntoViewIfNeeded();
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:output+'/queue-recovery-mobile.png'});
+ await page.setViewportSize({width:1280,height:1050});
+ await writeFile(output+'/queue-recovery-browser-report.json',JSON.stringify({passed:true,originalResult,recoveredResult,
+  checkReplayed:false,historyRewritten:false,limits:['Controlled transport, not native cleanup or archive verification.']},null,2));
  const started=await invokeAction('workspace.environments.start',{...scope,profileId:'linux-python',requestId:'inspection-fixture-start'},'inspection-start-command');
  let target=started.resource;
  target=(await invokeAction('workspace.environments.stop',{...scope,id:target.id,expectedRevision:target.revision,requestId:'inspection-fixture-stop'},'inspection-stop-command')).resource;

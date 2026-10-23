@@ -161,6 +161,8 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
         'tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input': 'native',
         'tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay': 'native',
         'tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait': 'native',
+        'tests/test_work_origin.py': 'native',
+        'tests/test_work_native_effects.py': 'native',
         **{f'tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[{resumed}]': 'native'
            for resumed in ('False', 'True')},
         'tests/test_search_read_policy.py': 'native',
@@ -303,3 +305,48 @@ def test_handoff_native_admission_has_an_executing_owner_and_coordination_guard(
     steps = workflow['jobs']['contracts']['steps']
     assert any('uv run --no-sync pytest' in step.get('run', '') and
                'tests/test_handoff_model_admission.py' in step['run'] for step in steps)
+
+
+def test_shared_work_native_modules_have_one_additive_execution_owner():
+    coverage = checks.manifest()
+    native = coverage['lanes']['native']
+    assert native['mode'] == 'automatic'
+    for selector in ('tests/test_work_origin.py', 'tests/test_work_native_effects.py'):
+        assert native['selectors'].count(selector) == 1
+        assert [name for name, lane in coverage['lanes'].items()
+                if selector in lane['selectors']] == ['native']
+        record, = [row for row in coverage['additionalRecords'] if row['node'] == selector]
+        assert record['owner'] == 'native' and record['kind'] == 'test_module'
+        assert record['introducedBy'] == '#894' and record['prerequisite']
+
+
+@pytest.mark.parametrize('path', [
+    'amplifier_web/workspace_work.py',
+    'amplifier_web/workspace_work_coverage.py',
+    'amplifier_web/workspace_work_evidence.py',
+    'amplifier_web/workspace_work_invocation.py',
+    'amplifier_web/workspace_work_effects.py',
+    'amplifier_web/coordination_delivery.py',
+    'amplifier_web/app_guidance.py',
+    'tests/test_work_origin.py',
+    'tests/test_work_native_effects.py',
+    'tests/test_work_invocation.py',
+    'tests/test_work_effects.py',
+    'tests/test_workspace_work.py',
+    'tests/test_coordination_delivery.py',
+    'tests/test_collaborative_workspaces.py',
+    'tests/test_peer_creation_operation.py',
+])
+def test_shared_work_changes_select_only_existing_native_owner(path):
+    # Checking membership alone would also pass an accidental all-lanes rule.
+    assert checks.select_lanes([path]) == [{'lane': 'native', 'os': 'ubuntu-latest'}]
+
+
+@pytest.mark.parametrize('path', [
+    'amplifier_web/workspace_navigation.py',
+    'tests/test_workspace_navigation.py',
+    'frontend/src/shared-work-browser.jsx',
+    'docs/validation/integration-coverage.md',
+])
+def test_shared_work_registration_does_not_expand_native_to_unrelated_paths(path):
+    assert 'native' not in {row['lane'] for row in checks.select_lanes([path])}

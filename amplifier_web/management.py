@@ -259,7 +259,8 @@ class Management:
             return await self.list_bundles(args, command_id)
         if action == 'providers.list':
             return await self.list_providers(args, command_id)
-        independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'}
+        independent=(action in {'bundle.preview','configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'}
+                     or action == 'runtime.control' and args.get('operation') == 'configuration.catalog')
         try:
             if not independent and self.lock.locked():
                 await self.provider_status(action,args,command_id,'queued')
@@ -362,23 +363,12 @@ class Management:
             return current and (revision is None or revision==state.get('configurationRevision',0))
 
     async def list_bundles(self, args, command_id):
-        """Read the catalog with one start and one atomic completion snapshot.
-
-        Keep the mutation lock: a refresh must not race bundle edits. Publishing
-        each bookkeeping field separately made this inexpensive read block all
-        HTTP clients while rebuilding the same navigation seven times.
-        """
+        """Read atomic saved settings without waiting for a runtime mutation."""
         action = 'bundles.list'
+        operation_id = command_id or str(uuid.uuid4())
+        revision = self.service.state.get('configurationRevision', 0)
         try:
-            if self.lock.locked():
-                await self.provider_status(action, args, command_id, 'queued')
-            await self.lock.acquire()
-        except asyncio.CancelledError:
-            await self._bundle_list_transition(args, command_id, 'error',
-                error='Bundle refresh cancelled.', active=False)
-            raise
-        try:
-            await self._bundle_list_transition(args, command_id, 'working')
+            await self._bundle_list_transition(args, command_id, operation_id, 'working')
             # Uncontended async locks do not yield. Let ready clients consume
             # the start snapshot before the final catalog is published.
             await asyncio.sleep(0)
@@ -386,31 +376,34 @@ class Management:
             workspace = self.configuration_session(args)['workspace']
             result = await BundleManager(self.service.data_dir).perform(
                 action, {**args, 'workspace': workspace})
-            await self._bundle_list_transition(args, command_id, 'ready',
+            if revision != self.service.state.get('configurationRevision', 0):
+                raise ValueError('Bundle settings changed during discovery. Refresh the choices.')
+            await self._bundle_list_transition(args, command_id, operation_id, 'ready',
                 values={key: result[key] for key in ('bundles', 'registeredBundles') if key in result})
         except asyncio.CancelledError:
-            await self._bundle_list_transition(args, command_id, 'error', error='Bundle refresh cancelled.')
+            await self._bundle_list_transition(args, command_id, operation_id, 'error', error='Bundle refresh cancelled.')
             raise
         except Exception as exc:
-            await self._bundle_list_transition(args, command_id, 'error', error=str(exc)[:1000])
-        finally:
-            self.lock.release()
-
-    async def _bundle_list_transition(self, args, command_id, phase, *, error=None, values=None, active=True):
+            await self._bundle_list_transition(args, command_id, operation_id, 'error', error=str(exc)[:1000])
+    async def _bundle_list_transition(self, args, command_id, operation_id, phase, *, error=None, values=None):
         async with self.service.lock:
             state = self.service.state
-            state.update(values or {})
             statuses = state.setdefault('actionStatus', {})
             previous = statuses.get('bundles.list', {})
-            if phase == 'working' or previous.get('commandId') == command_id:
+            changed = {'managementResults'}
+            if phase == 'working' or previous.get('commandId') == operation_id:
+                state.update(values or {})
                 statuses['bundles.list'] = {'phase': phase, 'error': error,
-                    'commandId': command_id, 'updatedAt': time.time(),
+                    'commandId': operation_id, 'updatedAt': time.time(),
                     'target': {key: args[key] for key in ('id', 'section', 'name', 'controlId') if key in args}}
-            if active:
-                state['management'] = {'phase': phase, 'operation': 'bundles.list', 'error': error}
+                changed.update({'actionStatus', *(values or {})})
+                # Independent catalog reads do not replace a mutation's progress.
+                if not self.lock.locked():
+                    state['management'] = {'phase': phase, 'operation': 'bundles.list', 'error': error}
+                    changed.add('management')
             if phase in {'ready', 'error'}:
                 self._record_completion(command_id, phase, error)
-            self.service._publish_changes(globals={'actionStatus','management','managementResults', *(values or {})})
+            self.service._publish_changes(globals=changed)
 
     def _record_completion(self, identity, phase, error=None):
         if identity:

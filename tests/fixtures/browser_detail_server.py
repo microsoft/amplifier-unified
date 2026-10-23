@@ -146,32 +146,71 @@ async def main():
                 for sid,patch in args.get('sessions',{}).items(): service._session(sid).update(patch)
             elif op=='interim-start':
                 row=service._session(aid);now=time.time()-10
+                removed = {message['id'] for message in row['messages']}
+                # This fixture replaces the conversation, unlike a real next
+                # turn. Retire only reveal requests for those removed messages.
+                # Otherwise reconnect replays the earlier test's stale reveal.
+                for client_id, client in service.clients.records.items():
+                    focus = client.get('view', {}).get('messageFocus') or {}
+                    if focus.get('sessionId') == aid and focus.get('messageId') in removed:
+                        client['view'].pop('messageFocus', None)
+                        service.clients.dirty.add(client_id)
                 row.update(status='working',messages=[],execution={'nodes':[],'turns':[]},generations=[],workers=[])
                 generation=row['fixtureGeneration']=f'interim-{time.time_ns()}'
-                service._message(row,'user','Investigate the synthetic issue.','chat',inputId='interim-input')
+                detailed = args.get('details') is True
+                input_id = row['fixtureInputId'] = generation if detailed else 'interim-input'
+                service._message(row,'user','Investigate the synthetic issue.','chat',inputId=input_id)
                 from amplifier_web.execution import ensure_turn
-                ensure_turn(row,'interim-input')
+                ensure_turn(row,input_id)
+                if detailed:
+                    from amplifier_web.execution_events import ExecutionEvents
+                    from amplifier_web.session_files import append_event
+                    observed=[]
+                    observer=ExecutionEvents(aid,observed.append)
+                    observer.lifecycle({'type':'input.delivered','input_id':input_id,'source':'user'})
                 await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
                     'event':'generation.started','generation_id':generation})
                 for index,text in enumerate(['Checking the first detail.','Checking the second detail.'],1):
-                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':'interim-input',
+                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':input_id,
                         'generationId':generation,'text':text,'runtimeMessage':{'sequence':index},
-                        'createdAt':now+index*2,'timestampKnown':True})
-                    await service.on_runtime_event('execution.event',{'sessionId':aid,'rootSessionId':aid,
-                        'id':f'interim-call-{index}','turnId':'interim-input','kind':'tool','label':'read_file','phase':'completed',
-                        'startedAt':now+index*2+.1,'endedAt':now+index*2+1,'input':{'file_path':'sample.txt'},'output':'Checked.'})
+                        'createdAt':time.time() if detailed else now+index*2,'timestampKnown':True})
+                    if detailed:
+                        for event in ('tool:pre','tool:post'):
+                            data={'session_id':aid,'tool_call_id':f'{generation}-call-{index}',
+                                  'tool_name':'read_file','timestamp':time.time(),
+                                  'tool_input':{'file_path':f'sample-{index}.txt','note':'界𝄞'*10000+f':INPUT-{index}'}}
+                            if event=='tool:post':data['result']='雪𝄞'*10000+f':OUTPUT-{index}'
+                            canonical=observer.hook(aid,event,data)
+                            append_event(row['workspace'],aid,event,canonical)
+                            await service.on_runtime_event('execution.event',observed[-1]['event'])
+                        at=time.time()
+                        await service.on_runtime_event('execution.event',{'sessionId':aid,'rootSessionId':aid,
+                            'id':f'{generation}-model-{index}','turnId':input_id,'kind':'llm',
+                            'label':f'Model step {index}','provider':'fixture','model':f'fixture-{index}',
+                            'producerId':'fixture-producer','revision':1,'liveObservation':True,
+                            'phase':'completed','startedAt':at,'endedAt':at,'usage':{'inputTokens':1,'outputTokens':1}})
+                    else:
+                        await service.on_runtime_event('execution.event',{'sessionId':aid,'rootSessionId':aid,
+                            'id':f'interim-call-{index}','turnId':input_id,'kind':'tool','label':'read_file','phase':'completed',
+                            'startedAt':now+index*2+.1,'endedAt':now+index*2+1,'input':{'file_path':'sample.txt'},'output':'Checked.'})
                 if args.get('long'):
                     row['messages'][1]['text'] += '\n\n' + ('A retained progress paragraph.\n\n'*100)
             elif op=='interim-finish':
-                row=service._session(aid);generation=row['fixtureGeneration']
+                row=service._session(aid);generation=row['fixtureGeneration'];input_id=row['fixtureInputId']
                 for index,text in enumerate(['The final conclusion.','The final next step.'],10):
-                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':'interim-input',
+                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':input_id,
                         'generationId':generation,'text':text,'runtimeMessage':{'sequence':index}})
                 await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
-                    'event':'generation.finished','generation_id':generation,'input_ids':['interim-input'],
+                    'event':'generation.finished','generation_id':generation,'input_ids':[input_id],
                     'text':'The final conclusion.The final next step.','active_job_ids':[],
                     'finalMessageRefs':{'version':1,'generationId':generation,'sequences':[10,11]}})
                 await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
+            elif op=='interim-saved-view':
+                from amplifier_web.session_projection import stored_execution
+                row=service._session(aid)
+                # Presentation-only persistence transform; the backend test
+                # separately exercises actual service recreation and cold reads.
+                row['execution']=json.loads(json.dumps(stored_execution(row['execution'])))
             elif op=='interim-error':
                 await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
                     'event':'generation.failed','generation_id':service._session(aid)['fixtureGeneration'],'input_ids':['interim-input']})
@@ -270,6 +309,11 @@ async def main():
                     if node.get('toolCallId')=='older-legacy')
                 log_hook(aid,'tool:post',{'tool_call_id':'older-legacy',
                     'tool_name':'app_control','result':'LEGACY-RECENT-OUTPUT'},legacy['endedAt'])
+                # The synthetic runtime events above also queue diagnostic
+                # capture records. Settle them before minting the initial
+                # signed window, so setup cannot append behind its receipt.
+                await service.diagnostics.flush()
+                assert not service.diagnostics.storage_error
                 await service.event_log_view.windows.close()
                 service.event_log_view.windows=WorkWindows(service)
                 await service.event_log_view.windows.read(aid)
@@ -443,6 +487,47 @@ async def main():
                 await service.event_log_view.refresh(aid)
                 row['execution']['currentTurnId']=row['execution']['plan']['turnId']
                 row['status']=args.get('status','working')
+            elif op=='delegate-observer':
+                # Real host metadata observer and stamped canonical fixture
+                # records; never patch exchange fields or invoke full replay.
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.runtime import normalize_event
+                row=service._session(aid);now=time.time()
+                row.update(status='idle',workers=[],messages=[
+                    {'id':'observer-question','role':'user','text':'Inspect the recorded delegate exchange','createdAt':now-1}],
+                    execution={'turns':[],'nodes':[]})
+                ensure_turn(row,'observer-turn')
+                row['execution']['turns'][0].update(startedAt=now,anchorMessageId='observer-question')
+                emitted=[];events=LoggedEvents(aid,emitted.append);events.turn_id='observer-turn'
+                arguments={'agent':'review','instruction':args['instruction']}
+                events.hook(aid,'tool:pre',{'tool_call_id':'observer-delegate','tool_name':'delegate','tool_input':arguments})
+                log_hook(aid,'delegate:agent_spawned',{'tool_call_id':'observer-delegate','parent_session_id':aid,'sub_session_id':'observer-child'})
+                events.lifecycle({'type':'child.updated','sessionId':'observer-child','parentSessionId':aid,
+                    'callId':'observer-delegate','runId':'observer-run','agent':'review','status':'running'})
+                child_input={'file_path':'/fixture/observed.txt'}
+                events.hook('observer-child','tool:pre',{'tool_call_id':'observer-read','tool_name':'read_file','tool_input':child_input})
+                events.hook('observer-child','tool:post',{'tool_call_id':'observer-read','tool_name':'read_file',
+                    'tool_input':child_input,'result':{'success':True,'output':'OBSERVER CHILD RESULT'}})
+                events.hook(aid,'tool:post',{'tool_call_id':'observer-delegate','tool_name':'delegate','tool_input':arguments,
+                    'result':{'success':True,'output':{'response':args['reply'],'session_id':'observer-child'}}})
+                events.lifecycle({'type':'child.updated','sessionId':'observer-child','parentSessionId':aid,
+                    'callId':'observer-delegate','runId':'observer-run','agent':'review','status':'completed','report':'SUMMARY-DECOY'})
+                if args.get('olderRecords') is True:
+                    from amplifier_web.event_window import MAX_ITEMS
+                    # Establish the explicit older-page prerequisite before
+                    # publishing host metadata to an already-open browser.
+                    # Otherwise a ready recent window can correctly supply the
+                    # exact fields without a separate saved-tool lookup.
+                    for index in range(MAX_ITEMS):
+                        log_hook(aid,'tool:post',{'tool_call_id':f'observer-later-{index}',
+                            'tool_name':'unrelated','result':'Later saved observation'})
+                    await service.event_log_view.windows.read(aid)
+                for event in emitted:
+                    normalized=normalize_event(event,aid)
+                    if normalized:
+                        await service.on_runtime_event(*normalized)
+                row['execution']['turns'][0].update(phase='completed',endedAt=time.time())
+                assert all('input' not in node and 'output' not in node for node in row['execution']['nodes'])
             elif op=='inspection':
                 from amplifier_web.execution import ensure_turn
                 from amplifier_web.execution_events import ExecutionEvents

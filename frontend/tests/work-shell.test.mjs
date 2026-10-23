@@ -100,21 +100,26 @@ test('mixed keyboard ordering preserves hidden pins and typed IDs, and workspace
  await act(async()=>root.unmount());
 });
 test('pending mixed reorder handles concurrent unpin without rendering an identity-less row',async()=>{
- let settle,root;
+ let settle,root;const calls=[];
  const pins=[{id:'session:a',kind:'session',row:{id:'a',title:'One',pinned:true}},
              {id:'workspace:b',kind:'workspace',row:{...row,pinned:true}}];
- const current={...snapshot,pinnedItemIds:pins.map(item=>item.id)};
- const model={state:current,act:()=>new Promise(resolve=>{settle=resolve}),view:{},setDraft(){},choose(){}};
  let pinPage={items:pins,total:2,index:0,pages:1};
+ const current={...snapshot,pinnedItemIds:pins.map(item=>item.id),pinnedNavigation:pinPage};
+ const model={state:current,host:{...host,getSnapshot:()=>current},
+  act:(...args)=>{calls.push(args);return new Promise(resolve=>{settle=resolve})},view:{},setDraft(){},choose(){}};
  const element=()=>React.createElement(PinnedItems,{page:pinPage,model,now:0});
  await act(async()=>{root=create(element())});
  await act(async()=>root.root.findByProps({'aria-label':'Reorder Research'}).props.onKeyDown({key:'ArrowUp',preventDefault(){}}));
+ assert.deepEqual(calls,[['navigation.pinOrder',{ids:['workspace:b','session:a']}]]);
+ assert.equal(typeof settle,'function','the reorder must be admitted and unresolved before unpin');
  current.pinnedItemIds=['session:a'];pinPage={...pinPage,items:[pins[0]],total:1};
+ current.pinnedNavigation=pinPage;
  await act(async()=>root.update(element()));
  assert.equal(root.root.findAllByProps({'aria-label':'Reorder Research'}).length,0);
  assert.equal(root.root.findAllByProps({className:'a-nav-chat-select'}).length,1);
  assert.equal(root.root.findByProps({className:'a-nav-chat-select'}).props['aria-label'],'One');
  await act(async()=>settle({accepted:false,error:'Pins changed'}));
+ assert.equal(calls.length,1,'rejection must not replay the reorder');
  await act(async()=>root.unmount());
 });
 test('standalone chat sidebar exposes a workspace edit without replacing an active chat edit',async()=>{
@@ -157,6 +162,54 @@ test('workspace details do not compute the hidden chat page',()=>{
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'details'},workspaces:[workspace]},act:host.dispatch})));
  assert.match(main,/Rename workspace/);assert.doesNotMatch(main,/Research ideas/);
+});
+test('Shared Work tab reads only through the rejecting presentation dispatcher and aborts when hidden',async()=>{
+ const current={...snapshot},calls=[],acts=[],pending=[];
+ Object.defineProperty(current,'sidebarNavigation',{enumerable:true,get(){throw Error('Work must not demand a chat page')}});
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ let state={view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'work'},workspaces:[workspace]},root;
+ const dispatch=async(action,args,meta)=>{
+  calls.push([action,args,meta]);
+  if(action==='workspace.work.list')return {accepted:true,result:{workspaceId:'b',version:1,observationVersion:'a'.repeat(64),items:[],total:0,truncated:false}};
+  assert.equal(action,'workspace.work.wait');
+  return new Promise(resolve=>{pending.push(resolve)});
+ };
+ const element=()=>render(React.createElement(WorkSurface,{shell,state,dispatch,act:async(...args)=>acts.push(args)}));
+ try{
+  await act(async()=>{root=create(element())});
+  assert.equal(root.root.findAllByProps({'aria-label':'Shared work'}).length,1);
+  const tabs=root.root.findByProps({'aria-label':'Workspace view'});
+  assert.deepEqual(tabs.findAllByType('button').map(node=>node.children.join('')),['Chats','Work','Files','Details']);
+  assert.deepEqual(calls.map(([name])=>name),['workspace.work.list','workspace.work.wait']);
+  assert.ok(calls.every(([,args,meta])=>args.workspaceId==='b'&&meta.presentation===true&&meta.feedback===false&&meta.signal));
+  assert.deepEqual(acts,[]);
+  state={...state,view:{...state.view,workSurface:'chat'}};
+  await act(async()=>root.update(element()));
+  assert.equal(root.root.findAllByProps({'aria-label':'Shared work'}).length,0);
+  assert.ok(calls.every(([, ,meta])=>meta.signal.aborted),'Hidden Work releases every reader');
+ }finally{await act(async()=>{root?.unmount();for(const resolve of pending)resolve({accepted:false,error:'aborted'})})}
+});
+test('Shared Work explicit Open chat uses the existing dispatcher, not presentation writes or chat selection on inspection',async()=>{
+ const current={...snapshot},calls=[];
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>({...host,getSnapshot:()=>current})};
+ const item={id:'work:wire',workspaceId:'b',revision:1,promiseRevision:1,title:'Wiring promise',ownerSessionId:'owner',originSessionId:'owner',commitment:'accepted',disposition:'open'};
+ const state={view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'work'},workspaces:[workspace]};
+ let root,release;const dispatch=async(action,args,meta)=>{
+  calls.push([action,args,meta]);
+  if(action==='workspace.work.list')return {accepted:true,result:{workspaceId:'b',version:1,observationVersion:'a'.repeat(64),items:[item],total:1,truncated:false}};
+  if(action==='workspace.work.wait')return new Promise(resolve=>{release=resolve});
+  if(action==='workspace.work.read')return {accepted:true,result:{item:{...item,resources:[],links:[],criteria:[],constraints:[]}}};
+  assert.equal(action,'session.select');return {accepted:false,error:'Dirty settings retained.'};
+ };
+ try{
+  await act(async()=>{root=create(render(React.createElement(WorkSurface,{shell,state,dispatch,act:()=>{throw Error('Wrong dispatcher')}})))});
+  await act(async()=>root.root.findByProps({'data-work-id':'work:wire'}).props.onClick());
+  assert.ok(calls.every(([name])=>name.startsWith('workspace.work.')));
+  await act(async()=>root.root.findByProps({'aria-label':'Open chat: owner'}).props.onClick());
+  assert.deepEqual(calls.at(-1),['session.select',{id:'owner'},undefined]);
+  assert.ok(root.root.findAllByProps({role:'alert'}).some(node=>node.children.join('').includes('Dirty settings retained')));
+ }finally{await act(async()=>{root?.unmount();release?.({accepted:false,error:'aborted'})})}
 });
 test('omitted scoped workspace page displays loading instead of a false empty result',()=>{
  const current={...snapshot,navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts']};
@@ -237,7 +290,7 @@ test('collapsed navigation gives all space back, including between chat and canv
 test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
  const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
  assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
- assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-sliders-horizontal/);
+ assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-message-circle/);
  assert.doesNotMatch(html,/<span>Overview<\/span>|lucide-ellipsis/);
  const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(expanded,/Open navigation/);

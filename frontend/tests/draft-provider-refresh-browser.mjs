@@ -24,7 +24,7 @@ try{
  assert.deepEqual(before.started,[]);assert.deepEqual(before.sent,[]);
  // An explicit chat choice survives subsequent changes to the default.
  await model.click();await page.locator('select#chat-model').selectOption('first');
- await page.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await preference('chosen-model');
  await expect.poll(async()=>(await state()).configurationRevision).toBe(2);
  await expect(model).toContainText('first');

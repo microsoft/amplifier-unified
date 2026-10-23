@@ -118,32 +118,31 @@ async def test_slow_read_allows_navigation_and_cancel_has_a_terminal_receipt(app
     assert not app.management.lock.locked()
 
 
-async def test_cancel_queued_refresh_preserves_active_operation(app, monkeypatch):
-    queued = asyncio.Event()
-    publish_status = app.management.provider_status
+async def test_independent_refresh_cancel_preserves_active_mutation(app, monkeypatch):
+    entered = asyncio.Event()
 
-    async def publish(*args, **kwargs):
-        await publish_status(*args, **kwargs)
-        queued.set()
+    async def read(*args, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
 
-    monkeypatch.setattr(app.management, 'provider_status', publish)
-    app.state['management'] = {'phase': 'working', 'operation': 'bundles.add', 'error': None}
+    monkeypatch.setattr(BundleManager, 'perform', read)
+    active = {'phase': 'working', 'operation': 'bundles.add', 'error': None}
+    app.state['management'] = active.copy()
     await app.management.lock.acquire()
-    task = asyncio.create_task(app.management.command('bundles.list', {}, 'queued'))
+    task = asyncio.create_task(app.management.command('bundles.list', {}, 'independent'))
     try:
-        # Startup work can briefly own the service lock. Observe publication,
-        # not one scheduler tick, before cancelling the queued operation.
-        await asyncio.wait_for(queued.wait(), 5)
-        assert app.state['actionStatus']['bundles.list']['phase'] == 'queued'
+        # Saved catalog reads enter independently of the mutation lock.
+        await asyncio.wait_for(entered.wait(), 5)
+        assert app.state['actionStatus']['bundles.list']['phase'] == 'working'
+        assert app.state['management'] == active
+    finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert app.state['management']['operation'] == 'bundles.add'
-        assert app.state['management']['phase'] == 'working'
-        assert app.state['managementResults']['queued']['phase'] == 'error'
-        assert app.state['actionStatus']['bundles.list']['phase'] == 'error'
-    finally:
         app.management.lock.release()
+    assert app.state['management'] == active
+    assert app.state['managementResults']['independent']['phase'] == 'error'
+    assert app.state['actionStatus']['bundles.list']['phase'] == 'error'
 
 
 async def test_cancel_before_queue_publication_records_completion(app):
@@ -164,34 +163,70 @@ async def test_cancel_before_queue_publication_records_completion(app):
         app.management.lock.release()
 
 
-async def test_older_completion_preserves_newer_queued_status(app, monkeypatch):
-    entered, finish = asyncio.Event(), asyncio.Event()
-    snapshots = publications(app, monkeypatch)
+@pytest.mark.parametrize('older_outcome', ['ready', 'error', 'cancelled'])
+@pytest.mark.parametrize('anonymous', [False, True])
+async def test_older_completion_cannot_replace_current_read(app, monkeypatch, older_outcome, anonymous):
+    entered = [asyncio.Event(), asyncio.Event()]
+    finish = [asyncio.Event(), asyncio.Event()]
     calls = 0
 
     async def read(*args, **kwargs):
         nonlocal calls
+        index = calls
         calls += 1
-        if calls == 1:
-            entered.set()
-            await finish.wait()
-        return {'bundles': [{'id': str(calls)}]}
+        entered[index].set()
+        await finish[index].wait()
+        if index == 0 and older_outcome == 'error':
+            raise ValueError('Older read failed')
+        name = ('older', 'newer')[index]
+        return {'bundles': [{'id': name}], 'registeredBundles': [{'name': name}]}
 
     monkeypatch.setattr(BundleManager, 'perform', read)
-    old = asyncio.create_task(app.management.command('bundles.list', {}, 'old'))
-    await asyncio.wait_for(entered.wait(), 1)
-    new = asyncio.create_task(app.management.command('bundles.list', {}, 'new'))
+    identities = [None, None] if anonymous else ['older', 'newer']
+    tasks = []
     try:
-        await asyncio.sleep(0)
-        assert app.state['actionStatus']['bundles.list']['commandId'] == 'new'
+        tasks.append(asyncio.create_task(app.management.command('bundles.list', {}, identities[0])))
+        await asyncio.wait_for(entered[0].wait(), 5)
+        older_identity = app.state['actionStatus']['bundles.list']['commandId']
+        tasks.append(asyncio.create_task(app.management.command('bundles.list', {}, identities[1])))
+        await asyncio.wait_for(entered[1].wait(), 5)
+        current_identity = app.state['actionStatus']['bundles.list']['commandId']
+        assert current_identity != older_identity
+        if older_outcome == 'ready':
+            finish[1].set()
+            await asyncio.wait_for(tasks[1], 5)
+            assert app.state['bundles'] == [{'id': 'newer'}]
+            assert app.state['registeredBundles'] == [{'name': 'newer'}]
+        before = copy.deepcopy({key: app.state.get(key) for key in
+                                ('bundles', 'registeredBundles', 'actionStatus', 'management')})
+        if older_outcome == 'cancelled':
+            tasks[0].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await tasks[0]
+        else:
+            finish[0].set()
+            await asyncio.wait_for(tasks[0], 5)
+        assert {key: app.state.get(key) for key in before} == before
+        if not anonymous:
+            assert app.state['managementResults']['older']['phase'] == ('ready' if older_outcome == 'ready' else 'error')
+        if older_outcome != 'ready':
+            finish[1].set()
+            await asyncio.wait_for(tasks[1], 5)
+        assert app.state['bundles'] == [{'id': 'newer'}]
+        assert app.state['registeredBundles'] == [{'name': 'newer'}]
+        saved = load_saved_state(app.db)
+        assert saved['bundles'] == app.state['bundles']
+        assert saved['registeredBundles'] == app.state['registeredBundles']
+        if not anonymous:
+            assert saved['managementResults']['newer'] == {'phase': 'ready', 'error': None}
+            assert saved['managementResults']['older'] == app.state['managementResults']['older']
+        else:
+            assert not app.state.get('managementResults')
     finally:
-        finish.set()
-        await asyncio.gather(old, new)
-    old_done = next(s for s in snapshots if 'old' in s.get('managementResults', {}))
-    assert old_done['actionStatus']['bundles.list']['commandId'] == 'new'
-    assert old_done['actionStatus']['bundles.list']['phase'] == 'queued'
-    assert app.state['bundles'] == [{'id': '2'}]
-    assert app.state['managementResults']['new']['phase'] == 'ready'
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def test_anonymous_reads_and_completion_retention(app):

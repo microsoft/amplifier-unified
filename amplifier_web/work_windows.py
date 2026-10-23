@@ -207,9 +207,19 @@ class WorkWindows:
         prior = self.current.get(identity)
         # Read only exact source stats before deciding whether this small page
         # needs rereading. No transcript, tree, directory scan or prefix digest.
-        if _initial and prior is not None and self.pages.get(prior, {}).get('source') == source:
-            matches = await asyncio.to_thread(self._matches, source, self.pages.get(prior, {}).get('revisions'))
+        from .cold_display import raw
+        if (_initial and prior is not None and self.pages.get(prior, {}).get('source') == source
+                and self.pages[prior].get('savedExecutionReference') ==
+                    raw(owner).get('_coldFields', {}).get('execution')
+                and ('savedExecution' not in self.pages[prior]
+                     or self.pages[prior].get('savedExecutionFence') == fence)):
+            accepted_page = self.pages[prior]
+            accepted_reference = deepcopy(accepted_page.get('savedExecutionReference'))
+            matches = await asyncio.to_thread(self._matches, source, accepted_page.get('revisions'))
             self._check_current(identity, owner, source, fence)
+            if (self.pages.get(prior) is not accepted_page
+                    or raw(owner).get('_coldFields', {}).get('execution') != accepted_reference):
+                raise _SupersededRead('The requested conversation changed. Open it again.')
             if matches:
                 if prior not in self.pages or self.current.get(identity) != prior:
                     raise _SupersededRead('The requested conversation changed. Open it again.')
@@ -238,6 +248,38 @@ class WorkWindows:
                 self.retry_at[identity] = time.monotonic() + 1
                 self._state(identity, {'status': 'retrying', 'current': False, 'reason': 'source_changed'})
             raise ValueError('Saved work changed while it was read. Refresh this window.')
+        # The existing saved view can retire its host placement metadata to a
+        # resource. Read that owned resource only on this explicit window read,
+        # not from passive projections or field chunks. Never hydrate the
+        # authoritative ColdRecord or accept arbitrary event rows as placement.
+        from .cold_display import raw
+        saved_reference = deepcopy(raw(owner).get('_coldFields', {}).get('execution'))
+        if saved_reference and 'execution' not in raw(owner):
+            from .resource_files import detach, read_detached
+            from .session_projection import stored_execution
+            import json
+            detached = detach(self.service.db, saved_reference['$resource'])
+            def saved_work():
+                tree = read_detached(detached, max_bytes=4 * 1024 * 1024)
+                if not isinstance(tree, dict):
+                    raise ValueError('Invalid saved Work placement.')
+                tree = stored_execution(tree)
+                # Keep within this page's existing output/retention budget.
+                if len(json.dumps([page, tree], ensure_ascii=False).encode()) > 4 * 1024 * 1024:
+                    raise ValueError('Saved Work placement exceeds this window budget.')
+                return tree
+            tree = await asyncio.to_thread(saved_work)
+            self._check_current(identity, owner, source, fence)
+            if (raw(owner).get('_coldFields', {}).get('execution') != saved_reference
+                    or 'execution' in raw(owner)):
+                raise _SupersededRead('The requested conversation changed. Open it again.')
+            matches = await asyncio.to_thread(self._matches, source, page.get('revisions'))
+            self._check_current(identity, owner, source, fence)
+            if (not matches or raw(owner).get('_coldFields', {}).get('execution') != saved_reference
+                    or 'execution' in raw(owner)):
+                raise _SupersededRead('The requested conversation changed. Open it again.')
+            page = {**page, 'savedExecution': tree, 'savedExecutionReference': saved_reference,
+                    'savedExecutionFence': fence}
         page = {**page, 'sessionId': identity, 'source': source}
         group = 'event-window:' + page['generation']
         page['group'] = group
@@ -297,14 +339,34 @@ class WorkWindows:
             'windowKey': page['windowKey'], 'coverage': coverage,
             'unavailableRanges': page.get('unavailableRanges', [])}
 
+    def resident_tree(self, session, *, touch=False):
+        """Current resident metadata or the requested, still-owned saved view."""
+        from .cold_display import raw
+        resident = raw(session)
+        if 'execution' in resident:
+            return resident['execution']
+        page = self.pages.get(self.current.get(session['id']))
+        if (page is not None and page['source'] == source_identity(session)
+                and page.get('savedExecutionReference') is not None
+                and page.get('savedExecutionFence') == self.epochs.get(session['id'])
+                and page['savedExecutionReference'] == resident.get('_coldFields', {}).get('execution')):
+            if touch:
+                self.pages.move_to_end(page['group'])
+            return page.get('savedExecution', {})
+        return {}
+
     def live_view(self, session):
         """Bounded current host evidence; never scan historical native nodes."""
         from .cold_display import raw
         resident = raw(session)
-        tree = resident.get('execution', {})
+        tree = self.resident_tree(session)
         source = {key: value for key, value in resident.items() if not key.startswith('_cold')}
         source.update(messages=resident.get('messages', [])[-100:],
             generations=resident.get('generations', [])[-20:])
+        if 'messages' not in resident:
+            transcript = getattr(getattr(self.service, 'history', None), 'windows', None)
+            if transcript is not None:
+                source['messages'] = transcript.project(session).get('messages', [])
         source.update({
             'execution': {**{key: tree[key] for key in ('aggregateUsage', 'usage', 'plan', 'currentTurnId') if key in tree},
                 'nodes': [self.live_node(session, row) for row in tree.get('nodes', [])[-100:]
@@ -342,7 +404,7 @@ class WorkWindows:
         live_source = self.live_view(session)
         live = detail_page(live_source, 'groups')
         from .cold_display import raw
-        if len(raw(session).get('execution', {}).get('nodes', [])) > 100:
+        if len(self.resident_tree(session).get('nodes', [])) > 100:
             # The tail is display evidence, not a complete current-turn count.
             live['items'] = [{**row, 'partialWindow': True, 'nodeCounts': None,
                               'aggregateUsage': None} for row in live['items']]

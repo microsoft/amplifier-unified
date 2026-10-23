@@ -21,12 +21,12 @@ test('runtime controls expose only bundle-supported goal actions',()=>{
  const html=renderToStaticMarkup(React.createElement(RuntimeSettings,{state,session:{id:'s',status:'ready'},act}));
  assert.match(html,/does not expose a goal controller/);assert.match(html,/disabled=""[^>]*data-action="runtime.control"/);
 });
-test('expanded execution renders nested public summaries and genuine partial usage',()=>{
+test('legacy summaries stay in explicit details, not substituted for original replies',()=>{
  const data={turns:[{id:'t',phase:'complete',aggregateUsage:{calls:1,inputTokens:100,outputTokens:20,costUsd:0,costType:'unavailable'}}],nodes:[{id:'tool',kind:'tool',turnId:'t',label:'delegate',phase:'complete'},{id:'child',parentId:'tool',kind:'worker',turnId:'t',label:'Research',summary:'**Result:** complete',phase:'complete'}]};
- const state={view:{executionExpanded:['turn:t','tool','child']}};
+ const state={view:{executionExpanded:['turn:t','exchange:child:details']}};
  const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state,act}));
  assert.match(html,/Research/);assert.match(html,/<strong>Result:<\/strong>/);assert.doesNotMatch(html,/cost unavailable|usage pending/);assert.doesNotMatch(html,/\$0\.00/);
- assert.match(html,/Recorded worker summary/);assert.match(html,/not evidence of the exact response/);
+ assert.match(html,/Saved task summary/);assert.match(html,/not the original reply/);
 });
 
 for(const [phase,label] of [['stopped','Stopped'],['cancelled','Cancelled'],['interrupted','Interrupted']])test(`${phase} work headers describe their terminal outcome`,()=>{
@@ -70,8 +70,8 @@ test('rejected follow-up is not labeled submitted and running worker is not comp
   {id:'followup',kind:'tool',turnId:'t',sessionId:'root',delegate:worker,phase:'error',exchange:{id:'followup',delegateRequest:'Continue',phase:'error'}}]};
  const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state:{view:{executionExpanded:['turn:t','delegate:t:w']}},act}));
  assert.match(html,/Follow-up error; delivery was not confirmed/);
- assert.doesNotMatch(html,/Submitted|aria-label="Completed"/);
- assert.match(html,/aria-label="running"/);
+ assert.doesNotMatch(html,/Submitted/);assert.match(html,/Delegate is working/);
+ assert.match(html,/Stop worker/);
 });
 
 for(const phase of ['cancelled','stopped'])test(`persistent reports remain chronological and cannot hide worker ${phase}`,()=>{

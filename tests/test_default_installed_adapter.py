@@ -597,7 +597,7 @@ def test_residual_helpers_keep_module_counts_separate_from_product(tmp_path, cha
     report = adapter.residual_helper_result(path, 1 if change == 'exit' else 0)
     assert report['passed'] is (change == 'none')
     assert report['expectedCounts'] == {
-        'tests.test_integration_clients': 15, 'tests.test_integration_checks': 44}
+        'tests.test_integration_clients': 15, 'tests.test_integration_checks': 64}
     assert report['exitCode'] == (1 if change == 'exit' else 0)
     assert not (tmp_path / 'junit.xml').exists()
     assert len(report['cases']) == len(list(root))

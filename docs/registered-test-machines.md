@@ -4,7 +4,7 @@ Global Settings → Testing & resources → Other test machines connects an alre
 
 ## Supported setup
 
-This first remote route requires an existing managed **Linux origin test setup** with the qualified source snapshot runtime. The origin's local container daemon need not have free capacity, but this is not yet a standalone macOS/Windows or Docker-free origin setup flow. Registered targets are native Linux Incus runners using an existing trusted SSH connection, configured qualified adapter, cached approved base image, and Python 3.13 or newer in that adapter. Registration installs only a small hash-qualified controller in private account storage. It never installs a daemon, changes BIOS/virtualization settings, enables SSH trust, or changes system services.
+The origin may run on macOS, Windows, WSL or Linux with Git and an existing trusted SSH connection; it needs no local Docker daemon or Linux snapshot runtime. Registered targets are native Linux Incus runners using an existing trusted SSH connection, configured qualified adapter, cached approved base image, and Python 3.13 or newer in that adapter. Registration installs only a small hash-qualified controller in private account storage. It never installs a daemon, changes BIOS/virtualization settings, enables SSH trust, or changes system services.
 
 A machine's CPU, memory, free-space and dependency-build budgets are shared by cooperating native clients using the same OS account. Registered controllers also share mutable running/retained/disk admission limits by exact Incus daemon/project/account. Different accounts, older clients, unrelated container workloads, remote Docker daemons and Docker Desktop are not collectively governed by this authority. Current physical observations still include outside CPU/memory/disk pressure.
 
@@ -15,6 +15,25 @@ Automatic machine budgets and configured backend limits remain visible separatel
 The ordinary job/allocation journal remains the canonical owner. It saves the selected controller, immutable package manifest, backend identity, source and resource/timing requests before source transfer or execution. Endpoint aliases reuse a durable per-account authority ID. That ID is distinct from the OS machine ID, because cloned machine images can have identical machine IDs.
 
 The target executes the actual create/test/cleanup operations and persists its effect receipt before dispatch. Lost replies retain the original target. They never authorize moving the job elsewhere or repeating an unknown create/test. Exact terminal backend observations can settle an interrupted create. Cancellation reaches the original builder without waiting for its long operation lock. Incomplete dependency cleanup can continue through the existing owner-checking cleanup helper; completed cleanup remains an idempotent receipt.
+
+Within one scheduling pass, first-fit selection accounts for the checks already
+scheduled against each observed backend and verified machine/account. It debits
+running/retained slots and requested CPU, memory and preparation slots before
+choosing the next target. Pending memory is counted once; running reservations
+are not subtracted again from observed available memory. Disk and load remain
+physical observations, not invented per-check storage estimates. The target's
+atomic admission remains authoritative, including races with other origins.
+Planned demand is transient and never rewrites observed capacity or saved limits.
+A prior pass's start may still await its reply after native admission. Its exact
+admitted owner is already represented by the backend retained total; only an
+unadmitted preparation adds another pending retained slot.
+
+A waiting request is bound only when it can be scheduled. Once bound, its exact
+controller and ownership route remain retained; an unknown or already admitted
+effect is never moved to another machine. This improves existing first-fit
+routing without adding load balancing, new targets or credential forwarding.
+Per-chat ordered work and configured concurrency ceilings still apply; explicitly
+independent checks may use different approved machines.
 
 A confirmed refusal before admission can return to the queue and choose another approved target. Read-only observations are shared within the scheduling pass, and unavailable targets use bounded backoff. A registration paused while its capacity observation is in flight is rechecked before binding.
 
@@ -34,8 +53,6 @@ The first development controller exposed the system interpreter's older archive 
 
 ## Remaining work
 
-- The existing one-pending-check and one-owned-test-environment limits per chat remain. Allowing more queued checks requires an adjustable per-chat limit plus deliberate same-chat scheduling; this route increases capacity across chats and approved machines.
-- Standalone remote-origin setup for Windows, macOS and Linux without a preconfigured local testing route, including portable existing receipt storage and independent snapshot runtime setup.
 - Approved target provisioning for people without an existing SSH/Incus setup; target registration currently assumes that setup already exists.
 - Shared authority across different OS users, older clients, Docker Desktop/VM hosts and additional remote backends.
 - More representative workload/load benchmarks and any cost-aware or geographic routing policy. Current routing chooses the first compatible available approved target.

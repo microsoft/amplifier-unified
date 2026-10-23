@@ -123,14 +123,64 @@ def accounting_projection(tree):
     return list(saved.values())
 
 
+def _observed_work(row, turns, accounting):
+    """Retain host placement, never a second copy of canonical action content.
+
+    This consumes the host's execution tree, not event-file or tool-result data.
+    A canonical observation alone cannot establish a turn. Exact field lookup
+    still needs its separately validated canonical source and observation token.
+    """
+    from .tool_observations import identity
+    if (row.get('liveObservation') is not True
+            or row.get('canonicalHistory') or row.get('nativeHistory')
+            or row.get('observation') or row.get('observationWindow')
+            or row.get('association') == 'unverified'):
+        return None
+    if any(not isinstance(row.get(key), str) or not 0 < len(row[key]) <= 200
+           for key in ('id', 'turnId', 'sessionId', 'rootSessionId')):
+        return None
+    if row['turnId'] not in turns:
+        return None
+    kind = row.get('kind')
+    if kind == 'tool':
+        if (not identity(row.get('toolObservationId'))
+                or not isinstance(row.get('toolCallId'), str)
+                or not 0 < len(row['toolCallId']) <= 200):
+            return None
+        result = {}
+    elif kind in {'llm', 'worker'}:
+        # Use the same already-owned receipt as accounting, not model payloads.
+        receipt = accounting.get((row['sessionId'], row['id']))
+        if not receipt or not receipt.get('producerId'):
+            return None
+        result = copy.deepcopy(receipt)
+    else:
+        return None
+    fields = {'id', 'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind',
+              'phase', 'label', 'tool', 'toolCallId', 'toolObservationId',
+              'revision', 'startedAt', 'endedAt', 'runId', 'lifecycle'}
+    result.update({key: value for key, value in row.items() if key in fields
+                   and (value is None or type(value) in (bool, int, float)
+                        or type(value) is str and len(value) <= 200)})
+    result['liveObservation'] = True
+    return result
+
+
 def stored_execution(tree):
-    """Keep owned receipts and app-only history, not reconstructed event views."""
+    """Keep owned placement/receipts and legacy history, not canonical bodies."""
+    accounting = accounting_projection(tree)
+    receipts = {(row.get('sessionId'), row['id']): row for row in accounting}
+    turns = [row for row in tree.get('turns', []) if not any(
+        row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]
+    turn_ids = {row['id'] for row in turns}
+    nodes = []
+    for row in tree.get('nodes', []):
+        if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation')):
+            nodes.append(row)  # Existing app-only data retains its original policy.
+        elif (observed := _observed_work(row, turn_ids, receipts)) is not None:
+            nodes.append(observed)
     return {**{key: value for key, value in tree.items() if key != 'plan'},
-        'retiredUsageNodes': accounting_projection(tree),
-        'nodes': [row for row in tree.get('nodes', []) if not any(
-            row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation'))],
-        'turns': [row for row in tree.get('turns', []) if not any(
-            row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]}
+        'retiredUsageNodes': accounting, 'nodes': nodes, 'turns': turns}
 
 
 def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False,
@@ -179,9 +229,9 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                        if dict.get(session, MARKER) else {})})
             continue
         path = view_path(home, session)
-        # Native event activity is a lazy view, never another persisted event
-        # or message cache. Preserve pre-existing legacy records, but never write
-        # new live observations or event-log-derived action bodies here.
+        # Canonical content remains a lazy view, never another event/body cache.
+        # Retain only the host's compact placement and exact lookup identities,
+        # alongside pre-existing legacy records and owned accounting receipts.
         from .cold_display import saved as saved_cold, MARKER
         value = {key: item for key, item in saved_cold(session).items()
                  if key not in {'historyActivity', 'questions', 'workProjection'}}

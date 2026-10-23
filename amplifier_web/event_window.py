@@ -248,9 +248,11 @@ def _observation(event, raw, offset, path, identity):
         outcome = _outcome_summary(name, data)
         if outcome:
             row['outcomeSummary'] = outcome
-        from .delegate_exchange import FIELDS, select, source_field, tool_name
-        if tool_name(row) == 'delegate':
-            for field in FIELDS:
+        from .delegate_exchange import exchange_fields, select, source_field, tool_name
+        input_ref = row['_eventFields'].get('input')
+        fields = exchange_fields(tool_name(row), data.get(input_ref['key']) if input_ref else None)
+        if fields:
+            for field in fields:
                 source = row['_eventFields'].get(source_field(field))
                 if source is None or field == 'delegateResponse' and (name == 'tool:error'
                         or data.get('error') or data.get('error_message')):
@@ -463,7 +465,15 @@ def read_field(session, reference, *, offset=0, limit=4096, check_budget=None):
             raise ValueError('Invalid canonical event field')
         value = event['data'][reference['key']]
         if 'delegateField' in reference:
-            from .delegate_exchange import select
+            from .delegate_exchange import exchange_fields, select, tool_name
+            data = event['data']
+            inputs = next((data[key] for key in ('tool_input', 'arguments', 'input', 'prompt') if key in data), None)
+            name = tool_name({'tool': data.get('tool_name') or data.get('tool')})
+            if reference['delegateField'] not in exchange_fields(name, inputs):
+                raise ValueError('Invalid delegation field for recorded tool')
+            if reference['delegateField'] == 'delegateResponse' and (
+                    event.get('event') == 'tool:error' or data.get('error') or data.get('error_message')):
+                raise ValueError('A failed tool observation is not a delegate reply')
             value = select(value, reference['delegateField'])
             if value is None:
                 raise StaleWindow('The delegation field is no longer available')

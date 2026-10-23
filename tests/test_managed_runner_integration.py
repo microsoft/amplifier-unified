@@ -15,10 +15,11 @@ from test_test_queue import queue, record, submit, drive
 
 
 @pytest.fixture
-def prepared(monkeypatch):
+def prepared(app, monkeypatch):
     calls = []
     def prepare(config, root, snapshot, profile_id, request_id, *,
-                resource_request=None, host_reservation=None, timing_request=None):
+                resource_request=None, host_reservation=None, timing_request=None, dependency_store=None):
+        assert dependency_store == app.data_dir / 'test-dependency-layers'
         assert resource_request == owner.profiles.freeze(profile_id)
         assert timing_request == owner.profiles.freeze_timing(profile_id)
         assert host_reservation['supported'] is False  # Controlled backend has no host target.

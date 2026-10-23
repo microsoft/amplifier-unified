@@ -1,5 +1,5 @@
 import './composer-test-helpers.mjs';
-import {openChatAdvancedPage} from './browser-chat-pages.mjs';
+import {openChatAdvancedPage,showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -14,7 +14,7 @@ try{
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1150,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const action=(name,args={},meta={})=>page.evaluate(([name,args,meta])=>window.amplifier.dispatch(name,args,meta),[name,args,meta]);
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  const current=await page.request.get(url+'/fixture').then(response=>response.json());
  await composer.fill('Private assignment draft');
  await openChatAdvancedPage(page,'Work & automation');
@@ -27,11 +27,21 @@ try{
  await panel.getByRole('button',{name:'Save integration responsibility',exact:true}).click();
  await expect(panel).toContainText('Integration responsibility: This conversation');
  await panel.getByText('Assignment limits',{exact:true}).click();
+ const openLimit=panel.getByLabel('Open helper chats',{exact:true}),callLimit=panel.getByLabel('Concurrent model calls',{exact:true});
+ await expect(openLimit).toHaveValue('');await expect(callLimit).toHaveValue('');
+ await expect(panel).toContainText('blank for no assignment count limit');
+ await openLimit.fill('3');await callLimit.fill('2');
  await panel.getByLabel('Total token limit',{exact:true}).fill('10000');
  await panel.getByLabel('Token allowance per call',{exact:true}).fill('1000');
  await panel.getByRole('button',{name:'Save assignment limits',exact:true}).click();
  let state=(await action('assignment.read',{sessionId:current.selected})).result;
  assert.equal(state.assignment.limits.maxTotalTokens,10000);
+ assert.equal(state.assignment.limits.maxOpenTasks,3);assert.equal(state.assignment.limits.maxConcurrentCalls,2);
+ await openLimit.fill('');await callLimit.fill('');
+ await panel.getByRole('button',{name:'Save assignment limits',exact:true}).click();
+ state=(await action('assignment.read',{sessionId:current.selected})).result;
+ assert.equal(state.assignment.limits.maxOpenTasks,null);assert.equal(state.assignment.limits.maxConcurrentCalls,null);
+ assert.equal(state.assignment.limits.maxMembers,64);assert.equal(state.assignment.limits.maxTotalTokens,10000);
  await panel.getByLabel('Total token limit',{exact:true}).fill('20000');
  await action('assignment.set',{sessionId:current.selected,expectedRevision:state.assignment.revision,maxTotalTokens:12000});
  await panel.getByRole('button',{name:'Save assignment limits',exact:true}).click();
@@ -65,6 +75,6 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  await expect(composer).toHaveDraft('Private assignment draft');
  assert.deepEqual(errors,[]);
- await writeFile(output+'/report.json',JSON.stringify({passed:true,scenarios:['create','limits','stale','reload','lost-response','commission','stop','independent-preserved','private-draft','mobile'],errors,providerCalls:false},null,2));
+ await writeFile(output+'/report.json',JSON.stringify({passed:true,scenarios:['create','limits','optional-counts','stale','reload','lost-response','commission','stop','independent-preserved','private-draft','mobile'],errors,providerCalls:false},null,2));
 }catch(error){if(page)await page.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
 finally{if(browser)await browser.close();fixture.kill('SIGTERM')}

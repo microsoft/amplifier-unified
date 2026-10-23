@@ -27,12 +27,6 @@ published tag, and records the bump type and reason in the release PR.
   public-contract changes require a major. Bundled client/server edits still
   ship together; independently released clients retain their own contracts.
 
-The `0.20` line accumulated the new Home/workspace views and host controls in
-patch releases. Use **0.21.0 for the next planned feature release** to establish
-this policy; an urgent repair can still ship as a `0.20` patch first. Do not
-renumber or republish historical releases. Remove this transition note once
-0.21.0 has shipped.
-
 For **every release**, including fixes-only, dependency, packaging and test-only
 maintenance releases:
 
@@ -53,6 +47,12 @@ maintenance releases:
 4. In the release PR, state the version rationale and whether high-impact
    guidance is included (or why none is needed). Use the existing release-notes
    tests, Fast release checks and package validation; no extra broad gate.
+
+Keep the JSON schema wrapper and one complete release object per line, with
+literal UTF-8 text and compact separators inside each object. Preserve that format
+when adding an entry; expanding every nested field onto separate lines needlessly
+consumes the bounded history budget. Formatting changes must preserve all parsed
+values, including notice IDs, wording, aliases and release order.
 
 The same data supplies installed/offline history and GitHub release text.
 The validator already requires the current entry and a nonempty changes list,
@@ -80,6 +80,32 @@ The installed-wheel probe also loads worker-owned app packages in a fresh
 `-I -S` child outside the checkout. A successful host import is not worker
 qualification: sibling app packages must be exposed by the explicit bootstrap
 without adding host site-packages or distribution metadata to the runtime.
+
+### Recovering a successful frontend build after asset parity fails
+
+Fast release checks retains `frontend-build-output-<attempt>` immediately after
+the build succeeds, before comparing the committed static files. It contains all
+generated static files and a manifest of their hashes and exact non-static source
+inputs. A stale-assets failure therefore does not require another owner to rebuild
+and transfer the same output. Failed or cancelled builds do not supply this bundle.
+
+Use the repository's exact run and attempt to download that artifact with `gh run
+download`. Inspect the run's repository, source and successful **Build frontend**
+step first; an artifact's own manifest is not independent workflow provenance.
+In the task-owned checkout, run:
+
+```sh
+python scripts/frontend_build_artifact.py verify --directory /path/to/downloaded/frontend-build-output
+```
+
+Verification is read-only. It rejects changed non-static inputs, changed local
+environment files, corrupt/missing/extra output, links and oversized bundles.
+After verification, the owner can copy the bundle's `static/` contents into
+`amplifier_web/static/` in its own checkout, removing only obsolete generated
+files after checking for local work, then review and commit the asset diff.
+If the source has changed, build that source again instead of importing old output.
+This repair artifact never supplies release qualification or skips checks. The
+existing successful-run proof and committed-assets requirement still apply.
 
 ## Local-first, fast publication policy (updated October 14, 2026)
 

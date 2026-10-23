@@ -1,5 +1,6 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {resolve} from 'node:path';
 import {writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ fixture.stderr.on('data',data=>log+=data);
 try{
  const headers={Authorization:'Bearer fixture-browser-control-token'};
  const boot=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error(log||'Fixture timeout')),60000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+log))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}})});
- assert.equal(boot.package,fileURLToPath(new URL('../../amplifier_web/__init__.py',import.meta.url)));
+ assert.equal(boot.package,process.env.AMPLIFIER_TEST_PACKAGE_ROOT?resolve(process.env.AMPLIFIER_TEST_PACKAGE_ROOT,'__init__.py'):fileURLToPath(new URL('../../amplifier_web/__init__.py',import.meta.url)));
  const base=boot.url;
  browser=await chromium.launch({channel:'chromium',headless:true,args:process.env.UNIFIED_BROWSER_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers});
@@ -43,6 +44,25 @@ try{
   {message:'mobile dialog must fit after responsive reflow'}).toBeLessThanOrEqual(1);
  await page.screenshot({path:output+'-mobile.png'});
  const stage=async value=>{const response=await page.request.post(base+'/fixture/update-progress',{data:{stage:value}});assert.ok(response.ok(),await response.text())};
+ // A failed chat control belongs to that command, not the host updater. Keep
+ // genuine update failures, blockers and saved preferences independently visible.
+ const readObservations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
+ const beforeControlError=await readObservations();
+ await stage('unrelated-control');
+ await expect(overview).toContainText('Waiting for 3 chats to finish');
+ await expect(page.locator('[data-part="settings-experience"]')).not.toContainText('Unsupported runtime control');
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().management?.error)).toBe('ValueError: Unsupported runtime control: goal.get');
+ await updates.locator('[data-part="update-blockers"]>summary').click();
+ await expect(updates.locator('[data-part="update-blockers"] li')).toHaveCount(3);
+ for(let index=1;index<=3;index++)await expect(updates.locator('[data-part="update-blockers"]')).toContainText(`Running fixture chat ${index}`);
+ assert.deepEqual(await readObservations(),beforeControlError);
+ await stage('unrelated-control-update-failed');
+ await expect(overview).toContainText('Updates need attention');
+ await expect(updates.getByRole('alert').filter({hasText:'Synthetic restart failed; the update remains fenced.'}).first()).toBeVisible();
+ await expect(page.locator('[data-part="settings-experience"]')).not.toContainText('Unsupported runtime control');
+ assert.deepEqual(await readObservations(),beforeControlError);
+ await stage('unrelated-control-reset');
+ result.errorOwnership={unrelatedControlRetained:true,unrelatedAlertExcluded:true,threeChatBlockers:true,updateFailureVisible:true,preferencesUnchanged:true,noUpdateEffects:true};
  await stage('initial');await expect(overview).toContainText('Getting Amplifier ready');await expect(overview).not.toContainText('Finishing your update');
  await stage('regular');await expect(overview).toContainText('Finishing your update');
  await stage('compatibility');await expect(updates).toContainText('12 of 37 completed');

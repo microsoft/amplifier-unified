@@ -38,7 +38,7 @@ def backend(monkeypatch, tmp_path):
     monkeypatch.setattr(preparation, 'backend_identity', lambda *args: identity)
     monkeypatch.setattr(preparation, 'memory_available', lambda *args: True)
     def build(config, folder, plan, env):
-        return 'sha256:' + '2' * 64, json.dumps({'preparationId': plan['preparationId'], 'sourceSha256': plan['sourceSha256']})
+        return 'sha256:' + '2' * 64, json.dumps({'preparationId': plan['preparationId'], 'sourceSha256': plan['sourceSha256'], 'executionContract': {**plan['executionContract'], 'pythonBuild': {'available': False, 'reason': 'This source declares no Python build backend.'}}})
     monkeypatch.setattr(preparation, '_docker', build)
     return identity
 
@@ -337,7 +337,7 @@ def test_builder_wait_consumes_same_preparation_deadline(tmp_path, backend, monk
     monkeypatch.setattr(preparation, 'preparation_slot', delayed_slot)
     def build(config, folder, expected, env):
         assert expected['_deadline'] - clock[0] == 500
-        return 'sha256:' + '2' * 64, json.dumps({'preparationId': expected['preparationId'], 'sourceSha256': expected['sourceSha256']})
+        return 'sha256:' + '2' * 64, json.dumps({'preparationId': expected['preparationId'], 'sourceSha256': expected['sourceSha256'], 'executionContract': {**expected['executionContract'], 'pythonBuild': {'available': False, 'reason': 'This source declares no Python build backend.'}}})
     monkeypatch.setattr(preparation, '_docker', build)
     timing = profiles.freeze_timing('python-project', {'preparationTimeoutSeconds': 2000})
     receipt = preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request', timing_request=timing)

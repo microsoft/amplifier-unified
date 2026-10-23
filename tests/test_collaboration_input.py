@@ -349,9 +349,13 @@ async def test_manager_approval_is_independent_of_admission_and_does_not_unpark(
 
 async def test_worker_root_stamps_generation_and_strips_forged_approval_child_never_borrows_it():
     worker = Worker()
-    root = SimpleNamespace(session_id="root")
+    def coordinator(session_id):
+        capabilities = {}
+        return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+                               register_capability=capabilities.__setitem__)
+    root = coordinator("root")
     worker.session = SimpleNamespace(coordinator=root)
-    worker.runtime = SimpleNamespace(generation={"id": "current"})
+    worker.runtime = SimpleNamespace(generation={"id": "current", "input_ids": ["delivered"]})
     worker.context_inputs = ["delivered"]
     worker.context_bindings = {"delivered": {"clientId": "client"}}
     worker.bridge = AsyncMock(return_value={})
@@ -366,7 +370,7 @@ async def test_worker_root_stamps_generation_and_strips_forged_approval_child_ne
     assert stamped["_runtimeSessionId"] == "root" and stamped["_generationId"] == "current"
     assert stamped["_inputBindings"] == [{"inputId": "delivered", "clientId": "client"}]
     assert "_coordinationApproval" not in stamped and forged == original
-    child_bridge = worker.app_access_bridge(SimpleNamespace(session_id="actual-child"))
+    child_bridge = worker.app_access_bridge(coordinator("actual-child"))
     worker.runtime.generation = {"id": "later"}
     worker.context_inputs = ["later-input"]
     worker.context_bindings.clear()

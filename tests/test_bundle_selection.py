@@ -133,7 +133,13 @@ async def settled(app):
         await asyncio.sleep(.005)
     raise AssertionError('operation did not settle')
 
-async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
+async def saved_preview_fixture(*args, **kwargs):
+    return {'bundle': args[2], 'fingerprint': 'same', 'selection': None,
+            'modelCompatible': True, 'changes': {}}
+
+
+async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path, monkeypatch):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     runtime=Runtime();app=AppService(tmp_path,runtime=runtime,workspace=tmp_path);app.management=Management(app)
     try:
         await app.dispatch('session.create',{'bundle':'anchors'})
@@ -143,7 +149,8 @@ async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
         await settled(app)
         assert app._session()['bundlePreview']['bundle']=='work'
         runtime.fail=True
-        args={'sessionId':sid,'bundle':'work','previewId':'token'}
+        assert not runtime.starts and not runtime.calls
+        args={'sessionId':sid,'bundle':'work','previewId':app._session()['bundlePreview']['previewId']}
         await admin('dispatch',{'action':'bundle.switch','args':args})
         await settled(app)
         assert app._session()['bundle']=='anchors'
@@ -158,11 +165,12 @@ async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
         app._session()['status']='working'
         await app.dispatch('bundle.preview',{'sessionId':sid,'bundle':'anchors'})
         await settled(app)
-        assert app.state['actionStatus']['bundle.preview']['phase']=='error'
+        assert app.state['actionStatus']['bundle.preview']['phase']=='ready'
     finally: await app.close()
 
 @pytest.mark.parametrize('reviewed',[False,True])
-async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path,reviewed):
+async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path,reviewed,monkeypatch):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     runtime=Runtime();app=AppService(tmp_path,runtime=runtime,workspace=tmp_path);app.management=Management(app)
     try:
         await app.dispatch('session.create',{'bundle':'anchors'})
@@ -172,7 +180,7 @@ async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path,
         if reviewed:
             await app.app_bridge('dispatch',{'action':'bundle.preview','args':{'sessionId':sid,'bundle':'work'}},sid)
             await settled(app)
-        payload={'action':'bundle.fork','id':'fork-once','args':{'sessionId':sid,'bundle':'work',**({'previewId':'token'} if reviewed else {})}}
+        payload={'action':'bundle.fork','id':'fork-once','args':{'sessionId':sid,'bundle':'work',**({'previewId':source['bundlePreview']['previewId']} if reviewed else {})}}
         await admin('dispatch',payload);await settled(app)
         child=app._session();assert child['id']!=sid and child['bundle']=='work'
         assert child['messages']==[{'id':'user','role':'user','text':'keep','nativeIndex':0}]

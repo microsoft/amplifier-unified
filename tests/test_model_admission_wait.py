@@ -84,6 +84,33 @@ async def test_provider_contention_waits_then_invokes_once_after_release(app, pr
     assert app.assignments.usage(app.assignments.current(source))['calls'] == 2
 
 
+async def test_uncapped_assignment_runs_more_than_eight_helpers_and_provider_calls(app, providers):
+    source = app.state['sessions'][0]
+    # The installation's separate per-source creation policy remains authoritative.
+    policy = (await app.dispatch('testing.execution.read', {}))['result']
+    await app.dispatch('testing.execution.save', {
+        'expectedRevision': policy['revision'], 'queue': {}, 'profiles': {},
+        'concurrency': {'maxTaskChatsPerSource': 12}}, command_id='fixture-source-cap')
+    sessions = [source]
+    for index in range(10):
+        helper, _ = await child(app, source, f'helper-{index}')
+        sessions.append(helper)
+    observed = [providers(session) for session in sessions]
+    calls = [item.start(f'call-{index}') for index, item in enumerate(observed)]
+    await until(lambda: all(item.called for item in observed) or any(task.done() for task in calls))
+    assert all(item.called == [f'call-{index}'] for index, item in enumerate(observed))
+    assert all(not task.done() for task in calls)  # All eleven overlap at the provider boundary.
+    snapshot = app.assignments.snapshot(source)
+    assert snapshot['inFlightCalls'] == 11
+    assert len(snapshot['assignment']['members']) == 11
+    assert not app._model_admission_waiters
+    for item in observed:
+        item.release.set()
+    await asyncio.gather(*calls)
+    await until(lambda: app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 110)
+    assert all(item.control.capacity.last_denial is None for item in observed)
+
+
 async def waiting_pair(app, providers, **policy):
     source = app.state['sessions'][0]
     target, _ = await child(app, source)
@@ -251,6 +278,20 @@ async def test_mixed_unknown_and_live_capacity_waits_fifo_without_releasing_unkn
     assert next(row for row in receipts if row['id'] == unknown['id']) == unknown
     assert len(receipts) == 4 and last.called == ['last-call']
     assert first.control.capacity.last_denial is None and last.control.capacity.last_denial is None
+    assert not app._model_admission_waiters
+
+
+async def test_removing_count_ceiling_wakes_waiter_without_erasing_unknown_receipt(app, providers):
+    source, waiting, assignment, unknown, live, live_task, queued, task = await mixed_capacity(app, providers)
+    await limits(app, source, maxOpenTasks=None, maxConcurrentCalls=None)
+    await until(lambda: queued.called)
+    assert queued.called == ['queued-call'] and not live_task.done()
+    assert not queued.control.capacity.last_denial
+    receipts = app.assignments.usage(app.assignments.current(source))['receipts']
+    assert len(receipts) == 3
+    assert next(row for row in receipts if row['id'] == unknown['id']) == unknown
+    live.release.set(); queued.release.set()
+    await asyncio.gather(live_task, task)
     assert not app._model_admission_waiters
 
 

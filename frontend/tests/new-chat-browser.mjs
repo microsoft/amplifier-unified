@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
 let browser;
-const out='/tmp/amplifier-chat-controls';
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/amplifier-chat-controls';
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{ }),...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
@@ -27,19 +27,19 @@ try{
  await expect(page.getByRole('button',{name:'Chat',exact:true})).toHaveCount(0);
  const originalWorkspace=(await state()).settings.workspace;
  await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
- await expect(page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true})).toContainText('Work');
+ await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await expect(page.getByLabel('Registered root bundles',{exact:true}).locator('option:checked')).toHaveText('Work');
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  assert.deepEqual((await state()).view.newSessionDraft?.selection||{},{});
 
  await launcher.click();await launcher.click();assert.equal((await state()).sessions.length,0);await expectCatalog([]);
  await expect(page.getByText('Chat settings',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Notify me when ready',exact:true})).toHaveCount(0);
- await page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true}).click();
- await page.getByLabel('Registered root bundles',{exact:true}).selectOption('work');
- await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await page.getByLabel('Registered root bundles',{exact:true}).selectOption('work');
  await page.locator('select#chat-model').selectOption('chosen-model');
  await page.locator('#chat-effort').press('End');
- await page.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Use existing folder',exact:true}).click();
  await page.getByRole('textbox',{name:/Folder on/}).fill(originalWorkspace+'/../');
@@ -53,7 +53,7 @@ try{
  await page.screenshot({path:out+'/new-chat-desktop.png'});
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});
  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`});
- await page.locator('.a-composer').getByRole('button',{name:'Chat options',exact:true}).click();const panel=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(panel).toBeVisible();
+ await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(panel).toBeVisible();
  const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}});
  assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry));
  await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();
@@ -75,7 +75,7 @@ try{
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'correction.txt',mimeType:'text/plain',buffer:Buffer.from('Next attachment')});await page.getByRole('button',{name:'Remove correction.txt'}).waitFor();await expect(send).toBeEnabled();await page.getByRole('button',{name:'Remove correction.txt'}).click();await expect(stop).toBeEnabled();await stop.click();await expect(page.getByRole('button',{name:'Start voice call',exact:true})).toBeEnabled();assert.deepEqual((await inspect()).stopped,[sid]);
  await activity('idle',[{id:'worker',status:'running',title:'Background work'}]);await expect(stop).toBeEnabled();await activity('idle');
  // The damaged source stays referenced and the drawer still opens.
- await action('canvas.show',{kind:'markdown',title:'Recoverable artifact',content:'# Saved artifact'});const aid=(await state()).canvas.id;await action('canvas.close');assert.equal((await page.request.post(url+'/fixture/damage',{data:{artifactId:aid}})).status(),200);await page.getByRole('button',{name:'Open canvas',exact:true}).click();await expect(page.getByRole('complementary',{name:'Agent canvas'})).toBeVisible();await expect(page.getByText('The saved artifact source is unavailable.',{exact:true}).first()).toBeVisible();assert.equal((await state()).canvas.id,aid);assert.equal((await state()).selectedSessionId,sid);await page.screenshot({path:out+'/unavailable-artifact.png'});await action('canvas.close');
+ await action('canvas.show',{kind:'markdown',title:'Recoverable artifact',content:'# Saved artifact'});const aid=(await state()).canvas.id;await action('canvas.close');assert.equal((await page.request.post(url+'/fixture/damage',{data:{artifactId:aid}})).status(),200);await page.getByRole('button',{name:'Open canvas',exact:true}).click();await expect(page.getByRole('complementary',{name:'Canvas',exact:true})).toBeVisible();await expect(page.getByText('The saved artifact source is unavailable.',{exact:true}).first()).toBeVisible();assert.equal((await state()).canvas.id,aid);assert.equal((await state()).selectedSessionId,sid);await page.screenshot({path:out+'/unavailable-artifact.png'});await action('canvas.close');
  await composer.fill('Keep this existing chat draft');await launcher.click();await expect(page.getByRole('region',{name:'New chat',exact:true})).toBeVisible();await expect(composer).toHaveDraft('');await expectCatalog([sid]);await composer.fill('A different new draft');await action('session.select',{id:sid});await expect(composer).toHaveDraft('Keep this existing chat draft');await launcher.click();await expect(composer).toHaveDraft('A different new draft');
  assert.deepEqual(errors,[]);assert.equal(calls.filter(row=>row.action==='session.create').length,1);
  console.log('New chat browser passed: one launcher, uncommitted configurable draft, reload and attachments, exact first submission, composer controls, header identity/export, send/stop transitions, damaged canvas, draft isolation, desktop/mobile.');

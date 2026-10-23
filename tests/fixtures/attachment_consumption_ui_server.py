@@ -123,6 +123,16 @@ async def main(home):
 
     app.router.add_get('/fixture/attachment-consumption', observe)
     app.router.add_post('/fixture/attachment-consumption', control)
+    async def browser_session(request):
+        # Chromium's native download does not carry Playwright renderer headers.
+        # Use the existing real session-cookie contract, never bypass attachment auth.
+        authorized(request)
+        from amplifier_web.auth import SESSION_COOKIE, new_session
+        response = web.json_response({'issued': True})
+        response.set_cookie(SESSION_COOKIE, new_session(app['session_secret']),
+                            httponly=True, samesite='Strict', path='/')
+        return response
+    app.router.add_post('/fixture/browser-session', browser_session)
     return app
 
 

@@ -196,3 +196,28 @@ async def test_mixed_reorder_rejects_stale_membership_and_rolls_back_transaction
                                command_id='failed-mixed')
     assert app._state == before
     assert not app.db.execute("SELECT 1 FROM commands WHERE id='failed-mixed'").fetchone()
+
+
+async def test_adjacent_mixed_reorders_receipt_idempotence_conflict_and_safe_read(app, tmp_path):
+    (one, a), (two, b) = await populate(app, tmp_path)
+    for action, identity in [('session.pin', a), ('workspace.pin', two), ('session.pin', b)]:
+        await app.dispatch(action, {'id': identity, 'pinned': True})
+    app.clients.attach('pin-reader')
+    first = [f'workspace:{two}', f'session:{a}', f'session:{b}']
+    second = [f'session:{b}', f'workspace:{two}', f'session:{a}']
+    receipt = await app.dispatch('navigation.pinOrder', {'ids': first}, command_id='first-pin-move')
+    stale_revision = app.state['revision']
+    await app.dispatch('navigation.pinOrder', {'ids': second}, command_id='second-pin-move')
+    # Re-reading the same command receipt cannot replay the first order over B.
+    again = await app.dispatch('navigation.pinOrder', {'ids': first}, command_id='first-pin-move')
+    assert again['revision'] == receipt['revision']
+    assert ordered_ids(app.state) == second
+    # The same total order under a fresh intent has no membership/order effect.
+    await app.dispatch('navigation.pinOrder', {'ids': second}, command_id='same-pin-order')
+    with pytest.raises(AppError):
+        await app.dispatch('navigation.pinOrder', {'ids': first},
+                           command_id='stale-pin-move', expected_revision=stale_revision)
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id='stale-pin-move'").fetchone()
+    current = await app.dispatch('shell.query', {'clientId': 'pin-reader', 'instanceId': 'chats'})
+    assert current['result']['pinnedItemIds'] == second
+    assert load(app.db)['pinnedItemIds'] == second

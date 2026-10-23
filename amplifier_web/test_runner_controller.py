@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import time
 import uuid
 
 # This entry point is shipped in a hash-qualified, private immutable directory.
@@ -53,18 +54,41 @@ def state():
     return path
 
 
+@contextmanager
+def authority_locked(root):
+    # Readers must not see the immutable writer's temporary second hard link.
+    # This persistent account lock is separate from long allocation operations.
+    path = root / '.authority.lock'
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        def check():
+            info = os.fstat(fd)
+            current = path.stat(follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077 or info.st_nlink != 1
+                    or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
+                raise ValueError('The runner authority lock changed.')
+        check()
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        check()
+        yield
+    finally:
+        os.close(fd)
+
+
 def authority_id(root, *, create=False):
-    path = root / 'authority.json'
-    value = read(path)
-    if value is None and create:
-        try:
-            worker.common.write_private_record(path, {'version': 1, 'id': uuid.uuid4().hex})
-        except FileExistsError:
-            pass
+    with authority_locked(root):
+        path = root / 'authority.json'
         value = read(path)
-    if not isinstance(value, dict) or value.get('version') != 1 or not re.fullmatch(r'[a-f0-9]{32}', value.get('id', '')):
-        raise ValueError('The target authority must be registered first.')
-    return value['id']
+        if value is None and create:
+            try:
+                worker.common.write_private_record(path, {'version': 1, 'id': uuid.uuid4().hex})
+            except FileExistsError:
+                pass
+            value = read(path)
+        if not isinstance(value, dict) or value.get('version') != 1 or not re.fullmatch(r'[a-f0-9]{32}', value.get('id', '')):
+            raise ValueError('The target authority must be registered first.')
+        return value['id']
 
 
 def read(path, default=None):
@@ -341,7 +365,20 @@ def dispatch(request, *, _configuration=None, _engine_owner=None):
             if action == 'start' and result.get('ok'):
                 machine.settle(row)
             if action == 'reconcile':
+                settle_observed_reservation(root, runtime_payload, result, row)
                 reconcile_launch(root, runtime_payload, result, row)
+            elif action == 'read' and result.get('status') in {'stopped', 'removed', 'absent', 'unknown'}:
+                if preparation_settled(root) and machine.held(row):
+                    try:
+                        observed = worker.execute_call({**runtime_payload, 'action': 'reconcile'}, **({'_engine_owner': _engine_owner} if _engine_owner else {}))
+                        if settle_observed_reservation(root, runtime_payload, observed, row):
+                            # Failed inventory is not evidence; replace it only
+                            # after exact settled native ownership/absence proof.
+                            result = {**(result if result.get('ok') is True else {}),
+                                      'ok': True, 'universeId': worker.identity(runtime_payload),
+                                      'status': 'removed' if observed['status'] == 'absent' else observed['status']}
+                    except (OSError, ValueError, TimeoutError):
+                        pass  # Keep both the uncertain effect and its reservation.
             # Unknown creation retains capacity even after absent inventory.
             # Release only after our completed launch followed by exact stopped
             # or removed owner evidence; no TTL and no origin assertions.
@@ -357,6 +394,36 @@ def dispatch(request, *, _configuration=None, _engine_owner=None):
             write(record_path, {'state': 'completed', 'intent': intent, 'result': result})
         return result
 
+
+
+def preparation_settled(root):
+    return (not read(root / 'preparation/intent.json') or bool(read(root / 'prepared.json'))
+            or (read(root / 'preparation/cleanup.json', {}) or {}).get('complete') is True)
+
+
+def settle_observed_reservation(root, payload, result, row):
+    """Under this target owner's lock, preserve effects and settle only compute."""
+    if (not preparation_settled(root) or not machine.held(row)
+            or result.get('ok') is not True or result.get('status') not in {'stopped', 'absent'}
+            or not isinstance(payload.get('expectedBackendIdentity'), dict)):
+        return
+    observed = result.get('observation')
+    if not isinstance(observed, dict):
+        return
+    expected = worker.common.binding(payload, worker.identity(payload), payload['expectedBackendIdentity'])
+    if (any(observed.get(key) != value for key, value in expected.items())
+            or observed.get('admissionSettled') is not True
+            or (result['status'] == 'stopped' and observed.get('ownership') != 'matched')
+            or (result['status'] == 'absent' and (observed.get('ownership') != 'absent'
+                                               or observed.get('absenceConfirmed') is not True))):
+        return
+    proof = {'version': 1, 'state': 'observed', 'environmentStatus': result['status'],
+             'observation': observed, 'observedAt': time.time()}
+    path = root / 'reservation-recovery.json'
+    write(path, proof)
+    machine.settle(row, release=True)
+    write(path, {**proof, 'state': 'released'})
+    return True
 
 
 def reconcile_launch(root, payload, result, row):

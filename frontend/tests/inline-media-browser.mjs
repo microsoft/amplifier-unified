@@ -100,7 +100,7 @@ const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
 
 // Observe REAL native decoder work and application draws. Do not substitute
 // decoded frames or clocks. Test-only gates delay delivery for late cleanup.
-function installProbe({unsupported=false,corrupt=false,hold=false}={}){
+function installProbe({unsupported=false,corrupt=false,hold=false,captureTinyPixels=false}={}){
  const fetch=window.fetch,posts=window.__mediaReportPosts=[],actions=window.__actionPosts=[];
  window.fetch=function(input,options){
   if(options?.method==='POST'&&new URL(typeof input==='string'?input:input.url,location.href).pathname==='/api/actions'){
@@ -174,7 +174,11 @@ function installProbe({unsupported=false,corrupt=false,hold=false}={}){
   const result=draw.call(this,frame,...args),info=frames.get(frame);
   if(info)probe.draws.push({...info,id:this.canvas.closest('[data-media-id]')?.dataset.mediaId,
    viewId:this.canvas.closest('[data-canvas-view]')?.dataset.canvasView||'inline',
-   at:performance.now(),timestamp:frame.timestamp,duration:frame.duration});
+   at:performance.now(),timestamp:frame.timestamp,duration:frame.duration,
+   // Capture the tiny disposal fixture in the same actual draw as its index.
+   // Later browser round trips may already observe a subsequent playing frame.
+   ...(captureTinyPixels&&this.canvas.width*this.canvas.height<=32?
+    {pixels:Array.from(this.getImageData(0,0,this.canvas.width,this.canvas.height).data)}:{})});
   return result;
  };
 }
@@ -813,19 +817,24 @@ try{
   });
 
   await phase('partial-disposal',async()=>{
-   const client=await newClient();
+   const client=await newClient({captureTinyPixels:true});
    try{
     const saved=await attach(client.page,'partial'),figure=await readyFigure(client.page,saved.id);
-    const check=index=>canvasPixels(figure).then(row=>assert.deepEqual(row.pixels,boot.partialPixels[index].flat()));
+    const check=async index=>{
+     const row=(await draws(client.page,saved.id)).find(row=>row.index===index);
+     assert.ok(row,`Actual disposal frame ${index} was drawn`);
+     assert.deepEqual(row.pixels,boot.partialPixels[index].flat());
+    };
     await check(0);
     await figure.getByRole('button',{name:'Play GIF',exact:true}).click();
     for(let index=1;index<4;index++){
-     await expect.poll(async()=>(await draws(client.page,saved.id)).at(-1)?.index).toBe(index);
+     await expect.poll(async()=>(await draws(client.page,saved.id)).some(row=>row.index===index)).toBe(true);
      await check(index);
     }
     await figure.getByRole('button',{name:'Pause GIF',exact:true}).click();
     await figure.locator('canvas').screenshot({path:join(evidenceDir,'partial-transparent.png')});
-    return {disposal:[2,3],expected:boot.partialPixels,cleanup:await unmountAndClose(client)};
+    return {disposal:[2,3],expected:boot.partialPixels,draws:await draws(client.page,saved.id),
+     cleanup:await unmountAndClose(client)};
    }finally{if(!client.page.isClosed())await unmountAndClose(client)}
   });
   await phase('large-native',async()=>{

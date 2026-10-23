@@ -58,6 +58,7 @@ def outcome_sender(request):
 
 def definitions(schema, string):
     from .result_artifacts import REFERENCE_HELP
+    from .workspace_work_invocation import references_schema
     sid = {"sessionId": string(200)}
     references = {"type": "array", "maxItems": 16, "items": string(2000)}
     message = {**sid, "senderSessionId": string(200), "grantId": string(200),
@@ -94,6 +95,7 @@ def definitions(schema, string):
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
             "returnNotification": {"type": "boolean", "default": True},
+            "workReferences": references_schema(schema, string),
         }, ["title", "text"])),
         "coordination.read": ("Read a bounded window from one existing native conversation without selecting or warming it.", schema({
             **sid, "scope": {"enum": ["workspace", "all"]}, "messageId": string(200), "offset": {"type": "integer", "minimum": 0},
@@ -102,6 +104,7 @@ def definitions(schema, string):
         }, ["sessionId"])),
         "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
             **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
+        "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request. scope=all never widens request-participant/workspace authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
@@ -515,7 +518,7 @@ class Collaboration:
                 and self.service._session(sid, hydrate=False)['workspace'] != reader['workspace']):
             self.error("This result is outside the caller's request and workspace scope.")
 
-    def resolve_message(self, session, identity):
+    def resolve_message(self, session, identity, *, strict_source=False):
         def correlated(row):
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
                            if item["messageId"] == identity and item["nativeIndex"] == row.get("nativeIndex")), None)
@@ -540,6 +543,15 @@ class Collaboration:
             if len(candidates) != 1:
                 self.error("The exact saved message cannot be reconciled unambiguously.", 409)
             retained = candidates[0]
+            if strict_source and (
+                    native.get("nativeInputId") and retained.get("inputId")
+                    and native["nativeInputId"] != retained["inputId"]
+                    or retained.get("text") != native.get("text")):
+                self.error("The retained source conflicts with its exact native input.", 409)
+            if (strict_source and native.get("role") == "user"
+                    and not (native.get("nativeInputId") and retained.get("inputId") == native["nativeInputId"])):
+                # An index alone is not host input provenance for accepted Work.
+                retained = {**retained, "inputOrigin": "unknown"}
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
                            if item["messageId"] == identity and item["nativeIndex"] == native.get("nativeIndex")), None)
             if (retained.get("role") != native.get("role")
@@ -662,6 +674,8 @@ class Collaboration:
         if (source['workspace'] != receipt['workspace']
                 or (source.get('workingDirectory') or source['workspace']) != receipt['result']['workingDirectory']):
             return 'The requester execution placement changed.'
+        if receipt.get('workReferences'):
+            return self.service.work_invocation.plan_reason(receipt)
 
     def can_steer(self, target):
         active = target.get("collaborationGeneration") or {}
@@ -1122,6 +1136,9 @@ class Collaboration:
         if response is None:
             return
         revision = self.record_outcome(request, response)
+        from .outcome_acknowledgement import acknowledged
+        if versioned and acknowledged(request, response):
+            return
         if versioned and revision <= wait.get('lastClaimedRevision', 0):
             return
         if revision > MAX_RESPONSE_REVISIONS:
@@ -1313,6 +1330,9 @@ class Collaboration:
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
         source = self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None
+        if action == 'coordination.acknowledge':
+            from .outcome_acknowledgement import acknowledge
+            return await acknowledge(self, source, args, origin, command_id)
         if action == 'coordination.cancel':
             from .request_cancellation import cancel
             return await cancel(self, source, args, origin, command_id)
@@ -1409,8 +1429,10 @@ class Collaboration:
                 results.append({"messageId": response["terminalMessageId"], "sessionId": sid,
                                 "inputId": (initial or receipt)['requestId'], "declaration": response})
             from .request_cancellation import status as cancellation_status
+            from .outcome_acknowledgement import reference as notification_reference
             return {"accepted": True, "result": {"receipt": receipt, "results": results,
                 'cancellation': cancellation_status(report),
+                'notification': notification_reference(report),
                 'responseRevision': report.get('responseRevision', 1 if response else 0), 'revisions': revisions,
                 **({'initialRequest': initial} if initial is not None else {}),
                 "preparation": copy.deepcopy((target or {}).get("activity")),
@@ -1426,11 +1448,15 @@ class Collaboration:
             prepared_artifacts = await prepare(self, source, args, origin, identity, digest)
             if prepared_artifacts.get('duplicate'):
                 return prepared_artifacts['duplicate']
-        async with self.service.lock, AsyncExitStack() as recovery_boundary:
+        async with (self.service.lock,
+                    self.service.work_invocation.initial_transaction(action, identity),
+                    AsyncExitStack() as recovery_boundary):
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
                 return duplicate
+            from .workspace_work_effects import guard
+            guard(self.service, action, args, origin, source['id'], final=True)
             if args.get("grantId"):
                 self.error("Legacy grant-bearing writes are unsupported. Read the original receipt; do not replay it as new work.", 410)
             creation = CREATION.get()
@@ -1501,6 +1527,8 @@ class Collaboration:
             elif action == "coordination.create":
                 if source.get('fileAccessPending'):
                     self.error('Finish applying the source chat’s file settings before creating another task.', 409)
+                if args.get('workReferences'):
+                    self.service.work_invocation.validate_references(source, args['workReferences'])
                 # Creation is handled outside the service lock below.
                 self.require_continuation()
                 receipt = None
@@ -1583,6 +1611,8 @@ class Collaboration:
                 if creation and identity == creation[4]['requestId'] + ':brief':
                     operation = self.receipt(creation[4]['requestId'])
                     if operation.get('creationVersion') == 1:
+                        if operation.get('workReferences'):
+                            self.service.work_invocation.seal(operation, receipt, source, target)
                         receipt['creationOperationId'] = operation['requestId']
                         wait = operation.get('subscription')
                         if wait:
@@ -1627,44 +1657,47 @@ class Collaboration:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 return duplicate
-            # A root occupies one slot while executable work is outstanding.
-            # Idle history and uncertain historical receipts are not work; their
-            # evidence stays unknown and is never resolved/replayed by this cap.
-            roots = [row for row in self.service.state["sessions"]
-                     if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]]
+            if args.get('workReferences'):
+                self.service.work_invocation.validate_references(source, args['workReferences'])
             from .test_execution_settings import concurrency
             maximum = concurrency(self.service)['maxTaskChatsPerSource']
-            outstanding = set()
-            for row in roots:
-                active = row.get("collaborationGeneration") or {}
-                task = row.get("task") or self.service.coordination.task(row["id"]) or {}
-                if (row.get("status") in {"starting", "working", "running", "busy", "stopping"}
-                        or active.get("id") and not active.get("terminal")
-                        or row["id"] in getattr(self.service.runtime, "_preparations", {})
-                        or task.get("id") and task.get("status") in {"active", "running", "working"}):
-                    outstanding.add(row["id"])
-            # Idle presentation can be nonresident while a durable task or an
-            # unsubmitted input still occupies a slot. Count exact directory
-            # owners without admitting or reading unrelated saved bodies.
-            sql, bound = self.service.directory.effective()
-            outstanding.update(row[0] for row in self.service.db.execute(sql + """
-                SELECT d.id FROM directory_rows d
-                WHERE json_extract(d.summary,'$.collaboration.creatorSessionId')=?
-                AND (json_extract(d.summary,'$._coordinationTaskActive')=1 OR EXISTS(
-                    SELECT 1 FROM commands c
-                    WHERE json_extract(c.receipt,'$.commandAction')='coordination.send'
-                    AND json_extract(c.receipt,'$.target.sessionId')=d.id
-                    AND json_extract(c.receipt,'$.delivery') IN ('queued','submitting','pending_steer')))
-                LIMIT ?""", (*bound, source['id'], maximum)))
-            pending = self.service.db.execute("""SELECT receipt FROM commands
-                WHERE json_extract(receipt,'$.commandAction')='coordination.create'
-                AND json_extract(receipt,'$.senderSessionId')=?
-                AND json_extract(receipt,'$.protocol')=?
-                AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""",
-                (source["id"], PROTOCOL)).fetchall()
-            outstanding.update(json.loads(row[0])["sessionId"] for row in pending)
-            if len(outstanding) >= maximum:
-                self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
+            if maximum:
+                # A root occupies one slot while executable work is outstanding.
+                # Idle history and uncertain historical receipts are not work; their
+                # evidence stays unknown and is never resolved/replayed by this cap.
+                roots = [row for row in self.service.state["sessions"]
+                         if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]]
+                outstanding = set()
+                for row in roots:
+                    active = row.get("collaborationGeneration") or {}
+                    task = row.get("task") or self.service.coordination.task(row["id"]) or {}
+                    if (row.get("status") in {"starting", "working", "running", "busy", "stopping"}
+                            or active.get("id") and not active.get("terminal")
+                            or row["id"] in getattr(self.service.runtime, "_preparations", {})
+                            or task.get("id") and task.get("status") in {"active", "running", "working"}):
+                        outstanding.add(row["id"])
+                # Idle presentation can be nonresident while a durable task or an
+                # unsubmitted input still occupies a slot. Count exact directory
+                # owners without admitting or reading unrelated saved bodies.
+                sql, bound = self.service.directory.effective()
+                outstanding.update(row[0] for row in self.service.db.execute(sql + """
+                    SELECT d.id FROM directory_rows d
+                    WHERE json_extract(d.summary,'$.collaboration.creatorSessionId')=?
+                    AND (json_extract(d.summary,'$._coordinationTaskActive')=1 OR EXISTS(
+                        SELECT 1 FROM commands c
+                        WHERE json_extract(c.receipt,'$.commandAction')='coordination.send'
+                        AND json_extract(c.receipt,'$.target.sessionId')=d.id
+                        AND json_extract(c.receipt,'$.delivery') IN ('queued','submitting','pending_steer')))
+                    LIMIT ?""", (*bound, source['id'], maximum)))
+                pending = self.service.db.execute("""SELECT receipt FROM commands
+                    WHERE json_extract(receipt,'$.commandAction')='coordination.create'
+                    AND json_extract(receipt,'$.senderSessionId')=?
+                    AND json_extract(receipt,'$.protocol')=?
+                    AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""",
+                    (source["id"], PROTOCOL)).fetchall()
+                outstanding.update(json.loads(row[0])["sessionId"] for row in pending)
+                if len(outstanding) >= maximum:
+                    self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
             if not args['title'].strip() or not args['text'].strip():
                 self.error('Enter a task title and brief.', 400)
             self.require_causal_depth(self.causal_depth(source, lineage, origin))
@@ -1682,6 +1715,8 @@ class Collaboration:
                 'sourceTaskId': task.get('id'), 'sourceTaskRevision': task.get('revision'),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
             receipt['assignmentId'] = assignment_id
+            if args.get('workReferences'):
+                receipt['workReferences'] = copy.deepcopy(args['workReferences'])
             if notify:
                 receipt['subscription'] = self.saved_wait(source, identity, status='reserved')
             self.service.db.execute('INSERT INTO collaboration_preparations(request_id,configuration) VALUES(?,?)',

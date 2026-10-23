@@ -195,15 +195,15 @@ async def test_creation_command_receipt_and_reserved_id_cannot_overwrite_existin
 async def test_source_task_pause_is_independent_and_mode_changes_require_review(tmp_path, monkeypatch):
     app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
     try:
-        await app.dispatch('task.create', {'sessionId':sid,'expectedRevision':0,'objective':'Original independent objective'})
+        await app.dispatch('task.create', {'sessionId':sid,'expectedRevision':0,'objective':'Original independent objective'}, command_id='source-task-create')
         record, _ = await create(app,sid,now[0])
-        await app.dispatch('task.pause', {'sessionId':sid,'expectedRevision':1})
+        await app.dispatch('task.pause', {'sessionId':sid,'expectedRevision':1}, command_id='source-task-pause')
         now[0]+=61; await app.schedules.tick()
         run=app.schedules.store.runs(sid)[0]
         assert run['phase']=='accepted',run['detail']
         assert runtime.workers[sid].tasks.record()['status']=='paused'
         await finish(app,run['destinationSessionId'],run)
-        await app.dispatch('task.resume',{'sessionId':sid,'expectedRevision':2})
+        await app.dispatch('task.resume',{'sessionId':sid,'expectedRevision':2}, command_id='source-task-resume')
         fields={'sessionId':sid,**config(now[0]),'destination':'same_task'}
         preview=(await app.dispatch('schedule.preview',fields))['result']
         updated=(await app.dispatch('schedule.update',{**fields,'id':record['id'],'expectedRevision':record['revision'],'previewHash':preview['previewHash']}))['result']['schedule']

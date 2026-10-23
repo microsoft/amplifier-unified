@@ -100,6 +100,8 @@ try{
  await openSettingsPage(page,'app-bundles');
  await openChatAdvancedPage(page,'Model & tools');
  await page.getByRole('dialog',{name:'Model & tools',exact:true}).locator('summary').filter({hasText:/^Conversation modules$/}).click();
+ // Details are passive; explicitly inspect the conversation before editing loaded modules.
+ await page.getByRole('dialog',{name:'Model & tools',exact:true}).getByRole('button',{name:'Load configuration',exact:true}).click();
  await page.locator('#filter-loaded-modules').fill('tool-*');
  assert.equal(await page.locator('.a-module-settings .a-collection-row').count(),1);
  await page.getByRole('button',{name:'tool-filesystem tools',exact:true}).click();
@@ -136,7 +138,7 @@ try{
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
  await page.getByRole('button',{name:'New chat',exact:true}).click();
- await page.locator('.a-composer').getByRole('button',{name:'Chat options',exact:true}).click();
+ await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');

@@ -1,5 +1,39 @@
 # Standard UX inventory and execution plan
 
+## Source preparation failure follow-up (October 22)
+
+**TEST-SOURCE-PRELAUNCH** extends the managed test-environment checklist: when
+source snapshot preparation returns `repository-source-changed`, show the failed
+check and explain that no environment or command started. Inspecting its exact
+retired owner must preserve the original failure without replay, cleanup, or a
+physical-absence claim. A new explicit check is distinct from repeating that ID.
+Changed owner, launch, backend or receipt evidence, pending preparation and
+uncertain effects remain held under normal recovery.
+
+`tests/test_prelaunch_source_failure.py` owns the deterministic helper and real
+dispatch/journal regressions in Full Python checks and the focused managed-removal
+lane. Existing `test-environments` browser checks retain unknown-command and
+ownership coverage. This adds backend failure-state coverage; it does not claim a
+new rendered-browser or physical-backend acceptance pass or alter frozen counts.
+
+## Expired configuration request follow-up (October 22)
+
+`approval-lifecycle` is an additive extended-browser owner in
+`frontend/tests/browser-checks.json`. Its report and screenshots are retained
+under `output/browser-checks/approval-lifecycle`; the runner also retains the
+exact command, source/plan/build identities, raw outcome and process cleanup.
+The journey covers cold stale/current requests, passive scope review, exact
+dismissal without work startup, late scope/expiry changes, two clients,
+adjacent requests, reload/private drafts and narrow keyboard-reachable controls.
+`tests/test_capability_lifecycle.py` owns authority and native-waiter boundaries;
+the existing `approval-layout` owner remains separate and unchanged.
+
+This adds ownership, not a new release gate or a passing test claim. Original
+incident causes/effects remain unknown, synthetic runtime checks do not qualify
+real-provider behavior, and the frozen inventory/counts/hash remain unchanged.
+See [configuration authority](../workspaces/configuration-authority.md) for the
+request/grant and dismissal boundaries.
+
 ## Completion-hook response follow-up (October 18)
 
 **RESPONSE-833** covers two ordinary answers with an internal completion check
@@ -995,3 +1029,62 @@ remote cleanup boundaries, concurrent scheduler passes, restart and the exact
 initial-allocation cancellation gap. Unknown or advanced owners remain held. This
 is controlled-backend and rendered-client evidence, not live runner deployment.
 No new broad test lane or publication gate is added.
+
+## Compact composer and peer preview integration (October 22)
+
+The additive `compact-composer` and `peer-preview` browser scenarios run in the
+automatic extended source smoke plan. The existing `composer-options` owner
+remains in Public readiness without duplication. Together they cover the
+ordinary writing/options controls and grouped incoming-message source preview;
+the existing composer primary-action and peer-attribution journeys retain their
+separate assertions. The frozen original inventory and 65-scenario hash remain
+unchanged. The delta ledger records the specific paths, expected results and
+synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
+qualify installed wheels and negative controls; they do not replace these
+automatic ordinary-path owners.
+
+## Immutable multi-quote integration (October 22)
+
+The additive `multi-quote` source journey uses the existing automatic browser
+runner and `output/browser-checks/multi-quote` evidence directory. It retains
+literal, independently expected commentary before/between/after immutable
+references through reload, removal/reorder, delayed addition and normal Send.
+The same journey checks compact writing-wrapper containment and narrow layout;
+it does not substitute quote-shaped Markdown for immutable source identity.
+The Composer and Peer owners above and the frozen baseline remain unchanged.
+The same owner also exercises nearby rendered-text selection, exact raw spans
+across supported formatting, explicit transformed/boundary-text fallback,
+selection-receipt ownership, source changes and chat changes. Scrolled-card
+checks use readable text and control hit tests at narrow/enlarged sizes, not
+only element presence. Quote-only height is bounded while ordinary drafts
+retain their existing cap.
+The manual multi-quote lane adds deliberate commentary-loss/misplacement,
+hidden-control and transformed-token controls, byte-exact restoration and
+installed-wheel proof. Managed exports bind a measured source manifest rather
+than inventing Git provenance; Git-backed CI retains the standard runner's
+revision evidence. The managed installed check uses a fresh wheel environment
+with read-only prepared dependencies, not a minimal production-dependency install.
+Optional private design comparisons are not repository fixtures or public CI
+inputs. Physical-device,
+real OS IME, live-provider and lost-Send-ACK browser coverage remain explicit
+limits; registering this owner is not a new passing result.
+
+## Shared Work additive ownership (October 22)
+
+`delta.shared-work` records the existing `shared-work` extended-browser journey,
+with `AMPLIFIER_TEST_COLD_TASK=1`, rather than adding a duplicate scenario.
+It covers retained source/corrections and evidence, cold saved tasks, independent
+clients, currentness, guarded Work Back/Forward, drafts and dirty Canvas/Settings
+at desktop and narrow widths. Native/nested effect checks have separate additive
+module selectors in the existing `native` integration owner; the browser's
+synthetic runtime is not native execution proof. See
+[integration ownership](integration-coverage.md#shared-work-native-and-nested-effect-ownership-october-22).
+
+The delta's source identity is the prior
+`6ac9611ddd85205e2781fe2e17f3bc950feee030` checkpoint, whose retained evidence keeps
+its original exact-input reuse limits. It is not an uncommitted integration
+identity or a new pass. Qualification of the new integration and registration
+increment is pending; tests for these changes are **UNRUN** until owned isolated
+execution. Installed-wheel qualification remains separate from automatic source
+smoke. The frozen inventory, existing Navigation/Automation/Composer/Peer/Pins
+and reaction owners, Fast checks and publication policy are unchanged.

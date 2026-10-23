@@ -153,7 +153,7 @@ try{
  assert.equal(await mutations(),1);
  assert.deepEqual(await snapshot(),before);
  // Ordinary Latest reopen and deliberately selected history are distinct.
- await page.getByRole('button',{name:'Canvas options',exact:true}).click();
+ await page.getByRole('button',{name:'Canvas details',exact:true}).click();
  await page.getByLabel('Artifact version',{exact:true}).selectOption('1');
  await expect(page.getByRole('status').filter({hasText:'Saved version · Read only'})).toBeVisible();
  await expect(page.getByRole('button',{name:'Open live view',exact:true})).toBeVisible();
@@ -198,7 +198,7 @@ try{
  await expect(frame.locator('#error')).toContainText('action schemas changed');
  assert.equal(await mutations(),2);
  // Required review remains visible even when optional Canvas controls are closed.
- const options=page.getByRole('button',{name:'Canvas options',exact:true});
+ const options=page.getByRole('button',{name:'Canvas details',exact:true});
  if(await options.getAttribute('aria-expanded')==='true')await options.click();
  await expect(page.getByRole('button',{name:'Review tool changes',exact:true})).toBeVisible();
  await expect(page.locator('#canvas-options .a-mcp-contract-review')).toHaveCount(0);
@@ -222,14 +222,14 @@ try{
  await expect(review).toContainText('Added actions — not granted');
  if(process.env.MCP_RECOVERY_SCREENSHOT)await page.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT.replace(/\.png$/,'-review.png')});
  await review.getByRole('button',{name:'Approve existing actions',exact:true}).click();
- // Successful approval moves the optional review into the closed Canvas options.
+ // Successful approval moves the optional review into the closed Canvas details.
  // Read the visible connection state without waiting on that now-hidden region.
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(frame.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Current client keeps this on contract-only approval');
  assert.equal(await mutations(),2);
  const ungranted=await frame.locator('body').evaluate(async()=>{try{await window.fixtureCall('counter_extra');return 'unexpected success'}catch(error){return error.message}});
  assert.match(ungranted,/not granted/);
- // A healthy tool keeps optional review in Canvas options, leaving its view clear.
+ // A healthy tool keeps optional review in Canvas details, leaving its view clear.
  await expect(page.getByRole('button',{name:'Review tool changes',exact:true})).toBeHidden();
  await options.click();
  await expect(page.locator('#canvas-options .a-mcp-contract-review')).toBeVisible();

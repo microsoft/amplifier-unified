@@ -8,6 +8,12 @@ from pathlib import Path
 
 def initialize(prefix=Path('/opt/unified-prepared'), workspace=Path('/workspace'), artifacts=Path('/artifacts')):
     plan = json.loads((prefix / 'plan.json').read_text())
+    if 'executionContract' in plan:
+        contract = json.loads((prefix / 'execution-contract.json').read_text())
+        if (contract.get('source') != plan['executionContract']['source']
+                or contract.get('profileId') != plan['profileId'] or contract.get('version') != 1
+                or not (prefix / 'venv/bin/python').is_file()):
+            raise ValueError('The prepared execution contract is incomplete or belongs to different source.')
     marker = workspace / '.unified-prepared-dependencies.json'
     if marker.exists():
         if marker.is_symlink() or json.loads(marker.read_text()) != {'preparationId': plan['preparationId']}:

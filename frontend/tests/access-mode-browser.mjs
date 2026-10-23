@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {settingsButton} from './browser-settings.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
@@ -48,7 +49,7 @@ try{
  const secondGrant=(await response.json()).result;
  const secondApproval=page.locator(`[data-approval-id="${secondGrant.id}"]`);
  await expect(secondApproval).toBeVisible();
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await settingsButton(page).click();
  await page.getByRole('button',{name:'Privacy & files',exact:true}).click();
  await page.getByRole('button',{name:/Access & approvals/}).click();
  const controls=page.getByRole('region',{name:'Access and approvals'});
@@ -87,11 +88,28 @@ try{
  const oldCard=page.locator(`[data-approval-id="${expiredGrant.id}"]`);
  await expect(oldCard).toBeVisible();
  await page.evaluate(sessionId=>window.amplifier.dispatch('conversation.stop',{sessionId}),current.selected);
- await expect(oldCard).toHaveCount(0);
+ await expect(oldCard).toContainText('This request cannot grant permission.');
+ await expect(oldCard.getByRole('button',{name:'Allow',exact:true})).toHaveCount(0);
+ await expect(oldCard.getByRole('button',{name:'Deny',exact:true})).toHaveCount(0);
+ const expired=await page.evaluate(args=>window.amplifier.dispatch('capability.read',args),{sessionId:current.selected,id:expiredGrant.id});
+ assert.equal(expired.accepted,true);
+ assert.equal(expired.result.request.status,'expired');
+ assert.equal(expired.result.request.canDecide,false);
+ assert.equal(expired.result.request.canDismiss,true);
+ assert.equal(expired.result.request.resolutionReason,'conversation_stopped');
  const stale=await page.evaluate(args=>window.amplifier.dispatch('approval.respond',args),{sessionId:current.selected,id:expiredGrant.id,decision:'allow',comment:'Retain this note only.'});
  assert.equal(stale.accepted,true);assert.equal(stale.decisionApplied,false);
+ // The retained note changes the exact request hash. Review it before dismissal.
+ await oldCard.getByRole('button',{name:'Review current scope',exact:true}).click();
+ await expect(oldCard.getByRole('region',{name:'Current configuration scope'})).toBeVisible();
+ await oldCard.getByRole('button',{name:'Dismiss old request',exact:true}).click();
+ await expect(oldCard).toHaveCount(0);
+ await page.locator('[data-part="approvals"] summary').click();
+ const historical=page.locator(`[data-permission-history-id="${expiredGrant.id}"]`);
+ await expect(historical).toContainText('Dismissed old request');
+ await expect(historical).toContainText('Retain this note only.');
  assert.deepEqual(errors,[]);
- const report={passed:true,pendingApproval:true,globalDefault:true,denyNote:true,expiredCard:true,expiredNote:true,revocation:true,reload:true,privateDraft:true,pendingPolicySteering:true,mobile:true,scriptedRuntime:true,realProvider:false};
+ const report={passed:true,pendingApproval:true,globalDefault:true,denyNote:true,expiredCard:true,expiredNote:true,explicitDismissal:true,revocation:true,reload:true,privateDraft:true,pendingPolicySteering:true,mobile:true,scriptedRuntime:true,realProvider:false};
  await writeFile(join(output,'report.json'),JSON.stringify(report,null,2));
  console.log(JSON.stringify({output,...report}));
 }finally{await browser?.close();fixture.kill('SIGTERM')}

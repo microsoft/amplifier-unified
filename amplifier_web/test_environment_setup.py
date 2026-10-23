@@ -203,6 +203,7 @@ def discover():
 
 async def readiness(app, *, force=False):
     from .task_environments import configuration, invoke
+    from . import test_capacity_settings
     config, state, reason = await settled_thread(configuration, app)
     if config and config.get('remoteRunner'):
         return {'status': 'ready', 'reason': reason, 'remote': True, 'backend': 'incus'}
@@ -210,7 +211,11 @@ async def readiness(app, *, force=False):
         return {'status': state, 'reason': reason}
     raw = read_json(Path(app.data_dir) / 'test-environments.json')
     installs = [{'id': row.get('id'), 'status': row.get('status'), 'commit': row.get('commit'), 'python': row.get('python')} for row in getattr(getattr(app, 'smart_tools', None), 'state', {}).get('installations', [])]
-    key = hashlib.sha256(json.dumps([raw, installs], sort_keys=True).encode()).hexdigest()
+    try:
+        effective = test_capacity_settings.apply(app, config) if config else None
+    except (OSError, ValueError, TypeError):
+        return {'status': 'unavailable', 'reason': 'The saved testing capacity settings need attention. Open Settings → Testing.'}
+    key = hashlib.sha256(json.dumps([raw, installs, effective], sort_keys=True).encode()).hexdigest()
     cached = getattr(app, '_test_setup_readiness', None)
     if not force and cached and cached['key'] == key and time.monotonic() - cached['at'] < 30:
         return cached['value']
@@ -220,12 +225,19 @@ async def readiness(app, *, force=False):
     if read_json(Path(app.data_dir) / 'test-environments.json') != raw:
         return {'status': 'unavailable', 'reason': 'The runner configuration changed during inspection. Refresh its status.'}
     try:
-        observed = await settled_thread(invoke, config, app.data_dir, {}, 'capacity', {})
+        if test_capacity_settings.apply(app, config) != effective:
+            return {'status': 'unavailable', 'reason': 'The runner or its capacity settings changed during inspection. Refresh its status.'}
+        # Setup reports the same policy as guarded launch admission. The retained
+        # backend configuration remains the exact identity for cleanup owners.
+        observed = await settled_thread(invoke, effective, app.data_dir, {}, 'capacity', {})
         if not observed.get('ok') or not isinstance(observed.get('capacity'), dict):
             raise ValueError('The configured daemon did not answer.')
         capacity = observed['capacity']
         blockers = capacity.get('blockers', [])
         await settled_thread(inspect_base_image, config)
+        if (read_json(Path(app.data_dir) / 'test-environments.json') != raw
+                or test_capacity_settings.apply(app, config) != effective):
+            return {'status': 'unavailable', 'reason': 'The runner or its capacity settings changed during inspection. Refresh its status.'}
         proof_path = root(app, create=False) / ('verified-' + hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest() + '.json')
         proof = read_json(proof_path)
         verified = bool(proof and proof.get('configuration') == raw and proof.get('proof', {}).get('probeRemoved'))
@@ -233,7 +245,7 @@ async def readiness(app, *, force=False):
                  'capacity': capacity, 'available': not blockers, 'backend': config.get('backend', 'docker'), 'observedAt': time.time()}
         app._test_setup_readiness = {'key': key, 'at': time.monotonic(), 'value': value}
         return value
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError, TypeError):
         return {'status': 'unavailable', 'reason': 'The saved runner could not be verified. Check that its local daemon is running and the approved installation is still available.'}
 
 

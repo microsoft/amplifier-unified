@@ -4,11 +4,14 @@ import json
 import inspect
 import time
 import uuid
+from contextvars import ContextVar
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from .host.config import app_home, write_private
 from .session_files import validate_id
+
+_STEER_INPUT = ContextVar('unified_native_steer_input', default=None)
 
 
 class NativeProviderHost:
@@ -18,6 +21,10 @@ class NativeProviderHost:
         self.provider = None
         self.identity = None
         self.reason = "Native provider transport is not enabled for this bundle."
+        self.send_bindings = {}
+        self.response_origins = {}
+        self.open_responses = set()
+        self.response_overflow = False
         self.state = {"version": 1, "sessionId": coordinator.session_id, "receipts": []}
         self.path = directory / "native-provider-state.json"
         self.checkpoint_path = directory / "native-provider-checkpoint.json"
@@ -25,14 +32,325 @@ class NativeProviderHost:
             saved = json.loads(self.path.read_text())
             if saved.get("sessionId") == coordinator.session_id:
                 self.state = saved
-                if self.state.get("outcome") in {"submitting", "running", "pending"}:
+                changed = False
+                for row in self.state.get("sends", []):
+                    if row.get("outcome") in {"submitting", "sent", "running", "pending"}:
+                        row["outcome"] = "unknown"
+                        changed = True
+                if self.state.get("outcome") in {"submitting", "sent", "running", "pending"}:
                     self.state["outcome"] = "unknown"
                     self.state["reason"] = "Host restarted without a terminal provider receipt; no work was replayed."
+                    changed = True
+                if changed:
                     self.save()
         coordinator.register_capability("web.native_provider", self)
 
     def save(self):
         write_private(self.path, json.dumps(self.state, ensure_ascii=False))
+
+    def _remember_response(self, identity, owner):
+        self.response_origins = {k: v for k, v in self.response_origins.items()
+            if v[0].attempts.get(v[1]['id']) is v[1]}
+        if owner and (identity in self.response_origins or len(self.response_origins) < 128):
+            self.response_origins[identity] = owner
+            owner[0].native_response(owner[1], identity)
+        # Exhausted attribution memory must not destroy an unrelated response.
+        # Absence is unavailable coverage, never a reused last-request proof.
+
+    async def send_lifecycle(self, kind, data):
+        """One stable sink; never replace a parent's callback with a steer's."""
+        from .coordination_delivery import WORK_ATTEMPT
+        from .execution_events import ADMITTED_CALL, AdmittedProviderCall
+        active = WORK_ATTEMPT.get()
+        admission = ADMITTED_CALL.get()
+        if kind == 'native.submitting':
+            if not isinstance(admission, AdmittedProviderCall) or admission.session_id != self.coordinator.session_id:
+                raise ValueError("Native send lacks its host provider admission")
+            delivery, attempt = active or (None, None)
+            if attempt and attempt['origin'] is not None and not delivery.origin_current(attempt):
+                raise ValueError("Native send origin changed")
+            if (data.get('operation') == 'response.steer'
+                    and data.get('input_id') != _STEER_INPUT.get()):
+                raise ValueError("Native steer is not its admitted input")
+            if len(self.send_bindings) >= 128:
+                recorded = {row['send_id'] for row in self.state.get('sends', [])}
+                terminal = {row['send_id'] for row in self.state.get('sends', [])
+                            if row['outcome'] in {'not_sent', 'completed', 'applied', 'failed'}}
+                self.send_bindings = {k: v for k, v in self.send_bindings.items()
+                                      if k in recorded and k not in terminal}
+            if len(self.send_bindings) >= 128 or data['send_id'] in self.send_bindings:
+                raise ValueError("Native send binding is ambiguous or full")
+            attempt_id = attempt['id'] if attempt else uuid.uuid4().hex
+            generation = getattr(self.coordinator.get_capability('live.runtime'), 'generation', None) or {}
+            callback = self.bind_send_lifecycle(
+                attempt_id=attempt_id, generation_id=generation.get('id'), admitted_call_id=admission.id)
+            self.send_bindings[data['send_id']] = {
+                'delivery': delivery, 'attempt': attempt, 'callback': callback, 'record': copy.deepcopy(data),
+                'admission': admission, 'generationId': generation.get('id'), 'attemptId': attempt_id}
+            if attempt:
+                attempt['sendId'] = data['send_id']
+            await callback(kind, data)
+            return
+        if kind == 'native.not_sent':
+            binding = self.send_bindings.get(data.get('send_id'))
+            if binding is None:
+                raise ValueError("Native terminal has no original send binding")
+            await binding['callback'](kind, data)
+            if binding['attempt']:
+                binding['attempt']['status'] = 'not_sent'
+            return
+        bindings = list(self.send_bindings.values())
+        if kind.startswith('steering.'):
+            bindings = [b for b in bindings if b['record'].get('operation') == 'response.steer'
+                        and b['record'].get('input_id') == data.get('input_id')]
+        elif kind == 'native.outcome_unknown':
+            bindings = [b for b in bindings if
+                (b['admission'] is admission and b['record'].get('operation') == 'response.create')
+                or (b['record'].get('operation') == 'response.steer'
+                    and data.get('input_id') is not None and b['record'].get('input_id') == data['input_id'])]
+        else:
+            bindings = [b for b in bindings if b['admission'] is admission
+                        and b['record'].get('operation') == 'response.create']
+        for binding in bindings:
+            delivery, attempt = binding['delivery'], binding['attempt']
+            await binding['callback'](kind, data)
+            if kind == 'native.outcome_unknown' and attempt:
+                delivery.finish_work(attempt, failed=True)
+            if kind == 'steering.applied' and attempt:
+                self._remember_response(data['response_id'], (delivery, attempt))
+        if kind == 'native.response.created':
+            identity = data.get('response_id')
+            owner = self.response_origins.get(identity, active)
+            self._remember_response(identity, owner)
+            # This connection serializes response.created / terminal phases.
+            # It is an event-ordered response identity, not a last model request.
+            epoch = getattr(self.provider, 'epoch', None)
+            if len(self.open_responses) < 128:
+                self.open_responses.add((epoch, identity))
+            else:
+                self.response_overflow = True
+        if kind == 'native.outcome_unknown':
+            self.open_responses.clear()
+            self.response_overflow = False
+
+    async def prepare_send(self, kind, *, input_id=None):
+        from amplifier_module_provider_openai.native import NativeSendAdmission
+        from .execution_events import ADMITTED_CALL
+        admission = ADMITTED_CALL.get()
+        matches = [b for b in self.send_bindings.values() if b['admission'] is admission
+                   and b['record']['operation'] == kind and b['record'].get('input_id') == input_id]
+        if len(matches) != 1:
+            raise ValueError("Native send has no unique captured admission")
+        binding = matches[0]
+        delivery, attempt = binding['delivery'], binding['attempt']
+        if kind == 'response.steer' and input_id != _STEER_INPUT.get():
+            raise ValueError("Native steer input changed")
+        if attempt:
+            await delivery.prepare_native(attempt)
+        def admit(envelope):
+            runtime = self.coordinator.get_capability('live.runtime')
+            generation = getattr(runtime, 'generation', None) or {}
+            cancellation = getattr(self.coordinator, 'cancellation', None)
+            activation = self.coordinator.get_capability('live.activation')
+            if (self.selected_identity() != self.identity or generation.get('id') != binding['generationId']
+                    or getattr(runtime, 'stop_requested', False) or getattr(runtime, 'closed', False)
+                    or activation is not None and not activation.current_valid
+                    or getattr(cancellation, 'is_cancelled', False)):
+                return False
+            if not attempt:
+                return envelope.attempt_id == binding['attemptId'] and envelope.kind == kind
+            return delivery.admit_native(attempt, envelope, send_id=binding['record']['send_id'])
+        return NativeSendAdmission(attempt_id=binding['attemptId'], admit=admit)
+
+    def work_trace(self, kind, value):
+        if kind != 'native.receive':
+            return  # Pre-send tracing is never promoted to actual-send proof.
+        terminal = value.get('response', {})
+        response_id = terminal.get('id') if isinstance(terminal, dict) and terminal else value.get('response_id')
+        if value.get('type') == 'response.output_item.done' and response_id is None:
+            frames = [identity for epoch, identity in self.open_responses
+                      if epoch == getattr(self.provider, 'epoch', None)]
+            response_id = frames[0] if len(frames) == 1 and not self.response_overflow else None
+            value = {**value, 'response_id': response_id}
+        owner = self.response_origins.get(response_id)
+        if owner:
+            owner[0].native_work_event(owner[1], kind, value)
+        else:
+            # Unattributed output still consumes its call IDs. It cannot reuse
+            # an earlier response's identical name/args to obtain that proof.
+            delivery = self.coordinator.get_capability('web.surface_delivery')
+            if delivery is not None:
+                items = terminal.get('output', []) if terminal else [value.get('item')]
+                delivery.finish_work(None, {'content': [
+                    {'type': 'tool_call', 'id': item.get('call_id')}
+                    for item in items if isinstance(item, dict) and item.get('type') == 'function_call']})
+        if value.get('type') in {'response.completed', 'response.incomplete', 'response.failed'}:
+            self.open_responses.discard((getattr(self.provider, 'epoch', None), response_id))
+
+    def bind_send_lifecycle(self, *, attempt_id, generation_id, admitted_call_id):
+        """Capture an existing host admission before an opted-in transport call.
+
+        This consumes receipts, not Work applicability or effect permission.
+        The caller supplies its actual host identities, never model arguments.
+        Legacy installation stays unchanged until its admission owner opts in.
+        Route submitting/not_sent to their exact operation binding. Keep each
+        live binding for later phases; non-owned phases are observation no-ops,
+        not permission to replace a parent's sink with a steer's callback.
+        """
+        if any(not isinstance(value, str) or not value or len(value) > 200
+               for value in (attempt_id, generation_id, admitted_call_id)):
+            raise ValueError("Native send requires an exact host admission binding")
+        binding = {"attemptId": attempt_id, "generationId": generation_id,
+                   "admittedCallId": admitted_call_id, "identity": copy.deepcopy(self.identity)}
+
+        async def observe(kind, data):
+            previous = self.state
+            state = copy.deepcopy(previous)
+            rows = state.setdefault("sends", [])
+            if kind in {"native.submitting", "native.not_sent"}:
+                keys = ("send_id", "operation", "epoch", "response_id", "input_id")
+                identity = {key: data.get(key) for key in keys}
+                operation = identity["operation"]
+                if (operation not in {"response.create", "response.steer"}
+                        or any(not isinstance(identity[key], str) or not identity[key]
+                               or len(identity[key]) > 200 for key in ("send_id", "epoch"))
+                        or any(value is not None and (not isinstance(value, str) or not value
+                                                     or len(value) > 200)
+                               for value in (identity["response_id"], identity["input_id"]))
+                        or (operation == "response.create" and identity["input_id"] is not None)
+                        or (operation == "response.steer" and
+                            (identity["input_id"] is None or identity["response_id"] is None))
+                        or data.get("execution_replayed") is not False):
+                    raise ValueError("Native send receipt identity is invalid")
+                matches = [row for row in rows if row["send_id"] == identity["send_id"]]
+                if kind == "native.submitting":
+                    generation = getattr(self.coordinator.get_capability("live.runtime"), "generation", None) or {}
+                    if (matches or data.get("attempt_id") is not None
+                            or self.selected_identity() != binding["identity"]
+                            or generation.get("id") != binding["generationId"]):
+                        raise ValueError("Native send admission binding changed")
+                    if any(all(row.get(key) == value for key, value in binding.items())
+                           and row["operation"] == operation
+                           and (operation == "response.create" or row["input_id"] == identity["input_id"])
+                           for row in rows):
+                        raise ValueError("Native send already exists for this admission binding")
+                    # Never evict an unresolved send to make room for another.
+                    if len(rows) >= 128:
+                        terminal = next((row for row in rows if row["outcome"] in
+                                         {"not_sent", "completed", "applied", "failed"}), None)
+                        if terminal is None:
+                            raise ValueError("Native send receipt capacity requires reconciliation")
+                        rows.remove(terminal)
+                    row = {**identity, **copy.deepcopy(binding), "outcome": "submitting"}
+                    rows.append(row)
+                    if operation == "response.create":
+                        state.update(requestId=attempt_id, generationId=generation_id,
+                                     admittedCallId=admitted_call_id,
+                                     identity=copy.deepcopy(binding["identity"]), outcome="submitting")
+                else:
+                    if (len(matches) != 1 or any(matches[0].get(key) != value for key, value in identity.items())
+                            or any(matches[0].get(key) != value for key, value in binding.items())
+                            or matches[0]["outcome"] != "submitting"
+                            or data.get("attempt_id") not in (None, attempt_id)
+                            or data.get("reason") not in ("cancelled", "rejected")):
+                        raise ValueError("Native terminal does not match an unresolved unsent operation")
+                    row = matches[0]
+                    row.update(outcome="not_sent", reason=data["reason"])
+                    if (operation == "response.create" and state.get("requestId") == attempt_id
+                            and state.get("admittedCallId") == admitted_call_id):
+                        state.update(outcome="not_sent", reason=data["reason"])
+                row["updatedAt"] = time.time()
+            else:
+                owned = [row for row in rows if all(row.get(key) == value for key, value in binding.items())
+                         and row["outcome"] in {"submitting", "sent", "running", "pending"}]
+                if kind.startswith("steering."):
+                    owned = [row for row in owned if row["operation"] == "response.steer"
+                             and row["input_id"] == data.get("input_id")]
+                elif kind in {"native.request", "native.response.created", "native.completed"}:
+                    owned = [row for row in owned if row["operation"] == "response.create"]
+                elif kind == "native.outcome_unknown":
+                    # A parent may fail while a steer is still awaiting prep.
+                    # Only the provider's identified in-flight input can turn a
+                    # steer unknown; preserve the other steer for its not_sent.
+                    owned = [row for row in owned if row["operation"] == "response.create"
+                             or row["input_id"] == data.get("input_id")]
+                phases = {"native.request": "sent", "steering.sent": "sent",
+                          "native.response.created": "running", "native.completed": "completed",
+                          "native.outcome_unknown": "unknown", "steering.accepted": "pending",
+                          "steering.applied": "applied", "steering.failed": "failed"}
+                if kind not in phases:
+                    return  # Other transport observations do not identify a send outcome.
+                if kind in phases:
+                    if not owned:
+                        # One provider emits interleaved create/steer phases.
+                        # A receipt consumer must not destroy another operation's
+                        # terminal response. Its original owner still observes it.
+                        return
+                    if kind != "native.outcome_unknown" and len(owned) != 1:
+                        raise ValueError("Native phase lacks an exact unresolved send")
+                    response = data.get("response_id")
+                    if kind in {"native.response.created", "native.completed", "steering.sent",
+                                "steering.accepted", "steering.applied"}:
+                        if not isinstance(response, str) or not response or len(response) > 200:
+                            raise ValueError("Native phase lacks an exact response identity")
+                    if kind == "native.completed":
+                        if (response != owned[0].get("currentResponseId")
+                                or type(data.get("pending_steering", False)) is not bool):
+                            raise ValueError("Native completion does not match its observed response")
+                    if kind in {"steering.sent", "steering.accepted"}:
+                        if response != owned[0]["response_id"]:
+                            raise ValueError("Native steering parent changed")
+                    if kind == "steering.applied":
+                        if (owned[0]["outcome"] != "pending" or response == owned[0]["response_id"]
+                                or not data.get("steer_id") or data.get("steer_id") != owned[0].get("steerId")):
+                            raise ValueError("Native steering successor is not its accepted input")
+                    if kind == "steering.accepted":
+                        steer_id = data.get("steer_id")
+                        if (owned[0]["outcome"] != "sent" or not isinstance(steer_id, str)
+                                or not steer_id or len(steer_id) > 200):
+                            raise ValueError("Native steering acceptance is not bound")
+                        owned[0]["steerId"] = steer_id
+                    if kind == "steering.failed" and owned[0]["outcome"] not in {"sent", "pending"}:
+                        raise ValueError("Native steering failure precedes send")
+                    for row in owned:
+                        if kind == "native.response.created":
+                            row["currentResponseId"] = response
+                        row["outcome"] = phases[kind]
+                        if kind == "native.outcome_unknown":
+                            reason = data.get("reason")
+                            # Upstream also supplies exception class names. Do
+                            # not publish arbitrary callback or exception text.
+                            row["reason"] = reason if reason in (
+                                "steer_send", "cancelled", "connection_closed",
+                                "pending_connection_closed") else "transport_unknown"
+                        row["updatedAt"] = time.time()
+                    if (kind.startswith("native.") and state.get("requestId") == attempt_id
+                            and state.get("admittedCallId") == admitted_call_id and owned):
+                        # The create operation is terminal even when a distinct
+                        # steer still needs a successor. Keep that uncertainty in
+                        # the logical summary and the steer's own receipt only.
+                        state["outcome"] = ("pending" if kind == "native.completed"
+                                            and data.get("pending_steering") else owned[0]["outcome"])
+                        if kind == "native.outcome_unknown":
+                            state["reason"] = owned[0]["reason"]
+                        if kind in {"native.response.created", "native.completed"}:
+                            state["responseId"] = data.get("response_id")
+            # Only bounded identity/phase metadata; never payload or arbitrary
+            # observer error text. A failed write cannot appear durable in RAM.
+            receipt = {"id": str(uuid.uuid4()), "event": kind, "requestId": attempt_id,
+                       "time": time.time(), **{key: data.get(key) for key in
+                       ("send_id", "operation", "epoch", "input_id", "response_id", "steer_id")
+                       if isinstance(data.get(key), str) and len(data[key]) <= 200}}
+            state["receipts"] = (state.get("receipts", []) + [receipt])[-128:]
+            state["updatedAt"] = time.time()
+            self.state = state
+            try:
+                self.save()
+            except BaseException:
+                self.state = previous
+                raise
+
+        return observe
 
     def selected_mount(self):
         providers = self.coordinator.get("providers") or {}
@@ -122,7 +440,7 @@ async def install_native(loop, coordinator, providers):
         return providers
     try:
         from amplifier_module_provider_openai import OpenAIProvider
-        from amplifier_module_provider_openai.native import NativeResponsesProvider, NATIVE_REQUEST as PROVIDER_REQUEST
+        from amplifier_module_provider_openai.native import NativeResponsesProvider, NativeSendAdmission, NATIVE_REQUEST as PROVIDER_REQUEST
     except ImportError:
         host.reason = "The installed provider does not include its optional native transport."
         return providers
@@ -161,12 +479,36 @@ async def install_native(loop, coordinator, providers):
             finally:
                 LOOP_REQUEST.reset(token)
 
+        async def steer_live(self, command):
+            # An independently admitted send, never the parent's proof. The
+            # protocol has no separately fitted detail request for steering.
+            from .coordination_delivery import WORK_ATTEMPT
+            delivery = coordinator.get_capability('web.surface_delivery')
+            observe = coordinator.get_capability('web.provider_call')
+            if delivery is None or not callable(observe):
+                raise ValueError("Native steering admission is unavailable")
+            attempt = delivery.begin_steer()
+            token = WORK_ATTEMPT.set((delivery, attempt))
+            steer_token = _STEER_INPUT.set(getattr(command, 'id', None))
+            try:
+                invoke = super().steer_live
+                return await observe(self, SimpleNamespace(model=host.identity['model']),
+                                     lambda: invoke(command), label="Steer provider context")
+            except BaseException:
+                if attempt['status'] != 'not_sent':
+                    delivery.finish_work(attempt, failed=True)
+                raise
+            finally:
+                _STEER_INPUT.reset(steer_token)
+                WORK_ATTEMPT.reset(token)
+
     def owned_loop():
         owner = LIVE_OWNER.get()
         return owner if (getattr(owner, "coordinator", None) is coordinator
                          and host.selected_identity() == host.identity) else None
     host.identity = identity
-    host.provider = LoopNativeProvider.wrap(original, owner_getter=owned_loop, lifecycle=host.lifecycle)
+    host.provider = LoopNativeProvider.wrap(original, owner_getter=owned_loop,
+        lifecycle=host.send_lifecycle, trace=host.work_trace, prepare_send=host.prepare_send)
     if host.state.get("outcome") in {"unknown", "pending"}:
         host.provider.request_uncertain = True
     if host.checkpoint_path.exists():

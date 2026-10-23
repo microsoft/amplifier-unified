@@ -26,8 +26,58 @@ is involved. The shared `view.update {workSurface:"chat"}` presentation action
 remains available to authorized callers; it shows the selected conversation,
 not a separate saved return target.
 
-**Canvas** is an icon beside More in the top toolbar. On phones, it fills the
-content area and offers **Back to chat**; the chat's scroll and draft stay intact.
+### Explicit Back/Forward history
+
+Header Back and Forward traverse this tab's last 30 visited destinations:
+Home, saved chats, workspace pages, All workspaces and Search chats. The History button
+opens one list; mouse/pen holding an arrow for 450 ms opens the same list without
+also navigating. Touch uses the visible 44 px button. Keyboard users can open
+the list with Enter or Arrow Down, move with arrows/Home/End, and dismiss with
+Escape. Header Home remains available on wide touch screens as well as narrow
+screens and mouse/keyboard clients. This is explicit navigation, not restoration of the removed remembered-
+chat banner or Escape-to-chat behavior; native browser Back/Forward is unchanged.
+
+Entries contain only typed IDs, bounded labels, workspace tabs and visit keys.
+Changing a workspace tab updates its current visit. Home view modes, search text, filters,
+pagination and file-folder browsing do not create visits. Selecting the same
+destination does not add an adjacent duplicate. New navigation after Back
+replaces Forward; traversal itself moves the cursor without appending.
+
+Unsent New chat is off-trail: Back goes to the current saved visit, while Forward
+can still open its next visit. Neither direction recreates a draft. A newly
+submitted chat becomes a normal saved destination. Drafts, attachments, Canvas
+editors and settings guards keep their existing ownership; file preview still
+uses its single guarded action rather than replaying a file-open command.
+
+The cursor changes only when an accepted action receipt and authoritative state
+agree on the host, revision and destination. Reconnect snapshots never append
+visits, but can confirm an explicit traversal. Rejected, cancelled, missing or
+unconfirmed navigation keeps the trail; errors remain visible and nothing is
+automatically retried or replaced with a fallback. An unavailable entry can be
+retried explicitly; absence from a bounded catalog page is not deletion.
+
+The trail lives in origin/tab-scoped `sessionStorage`, not the host database or
+agent state. Reload retains it; a duplicate tab gets an independent copy.
+Restoration requires an opaque scope derived from the authenticated sign-in,
+process owner and host data identity. A new sign-in/root/secret starts a new
+trail. A 401 clears the current trail and rejects late old-scope frames.
+An already-open stream cannot detect a removed/expired cookie until an
+authenticated request or reconnect observes it; the app has no logout endpoint.
+This is presentation isolation, not protection against other same-origin script
+or physical access to the browser. If storage fails, the History menu explains
+that retention lasts only while this page stays open.
+
+Focused checks (run against the candidate in an owned isolated environment):
+`tests/test_auth.py`, `tests/test_history_scope.py`,
+`frontend/tests/destination-history.test.mjs`,
+`frontend/tests/destination-history-ui.test.mjs`, and
+`frontend/tests/destination-history-browser.mjs`. The browser script requires an
+owned `AMPLIFIER_TEST_OUTPUT` directory and rebuilt production assets. These
+instructions are not evidence that the checks have passed.
+
+The container-header **Canvas** button stays reachable on phones, where Canvas
+fills the content area. **Hide canvas** returns to the chat while retaining its
+scroll, draft and selected artifact, as described in [Canvas](canvas.md).
 On larger screens it docks when the chat and panel have usable widths.
 Visibility paints immediately through `canvas.visibility {open,sessionId,canvasId}`;
 it has its own ordered queue and no busy spinner. The host persists only client
@@ -280,8 +330,14 @@ Pins and Settings orders use the same `ReorderList` pointer/keyboard control:
 full row preview, placeholder, insertion marker, scroll assistance, focus return,
 and cancellation with Escape, pointer cancellation, or an outside drop. A concurrent
 order change cancels a held drag. Pins persist on drop; Settings preserves its
-draft-only preview and explicit Save/Cancel. A pending pin receipt blocks duplicate
-moves; failure restores the saved order and exposes a retryable error.
+draft-only preview and explicit Save/Cancel. Distinct pin gestures made while a
+previous save or display is pending remain in the local preview and are submitted
+in order after each confirmed display. At most 32 moves wait locally; a full queue
+shows backpressure rather than accepting more gestures. They never derive a command from a stale
+page. A rejection, unknown save outcome, changed view or conflicting order drops
+later unsent moves and reports that they were not sent; it never retries a save.
+A saved order whose display is unavailable offers a bounded read-only refresh,
+not a reconnect or mutation retry. Settings keeps its single-flight draft behavior.
 
 Rows reserve their action and activity space. Names and parent labels truncate
 within a fixed 60 px row (52 px with the existing compact shell density). Hovering

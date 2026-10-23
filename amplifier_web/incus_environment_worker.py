@@ -563,6 +563,8 @@ def execute_call(payload, *, _engine_owner=None):
             artifacts_only = action == 'exportArtifacts'
             recovering = action == 'finishCleanup'
             mode = 'archive-only' if recovering else payload.get('retentionMode', 'files')
+            if not artifacts_only and mode == 'files' and common.prepared_archive_custody(payload):
+                mode = 'archive-only'
             if not artifacts_only and mode not in {'files', 'full', 'archive-only'}:
                 raise BackendFailure('retention_unsupported', 'The selected retention policy is unsupported. The stopped environment remains.', admitted=False)
             if instance.get('status') != 'Stopped':
@@ -592,7 +594,7 @@ def execute_call(payload, *, _engine_owner=None):
                     digest, size = file_digest(archive, EXPORT_BYTES)
                     archives = [{'id': name, 'source': '/', 'retainedPaths': ['/workspace', '/artifacts'], 'destination': str(archive), 'bytes': size, 'sha256': digest}]
                 else:
-                    archives = export_selected(config, env, name, destination, archive_only=recovering)
+                    archives = export_selected(config, env, name, destination, archive_only=mode == 'archive-only')
                 if not artifacts_only:
                     phase = 'verifying'
                     common.cleanup_phase(payload, phase)

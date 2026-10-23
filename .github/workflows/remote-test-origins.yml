@@ -4,6 +4,10 @@ on:
     paths:
       - 'amplifier_web/test_origin_*.py'
       - 'amplifier_web/registered_test_runners.py'
+      - 'amplifier_web/test_runner_routing.py'
+      - 'amplifier_web/test_queue.py'
+      - 'tests/test_runner_routing.py'
+      - 'tests/test_registered_test_runner_queue.py'
       - 'amplifier_web/test_environment_configs.py'
       - 'tests/test_remote_test_origins.py'
       - '.github/workflows/remote-test-origins.yml'
@@ -32,3 +36,21 @@ jobs:
         with:
           name: remote-origin-${{ matrix.os }}
           path: origin-results.xml
+
+  queue-routing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev
+      - name: Check queued routing across approved machines
+        run: uv run --no-sync pytest -q tests/test_runner_routing.py tests/test_registered_test_runner_queue.py --junitxml=routing-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: queue-routing
+          path: routing-results.xml

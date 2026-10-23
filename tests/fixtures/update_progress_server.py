@@ -1,5 +1,6 @@
 """Real HTTP/SSE Updates UI with synthetic transitions, no installation/model work."""
 import asyncio
+import copy
 import json
 import time
 from aiohttp import web
@@ -39,6 +40,7 @@ async def main(home):
     diagnostics.record('ecosystem-activation','succeeded')
     diagnostics.begin('ecosystem','b'*32,tier='other',components=['amplifier-module-hooks-approval'])
     attempt=diagnostics.state['attemptId']
+    unrelated_control = None
     original_application = dict(service.state['updates']['application'])
     original_notice_start = service.state['releaseNoticeStartVersion']
     summary_notes = [{'version': version, 'title': title, 'changes': [change], 'notices': []}
@@ -51,8 +53,34 @@ async def main(home):
         sequence={'stage':'other','install':True},
         probeProgress={'attemptId':attempt,'phase':'prepare','completed':24,'total':37,'startedAt':time.time()})
     async def transition(request):
+        nonlocal unrelated_control
         stage=(await request.json())['stage']
-        if stage == 'summary-before':
+        if stage == 'unrelated-control':
+            unrelated_control = {'updates': {key: copy.deepcopy(service.state['updates'].get(key))
+                for key in ('phase', 'pendingApp', 'pendingRelease', 'error')},
+                'management': copy.deepcopy(service.state.get('management', {})), 'sessions': []}
+            for index in range(3):
+                session = service._new_session({'title': f'Running fixture chat {index + 1}'})
+                session['status'] = 'working'
+                service.state['sessions'].append(session)
+                unrelated_control['sessions'].append(session['id'])
+            await service.management.command_transition('runtime.control', {'operation': 'goal.get'},
+                'fixture-unrelated-control', 'queued')
+            await service.management.command_transition('runtime.control', {'operation': 'goal.get'},
+                'fixture-unrelated-control', 'error', 'ValueError: Unsupported runtime control: goal.get')
+            await manager.publish(phase='app-staged', pendingApp=dict(original_application),
+                pendingRelease=None, error=None)
+        elif stage == 'unrelated-control-update-failed':
+            await manager.publish(phase='error', error='Synthetic restart failed; the update remains fenced.')
+        elif stage == 'unrelated-control-reset':
+            service.state['sessions'] = [row for row in service.state['sessions'] if row['id'] not in unrelated_control['sessions']]
+            service.state['management'] = unrelated_control['management']
+            # Restore only this scenario's fields through the updater owner;
+            # replacing its diagnostics object would detach the receipt writer.
+            await manager.publish(**unrelated_control['updates'])
+            service._publish_changes(globals={'management'})
+            unrelated_control = None
+        elif stage == 'summary-before':
             # Simulate the install's notice history as well as its displayed version.
             service.state['releaseNoticeStartVersion'] = '0.20.205'
             await manager.publish(phase='checked', error=None, pendingApp=None, pendingRestart=None,

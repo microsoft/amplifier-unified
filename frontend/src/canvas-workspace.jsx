@@ -87,6 +87,7 @@ function ResourceView({view,state,dispatch,recovery}){
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  return <CanvasViewControls label="Artifact controls"><section className="a-resource-view" data-canvas-view={view.viewId} aria-label="Artifact view">
   <CanvasControl><div className="a-resource-view-controls a-canvas-toolbar">
+   <strong>{canvas?.title}</strong>
    {!!view.versions?.length&&<><label>Version<select aria-label="Artifact version" value={view.selectedVersion??'latest'} onChange={event=>run('canvas.select',{id:view.resourceId,...(event.target.value==='latest'?{}:{version:Number(event.target.value)})})}>
     <option value="latest">Latest · Version {view.latestVersion}</option>
     {view.versions.slice().reverse().map(version=><option key={version.version} value={version.version}>Version {version.version}{version.createdAt?' · '+new Date(version.createdAt*1000).toLocaleString():''}</option>)}
@@ -104,7 +105,7 @@ function ResourceView({view,state,dispatch,recovery}){
 }
 
 export function CanvasWorkspace({state,dispatch,hidden=false}){
- const retained=useRef(new Map()),allViews=(state.canvasWorkspace?.views||[]).filter(view=>view.viewId==='primary');
+ const retained=useRef(new Map()),allViews=(state.canvasWorkspace?.views||[]).filter(view=>view.viewId==='primary'&&!state.canvas?._presentationDisposed);
  // Do not initialize a newly selected hidden artifact. Retain the mounted
  // viewer while Library is open so local edits survive passive navigation.
  for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id)||(state.canvas?.kind==='gif'&&!state.canvas.open))retained.current.delete(id);

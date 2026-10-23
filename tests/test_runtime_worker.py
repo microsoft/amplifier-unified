@@ -14,6 +14,12 @@ from amplifier_web.service import AppError, AppService
 TRANSPORT_FIELDS = {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients'}
 
 
+def coordinator(session_id):
+    capabilities = {}
+    return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+                           register_capability=capabilities.__setitem__)
+
+
 @pytest.fixture
 async def worker_bridge(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'amplifier'))
@@ -28,8 +34,8 @@ async def worker_bridge(tmp_path, monkeypatch):
         app.clients.attach(client)
     monkeypatch.setattr(app.history, 'refresh', AsyncMock())
     worker = Worker.__new__(Worker)
-    worker.session = SimpleNamespace(coordinator=SimpleNamespace(session_id='native-root'))
-    worker.runtime = SimpleNamespace(generation={'id': 'generation-root'})
+    worker.session = SimpleNamespace(coordinator=coordinator('native-root'))
+    worker.runtime = SimpleNamespace(generation={'id': 'generation-root', 'input_ids': ['input-1']})
     worker.context_inputs = ['input-1']
     worker.context_bindings = {
         'input-1': {'clientId': 'input-browser', 'targets': [{'surfaceId': 'surface-1'}]}}
@@ -156,7 +162,7 @@ async def test_context_operations_retain_worker_specific_bindings(worker_bridge,
     assert (await bridge('context.read', {'surfaceId': 'surface-1'}))['surfaceId'] == 'surface-1'
     # Delegates freeze assignment and narrow surface targets; do not remove
     # these context-specific fields along with the common transport envelope.
-    child = worker.app_access_bridge(SimpleNamespace(session_id='native-child'))
+    child = worker.app_access_bridge(coordinator('native-child'))
     worker.context_inputs = ['later-input']
     worker.context_bindings['later-input'] = {'clientId': 'old-browser', 'targets': []}
     await child('context.manifest', {})
@@ -165,7 +171,7 @@ async def test_context_operations_retain_worker_specific_bindings(worker_bridge,
 
 async def test_child_transport_cannot_borrow_root_principal_or_generation(worker_bridge, monkeypatch):
     app, root, worker, envelopes = worker_bridge
-    child = worker.app_access_bridge(SimpleNamespace(session_id='native-child'))
+    child = worker.app_access_bridge(coordinator('native-child'))
     worker.context_inputs = ['later-input']
     worker.context_bindings.clear()
 

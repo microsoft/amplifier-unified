@@ -352,3 +352,29 @@ the source digest must remain unchanged during execution. `result.json` is true
 only after both probes pass. Retain that receipt, command logs, wheel hashes and
 dependency identities, then audit/remove the work directory. No live model,
 native Windows, TUI, recipe-specific or ACP acceptance is claimed.
+
+### Shared Work native and nested-effect ownership (October 22)
+
+The existing automatic `native` owner adds the complete
+`tests/test_work_origin.py` and `tests/test_work_native_effects.py` modules.
+Their two `additionalRecords` and narrow Work implementation/fixture path rules
+preserve the frozen 87-record baseline and all earlier owners. Missing native
+adapter APIs, loop prerequisites, JavaScript runtime or skipped cases fail the
+owner; an import alone does not qualify those boundaries.
+
+The tests use controlled provider transport with actual worker-origin handling,
+native callbacks, nested JavaScript dispatch and host effect checks. The reused
+parent case requires explicit `work_coverage_unavailable` before ordinary receipt
+deduplication; unchanged storage alone is insufficient. Ordinary API suites
+`test_workspace_work.py`, `test_work_invocation.py` and `test_work_effects.py`
+retain their Full Python owner. The existing single `shared-work` extended-browser
+scenario retains cold-task coverage; source-browser and installed-wheel evidence
+remain separate.
+
+Prior checkpoint `6ac9611ddd85205e2781fe2e17f3bc950feee030` identifies historical
+evidence with its original exact-input reuse limits, not the current integration.
+This additive registration and the new integration remain pending qualification;
+tests for these registration changes are **UNRUN** until owned isolated execution.
+No new workflow, broad gate, paid-provider claim or whole-feature acceptance is
+added. Generic streaming, unmeasured steering and tool-internal awaits remain
+outside that prior qualification.

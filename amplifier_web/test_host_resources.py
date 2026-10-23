@@ -277,6 +277,27 @@ def reserve(row, target):
         return value
 
 
+def held(row):
+    """Inspect one exact existing lease; never initialize a machine authority."""
+    if not identity() or not directory().exists():
+        return False
+    with locked() as root:
+        original = binding(row)
+        saved = read(root / ('lease-' + digest(original) + '.json'))
+        if saved is None:
+            return False
+        resources = {key: row['resourceRequest'][key] for key in ('cpus', 'memoryMiB')}
+        if (saved.get('admitted') is not True or saved.get('machineId') != identity()
+                or saved.get('binding') != original or saved.get('resources') != resources):
+            raise ValueError('The retained machine reservation changed.')
+        receipt = row.get('hostReservation')
+        if 'hostReservation' in row and not isinstance(receipt, dict):
+            raise ValueError('The saved machine reservation is malformed.')
+        if receipt and any(receipt.get(key) != saved.get(key) for key in ('machineId', 'binding', 'resources')):
+            raise ValueError('The saved machine reservation belongs to another owner.')
+        return True
+
+
 def settle(row, *, release=False, phase='running'):
     """Only the canonical owner calls this after confirmed effects/cleanup."""
     receipt = row.get('hostReservation', {})

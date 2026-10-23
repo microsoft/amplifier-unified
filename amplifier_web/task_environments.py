@@ -63,7 +63,7 @@ def definitions(schema, string):
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}},
             [*scope, 'id', 'expectedRevision'])),
         'workspace.environments.start': ('Copy this task’s current Git working area into one approved isolated test environment and prepare locked dependencies for the selected profile. No original writable mounts or injected credentials. Keep requestId stable; unknown launches never replay.', schema({**request, 'profileId': {'enum': [item['id'] for item in profiles.catalog()]}})),
-        'workspace.environments.execute': ('Run an approved command in this task’s environment, retaining bounded output. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS}}, [*owned, 'command'])),
+        'workspace.environments.execute': ('Run an approved command in this task’s environment, retaining bounded output. Use its executionContract for Python, offline build, artifact paths and source identities; the copied source has no Git metadata. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS}}, [*owned, 'command'])),
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
         'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its source and artifacts. Optional full retention preserves the complete Incus environment; Docker supports files only. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
         'workspace.environments.finishCleanup': ('Finish cleanup of an exact stopped owned environment after a failed or uncertain removal. Preserve complete bounded archives without following guest links, then verify removal and release ownership. The original request and test result stay unchanged. Requires its previousRequestId; keep the new requestId stable.', schema({**owned, 'previousRequestId': {**string(200), 'minLength': 1}})),
@@ -182,10 +182,12 @@ def public(home, row):
         'status': row.get('environmentState', 'unknown'), 'universeId': row.get('universeId'),
         'source': row['source'], 'snapshot': row.get('snapshot'), 'sourceReady': row.get('sourceReady'), 'services': row.get('services', []),
         'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
+        'reservationRecovery': row.get('reservationRecovery'),
         'previousCleanup': row.get('previousCleanup'),
         'artifactExport': row.get('artifactExport'), 'lastArtifactExport': row.get('lastArtifactExport'),
         'preparation': ({'status': 'ready' if row.get('preparedDependencies') else 'pending', 'remote': True} if row.get('testMachine') else dependencies.status(storage.directory(home, row))) if row.get('preparationPending') or row.get('preparedDependencies') else None,
         'preparationCleanup': row.get('preparationCleanup'),
+        'executionContract': row.get('preparedDependencies', {}).get('executionContract'),
         'reason': row.get('reason'), 'observation': row.get('observation'),
         'recovery': row.get('recovery', {'available': False, 'reason': 'Refresh to inspect the retained recovery backend.'}),
         'retention': {'path': str(storage.directory(home, row)), 'preserved': True,
@@ -261,7 +263,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
             raise ValueError('This environment request already has a different or admitted owner. Inspect its exact receipt.')
         limits = execution_settings.concurrency(home)
         count = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
-        if not _qualification and count >= limits['maxEnvironmentsPerChat']:
+        if not _qualification and limits['maxEnvironmentsPerChat'] and count >= limits['maxEnvironmentsPerChat']:
             raise ValueError('This task already owns its allowed environments. Inspect or remove one, or adjust Advanced execution limits in Settings.')
         total, owned = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
         if not _qualification and (total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']):
@@ -330,7 +332,7 @@ def invoke(config, home, row, action, args, *, _qualification=False):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False
-    deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
         process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
@@ -402,9 +404,9 @@ def legacy_cleanup_qualification(app, row, action, args):
     """Derive an exception from trusted retained evidence, never caller flags."""
     if action != 'finishCleanup':
         return None
-    from .test_environment_legacy import returned_export_limit
+    from .test_environment_legacy import returned_preservation_failure
     prior = app.operations.requests.read(row['sessionId'], args['previousRequestId'])
-    return returned_export_limit(row, prior)
+    return returned_preservation_failure(row, prior)
 
 
 def require_resolved_removal(app, row, exclude_request_id=None, legacy=None):
@@ -416,15 +418,15 @@ def require_resolved_removal(app, row, exclude_request_id=None, legacy=None):
     """
     qualified = None
     if legacy is not None:
-        from .test_environment_legacy import returned_export_limit, completed_export_limit
+        from .test_environment_legacy import returned_preservation_failure, completed_preservation_failure
         prior = app.operations.requests.read(row['sessionId'], legacy['originalRequestId'])
         if row.get('guestRemoved'):
             removal, _ = confirmed_guest_removal(app, row)
-            verified = completed_export_limit(row, prior, removal)
+            verified = completed_preservation_failure(row, prior, removal)
         else:
-            verified = returned_export_limit(row, prior)
+            verified = returned_preservation_failure(row, prior)
         if verified != legacy:
-            raise ValueError('The retained legacy preservation result changed.')
+            raise ValueError('The retained preservation result changed.')
         qualified = legacy['originalRequestId']
     journal = app.operations.requests.journal
     with journal.lock:
@@ -701,7 +703,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                         else:
                             prepared_dependencies = dependencies.prepare(config, storage.directory(home, row),
                                 row['snapshot'], row['profileId'], request['requestId'],
-                                resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'))
+                                resource_request=row.get('resourceRequest'), host_reservation=reservation, timing_request=row.get('timingRequest'),
+                                dependency_store=Path(home) / 'test-dependency-layers')
                         row = save(home, row, preparedDependencies=prepared_dependencies)
                         host_resources.settle(row, phase='launching')
                     if policy_admit:
@@ -905,6 +908,7 @@ def read(app, sid, config, offset=0, limit=10):
         rows = [json.loads(value[0]) for value in db.execute(
             "SELECT body FROM allocations WHERE root=? AND json_extract(body,'$.kind')=? ORDER BY rowid DESC LIMIT ? OFFSET ?", (sid, KIND, limit, offset))]
     result, configurations = [], {}
+    reservation_probe = recovery.reservation_candidate(app, rows)
     for row in rows:
         selected = None
         availability = {'available': False, 'reason': 'This environment is already retired.'}
@@ -961,6 +965,16 @@ def read(app, sid, config, offset=0, limit=10):
                         try:
                             row = recovery.bind_configuration(app, row, selected)
                             observed = invoke(selected, home, row, 'read', {})
+                            # An absent owner can make the ordinary read fail.
+                            # Only the selected bounded native proof can recover it.
+                            if row['id'] == reservation_probe:
+                                recovered = recovery.recover_reservation(app, row, selected, observed)
+                                if recovered is not row:
+                                    physical = recovered['reservationRecovery']['environmentStatus']
+                                    observed = {**(observed if observed.get('ok') is True else {}),
+                                                'ok': True, 'universeId': row['universeId'],
+                                                'status': 'removed' if physical == 'absent' else physical}
+                                row = recovered
                             if observed.get('ok'):
                                 changes = {key: observed[key] for key in ('universeId', 'services', 'snapshot', 'sourceReady') if key in observed and observed[key] != row.get(key)}
                                 if observed.get('status') != row.get('environmentState'):

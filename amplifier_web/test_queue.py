@@ -50,11 +50,11 @@ def definitions(schema, string):
             'waitSeconds': {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS},
             'independent': {'type': 'boolean', 'description': 'Allow this check to overlap other independent checks in this chat within the global environment limit. Use only when no earlier check result is required. Default false preserves ordered execution.'},
             'notify': {'type': 'boolean'}}, [*scope, 'requestId', 'profileId', 'command'])),
-        'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. Does not execute or replay a check.', schema({**scope,
+        'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. A recoveredOutcome separately reports exact later cleanup and the verified check result; the original status remains retained. Does not execute or replay a check.', schema({**scope,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, list(scope))),
         'workspace.tests.cancel': ('Cancel this chat’s waiting check or request prompt termination of its admitted durable guest job. Cancellation is confirmed only after observed termination and owned cleanup. Evidence is retained.', schema({**scope,
             'requestId': string(200)}, [*scope, 'requestId'])),
-        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. Never executes or repeats a check.', schema({**scope,
+        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. A recoveredOutcome can confirm later cleanup without changing an unknown check into a pass. Never executes or repeats a check.', schema({**scope,
             'requestId': string(200), 'offset': {'type': 'integer', 'minimum': 0}}, [*scope, 'requestId'])),
     }
 
@@ -154,7 +154,7 @@ class TestQueue:
                 reason = 'Waiting for an earlier check in this chat to finish and clean up.'
         if reason is None and other_owners and not independent:
             reason = 'Waiting for this chat’s previous test environment cleanup to be confirmed.'
-        if reason is None and not own and len(occupants) >= limit:
+        if reason is None and not own and limit and len(occupants) >= limit:
             reason = 'Waiting for this chat’s test environment capacity and cleanup to be confirmed.'
         if reason is None and not own and (total >= limits['maxOwnedResources'] or root_total >= limits['maxOwnedResourcesPerChat']):
             reason = 'Waiting for retained resource owner capacity. Inspect retained resources or adjust Advanced execution limits in Settings.'
@@ -203,6 +203,10 @@ class TestQueue:
                 result = job[phase]
                 value[phase] = {key: result[key] for key in ('requestId', 'state', 'message') if key in result}
         value['notification'] = receipt['subscription']['status']
+        from .test_queue_recovery import outcome
+        recovered = outcome(self.app, receipt)
+        if recovered is not None:
+            value['recoveredOutcome'] = recovered
         return value
 
     def summary(self, request):
@@ -373,7 +377,7 @@ class TestQueue:
             config, _, reason = environments.configuration(self.app)
             if not config:
                 owner.error(reason, 409)
-            if self.pending_count(sid=source['id']) >= queue_policy['maxPendingPerChat']:
+            if queue_policy['maxPendingPerChat'] and self.pending_count(sid=source['id']) >= queue_policy['maxPendingPerChat']:
                 owner.error('This chat’s pending check limit has been reached. Inspect its checks or adjust Advanced execution limits in Settings.', 429)
             if self.pending_count() >= queue_policy['maxPending']:
                 owner.error('The saved queue limit has been reached. Inspect pending checks or adjust Advanced execution limits in Settings.', 429)
@@ -456,6 +460,25 @@ class TestQueue:
             except Exception:
                 # The saved result survives a temporarily unavailable inbox.
                 pass
+        from .test_runner_routing import RoutingPass
+        starting = self.app.db.execute("""SELECT id,json_extract(receipt,'$.job.backendKey'),
+            json_extract(receipt,'$.senderSessionId'),json_extract(receipt,'$.job.resourceId'),
+            coalesce(json_extract(receipt,'$.job.attempt'),0) FROM commands
+            WHERE json_extract(receipt,'$.commandAction')=?
+            AND json_extract(receipt,'$.job.status')='starting'""", (ACTION,)).fetchall()
+        with closing(environments.storage.connect(self.app.data_dir)) as db:
+            admitted = set(db.execute("""SELECT root,id,json_extract(body,'$.backendKey'),
+                json_extract(body,'$.commandId') FROM allocations WHERE status!='retired'
+                AND json_extract(body,'$.kind')=? AND json_extract(body,'$.backendAdmitted')=1""", (environments.KIND,)))
+        preparing, unadmitted = {}, {}
+        for identity, key, sid, resource, attempt in starting:
+            preparing[key] = preparing.get(key, 0) + 1
+            # A delayed start acknowledgment must not add a second retained
+            # slot for its already admitted owner. Missing/mismatched ownership
+            # remains conservative; final native admission still checks atomically.
+            if (sid, resource, key, identity + ':start:' + str(attempt)) not in admitted:
+                unadmitted[key] = unadmitted.get(key, 0) + 1
+        routing = RoutingPass(preparing, unadmitted)
         capacities = {}
         runner_observations = {}
         for receipt in self.active_page():
@@ -478,8 +501,9 @@ class TestQueue:
                 continue
             if not self.chat_available(receipt) or self.admission.locked():
                 continue
-            if receipt['job'].get('runnerCandidates') and not receipt['job'].get('targetBound'):
-                selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff)
+            choosing = bool(receipt['job'].get('runnerCandidates') and not receipt['job'].get('targetBound'))
+            if choosing:
+                selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff, routing)
                 async with self.app.lock:
                     receipt = self.get(identity)
                     if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
@@ -492,10 +516,7 @@ class TestQueue:
                         continue
                     self.guard(receipt)
                     config = selected
-                    receipt['job'].update(backendKey=environments.config_key(config), targetBound=True,
-                        testMachine=({key: config['remoteRunner'][key] for key in ('id', 'name', 'machineId')} if config.get('remoteRunner') else None))
-                    self.save(receipt)  # Bind before source transfer or any target effect.
-            key = receipt['job']['backendKey']
+            key = environments.config_key(config)
             if key not in capacities:
                 retry, delay = self.backoff.get(key, (0, 5))
                 if retry > time.time():
@@ -503,16 +524,12 @@ class TestQueue:
                 capacity = runner_observations.get(key)
                 if capacity is None:
                     capacity = await asyncio.to_thread(environments.capacity, self.app, config)
-                limits, counts = capacity.get('limits', {}), capacity.get('counts', {})
-                maximum = limits.get('max_running', 1)
-                preparing = self.pending_count(preparing_backend=key)
-                free = max(0, maximum-counts.get('active', 0)-preparing) if maximum else 64  # Bounded scheduling batch, not a concurrency ceiling.
-                capacities[key] = [capacity, free if capacity.get('available') else 0]
+                capacities[key] = capacity
                 if not capacity.get('available'):
                     self.backoff[key] = (time.time()+delay, min(60, delay*2))
                 else:
                     self.backoff.pop(key, None)
-            capacity, free = capacities[key]
+            capacity = capacities[key]
             async with self.app.lock:
                 receipt = self.get(identity)
                 task = self.tasks.get(identity)
@@ -525,11 +542,19 @@ class TestQueue:
                     continue
                 if not self.chat_available(receipt):
                     continue
-                receipt['job']['capacity'] = capacity
-                self.save(receipt)
-                if free <= 0:
+                if choosing and not registered_runners.enabled(self.app, config):
                     continue
-                capacities[key][1] -= 1
+                receipt['job']['capacity'] = capacity
+                if not routing.room(key, config, capacity, routing.request(receipt['job'])):
+                    self.save(receipt)
+                    continue
+                if choosing:
+                    receipt['job'].update(backendKey=key, targetBound=True,
+                        testMachine=({name: config['remoteRunner'][name] for name in ('id', 'name', 'machineId')} if config.get('remoteRunner') else None))
+                # Bind only when scheduling; later candidates see this pass's
+                # planned demand before physical reservations become visible.
+                self.save(receipt)
+                routing.scheduled(key, config, capacity, routing.request(receipt['job']))
                 self.tasks[identity] = asyncio.create_task(self.run(identity, config))
 
     async def effect(self, receipt, config, action, *, cleanup=False, suffix=None, previous_request=None):

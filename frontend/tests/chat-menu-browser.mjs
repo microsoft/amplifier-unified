@@ -5,6 +5,8 @@ import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {once} from 'node:events';
+import {mkdir} from 'node:fs/promises';
+import {join} from 'node:path';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
@@ -50,7 +52,9 @@ const fixtureReady=new Promise((resolve,reject)=>{
  fixture.once('exit',code=>reject(new Error(`Scroll fixture exited ${code}: ${fixtureLog}`)));
 });
 let vite,browser,page;
+const output=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp';
 try{
+ await mkdir(output,{recursive:true});
  const port=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Scroll fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
@@ -68,7 +72,7 @@ try{
  await expect(page.getByRole('button',{name:'Chat controls',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Chat actions',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Chat',exact:true}).click();
- await expect(page.getByRole('group',{name:'Chat'}).getByRole('button')).toHaveText(['Rename','Pin','Share or save','Chat info','Help & diagnostics','Advanced','Archive']);
+ await expect(page.getByRole('group',{name:'Chat',exact:true}).getByRole('button')).toHaveText(['Rename','Pin','Share or save','Chat info','Help & diagnostics','Advanced','Archive']);
  await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'Chat',exact:true})).toBeFocused();
  await openChat('Chat info');
  const info=page.locator('.a-chat-info');
@@ -130,12 +134,12 @@ try{
  await page.getByRole('button',{name:'Open canvas',exact:true}).click();
  await expect(page.locator('.a-canvas-delivery summary').filter({hasText:'Outputs & review'})).toBeVisible();
  await expect(page.locator('.a-canvas-delivery summary').filter({hasText:/^Publishing$/})).toBeVisible();
- await page.locator('[data-canvas-delivery="outputs"] > summary').click();
+ await page.locator('[data-overview-section="review"] > summary').click();
  await expect(page.getByRole('button',{name:'Inspect outputs',exact:true})).toBeVisible();
- const outputLast=page.locator('[data-canvas-delivery="outputs"] button').last();await outputLast.scrollIntoViewIfNeeded();await expect(outputLast).toBeInViewport();
- await page.locator('[data-canvas-delivery="publishing"] > summary').click();
- const publishingLast=page.locator('[data-canvas-delivery="publishing"] button').last();await publishingLast.scrollIntoViewIfNeeded();await expect(publishingLast).toBeInViewport();
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ const outputLast=page.locator('[data-overview-section="review"] button').last();await outputLast.scrollIntoViewIfNeeded();await expect(outputLast).toBeInViewport();
+ await page.locator('[data-overview-section="publishing"] > summary').click();
+ const publishingLast=page.locator('[data-overview-section="publishing"] button').last();await publishingLast.scrollIntoViewIfNeeded();await expect(publishingLast).toBeInViewport();
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
  // Opening menus and inspecting diagnostics must not start work or mutate settings.
  assert.equal(calls.filter(row=>['conversation.send','tool.invoke','session.rename','session.naming','feedback.submit','capacity.set','context.clear','computer.visual.capture'].includes(row.action)).length,0);
  for(const scheme of ['light','dark'])for(const width of [1200,360]){
@@ -143,7 +147,7 @@ try{
   await openChat('Chat info');
   await expect(info.locator(':scope > :first-child')).toBeVisible();
   const box=await page.getByRole('dialog').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1);
-  await page.screenshot({path:`/tmp/chat-menu-${scheme}-${width}.png`});await close();
+  await page.screenshot({path:join(output,`chat-menu-${scheme}-${width}.png`)});await close();
  }
  assert.deepEqual(errors,[]);
  console.log('Chat menu browser checks passed: one menu, session ID first/copy, accurate paths, rename draft/auto, sharing, lazy safe diagnostics/copy/download/settings, four advanced groups, legacy computer navigation, canvas destinations, no unintended mutations, light/dark desktop/mobile.');

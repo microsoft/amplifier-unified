@@ -177,21 +177,23 @@ async def materialize_bundle_providers(bundle, prepared, *, environment=None, sc
 HOST_CREDENTIAL = {"$hostProviderCredential": True}
 
 
-def credential_bindings(value, *, provider=False):
+def credential_bindings(value, *, provider=False, module=None):
     """Retain references, not literal credentials, in inherited task snapshots."""
-    from .runtime_controls import public_config, REDACTED
+    from .runtime_controls import credential_field
     if isinstance(value, dict):
-        provider = provider or str(value.get("module", "")).startswith("provider-")
+        if "module" in value:
+            provider = str(value["module"]).startswith("provider-")
         result = {}
         for key, item in value.items():
-            if public_config({key: item}).get(key) == REDACTED:
-                if isinstance(item, str) and _ENV_REFERENCE.fullmatch(item):
+            if credential_field(key, module=module):
+                if item is None or isinstance(item, str) and _ENV_REFERENCE.fullmatch(item):
                     result[key] = item
                 elif provider:
                     result[key] = copy.deepcopy(HOST_CREDENTIAL)
                 # Other module secrets are not copied or rebound implicitly.
             else:
-                result[key] = credential_bindings(item, provider=provider)
+                result[key] = credential_bindings(
+                    item, provider=provider, module=value.get("module") if key == "config" else None)
         return result
     if isinstance(value, list):
         return [credential_bindings(item, provider=provider) for item in value]
@@ -228,11 +230,11 @@ def rebind_provider_credentials(edited, authorized):
     def visit(node, host):
         nonlocal bound
         for row in node.get("providers", []):
-            from .runtime_controls import public_config, REDACTED
+            from .runtime_controls import credential_field
             # An explicit saved envref is already a credential binding; after
             # expansion it must remain a reference in the child's next snapshot.
             bound = bound or any(
-                public_config({key: value}).get(key) == REDACTED
+                credential_field(key, module=row.get("module"))
                 and isinstance(value, str) and _ENV_REFERENCE.fullmatch(value)
                 for key, value in row.get("config", {}).items())
             if not has_binding(row.get("config", {})):

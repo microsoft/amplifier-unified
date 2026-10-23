@@ -177,7 +177,7 @@ try{
  await page.locator('.a-pinned-chats .a-nav-chat-select').filter({hasText:'Home launch notes'}).click();
  await expect(page.locator('#workspace-canvas')).toContainText('Retain this exact output.');
  assert.equal(await page.locator('#workspace-canvas').evaluate(element=>!!element.closest('[inert]')),false);
- await page.getByRole('button',{name:'Back to chat',exact:true}).click();
+ await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
  await expect(composer).toBeVisible();await expect(composer).toHaveDraft('Keep this Home draft');
  assert.equal((await state()).canvas.id,canvas);
  await home();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

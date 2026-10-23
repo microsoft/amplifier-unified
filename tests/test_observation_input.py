@@ -99,8 +99,13 @@ async def test_every_terminal_path_restores_temporary_scope(tmp_path,monkeypatch
 
 async def test_actual_worker_overwrites_claimed_input_provenance_and_freezes_child_binding():
     from amplifier_web.runtime_worker import Worker
+    def coordinator(session_id):
+        capabilities = {}
+        return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+                               register_capability=capabilities.__setitem__)
     worker=Worker.__new__(Worker)
-    worker.session=SimpleNamespace(coordinator=SimpleNamespace(session_id='actual-root'))
+    worker.session=SimpleNamespace(coordinator=coordinator('actual-root'))
+    worker.runtime=SimpleNamespace(generation={'id':'generation-1','input_ids':['original-input']})
     worker.context_inputs=['original-input']
     worker.context_bindings={'original-input':{'clientId':'original-client'}}
     worker.bridge=AsyncMock(return_value={})
@@ -110,7 +115,8 @@ async def test_actual_worker_overwrites_claimed_input_provenance_and_freezes_chi
     await bridge('dispatch',forged)
     stamped=worker.bridge.call_args.args[1]
     assert stamped['_inputBindings']==[{'inputId':'original-input','clientId':'original-client'}]
-    child=worker.app_access_bridge(SimpleNamespace(session_id='actual-child'))
+    child=worker.app_access_bridge(coordinator('actual-child'))
     worker.context_bindings.clear(); worker.context_inputs=['later-input']
+    worker.runtime.generation={'id':'generation-2','input_ids':['later-input']}
     await child('dispatch',forged)
     assert worker.bridge.call_args.args[1]['_inputBindings']==stamped['_inputBindings']

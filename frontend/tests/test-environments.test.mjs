@@ -17,6 +17,22 @@ const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join
 const button=(root,label)=>root.root.findAllByType('button').find(node=>text(node)===label);
 const read={action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'a',offset:0}};
 
+for(const outcome of ['passed','failed','unknown','cancelled'])test(`later cleanup preserves the ${outcome} check outcome`,async()=>{
+ let root;const calls=[];
+ const check={id:'q',status:'unknown',detail:'Old cleanup was not confirmed.',
+  recoveredOutcome:{outcome,cleanup:{environmentState:'removed'}},check:{state:outcome==='passed'?'completed':'outcome_unknown'}};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,
+   act:async(action,args)=>{calls.push(action);return accepted({...page,checks:[check]})}}))});
+  const statuses=root.root.findAllByProps({role:'status'}).map(text);
+  assert.ok(statuses.includes('Check: '+outcome));
+  assert.match(text(root.toJSON()),/Cleanup recovered\. The environment was removed; the check was not repeated\./);
+  assert.equal(calls.length,1);assert.equal(calls[0],'workspace.environments.read');
+  assert.ok(button(root,'Read check result'),'original result remains inspectable');
+  assert.equal(button(root,'Cancel check'),undefined);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 for(const status of ['stopped','running'])test(`artifact evidence export is ${status==='stopped'?'available':'blocked'} for ${status} work`,async()=>{
  let root;const calls=[],resource={id:'env',revision:8,status,recovery:{available:true}};
  const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?{items:[resource],capability:{status:'unavailable'}}:{request:{state:'completed'}})};
@@ -578,4 +594,22 @@ test('automatic observation keeps the selected environment page while checks run
   await act(async()=>{for(const callback of timers.values())callback()});
   assert.equal(calls.at(-1).args.offset,10);
  }finally{await act(async()=>root?.unmount());globalThis.setInterval=originalInterval;globalThis.clearInterval=originalClear}
+});
+
+
+for(const limit of [0,1,2])test(`manual Start follows the effective environment count limit ${limit}`,async()=>{
+ let root;const calls=[];
+ const view={items:[{id:'retained',revision:2,status:'stopped'}],capability:{status:'ready',ownedEnvironments:1,maxEnvironmentsPerChat:limit,profiles:[{id:'linux-python',label:'Python'}]}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action===read.action?view:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',active:true,act:dispatch}))});
+  const forms=root.root.findAllByProps({'aria-label':'Start test environment'});
+  assert.equal(forms.length,limit===1?0:1);
+  if(limit===0){
+   await act(async()=>forms[0].props.onSubmit({preventDefault(){}}));
+   const start=calls.find(row=>row.action==='workspace.environments.start');
+   assert.equal(start.args.workspaceId,'w');assert.equal(start.args.sessionId,'a');assert.equal(start.args.profileId,'linux-python');
+   assert.equal(calls.filter(row=>row.action==='workspace.environments.remove').length,0);
+  }
+ }finally{await act(async()=>root?.unmount())}
 });

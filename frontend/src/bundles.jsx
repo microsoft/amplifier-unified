@@ -75,7 +75,8 @@ export function ModuleSettings({state,session,act}){
  const preserveRecoveryDraft=recoveryDraft.current===session?.id+':'+session?.pendingConfiguration?.operationId;
  const pending=held||['queued','working'].includes(inspectOp?.phase)||['queued','working'].includes(configOp?.phase);
  const active=!!session&&['working','running','busy','starting','stopping'].includes(session.status);
- useEffect(()=>{if(session&&!configurationHeld(session))act('configuration.inspect',{id:session.id})},[session?.id]);
+ // Mounting a closed Details section must not prepare a dormant conversation.
+ // The existing Load/Refresh button is the explicit runtime-inspection demand.
  // Preserve ordinary apply settlement; recovery must not overwrite an editor draft.
  useEffect(()=>{if(plan&&session&&!held&&(draft.sessionId!==session.id||!draft.text||(!preserveRecoveryDraft&&session.pendingConfiguration?.phase==='ready'&&draft.appliedAt!==session.pendingConfiguration?.appliedAt)))edit({sessionId:session.id,text:pretty(plan),selectedKey:'',configText:'',appliedAt:session.pendingConfiguration?.appliedAt})},[session?.id,plan,held]);
  let parsed=null,parseError='';

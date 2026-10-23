@@ -57,10 +57,11 @@ async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, 
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager', AsyncMock(return_value=(session, runtime, {})))
     monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
-    def make_controls(session_arg, runtime_arg, telemetry, *, preserve_configuration):
+    def make_controls(session_arg, runtime_arg, telemetry, *, preserve_configuration, tool_invocation):
         assert session_arg is session
         assert runtime_arg is runtime
         assert preserve_configuration is False
+        assert tool_invocation == worker.tool_invocation
         return controls
     monkeypatch.setattr('amplifier_web.runtime_controls.RuntimeControls', make_controls)
     monkeypatch.setattr('amplifier_web.app_guidance.install_app_access', AsyncMock())

@@ -74,9 +74,8 @@ class SessionWarmup:
                         current = self.service._session(identity)
                         current["preparation"] = {"status": "ready"}
                         if payload.get("report"):
-                            current["runtimeReport"] = payload["report"]
-                            if payload["report"].get("root_bundle"):
-                                current["bundle"] = payload["report"]["root_bundle"]
+                            from .conversation_models import accept_report
+                            accept_report(self.service, current, payload)
                         if payload.get("runtimeSessionId"):
                             current["runtimeSessionId"] = payload["runtimeSessionId"]
                         self.service._publish_progress(session_ids={identity}, record_only=True)

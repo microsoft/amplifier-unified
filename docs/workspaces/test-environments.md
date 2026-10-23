@@ -31,6 +31,16 @@ its receipt. An interrupted or timed-out command remains uncertain and is never
 automatically replayed. A read can observe containers without proving that an
 earlier command finished. Stop of a conversation revokes agent approval; it does
 not itself claim to stop an environment or cancel an in-container command.
+
+A returned `repository-source-changed` failure during source preparation is a
+terminal failed check: no dependency preparation, guest launch or test command
+started. Keep the source stable and submit a **new** check explicitly; the failed
+request is never replayed. Reconciliation can recognize an already-retired
+allocation from its exact original failed receipt and private owner/backend
+binding. This reports the historical no-launch result, not current physical
+absence, and performs no cleanup. Missing or changed evidence, pending preparation,
+admitted work and genuine unknown outcomes retain the existing recovery rules.
+
 Manual operations serialize for each environment. Queued checks use durable
 guest supervision: cancellation requests termination, host restarts observe the
 same job, and cleanup waits for a confirmed terminal result. The manual execute
@@ -214,3 +224,54 @@ identified manual environments. Physical backend and machine admission still app
 All retained unknown owners count against capacity until exact cleanup or
 reconciliation confirms release. Environment reads support offset/limit paging;
 cleanup always names one exact resource and revision.
+
+Environment inspection also recovers a held compute reservation when the original
+native owner proves a stopped or absent environment **and** settled launch
+admission. Local reads rotate one extra ownership probe through the requested
+page; no background inventory or history scan is introduced. Registered targets
+perform the same proof under their own owner lock and release only their own
+machine reservation. Unknown launches, active preparation, changed ownership and
+unavailable backends retain capacity. Merely reporting `stopped` is insufficient.
+
+A separate `reservationRecovery` observation is saved before release. The original
+check, stop and cleanup receipts remain unchanged; freed CPU/memory does not mean
+the check passed, files were preserved, or storage ownership was retired. Reads
+never retry a test, stop a guest, or remove files. Retained older target controller
+generations keep their existing behavior; inspection does not replace them or
+redirect historical owners to a newer controller.
+
+
+### Prepared execution contract
+
+New prepared environments publish `executionContract` in the owned environment
+result and in `/opt/unified-prepared/execution-contract.json`. Read it before
+constructing a check. Python is on `PATH` and `AMPLIFIER_TEST_PYTHON` names the
+actual interpreter; `AMPLIFIER_TEST_ARTIFACTS` is `/artifacts`. Do not assume a
+`/workspace/.venv`. The copied source intentionally has no `.git`: the contract
+records the original source HEAD, snapshot commit/tree and archive SHA-256 when
+available. These identify the admitted snapshot, not later changes in the guest.
+
+For a source with an explicit Python build backend, preparation resolves its
+declared and dynamic wheel-build requirements in a separate build environment,
+records the exact inventory, and checks prerequisites. It does not install them
+into the locked test environment or perform an additional wheel build. The
+advertised `pythonBuild.command` builds the current source offline with
+`--no-isolation`, writing wheels under `/artifacts/dist`. Virtual Python projects
+and Node-only projects explicitly report no Python build backend. A packaging
+prerequisite rejection reports packaging unavailable with retained diagnostics;
+the already prepared source-test environment remains usable. Cancellation,
+timeouts and filesystem/helper failures are not converted into readiness.
+The build environment has its own package and byte inventory. Changing build
+requirements requires a new preparation; execution never fetches missing packages.
+Git-dependent scripts must use the saved snapshot identity or a separately
+approved repository-capable route; preparation does not fabricate Git history.
+
+New prepared receipts also select complete archive-only custody on the first
+ordinary removal. Both `/workspace` and `/artifacts` are bounded to 4 GiB per
+selection and 300 seconds per export on Docker; the existing Incus input-stream
+bound remains. This includes dependencies and unknown or modified files, rather
+than discarding them to fit the library's smaller default export limit. Archives
+are byte-verified, never extracted on the host, and ownership/stopped state is
+rechecked before deletion. Insufficient disk space, invalid archives or an
+uncertain removal retain the environment. Older receipts retain their original
+policy and existing `finishCleanup` recovery path.

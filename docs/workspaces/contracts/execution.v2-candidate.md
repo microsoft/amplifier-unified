@@ -523,7 +523,15 @@ Membership, limits and Stop are retained in existing command receipts; model
 usage stays in existing execution receipts and is attributed at admission.
 
 Assignment limits cover aggregate supported model calls and open commissioned
-roots. Optional token/cost reservations are declared allowances per call, not
+roots. New assignments have no execution count ceiling: `maxOpenTasks` and
+`maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
+explicit ceiling or `null` for no count limit (blank in the UI). Existing saved
+finite values are preserved until their owner explicitly changes them. The
+retained member roster remains structurally bounded by `maxMembers` (1–64,
+default 64); removing execution ceilings never discards members or unknown
+receipts, changes Stop/ownership, or bypasses token/cost budgets, the installation's
+separate per-source task-chat policy, or host resource admission. Optional
+token/cost reservations are declared allowances per call, not
 provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
@@ -699,6 +707,23 @@ Read pages contain at most 32 records and do not hydrate conversation history.
 The ready-worker policy check observes supported reference filesystem and patch
 tools only; it does not certify custom tools, shell, browser or database access.
 
+### Optional per-chat execution counts — 2026-10-21
+
+Global execution settings accept explicit zero for outstanding task chats per
+source, owned test environments per chat and pending checks per chat; each
+then has no count ceiling. These optional counts and queue wait default to zero.
+Saved positive operator values are preserved. Wait zero means until Stop or
+cancellation; accepted checks retain their original deadline and resource budget.
+
+These choices do not change same-request idempotency, causal depth, assignment
+membership, authorization, Stop, retained-owner bounds or physical resource
+admission. Ordered checks retain their earlier-check/cleanup barrier; overlap
+requires both checks to be explicitly independent. Unknown results remain unknown
+and retain exact owners. Disabling a count cannot retire, replay or overwrite them.
+Manual and queued environment allocations share the same atomic admission owner.
+The global pending queue and retained resource/reservation record limits remain
+positive; bounded display pages are not concurrency ceilings.
+
 ### Notification display provenance — 2026-10-14
 
 A retained versioned notification is labelled as an Amplifier update when its
@@ -781,3 +806,44 @@ Root and child mounting reject reference modules that cannot honor the selected
 read policy before model input. The same check runs in existing no-model runtime
 qualification. Dependency updates use the existing checked staging/activation
 path; no capability approval or automatic replay repairs a recorded old worker.
+
+
+### Explicit review of completion notifications — 2026-10-22
+
+A requester may acknowledge an exact outcome after reviewing it through
+`coordination.acknowledge`, using the current result's revision and review key.
+This is the caller's explicit disposition, not a claim that a passive read was
+consumed by a model. Reads, UI views and assistant prose do not acknowledge.
+
+The host retains the acknowledgement in the existing command journal, checks the
+current root, original requester/workspace, task continuation epoch, assignment
+and Stop boundary, and atomically suppresses only the matching still-queued
+notification. An already submitting, admitted or unknown notification is kept
+unchanged. If backpressure prevented enqueueing, the same reviewed outcome does
+not enqueue later. A changed outcome remains eligible for its own notification.
+Results, declarations, successful qualification, task status, budgets and
+permissions are unchanged; acknowledging never cancels work or permits replay.
+A stable command identity recovers a lost acknowledgement without repeating an
+effect. This action is available on the explicit recovery/report surface.
+
+### Compact assignment orientation
+
+`assignment.brief` reads current member metadata and the caller's latest direct
+request to each member, with exact inspection/result handles. It does not load
+conversation history, admit a dormant worker, change task authority or create
+another task/context store. Shared Work and original constraints remain authoritative.
+A short objective/result preview is labeled when truncated; idle is not completion,
+and a response's qualification is reported separately from delivery.
+
+Each page is at most 9 KiB UTF-8, defaults to eight members and accepts `limit`
+1–16. Follow `nextAfter` for further members; current progress can change between
+pages, while assignment membership changes invalidate the cursor. Unavailable,
+detached or moved members expose no title, task or request preview. This is a
+current orientation view, not a global snapshot, history search or instruction
+supersession mechanism.
+
+The brief reads directory metadata without admitting dormant members. Task text
+comes only from already resident fields or bounded scalar projections of existing
+retained runtime/session records; absent projections stay unknown. It does not
+open native control files or decode saved view/history bodies to fill a preview.
+The agent bridge also avoids unrelated pending-progress publication for this read.

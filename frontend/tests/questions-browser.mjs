@@ -7,7 +7,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUESTIONS_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 let browser;
 const output=process.env.AMPLIFIER_QUESTIONS_OUTPUT,layoutChecks=[];
 if(output)await mkdir(output,{recursive:true});
@@ -61,7 +61,7 @@ try{
    await expect(usage().getByRole('button',{name:'Refresh usage',exact:true})).toBeEnabled();
    await questions.click();await expect(questions.locator('..')).toHaveAttribute('open','');
   }
-  await page.locator('.a-question-history summary').click();
+   await page.locator('.a-question-history > summary').click();
  };
  const close=async()=>{
   // Closing is optimistic; do not reload until the closed panel is saved.
@@ -155,10 +155,179 @@ try{
  state=await check();assert.equal(state.sent.length,3);assert.equal(new Set(state.sent.map(row=>row.inputId)).size,3);
  await page.reload();await expect(composer()).toHaveDraft('Keep this unsent message');
  await page.setViewportSize({width:390,height:844});
- await history({stableUsage:true,usageCalls:12,label:'narrow'});await expect(card(voice.id).getByText('Your answer: Plain language',{exact:true})).toBeVisible();
+ await history({stableUsage:true,usageCalls:12,label:'narrow'});await expect(card(voice.id).locator('.a-question-result .a-markdown')).toHaveText('Plain language');
  await expect(card(voice.id)).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await card(voice.id).scrollIntoViewIfNeeded();await expect(card(voice.id)).toBeInViewport();
  await page.screenshot({path:'/tmp/amplifier-durable-questions-mobile.png'});
+ await close();
+ const reviewResponse=await page.request.post(ready.url+'/fixture/reviews');
+ assert.equal(reviewResponse.status(),200,await reviewResponse.text());
+ const review=await reviewResponse.json(),q=card(review.question.id);
+ await page.setViewportSize({width:1280,height:900});
+ if(process.env.AMPLIFIER_QUESTIONS_NEGATIVE==='flatten'){
+  // Deliberate rendered-boundary fault: the formatting oracle below must fail.
+  await q.locator('.a-question-prompt').evaluate(element=>{element.textContent=element.textContent});
+ }
+ await expect(q.locator('.a-question-prompt h1')).toHaveText('Choose the peer presentation');
+ await expect(q.locator('.a-question-prompt li')).toHaveCount(2);
+ await expect(q.locator('.a-question-prompt pre code')).toHaveText('exact source\n');
+ assert.equal(await q.locator('.a-question-prompt a[href^="javascript:"]').count(),0);
+ assert.equal(await page.evaluate(()=>window.bad),undefined);
+ assert.equal(await page.evaluate(()=>document.body.dataset.untrusted),undefined);
+ const answerDraft='**Proceed**.\n\nKeep the `source` visible.';
+ await q.getByRole('textbox').fill(answerDraft);
+ await page.reload();await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ const rows=q.locator('.a-compact-artifact'),first=rows.nth(0),second=rows.nth(1);
+ await expect(rows).toHaveCount(2);await expect(q.locator('[data-full-artifact-preview]')).toHaveCount(0);
+ for(const width of [1280,390,320]){
+  await page.setViewportSize({width,height:900});
+  await first.scrollIntoViewIfNeeded();
+  const geometry=await first.locator('.a-compact-artifact-row').evaluate(row=>{
+   const bounds=node=>{const b=node.getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height}};
+   return {row:bounds(row),buttons:[...row.querySelectorAll('button')].map(bounds),scrollWidth:row.scrollWidth,clientWidth:row.clientWidth};
+  });
+  for(const b of geometry.buttons){assert.ok(b.width>=44&&b.height>=44,'44px review targets');assert.ok(b.x>=geometry.row.x&&b.x+b.width<=geometry.row.x+geometry.row.width+1,'Review actions fit row')}
+  assert.ok(Math.abs(geometry.buttons[0].y-geometry.buttons[1].y)<1,'Review actions stay on one row');
+  assert.ok(geometry.scrollWidth<=geometry.clientWidth+1,'No row overflow');
+  layoutChecks.push({label:'compact-question-review',width,...geometry});
+  if(output)await page.screenshot({path:join(output,`question-review-${width}.png`)});
+ }
+ await page.setViewportSize({width:1280,height:900});
+ if(process.env.AMPLIFIER_QUESTIONS_NEGATIVE==='wrong-version'){
+  // Deliberate request fault: bypassing the pinned version must fail the v1 oracle.
+  await page.route('**/api/actions',async route=>{
+   const body=route.request().postDataJSON();
+   if(body?.action==='canvas.views.inline'&&body.args?.questionId===review.question.id)
+    return route.continue({postData:JSON.stringify({...body,args:{...body.args,version:2}})});
+   return route.continue();
+  });
+ }
+ await first.getByRole('button',{name:/^Preview here:/}).click();
+ await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
+ await expect(first.getByRole('heading',{name:'Latest document v2'})).toHaveCount(0);
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ await first.getByRole('button',{name:/^Open in Canvas:/}).click();
+ await expect(first.locator('[data-full-artifact-preview]')).toHaveCount(0);
+ await expect.poll(()=>page.evaluate(()=>({id:window.amplifier.getState().canvas.id,version:window.amplifier.getState().canvas.selectedVersion}))).toEqual({id:review.markdown.id,version:1});
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ await first.getByRole('button',{name:/^Preview here:/}).click();
+ await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
+ await first.getByRole('button',{name:/^Hide preview:/}).click();
+ await expect(first.locator('[data-full-artifact-preview]')).toHaveCount(0);
+ await second.getByRole('button',{name:/^Preview here:/}).click();
+ const frame=second.frameLocator('iframe');
+ await expect(frame.getByRole('heading',{name:'HTML mockup v1'})).toBeVisible();
+ await expect(second.locator('iframe')).toHaveAttribute('sandbox','allow-scripts');
+ await frame.getByRole('button',{name:'Try mockup'}).click();
+ await expect(frame.locator('#value')).toHaveText('1');
+ await expect(frame.locator('body')).toHaveAttribute('data-parent-blocked','yes');
+ await expect(frame.locator('body')).toHaveAttribute('data-network-blocked','yes');
+ assert.equal((await check()).networkAttempts,0,'Sandbox must block a reachable fixture endpoint, not merely fail DNS');
+ assert.equal(await page.evaluate(()=>document.body.dataset.untrusted),undefined);
+ assert.equal((await check()).sent.length,3,'Review actions never send or answer');
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ if(output)await page.screenshot({path:join(output,'question-html-review.png')});
+ const beforeTransfer=await second.locator('iframe').elementHandle();
+ await second.getByRole('button',{name:/^Open in Canvas:/}).click();
+ await expect(second.getByRole('button',{name:'Keep current preview',exact:true})).toBeVisible();
+ await second.getByRole('button',{name:'Keep current preview',exact:true}).click();
+ assert.equal(await beforeTransfer.evaluate(element=>element.isConnected),true,'Keep preserves the exact interactive frame');
+ await expect(frame.locator('#value')).toHaveText('1');
+ await second.getByRole('button',{name:/^Open in Canvas:/}).click();
+ await second.getByRole('button',{name:'Reset preview and open in Canvas',exact:true}).click();
+ await expect(second.locator('[data-full-artifact-preview]')).toHaveCount(0);
+ await expect.poll(()=>beforeTransfer.evaluate(element=>element.isConnected)).toBe(false);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().canvas.id)).toBe(review.html.id);
+ // A closed Canvas retains the primary frame: returning it to the question
+ // also needs explicit reset, not canvas.close as an implicit disposal.
+ await page.evaluate(()=>{const state=window.amplifier.getState();return window.amplifier.dispatch('canvas.visibility',{open:false,sessionId:state.selectedSessionId,canvasId:state.canvas.id})});
+ await second.getByRole('button',{name:/^Preview here:/}).click();
+ await expect(second.getByRole('button',{name:'Keep current preview',exact:true})).toBeVisible();
+ await second.getByRole('button',{name:'Reset preview and preview in chat',exact:true}).click();
+ await expect(frame.getByRole('heading',{name:'HTML mockup v1'})).toBeVisible();
+ await frame.getByRole('button',{name:'Try mockup'}).click();
+ await expect(frame.locator('#value')).toHaveText('1');
+ await beforeTransfer.dispose();
+ // Synthetic renderer-declared dirty state is a supported contract probe.
+ // It does not claim the built-in Markdown/HTML reader has a document editor.
+ const reviewTarget=await page.evaluate(id=>{
+  const view=window.amplifier.getState().canvasWorkspace.views.find(v=>v.viewId.startsWith('inline-')&&v.resourceId===id);
+  return Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
+ },review.html.id);
+ const reviewAction=async(action,args)=>page.evaluate(async({action,args})=>{
+  try{return await window.amplifier.dispatch(action,args)}
+  catch(error){return {accepted:false,code:error.code,error:error.message}}
+ },{action,args});
+ assert.equal((await reviewAction('canvas.views.dirty',{...reviewTarget,dirty:true})).accepted,true);
+ const mountedFrame=await second.locator('iframe').elementHandle();
+ await second.getByRole('button',{name:/^Open in Canvas:/}).click();
+ await expect(second.getByRole('status')).toContainText('Finish or cancel');
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Canvas transfer cannot bypass a dirty question preview');
+ await q.getByRole('button',{name:'Submit answer'}).click();
+ await expect(q.getByRole('alert')).toContainText('Finish or cancel');
+ await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ assert.equal((await check()).questions.find(row=>row.id===review.question.id).status,'pending');
+ assert.equal((await check()).sent.length,3,'Rejected dirty answer must not send');
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Dirty rejection preserves the mounted renderer');
+ await expect(frame.locator('#value')).toHaveText('1');
+ assert.equal((await reviewAction('session.draft',{})).code,'canvas_view_dirty');
+ if(output)await page.screenshot({path:join(output,'question-dirty-answer-rejected.png')});
+ assert.equal((await reviewAction('canvas.views.dirty',{...reviewTarget,dirty:false})).accepted,true);
+ // New explicit click after confirmed rejection; the same draft must work.
+ await q.getByRole('button',{name:'Submit answer'}).click();
+ await expect(q.getByText('Answer saved and delivered to Amplifier.')).toBeVisible();
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Status revision and delivery updates preserve the open review');
+ await expect(frame.locator('#value')).toHaveText('1');
+ assert.equal((await check()).sent.length,4);
+ await history();await expect(q).toHaveCount(1);
+ await expect(page.locator('.a-question-history').locator(`[data-question-id="${review.question.id}"]`)).toHaveCount(0);
+ await close();
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'History inspection does not duplicate or replace the review');
+ await second.getByRole('button',{name:/^Hide preview:/}).click();
+ await expect(second.getByRole('button',{name:'Keep current preview',exact:true})).toBeVisible();
+ assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Hide does not silently reset interactive state');
+ await expect(frame.locator('#value')).toHaveText('1');
+ await second.getByRole('button',{name:'Keep current preview',exact:true}).click();
+ await expect(frame.locator('#value')).toHaveText('1');
+ await second.getByRole('button',{name:/^Hide preview:/}).click();
+ await second.getByRole('button',{name:'Reset preview and hide',exact:true}).click();
+ await expect(q).toHaveCount(0);
+ await mountedFrame.dispose();
+ await history();await expect(card(review.question.id).locator('.a-question-result strong').filter({hasText:'Proceed'})).toBeVisible();
+ const savedQuestion=(await check()).questions.find(row=>row.id===review.question.id);
+ assert.equal(savedQuestion.answer.text,answerDraft);assert.equal(savedQuestion.answer.questionRevision,1);
+ assert.equal(savedQuestion.answer.artifacts[0].version,1);
+ assert.equal(savedQuestion.answer.artifacts[0].id,review.markdown.id);
+ if(output)await page.screenshot({path:join(output,'question-formatted-answer.png')});
+ await close();
+ for(const action of ['question.cancel','question.supersede']){
+  const seeded=await page.request.post(ready.url+'/fixture/reviews');
+  assert.equal(seeded.status(),200,await seeded.text());
+  const data=await seeded.json(),item=card(data.question.id),document=item.locator('.a-compact-artifact').first();
+  await document.getByRole('button',{name:/^Preview here:/}).click();
+  await expect(document.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
+  const body=await document.locator('.a-inline-artifact-body').elementHandle();
+  const target=await page.evaluate(id=>{
+   const view=window.amplifier.getState().canvasWorkspace.views.find(v=>v.viewId.startsWith('inline-')&&v.resourceId===id);
+   return Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
+  },data.markdown.id);
+  const args={sessionId:ready.sessionId,id:data.question.id,expectedRevision:1,
+   ...(action==='question.supersede'?{prompt:'Replacement review question',required:false,dependency:'Choose'}:{})};
+  assert.equal((await reviewAction('canvas.views.dirty',{...target,dirty:true})).accepted,true);
+  assert.equal((await reviewAction(action,args)).code,'canvas_view_dirty');
+  assert.equal((await check()).questions.find(row=>row.id===data.question.id).status,'pending');
+  assert.equal(await body.evaluate(element=>element.isConnected),true);
+  assert.equal((await check()).sent.length,4,'Cancel/supersede cannot send an answer');
+  assert.equal((await reviewAction('canvas.views.dirty',{...target,dirty:false})).accepted,true);
+  const closed=await reviewAction(action,args);assert.equal(closed.accepted,true);
+  await expect(item.getByText(action==='question.cancel'?'Question cancelled without an answer.':'Replaced by a newer question.')).toBeVisible();
+  assert.equal(await body.evaluate(element=>element.isConnected),true,'Clean closure keeps the open review reachable');
+  await document.getByRole('button',{name:/^Hide preview:/}).click();
+  await expect(item).toHaveCount(0);await body.dispose();
+  if(action==='question.supersede')assert.equal((await reviewAction('question.cancel',{
+   sessionId:ready.sessionId,id:closed.result.id,expectedRevision:closed.result.revision,
+  })).accepted,true);
+ }
  assert.deepEqual(errors,[]);
  console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
 }finally{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}await browser?.close();fixture.kill()}

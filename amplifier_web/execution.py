@@ -54,6 +54,20 @@ def restore_voice_usage(session):
     return changed
 
 
+def interrupt_owned_workers(session, runtime_owner):
+    """Retain unknown outcomes after the exact native process has exited.
+
+    An independent chat, unbound historical row or replacement process is not
+    owned by this receipt. Terminal results and reports remain authoritative.
+    """
+    if not runtime_owner:
+        return
+    for worker in session.get('workers', []):
+        if (worker.get('runtimeOwnerId') == runtime_owner and
+                (worker.get('status') in {'starting', 'running', 'working', 'queued', 'pending', 'stopping'}
+                 or worker.get('persistent') and worker.get('status') == 'idle')):
+            worker.update(status='interrupted', updatedAt=time.time())
+
 def interrupt_unfinished(session):
     """Settle lost execution without interpreting a later warm worker as success."""
     reference = dict.get(session, '_coldFields', {}).get('execution', {})

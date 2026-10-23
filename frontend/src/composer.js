@@ -1,8 +1,13 @@
+/** Presentation only: keep short prompts compact; give rich/long content full width. */
+export function composerExpanded({draft='',attachments=[],quote=null}={}){
+ return !!quote||attachments.length>0||draft.includes('\n')||draft.length>80;
+}
+
 /** Re-measure after any draft update, including agent-origin updates. */
 export function resizeComposer(element){
  if(!element)return;
  element.style.minHeight='44px';
- element.style.maxHeight='180px';
+ element.style.maxHeight=element.querySelector?.('[data-quote-instance]')?'min(400px, 35dvh)':'180px';
  element.style.height='auto';
  // Rich text blocks size naturally; only textareas need scrollHeight sizing.
  if(element.hasAttribute?.('contenteditable')){element.style.overflowY='auto';return;}

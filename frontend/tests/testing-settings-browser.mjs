@@ -149,6 +149,19 @@ try{
  await page.screenshot({path:process.env.EXECUTION_SETTINGS_SCREENSHOT||'/tmp/execution-settings-browser.png',fullPage:true});
  await execution.getByLabel('Small Python check: Memory (MiB)',{exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/execution-profile-browser.png',fullPage:true});
+ // Optional per-chat counts round-trip zero without changing retained-owner bounds.
+ for(const label of ['Outstanding task chats per manager','Owned test environments per chat','Maximum pending checks per chat'])await execution.getByLabel(label,{exact:true}).fill('0');
+ await execution.getByRole('button',{name:'Save execution limits'}).click();
+ await expect(execution.getByRole('status')).toContainText('Execution limits saved');
+ await expect(execution).toContainText('with no per-chat count limit');
+ await expect(execution).toContainText('with no per-chat environment count limit');
+ const uncapped=(await page.evaluate(()=>window.amplifier.dispatch('testing.execution.read',{}))).result;
+ assert.equal(uncapped.concurrency.maxTaskChatsPerSource,0);assert.equal(uncapped.concurrency.maxEnvironmentsPerChat,0);assert.equal(uncapped.queue.maxPendingPerChat,0);
+ assert.equal(uncapped.concurrency.maxOwnedResources,700);assert.equal(uncapped.concurrency.maxOwnedResourcesPerChat,40);assert.equal(uncapped.queue.maxPending,160);assert.equal(uncapped.queue.defaultWaitSeconds,0);
+ await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'testing');
+ await execution.getByText('Advanced execution limits',{exact:true}).click();
+ for(const label of ['Outstanding task chats per manager','Owned test environments per chat','Maximum pending checks per chat'])await expect(execution.getByLabel(label,{exact:true})).toHaveValue('0');
+ await expect(execution.getByText('Effective: No count limit',{exact:true})).toHaveCount(2);
  // Mounted remote-target setup is a bounded protocol fixture, not a host install.
  let targets={revision:'r1',runners:[],scope:'Approved machines, shared per account.'},targetWrites=0,refreshes=0,policyWrites=0,losePolicyReply=false;
  const backendDefaults={maxRunning:15,maxInstances:256,minFreeBytes:10*1024**3};

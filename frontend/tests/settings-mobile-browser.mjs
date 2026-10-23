@@ -112,7 +112,10 @@ try{
  // Conversation modules now belong to the selected chat's public Model & tools page.
  const closeNavigation=page.getByRole('button',{name:'Close navigation',exact:true});
  if(await closeNavigation.isVisible())await closeNavigation.click();
- await openChatAdvancedPage(page,'Model & tools');await expect(page.getByRole('button',{name:'Back to Advanced',exact:true})).toBeVisible();await page.getByText('Conversation modules',{exact:true}).click();await expect(page.getByRole('searchbox',{name:'Filter loaded modules',exact:true})).toBeVisible();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeChecked();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeDisabled();await page.screenshot({path:join(evidence,'settings-mobile-modules.png')});
+ await openChatAdvancedPage(page,'Model & tools');await expect(page.getByRole('button',{name:'Back to Advanced',exact:true})).toBeVisible();await page.getByText('Conversation modules',{exact:true}).click();
+ // Details are passive; explicitly inspect the conversation before editing loaded modules.
+ await page.getByRole('dialog',{name:'Model & tools',exact:true}).getByRole('button',{name:'Load configuration',exact:true}).click();
+ await expect(page.getByRole('searchbox',{name:'Filter loaded modules',exact:true})).toBeVisible();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeChecked();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeDisabled();await page.screenshot({path:join(evidence,'settings-mobile-modules.png')});
  assert.deepEqual(errors,[]);console.log('Mobile Settings: index, browser Back/Forward, private drafts, nested routing, footer actions, ordering, catalog selection and all destinations at 5 widths passed.');
 }catch(error){if(page)await page.screenshot({path:join(evidence,'settings-mobile-failure.png')});throw error;}
 finally{await browser?.close();fixture.kill('SIGTERM');}

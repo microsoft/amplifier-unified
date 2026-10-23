@@ -17,7 +17,7 @@ const output=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-che
 const fixtureRoot=process.env.AMPLIFIER_TEST_FIXTURE_ROOT||join(root,'tests/fixtures');
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDioAAAAASUVORK5CYII=','base64');
-const names=['detector-countercheck','accepted-two-cycle','failed-recovery','unknown-reload'];
+const names=['detector-countercheck','accepted-two-cycle','response-before-frame','failed-recovery','unknown-reload'];
 const report={schemaVersion:1,scenario:'attachment-consumption',runtime:'synthetic',liveProvider:false,
  cases:names.map(id=>({id,status:'unrun'})),errors:[],routeLifecycle:[],traces:[],observations:[]};
 await mkdir(output,{recursive:true});
@@ -84,12 +84,28 @@ async function settled(page,command){
 }
 async function setupPage(){
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- await context.route('**/*',route=>new URL(route.request().url()).origin===base?route.continue():route.abort('blockedbyclient'));
+ await context.route(url=>url.origin!==base,route=>route.abort('blockedbyclient'));
  await context.addInitScript(installAttachmentObserver);
  await context.addInitScript(()=>{
   const Native=window.WebSocket;
   window.attachmentSockets=[];
-  window.WebSocket=class extends Native{constructor(...args){super(...args);window.attachmentSockets.push(this)}};
+  // Hold actual state-frame delivery only. No payload/revision/draft is edited.
+  window.attachmentFrameGate={arm:false,active:false,held:[],events:[],
+   release(){this.arm=false;this.active=false;for(const [handler,event] of this.held.splice(0))handler(event);}};
+  window.WebSocket=class extends Native{constructor(...args){super(...args);window.attachmentSockets.push(this);
+   Object.defineProperty(this,'onmessage',{set(handler){this.addEventListener('message',event=>{
+    const gate=window.attachmentFrameGate,frame=JSON.parse(event.data);
+    if(gate.active&&['state','state-delta'].includes(frame.event)){
+     gate.held.push([handler,event]);gate.events.push({kind:'held',revision:frame.data.revision});return;
+    }
+    handler(event);
+    const state=window.amplifier?.getState(),session=state?.sessions.find(row=>row.id===state.selectedSessionId);
+    const sent=session?.messages.find(row=>row.text==='Response-first submission');
+    if(gate.arm&&sent?.delivery?.status==='sending'){
+     gate.active=true;gate.admission=state.revision;gate.command=sent.inputId;
+    }
+   });}});
+  }};
  });
  const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
  page.on('pageerror',error=>{report.errors.push(error.message);rememberFailure(error,'pageerror');});
@@ -240,6 +256,41 @@ async function twoCycles(page,owner,other){
  assert.equal((await inspect(page)).sends.filter(x=>x.sessionId===owner).length,2,'Reattachment never resends');
 }
 
+async function responseFirst(page,owner){
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+ const file=await upload(page,'response-first.png');await watch(page,owner,[file.id]);
+ await composer.fill('Response-first submission');
+ await page.evaluate(()=>{window.attachmentFrameGate.arm=true;});
+ const responsePromise=page.waitForResponse(response=>{
+  try{return response.request().postDataJSON()?.action==='conversation.send';}catch{return false;}
+ });
+ try{
+  await page.getByRole('button',{name:'Send message',exact:true}).click();
+  await page.waitForFunction(()=>window.attachmentFrameGate.active);
+  const inputId=await waitRuntimeSend(page,owner,0);
+  await control(page,{op:'accept',inputId});await control(page,{op:'finish',inputId});
+  const response=await responsePromise,receipt=await response.json();assert.equal(response.status(),200);
+  const gate=await page.evaluate(()=>({admission:window.attachmentFrameGate.admission,events:window.attachmentFrameGate.events}));
+  report.observations.push({label:'Response before attachment-consumption frame',receipt,gate});
+  assert.equal(receipt.delivery,'accepted');
+  assert.equal(receipt.revision,gate.admission,'Durable command retains its admission revision');
+  assert.ok(receipt.stateRevision>gate.admission,'Accepted response observes later attachment consumption');
+  // Queue a normal second send while the first receipt awaits its state frame.
+  // Its optimistic outbox must already exclude the first consumed upload.
+  await composer.fill('Adjacent cycle');await page.getByRole('button',{name:'Send message',exact:true}).click();
+  const next=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')||'[]').find(row=>row.text==='Adjacent cycle'));
+  assert.ok(next);assert.deepEqual(next.attachmentIds,[],'Adjacent send never reuses the first attachment');
+  await cleanTrace(page,'Accepted HTTP response while later frames are held');
+  await page.evaluate(()=>window.attachmentFrameGate.release());
+  const second=await waitRuntimeSend(page,owner,1);
+  await control(page,{op:'accept',inputId:second});await control(page,{op:'finish',inputId:second});await settled(page,second);
+  const actual=await inspect(page),messages=actual.sessions.find(row=>row.id===owner).messages.filter(row=>row.role==='user'&&[inputId,second].includes(row.inputId));
+  assert.deepEqual(messages.map(row=>row.attachments.map(file=>file.id)),[[file.id],[]]);
+  assert.equal(actual.sends.filter(row=>row.sessionId===owner).length,2,'Two explicit sends, no replay');
+  await cleanTrace(page,'Response-first two-cycle settlement');await original(page,file);
+ }finally{await page.evaluate(()=>window.attachmentFrameGate.release());}
+}
+
 async function recovery(page,owner,mode){
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  const row=await upload(page,mode+'.png');await composer.fill('Retain '+mode+' submission');
@@ -288,6 +339,7 @@ try{
    const delivered=await page.request.get(base+'/build.json',{timeout:5000});assert.equal(delivered.status(),200);assert.equal(hash(await delivered.body()),ready.buildSha256,'HTTP build metadata matches fixture import');
    if(row.id==='detector-countercheck')await detector(page,env.owner);
    else if(row.id==='accepted-two-cycle')await twoCycles(page,env.owner,env.other);
+   else if(row.id==='response-before-frame')await responseFirst(page,env.owner);
    else await recovery(page,env.owner,row.id==='failed-recovery'?'failed':'unknown');
    row.status='passed';
   }catch(error){row.status='failed';row.error=error.message;rememberFailure(error,'case',row.id);}

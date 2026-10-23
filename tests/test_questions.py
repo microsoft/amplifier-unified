@@ -374,3 +374,258 @@ async def test_agent_cannot_launder_its_own_send_as_a_user_answer(tmp_path):
         assert len(app.runtime.sent) == 1
     finally:
         await app.close()
+
+
+async def test_question_preserves_markdown_source_and_exact_review_versions(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'html', 'title': 'Review mockup', 'content': '<h1>Original v1</h1>',
+        }))['result']
+        prompt = '  **Choose** this design?\n\n- First\n- Second\n\n    code\n'
+        q = await create_question(app, sid, prompt=prompt, artifacts=[{'id': saved['id'], 'version': 1}])
+        assert q['prompt'] == prompt
+        reference = q['artifacts'][0]
+        assert reference['id'] == saved['id'] and reference['version'] == 1
+        assert reference['kind'] == 'html' and reference['title'] == 'Review mockup'
+        assert reference['sessionId'] == sid and len(reference['bodyDigest']) == 64
+        assert 'content' not in reference and 'body' not in reference
+        await app.dispatch('canvas.versions.revise', {
+            'id': saved['id'], 'expectedRevision': 1, 'content': '<h1>New v2</h1>', 'title': 'Changed title',
+        })
+        answer = '  **Yes**.\n\nKeep the `source`.\n'
+        result = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': answer,
+        }))['result']
+        assert result['answer']['text'] == answer
+        assert result['answer']['questionRevision'] == 1
+        assert result['answer']['artifacts'] == [reference]
+        assert result['artifacts'] == [reference]
+        assert len(app.runtime.sent) == 1
+    finally:
+        await app.close()
+
+
+async def test_question_preview_is_bound_not_a_message_publication(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'markdown', 'title': 'Proposal', 'content': '# Exact first version',
+        }))['result']
+        q = await create_question(app, sid, artifacts=[{'id': saved['id'], 'version': 1}])
+        app.clients.attach('review-browser')
+        with app.clients.bind('review-browser'):
+            await app.dispatch('session.select', {'id': sid})
+            await app.dispatch('canvas.versions.revise', {
+                'id': saved['id'], 'expectedRevision': 1, 'content': '# Latest second version',
+            })
+            args = {'resourceId': saved['id'], 'version': 1, 'questionId': q['id'],
+                    'questionContentRevision': 1, 'previewId': 'question-review'}
+            preview = (await app.dispatch('canvas.views.inline', args))['result']
+            assert app.canvas_views.canvas(preview['viewId'])['content'] == '# Exact first version'
+            assert not app.runtime.sent
+            assert app.questions.store.get(sid, q['id'])['status'] == 'pending'
+            with pytest.raises(AppError, match='question'):
+                await app.dispatch('canvas.views.inline', {**args, 'version': 2})
+            with pytest.raises(AppError, match='question'):
+                await app.dispatch('canvas.views.inline', {**args, 'questionContentRevision': 2})
+            with pytest.raises(AppError):
+                await app.dispatch('canvas.views.inline', {**args, 'messageId': 'not-a-publication'})
+            await app.dispatch('question.answer', {
+                'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Proceed',
+            })
+            with pytest.raises(AppError, match='existing preview'):
+                await app.dispatch('canvas.views.inline', {**args, 'previewId': 'second-location'})
+            await app.dispatch('canvas.views.release', {key: preview[key] for key in (
+                'viewId', 'resourceId', 'resourceRevision', 'generation')})
+            again = (await app.dispatch('canvas.views.inline', {**args, 'previewId': 'history-review'}))['result']
+            assert app.canvas_views.canvas(again['viewId'])['content'] == '# Exact first version'
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('invalid', [
+    [{'id': 'absent', 'version': 1}],
+    [{'id': 'https://example.com/', 'version': 1}],
+    [{'id': 'absent', 'version': 0}],
+])
+async def test_invalid_question_review_reference_never_creates_question(tmp_path, invalid):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        with pytest.raises(AppError):
+            await create_question(app, app._session()['id'], artifacts=invalid)
+        assert app.questions.store.all() == []
+        assert app.runtime.sent == []
+    finally:
+        await app.close()
+
+
+async def test_question_review_foreign_owner_supersede_and_dirty_guard(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'html', 'title': 'Review', 'content': '<p>Exact v1</p>',
+        }))['result']
+        refs = [{'id': saved['id'], 'version': 1}]
+        q = await create_question(app, sid, artifacts=refs)
+        await app.dispatch('session.create', {})
+        other = app._session()['id']
+        with pytest.raises(AppError, match='calling conversation'):
+            await create_question(app, other, artifacts=refs)
+        replacement = (await app.dispatch('question.supersede', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1,
+            'prompt': '**Revised** question', 'required': True, 'dependency': 'Choose',
+            'artifacts': refs,
+        }))['result']
+        assert replacement['id'] != q['id']
+        assert replacement['artifacts'] == q['artifacts']
+        assert app.questions.store.get(sid, q['id'])['status'] == 'superseded'
+        app.clients.attach('review-browser')
+        with app.clients.bind('review-browser'):
+            await app.dispatch('session.select', {'id': sid})
+            preview = (await app.dispatch('canvas.views.inline', {
+                'resourceId': saved['id'], 'version': 1, 'questionId': replacement['id'],
+                'questionContentRevision': 1, 'previewId': 'dirty-review',
+            }))['result']
+            target = {key: preview[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+            await app.dispatch('canvas.views.dirty', {**target, 'dirty': True})
+            with pytest.raises(AppError) as refused:
+                await app.dispatch('canvas.select', {'id': saved['id'], 'version': 1})
+            assert refused.value.code == 'canvas_view_dirty'
+            assert app.canvas_views.canvas(preview['viewId'])['content'] == '<p>Exact v1</p>'
+            assert app.runtime.sent == []
+    finally:
+        await app.close()
+
+
+async def test_question_preview_revalidates_saved_binding_on_resource_read(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'markdown', 'title': 'Review', 'content': '# Pinned',
+        }))['result']
+        q = await create_question(app, sid, artifacts=[{'id': saved['id'], 'version': 1}])
+        app.clients.attach('reader')
+        with app.clients.bind('reader'):
+            await app.dispatch('session.select', {'id': sid})
+            preview = (await app.dispatch('canvas.views.inline', {
+                'resourceId': saved['id'], 'version': 1, 'questionId': q['id'],
+                'questionContentRevision': q['contentRevision'], 'previewId': 'read-recheck',
+            }))['result']
+            assert app.canvas_views.canvas(preview['viewId'])['content'] == '# Pinned'
+            # Synthetic corruption: a changed reference must never become a new
+            # body on an existing view. Production questions are immutable.
+            changed = app.questions.store.get(sid, q['id'])
+            changed['artifacts'][0]['bodyDigest'] = '0' * 64
+            app.questions.store.put(changed)
+            with pytest.raises(AppError, match='saved artifact changed'):
+                app.canvas_views.canvas(preview['viewId'])
+            assert preview['viewId'] not in {v['viewId'] for v in app.canvas_views.project()['views']}
+            assert app.runtime.sent == []
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('question_first', [True, False])
+async def test_question_and_message_preview_do_not_duplicate_body(tmp_path, question_first):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        message = app._message(app._session(), 'user', 'Review this document')
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'text', 'title': 'Review', 'content': 'One body',
+        }))['result']
+        q = await create_question(app, sid, artifacts=[{'id': saved['id'], 'version': 1}])
+        question = {'questionId': q['id'], 'questionContentRevision': q['contentRevision']}
+        publication = {'messageId': message['id']}
+        first, second = (question, publication) if question_first else (publication, question)
+        app.clients.attach('reader')
+        with app.clients.bind('reader'):
+            await app.dispatch('session.select', {'id': sid})
+            args = {'resourceId': saved['id'], 'version': 1, 'presentationRequest': True}
+            await app.dispatch('canvas.select', {'id': saved['id'], 'version': 1, **first, 'presentation': 'inline'})
+            opened = (await app.dispatch('canvas.views.inline', {**args, **first, 'previewId': 'first'}))['result']
+            await app.dispatch('canvas.select', {'id': saved['id'], 'version': 1, **second, 'presentation': 'inline'})
+            with pytest.raises(AppError, match='Unknown'):
+                app.canvas_views.canvas(opened['viewId'])
+            with pytest.raises(AppError, match='presentation changed'):
+                await app.dispatch('canvas.views.inline', {**args, **first, 'previewId': 'late-first'})
+            replacement = (await app.dispatch('canvas.views.inline', {**args, **second, 'previewId': 'second'}))['result']
+            assert app.canvas_views.canvas(replacement['viewId'])['content'] == 'One body'
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('action', ['question.answer', 'question.cancel', 'question.supersede'])
+@pytest.mark.parametrize('other_client', [False, True])
+async def test_question_closure_keeps_dirty_preview_and_has_no_answer_effect(tmp_path, action, other_client):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        saved = (await app.dispatch('canvas.show', {
+            'kind': 'html', 'title': 'Question review', 'content': '<p>Exact review</p>',
+        }))['result']
+        q = await create_question(app, sid, artifacts=[{'id': saved['id'], 'version': 1}])
+        unrelated = await create_question(app, sid, prompt='Unrelated question')
+        for identity in ('preview-client', 'answer-client'):
+            app.clients.attach(identity)
+            with app.clients.bind(identity):
+                await app.dispatch('session.select', {'id': sid})
+        with app.clients.bind('preview-client'):
+            view = (await app.dispatch('canvas.views.inline', {
+                'resourceId': saved['id'], 'version': 1, 'questionId': q['id'],
+                'questionContentRevision': q['contentRevision'], 'previewId': 'owned-review',
+            }))['result']
+            target = {key: view[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+            await app.dispatch('canvas.views.dirty', {**target, 'dirty': True})
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': q['revision']}
+        args.update({'text': 'Proceed'} if action == 'question.answer' else
+                    {'prompt': 'Replacement', 'required': True, 'dependency': 'Choose'} if action == 'question.supersede' else {})
+        with app.clients.bind('answer-client' if other_client else 'preview-client'):
+            before = app.questions.store.all(sid)
+            with pytest.raises(AppError) as caught:
+                await app.dispatch(action, args)
+            assert caught.value.code == 'canvas_view_dirty'
+            assert app.questions.store.all(sid) == before
+            assert not app.runtime.sent
+            assert not any(m.get('questionId') == q['id'] for m in app._session(sid)['messages'])
+            # The guard is question-scoped, not a blanket hold on unrelated decisions.
+            await app.dispatch('question.cancel', {
+                'sessionId': sid, 'id': unrelated['id'], 'expectedRevision': unrelated['revision'],
+            })
+        with app.clients.bind('preview-client'):
+            assert app.canvas_views.summary(view['viewId'])['dirty'] is True
+            assert app.canvas_views.canvas(view['viewId'])['content'] == '<p>Exact review</p>'
+            with pytest.raises(AppError) as caught:
+                await app.dispatch('session.draft', {})
+            assert caught.value.code == 'canvas_view_dirty'
+            # Only an explicit renderer clear permits closing the question.
+            await app.dispatch('canvas.views.dirty', {**target, 'dirty': False})
+        with app.clients.bind('answer-client' if other_client else 'preview-client'):
+            await app.dispatch(action, args)
+        closed = app.questions.store.get(sid, q['id'])
+        assert closed['revision'] == q['revision'] + 1
+        assert closed['contentRevision'] == q['contentRevision']
+        assert closed['status'] == {'question.answer': 'answered', 'question.cancel': 'cancelled',
+                                    'question.supersede': 'superseded'}[action]
+        assert len(app.runtime.sent) == (1 if action == 'question.answer' else 0)
+        with app.clients.bind('preview-client'):
+            assert app.canvas_views.canvas(view['viewId'])['content'] == '<p>Exact review</p>'
+            for index in range(11):
+                await create_question(app, sid, prompt=f'Later question {index}')
+            assert q['id'] in {row['id'] for row in app._session(sid)['questions']}
+            await app.dispatch('canvas.views.release', target)
+            await app.dispatch('session.draft', {})
+    finally:
+        await app.close()

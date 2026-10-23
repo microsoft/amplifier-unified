@@ -127,6 +127,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
     kind = event.get("type", "")
     base = {"sessionId": session_id}
+    if kind == 'runtime.error' and 'terminalFailure' in event:
+        from .support_diagnostics import terminal_exception_capture
+        capture = terminal_exception_capture(event['terminalFailure'])
+        return ('runtime.error', {**base, 'terminalFailure': capture,
+                'error': 'The manager turn failed. Work was not replayed.'}) if capture else None
     if kind == 'runtime.bridge':
         from .support_diagnostics import event_detail
         return kind, {**base, **event_detail(event)}
@@ -238,6 +243,8 @@ class RuntimeManager:
         self._closed = False
         self._retired = {}
         self._execution_state = None
+        self._configuration_revision = lambda: 0
+        self._input_configuration = None
         self.home = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
@@ -245,6 +252,14 @@ class RuntimeManager:
     def bind_execution_state(self, read):
         """Host-owned synchronous authority; never supplied by a model command."""
         self._execution_state = read
+
+    def bind_configuration_revision(self, read):
+        """Capture host configuration provenance before asynchronous preparation."""
+        self._configuration_revision = read
+
+    def bind_input_configuration(self, prepare):
+        """Host-only next-message validation; never invoked by reads or warmup."""
+        self._input_configuration = prepare
 
     def _check_execution(self, sid, session=None, *, allow_fenced=False):
         if self._execution_state is None:
@@ -368,11 +383,14 @@ class RuntimeManager:
         # Host callbacks only: no command argument can authorize a restart.
         if preserve_configuration and guard is None:
             raise ValueError('Placement-only startup requires the retained host operation guard.')
+        if session.get('bundleReplacement', {}).get('deferred') and guard is None:
+            raise RuntimeStartupError('Deferred bundle replacement requires its host admission guard.')
         if guard is not None: guard()
         if self._closed:
             raise RuntimeHostClosingError()
         sid = session["id"]
         self._check_execution(sid, session)
+        configuration_revision = self._configuration_revision()
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
@@ -510,11 +528,13 @@ class RuntimeManager:
                         candidate.unlink(missing_ok=True)
                     except OSError:
                         pass  # Preserve the original failed setup diagnosis.
-        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
+        row = {"process": proc, "emit": emit, "runtimeOwnerId": str(uuid.uuid4()), "configurationRevision": configuration_revision, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
         self.workers[sid] = row
+        if session.get('bundleReplacement', {}).get('deferred'):
+            row['configuration_guard'] = guard
         row['generation_lease'] = lease
         row["reader"] = asyncio.create_task(self._read(sid, row))
         row["stderr_task"] = asyncio.create_task(self._drain_stderr(row))
@@ -599,9 +619,16 @@ class RuntimeManager:
         try:
             if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
                 raise RuntimeError("The calling runtime no longer owns this bridge.")
-            if not self.app_bridge:
-                raise RuntimeError("App controls are not connected")
-            result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
+            if data['operation'] == 'configuration.nextMessage.admit':
+                guard = row.get('configuration_guard')
+                if guard is None:
+                    raise RuntimeError('No deferred bundle application owns this worker.')
+                guard()
+                result = {'allowed': True}
+            else:
+                if not self.app_bridge:
+                    raise RuntimeError("App controls are not connected")
+                result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
             reply = {"op": "bridge.result", "id": data["id"], "result": result}
         except Exception as exc:
             reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
@@ -759,6 +786,7 @@ class RuntimeManager:
                         row["ready"].set_result(data.get("report", {}))
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
+                        "runtimeOwnerId": row['runtimeOwnerId'], "configurationRevision": row['configurationRevision'],
                         "report": data.get("report", {})})
                 elif data.get("type") == "runtime.ownership":
                     row['yielded'] = data.get('status') == 'yielded'
@@ -766,6 +794,15 @@ class RuntimeManager:
                     await row['emit']('runtime.ownership', {'sessionId': sid,
                         **{key: data[key] for key in ('status', 'source', 'detail') if key in data}})
                 elif data.get("type") == "runtime.error":
+                    if 'terminalFailure' in data:
+                        # This is supplemental metadata, not a new failure or
+                        # startup exception. Invalid/unsupported captures cannot
+                        # be downgraded into an uncorrelated generic exit.
+                        normalized = normalize_event(data, sid)
+                        if (self.workers.get(sid) is row and not row['closing']
+                                and row['ready'].done() and normalized):
+                            await row['emit'](*normalized)
+                        continue
                     from .session_health import failure_details
                     failure = _worker_error(data)
                     diagnostic = None
@@ -844,6 +881,11 @@ class RuntimeManager:
                         # Closing a process for maintenance is not a user Stop.
                         normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
+                        if normalized[0] == 'worker.updated' and not normalized[1].get('activityOnly'):
+                            # Only lifecycle receipts on this process's pipe
+                            # bind its native jobs/children. Progress and peer
+                            # chats cannot acquire that execution ownership.
+                            normalized[1]['runtimeOwnerId'] = row['runtimeOwnerId']
                         await row["emit"](*normalized)
             code = await row["process"].wait()
             if not row["closing"] and not reported_error:
@@ -888,10 +930,11 @@ class RuntimeManager:
                                              else RuntimeError("Amplifier worker disconnected"))
 
     async def _execution_ended(self, sid, row, status):
-        """Only a confirmed process exit settles independent background calls."""
+        """Only confirmed process exit settles its native children/background calls."""
         if row.get("executionEnded"): return
         shutdown = row.get('stop_reason') == 'shutdown'
         await row["emit"]("runtime.ended", {"sessionId": sid, "status": 'interrupted' if shutdown else status,
+            **({'runtimeOwnerId': row['runtimeOwnerId']} if row.get('runtimeOwnerId') else {}),
             **({'reason': 'shutdown'} if shutdown else {}), "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
         # The reader can be cancelled while delivery waits for the service
         # lock. Only successful delivery suppresses the stop-path retry.
@@ -1008,8 +1051,8 @@ class RuntimeManager:
             await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit):
-        await self._start_for_input(session, emit)
-        return await self._request(session["id"], "send", text=text, input_id=input_id,
+        guard = await self._start_for_input(session, emit)
+        return await self._request(session["id"], "send", guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
@@ -1039,7 +1082,7 @@ class RuntimeManager:
         if reason:
             return {"accepted": False, "reason": reason}
         try:
-            await self._start_for_input(session, emit)
+            configuration_guard = await self._start_for_input(session, emit)
         except (RuntimeStartupError, SessionInUseError, asyncio.CancelledError) as exc:
             # Positive evidence from this attempt's pre-admission boundary.
             # This is never inferred from worker-row absence after restart.
@@ -1051,6 +1094,8 @@ class RuntimeManager:
             reason = guard()
             if reason:
                 return {"accepted": False, "reason": reason}
+            if configuration_guard:
+                configuration_guard()
             args = {"operation": "coordination.submit", "arguments": arguments}
             pending = await self._admit(session["id"], "control", args)
         return await self._reply(*pending, op="control", args=args)
@@ -1083,11 +1128,22 @@ class RuntimeManager:
 
     async def _start_for_input(self, session, emit):
         try:
+            guard = None
+            original = session
+            if self._input_configuration and session.get('nextMessageRevision'):
+                session, guard = await self._input_configuration(session)
             requested=session.get('pendingModelSelection')
-            await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit)
+            guarded = {'guard': guard} if guard else {}
+            await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit, **guarded)
             if requested:
-                await self.control(session['id'],'provider.select',requested)
+                await self.control(session['id'],'provider.select',requested, **guarded)
+            if guard:
+                guard()
+                await emit('runtime.nextMessageApplied', {'sessionId': session['id'],
+                    'revision': original['nextMessageRevision'], 'bundle': session.get('bundle'), 'selection': requested})
+            elif requested:
                 await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
+            return guard
         except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
             raise
         except Exception as exc:
@@ -1110,8 +1166,8 @@ class RuntimeManager:
         return await asyncio.to_thread(saved_delivery, session, input_id)
 
     async def retry(self, session, text, input_id, emit):
-        await self._start_for_input(session, emit)
-        return await self._request(session['id'], 'retry', text=text, input_id=input_id,
+        guard = await self._start_for_input(session, emit)
+        return await self._request(session['id'], 'retry', guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get('replyTo') for m in session.get('messages',[]) if m.get('inputId')==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get('attachments', []) for m in session.get('messages', []) if m.get('inputId') == input_id), []))

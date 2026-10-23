@@ -52,7 +52,7 @@ try{
  await openSettingsPage(page,'appearance');await page.getByLabel('Plan location',{exact:true}).selectOption('overview');
  await expect(page.getByLabel('Plan location',{exact:true})).toBeEnabled();await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await page.evaluate(()=>window.amplifier.dispatch('canvas.visibility',{open:true}));
- await page.locator('#workspace-canvas').getByRole('button',{name:'Chat overview',exact:true}).click();
+ await page.locator('#workspace-canvas').getByRole('tab',{name:'Chat overview',exact:true}).click();
  await expect(plan).toHaveClass(/a-chat-plan-overview/);
  await expect(plan.getByText('Prepare a document to share',{exact:true})).toBeVisible();
  await page.evaluate(()=>window.amplifier.dispatch('canvas.visibility',{open:false}));

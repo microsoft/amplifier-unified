@@ -124,13 +124,14 @@ try{
  // Await the source view itself: before its response arrives the old toolbar
  // also has one Copy button, but it is a different command/control.
  await expect(canvas.locator('.a-canvas-preview > .a-canvas-code')).toBeVisible();
- await expect(page.getByRole('button',{name:'Copy canvas source',exact:true})).toHaveCount(1);
- await copy(page.getByRole('button',{name:'Copy canvas source',exact:true}),markdown);
- // Code/text reuse the one visible source control, not two identical toolbars.
+ await expect(canvas.getByRole('button',{name:'Copy canvas source',exact:true})).toHaveCount(1);
+ await copy(canvas.getByRole('button',{name:'Copy canvas source',exact:true}),markdown);
+ // The rendered source has one block-copy control; the artifact header owns
+ // its separate Copy action.
  for(const kind of ['code','text']){
   await action('canvas.show',{kind,title:kind+' fixture',content:raw});
-  await expect(page.getByRole('button',{name:'Copy canvas source',exact:true})).toHaveCount(1);
-  await copy(page.getByRole('button',{name:'Copy canvas source',exact:true}),raw);
+  await expect(canvas.getByRole('button',{name:'Copy canvas source',exact:true})).toHaveCount(1);
+  await copy(canvas.getByRole('button',{name:'Copy canvas source',exact:true}),raw);
  }
  for(const [kind,content] of [['mermaid','flowchart LR\r\n A-->B\r\n'],['dot','digraph { a -> b }\r\n']]){
   await action('canvas.show',{kind,content});
