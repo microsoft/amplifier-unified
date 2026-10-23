@@ -21,8 +21,21 @@ The usual add, toggle, reorder, and remove actions are shared by the UI and
 agents. Explicit lists, including an empty list, remain authoritative. Disabled
 or removed entries stay disabled or removed.
 
-For an existing configuration with an explicit behavior list, add the behavior
-through the Bundles UI or the `bundles.add` action:
+The `coordinate-work` and `amplifier-shell` skills are supplied by this behavior,
+not by the presence of `app_control`. A missing search result means the skill is
+not in that runtime's discovered catalog; it does not prove all skills loading
+has failed. Compare an exact-name load of a known selected skill and read its
+companion file from the returned `skill_directory` as separate checks. Inspect
+the session's effective `tool-skills` sources and the configured behavior list
+before diagnosing a namespace resolver failure.
+
+When Unified shell is absent from an explicit list, keep that selection intact.
+Collaboration remains available through discovered `coordination.*` action
+schemas. Do not automatically add a source, override an exclusion, or substitute
+a repository file read and call it a successful skill load.
+
+If the user chooses to enable Unified shell in an existing configuration, add
+the behavior through the Bundles UI or the `bundles.add` action:
 
 ```json
 {

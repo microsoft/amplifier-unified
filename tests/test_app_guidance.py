@@ -6,6 +6,15 @@ import sys
 import pytest
 
 
+def test_collaboration_guidance_does_not_require_an_optional_skill():
+    from amplifier_web.app_guidance import CANVAS_GUIDANCE
+
+    assert 'search for coordinate-work and load it when found' in CANVAS_GUIDANCE
+    assert 'A missing skill is not a coordination failure' in CANVAS_GUIDANCE
+    assert 'Preserve selected sources and exclusions' in CANVAS_GUIDANCE
+    assert 'discover coordination.* and load the coordinate-work skill' not in CANVAS_GUIDANCE
+
+
 def test_surface_runtime_import_does_not_require_host_css_parser():
     result = subprocess.run([sys.executable, '-c', """
 import importlib.abc
