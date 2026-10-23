@@ -253,9 +253,23 @@ async def test_work_bound_settings_catalog_read_has_no_mutation_or_settings_exem
     assert app.runtime.inputs == inputs
     for action in ('settings.open', 'settings.close', 'settings.connection.start', 'settings.connection.select'):
         assert not recovery_read('app_control', {'operation': 'dispatch', 'args': {'action': action}})
-    with pytest.raises(AppError, match='originating-call coverage'):
-        await app_effect(app, child, 'settings.connection.start', {}, 'settings-uncovered')
-    assert retained_bytes(app) == before and app.clients.records == clients
+    # Satisfy the independent navigation-client prerequisite so this negative
+    # reaches the Work guard, rather than proving only that no browser exists.
+    app.clients.attach('work-settings')
+    with app.clients.bind('work-settings'):
+        await app.dispatch('session.select', {'id': child['id']})
+        queue = app.subscribe()
+    try:
+        before = retained_bytes(app)
+        clients, revision = copy.deepcopy(app.clients.records), app.state['revision']
+        inputs = list(app.runtime.inputs)
+        with pytest.raises(AppError, match='originating-call coverage'):
+            await app_effect(app, child, 'settings.connection.start',
+                             {'clientId': 'work-settings'}, 'settings-uncovered')
+        assert retained_bytes(app) == before and app.clients.records == clients
+        assert app.state['revision'] == revision and app.runtime.inputs == inputs
+    finally:
+        app.unsubscribe(queue)
 
 
 @pytest.mark.parametrize('change', [False, True])
