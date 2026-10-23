@@ -40,7 +40,7 @@ try{
   const metrics=await page.evaluate(()=>{
    const box=s=>{const el=document.querySelector(s),b=el.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,display:getComputedStyle(el).display}};
    const title=document.querySelector('.a-work-heading strong'),style=getComputedStyle(title),measure=document.createElement('canvas').getContext('2d');measure.font=style.font;
-   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),home:box('.a-work-home-crumb'),title:{...box('.a-work-heading strong'),text:title.textContent,full:title.title,readableWidth:measure.measureText(title.textContent.split(/\s+/)[0]+'…').width},nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y,width:b.getBoundingClientRect().width,height:b.getBoundingClientRect().height}))};
+   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),home:box('.a-work-home-nav'),title:{...box('.a-work-heading strong'),text:title.textContent,full:title.title,readableWidth:measure.measureText(title.textContent.split(/\s+/)[0]+'…').width},nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y,width:b.getBoundingClientRect().width,height:b.getBoundingClientRect().height}))};
   });
   results.push(metrics);assert.equal(metrics.body,width);assert.equal(metrics.font,'14px');
   if(width<=760){
@@ -49,14 +49,14 @@ try{
    // Phone headers wrap. Keep the title readable and every control contained
    // without assuming the title and actions occupy the same row.
    assert.ok(metrics.title.width>=metrics.title.readableWidth);assert.ok(metrics.title.height>0);
-   assert.ok(metrics.title.x>=metrics.home.x+metrics.home.width);
+   assert.ok(metrics.title.y>=metrics.home.y+metrics.home.height,'Site Home remains above the breadcrumb title');
    const separate=(a,b)=>a.x+a.width<=b.x||b.x+b.width<=a.x||a.y+a.height<=b.y||b.y+b.height<=a.y;
    const contained=row=>row.x>=metrics.header.x&&row.y>=metrics.header.y&&row.x+row.width<=metrics.header.x+metrics.header.width&&row.y+row.height<=metrics.header.y+metrics.header.height;
    assert.ok(contained(metrics.title)&&contained(metrics.home));
-   assert.ok(metrics.actions.every(row=>separate(metrics.title,row)&&separate(metrics.home,row)));
+   assert.ok(metrics.actions.every(row=>separate(metrics.title,row)&&(row.label==='Home'||separate(metrics.home,row))));
    assert.ok(metrics.actions.every((row,i)=>metrics.actions.slice(i+1).every(other=>separate(row,other))));
    assert.notEqual(metrics.home.display,'none');assert.ok(metrics.home.width>=44&&metrics.home.height>=44);
-   assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Back in navigation history','Forward in navigation history','Navigation history','Chat','Open canvas']);
+   assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Home','Back in navigation history','Forward in navigation history','Recent places','Chat','Open canvas']);
    assert.ok(metrics.actions.every(row=>contained(row)&&row.width>=44&&row.height>=44&&row.x>=0&&row.x+row.width<=width));
   }
   await page.screenshot({path:`${out}/chat-${width}.png`});

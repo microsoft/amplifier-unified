@@ -70,10 +70,13 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
  },[]);
  const title=surface==='home'?'Home':surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
  return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel} {...fileDropHandlers}>
-  <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
+  <button type="button" className="a-brand a-work-brand" aria-label="Amplifier Home" title="Amplifier Home" onClick={()=>nav.home({navExpanded:false})}><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></button>
   <button id="navigation-toggle" type="button" className="a-icon a-work-nav-toggle" aria-label={navOpen?'Close navigation':'Open navigation'} aria-expanded={navOpen} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:!navOpen,...(!navigationNarrow?{navPinned:!navOpen}:{}),toolbarMenuOpen:false}})}><PanelLeft/>{!navOpen&&<AttentionBadge state={state}/>}</button>
-  <DestinationHistory history={nav.history} onVisit={nav.visitHistory} disabled={!!state.navigationPending}/>
-  <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb"><button type="button" className="a-work-crumb a-work-home-crumb" onClick={()=>nav.home({navExpanded:false})}><HomeIcon/><span>Home</span></button><ChevronRight aria-hidden="true"/>{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page">{title}</strong></nav>}</ShellSlot>
+  <nav className="a-site-navigation" aria-label="Site navigation">
+   <button type="button" className="a-icon a-work-home-nav" aria-label="Home" title="Home" aria-current={surface==='home'?'page':undefined} onClick={()=>nav.home({navExpanded:false})}><HomeIcon/></button>
+   <DestinationHistory history={nav.history} onVisit={nav.visitHistory} onRecent={nav.visitRecent} disabled={!!state.navigationPending}/>
+  </nav>
+  <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page">{title}</strong></nav>}</ShellSlot>
   <div className="a-work-header-actions">
    {!browsing&&session&&<><ActionMenu label="Chat" icon={<MessageCircle/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>

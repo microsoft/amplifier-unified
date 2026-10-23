@@ -71,7 +71,7 @@ import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraft
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation,isNavigationAction,usesNavigationQueue} from './conversation-navigation';
-import {createDestinationHistory,destinationCommand} from './destination-history.js';
+import {createDestinationHistory,destinationCommand,destinationKey} from './destination-history.js';
 import {onAuthenticationChange} from './api';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
@@ -213,7 +213,7 @@ function App(){
   if(chatReference)meta={...meta,chatReferenceIntent:meta.chatReferenceIntent??archiveRevision.current};
   if(meta.chatLink&&!meta.chatLinkIsCurrent())return Promise.resolve({accepted:false});
   const presentationOnly=['canvas.select','canvas.show'].includes(action)&&args.presentation&&args.presentation!=='canvas'&&args.id!==latest.current?.canvas?.id;
-  const leavingSettings=!!meta.historyVisit||!presentationOnly&&(['peer.preview','session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action));
+  const leavingSettings=!!meta.historyVisit||!!meta.recentPlace||!presentationOnly&&(['peer.preview','session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action));
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,superseded:!!chatReference&&meta.chatReferenceIntent!==archiveRevision.current,error:'Settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
@@ -280,8 +280,8 @@ function App(){
     return {accepted:false,superseded:true,error:'The view changed. Open the reference from its original reply.'};
    // Begin only when this queued command executes, after local/settings guards.
    // No file-open/create action is replayed by a history traversal.
-   const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):null;
-   if(meta.historyVisit&&!historyVisit)return {accepted:false};
+   const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):meta.recentPlace?destinationHistory.current.beginRecent(destinationKey(meta.recentPlace.entry),meta.recentPlace.entry,meta.recentPlace.scope):null;
+   if((meta.historyVisit||meta.recentPlace)&&!historyVisit)return {accepted:false};
    try{
     const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
     if(historyVisit)destinationHistory.current.finish(result);
@@ -693,6 +693,12 @@ function App(){
   const [action,args]=destinationCommand(entry);
   try{await dispatch(action,args,{historyVisit:key})}catch(error){reportError(error)}
  };
+ const visitRecent=async key=>{
+  const entry=destinationHistory.current.snapshot().recent.find(row=>destinationKey(row)===key);
+  if(!entry||destinationHistory.current.snapshot().pending)return;
+  const [action,args]=destinationCommand(entry);
+  try{await dispatch(action,args,{recentPlace:{entry,scope:serverState.current?.client?.historyScope}})}catch(error){reportError(error)}
+ };
  if(!archiveAction.current)archiveAction.current=createArchiveAction({
   getState:()=>pendingView.current.apply(latest.current),getRevision:()=>archiveRevision.current,dispatch,
   onChange:setArchiveFeedback,
@@ -712,7 +718,7 @@ function App(){
   },
  });
  const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
- const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,history:destinationTrail,visitHistory,
+ const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,history:destinationTrail,visitHistory,visitRecent,
   sidebarView:view,updateSidebar:patch=>act('view.update',{patch}),
   home:(extra={})=>act('view.update',{patch:homePatch(presentation,extra,view)}),
   setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};

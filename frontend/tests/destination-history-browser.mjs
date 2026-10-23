@@ -143,6 +143,35 @@ function observeSettingsClose(page){
  };
 }
 const pendingGates=new Set();
+const placeKey=row=>JSON.stringify([row.kind,row.id||null]);
+const menuKeys=(menu,attribute)=>menu.getByRole('menuitem').evaluateAll((rows,attribute)=>rows.map(row=>row.getAttribute(attribute)),attribute);
+const placeRow=(page,row)=>page.getByRole('menu',{name:'Recent places',exact:true}).locator(`[data-place-key=${JSON.stringify(placeKey(row))}]`);
+const visitRow=(menu,key)=>menu.locator(`[data-visit-key=${JSON.stringify(key)}]`);
+async function keyboardSteps(page,button,direction){
+ await expect(button).toBeEnabled();await button.focus();await expect(button).toBeFocused();await page.keyboard.press('ArrowDown');
+ const menu=page.getByRole('menu',{name:direction+' steps',exact:true});
+ await expect(menu).toBeVisible();assert.equal(await menu.locator('[role=menuitem]:focus').count(),1);
+ return menu;
+}
+async function holdSteps(page,button,direction,pointerType){
+ // Observe the actual menu insertion, not the time of a later polling assertion.
+ // The deadline is only a bound; it cannot make an early-opening menu pass.
+ await expect(button).toBeEnabled();
+ const elapsed=await button.evaluate((button,{direction,pointerType})=>new Promise((resolve,reject)=>{
+  const started=performance.now(),label=direction+' steps';
+  const observer=new MutationObserver(()=>{
+   if(![...document.querySelectorAll('[role=menu]')].some(node=>node.getAttribute('aria-label')===label))return;
+   clearTimeout(deadline);observer.disconnect();resolve(performance.now()-started);
+  });
+  const deadline=setTimeout(()=>{observer.disconnect();reject(Error('Directional hold menu did not open'))},4000);
+  observer.observe(document.body,{subtree:true,childList:true});
+  button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType,button:0,clientX:10,clientY:10}));
+ }),{direction,pointerType});
+ assert.ok(elapsed>=450,`${pointerType} ${direction} hold opened before 450 ms: ${elapsed}`);
+ await expect(page.getByRole('menu',{name:direction+' steps',exact:true})).toBeVisible();
+ await button.dispatchEvent('pointerup',{pointerType,button:0});await button.dispatchEvent('click');
+ return elapsed;
+}
 async function wideTouchHome(browser,url,sessionId){
  const isolated=process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?await chromium.launch(launch):null;
  let context;
@@ -157,30 +186,58 @@ async function wideTouchHome(browser,url,sessionId){
   await action('session.select',{id:sessionId});
   const input=await page.evaluate(()=>({width:innerWidth,coarse:matchMedia('(pointer:coarse)').matches}));
   assert.equal(input.width,1024);assert.equal(input.coarse,true,'Use a real coarse-pointer context, not a resized mouse context');
-  const home=page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true});
+  const home=page.locator('[data-part="header"] .a-work-home-nav');
   await expect(home).toBeVisible();await expect(home).toBeEnabled();
+  await expect(home).toHaveAccessibleName('Home');
+  assert.equal(await home.evaluate(node=>node.closest('[aria-label="Breadcrumb"]')),null,'Home is site navigation, not a breadcrumb');
   const visible=async()=>assert.equal(await home.isVisible(),true,'Wide-touch header Home must remain visible');
   await visible();
   const box=await home.boundingBox();assert.ok(box.width>=44&&box.height>=44);
-  // Reintroduce the exact old coarse-pointer hiding rule in this synthetic page.
-  // The same visibility assertion must reject it; removing it must restore Home.
+  // The old breadcrumb-hiding regression no longer matches site Home. Retain
+  // that adversarial rule, then prove the visibility oracle still detects a hide.
   const regression=await page.addStyleTag({content:'@media(pointer:coarse),(max-width:760px){#amp-one.a-approachable-shell .a-work-heading .a-work-crumb,#amp-one.a-approachable-shell .a-work-heading>.a-work-crumb+svg{display:none}}'});
-  try{await assert.rejects(visible,/Wide-touch header Home must remain visible/)}
+  try{await visible()}
   finally{await regression.evaluate(node=>node.remove())}
+  const hiddenHome=await page.addStyleTag({content:'#amp-one.a-approachable-shell .a-work-home-nav{display:none!important}'});
+  try{await assert.rejects(visible,/Wide-touch header Home must remain visible/)}
+  finally{await hiddenHome.evaluate(node=>node.remove())}
   await expect(home).toBeVisible();await visible();
   await home.focus();await expect(home).toBeFocused();await page.keyboard.press('Enter');
   await expect.poll(async()=>(await state()).view.workSurface).toBe('home');
   await action('session.select',{id:sessionId});await home.tap();
   await expect.poll(async()=>(await state()).view.workSurface).toBe('home');
+  await action('session.select',{id:sessionId});
+  const brand=page.getByRole('button',{name:'Amplifier Home',exact:true});
+  assert.equal(await brand.evaluate(node=>node.tagName),'BUTTON');
+  await brand.focus();await page.keyboard.press('Space');
+  await expect.poll(async()=>(await state()).view.workSurface).toBe('home');
+  const touchBack=page.getByRole('button',{name:'Back in navigation history',exact:true});
+  await expect(touchBack).toBeEnabled();
+  await expect.poll(()=>page.evaluate(()=>{
+   const trail=JSON.parse(sessionStorage.getItem('amplifier.destinationHistory'));
+   return trail.entries[trail.cursor]?.kind;
+  })).toBe('home');
+  const beforeTouch=await page.evaluate(()=>sessionStorage.getItem('amplifier.destinationHistory'));
+  const openedDuringTouch=await touchBack.evaluate(button=>new Promise(resolve=>{
+   let opened=false;
+   const observer=new MutationObserver(()=>{opened||=!!document.querySelector('.a-destination-menu [role=menu]')});
+   observer.observe(document.body,{subtree:true,childList:true});
+   button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',button:0}));
+   // A bounded negative observation must span the 450 ms mouse/pen threshold.
+   setTimeout(()=>{button.dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,pointerType:'touch',button:2}));button.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerType:'touch'}));setTimeout(()=>{observer.disconnect();resolve(opened)},0)},550);
+  }));
+  assert.equal(openedDuringTouch,false,'Touch hold must not open a step menu');
+  assert.equal(await page.evaluate(()=>sessionStorage.getItem('amplifier.destinationHistory')),beforeTouch);
   await action('view.update',{patch:{workSurface:'workspaces'}});
-  await page.getByRole('button',{name:'Navigation history',exact:true}).click();
+  await page.getByRole('button',{name:'Recent places',exact:true}).click();
   await expect(page.getByRole('menuitem').filter({hasText:'All workspaces'})).toHaveCount(1);
   await expect(page.getByRole('menuitem').filter({hasText:'All projects'})).toHaveCount(0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await page.screenshot({path:path.join(out,'history-wide-touch.png')});
   assert.deepEqual(errors,[]);
   await writeFile(path.join(out,'wide-touch-home.json'),JSON.stringify({passed:true,input,box,
-   oldSelectorRejected:true,restoredVisible:true,keyboardHome:true,tapHome:true,
+   oldBreadcrumbSelectorHarmless:true,hiddenHomeRejected:true,restoredVisible:true,keyboardHome:true,tapHome:true,
+   nativeBrandKeyboardHome:true,touchHoldExcluded:true,
    allWorkspacesLabel:true,pageErrors:errors},null,2));
  }finally{await context.close()}
  }finally{await isolated?.close()}
@@ -229,7 +286,9 @@ try{
  const saved=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.destinationHistory')));
  const back=page.getByRole('button',{name:'Back in navigation history',exact:true});
  const forward=page.getByRole('button',{name:'Forward in navigation history',exact:true});
- const menu=page.getByRole('button',{name:'Navigation history',exact:true});
+ const menu=page.getByRole('button',{name:'Recent places',exact:true});
+ const recentMenu=page.getByRole('menu',{name:'Recent places',exact:true});
+ const headerHome=page.locator('[data-part="header"] .a-work-home-nav');
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  await expect(menu).toBeEnabled();
@@ -242,30 +301,118 @@ try{
  await action('session.select',{id:b});await action('session.select',{id:c});
  const baseline=await saved();await back.click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(b);
  await expect.poll(async()=>(await saved()).cursor).toBe(baseline.cursor-1);
+ assert.equal((await saved()).version,1);assert.equal((await saved()).recent[0].id,b,'Confirmed Back refreshes MRU');
  await expect(back).toBeEnabled();await expect(back).toBeFocused();
  await forward.click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(c);
  // Selection is optimistic; keyboard focus requires the confirmed history move.
  await expect.poll(async()=>(await saved()).cursor).toBe(baseline.cursor);
+ assert.equal((await saved()).recent[0].id,c,'Confirmed Forward refreshes MRU');
  await expect(menu).toBeEnabled();
  assert.equal((await saved()).entries.length,baseline.entries.length);
- // One accessible menu, repeated names disambiguated by workspace/ID, Escape restores focus.
- await menu.focus();await page.keyboard.press('ArrowDown');await expect(page.getByRole('menu',{name:'Visited destinations'})).toBeVisible();
+ // Recent places is separate from the directional menus; keyboard dismissal
+ // returns to its own opener and never performs a navigation.
+ await menu.focus();await page.keyboard.press('ArrowDown');await expect(recentMenu).toBeVisible();
  assert.equal(await page.locator('[role=menuitem]:focus').count(),1);
+ assert.deepEqual(await menuKeys(recentMenu,'data-place-key'),(await saved()).recent.map(placeKey));
+ assert.ok((await menuKeys(recentMenu,'data-visit-key')).every(key=>key===null));
  await page.keyboard.press('End');await page.keyboard.press('Home');await page.keyboard.press('Escape');await expect(menu).toBeFocused();
- // Hold opens the same menu; pointer release must not also execute Back.
- const beforeHold=(await saved()).cursor;
- await back.dispatchEvent('pointerdown',{pointerType:'mouse',button:0,clientX:10,clientY:10});
- await expect(page.getByRole('menu',{name:'Visited destinations'})).toBeVisible();
- await back.dispatchEvent('pointerup',{pointerType:'mouse',button:0});await back.dispatchEvent('click');
- assert.equal((await saved()).cursor,beforeHold);await page.keyboard.press('Escape');
- // Select the saved Alpha visit; all draft ownership and attachments remain intact.
- await menu.click();await page.getByRole('menuitem').filter({hasText:'Alpha'}).last().click();
+ // A -> B -> A remains two distinct visits, while Recent has one row per place.
+ for(const id of [a,b,a,c])await action('session.select',{id});
+ const repeated=await saved(),olderAlphaIndex=repeated.cursor-3;
+ assert.deepEqual(repeated.entries.slice(-4).map(row=>row.id),[a,b,a,c]);
+ const olderAlpha=repeated.entries[olderAlphaIndex],newerAlpha=repeated.entries[repeated.cursor-1];
+ const originalAlpha=baseline.entries.findLast(row=>row.kind==='chat'&&row.id===a);
+ assert.ok(originalAlpha);
+ const originalAlphaIndex=repeated.entries.findIndex(row=>row.key===originalAlpha.key);
+ assert.notEqual(olderAlpha.key,newerAlpha.key);
+ assert.deepEqual(repeated.recent.slice(0,3).map(row=>row.id),[c,a,b]);
+ assert.equal(new Set(repeated.recent.map(placeKey)).size,repeated.recent.length);
+ const mouseHoldMs=await holdSteps(page,back,'Back','mouse');
+ const backMenu=page.getByRole('menu',{name:'Back steps',exact:true});
+ assert.deepEqual(await menuKeys(backMenu,'data-visit-key'),repeated.entries.slice(0,repeated.cursor).reverse().map(row=>row.key));
+ assert.deepEqual(await saved(),repeated,'Hold release must not also execute Back or change recency');
+ await page.screenshot({path:path.join(out,'history-back-repeated-visits.png')});
+ await visitRow(backMenu,olderAlpha.key).click();
+ await expect.poll(async()=>(await saved()).cursor).toBe(olderAlphaIndex);
+ assert.deepEqual((await saved()).entries,repeated.entries);
+ assert.equal((await saved()).recent[0].id,a);
+ await keyboardSteps(page,back,'Back');await visitRow(backMenu,originalAlpha.key).click();
+ await expect.poll(async()=>(await saved()).cursor).toBe(originalAlphaIndex);
+ const atOriginalAlpha=await saved(),penHoldMs=await holdSteps(page,forward,'Forward','pen');
+ const forwardMenu=page.getByRole('menu',{name:'Forward steps',exact:true});
+ const futureVisits=repeated.entries.slice(originalAlphaIndex+1);
+ assert.ok(futureVisits.filter(row=>row.id===a).length>=2,'Forward oracle must include repeated Alpha visits');
+ assert.deepEqual(await menuKeys(forwardMenu,'data-visit-key'),futureVisits.map(row=>row.key));
+ assert.deepEqual(await saved(),atOriginalAlpha,'Pen hold release must not also execute Forward');
+ await page.screenshot({path:path.join(out,'history-forward-repeated-visits.png')});
+ await page.keyboard.press('Escape');await expect(forward).toBeFocused();
+ await keyboardSteps(page,forward,'Forward');await visitRow(forwardMenu,newerAlpha.key).click();
+ await expect.poll(async()=>(await saved()).cursor).toBe(repeated.cursor-1);
+ assert.equal((await state()).selectedSessionId,a,'Exact Forward visits must work even when both visits name Alpha');
+ await keyboardSteps(page,back,'Back');await visitRow(backMenu,olderAlpha.key).click();
+ await expect.poll(async()=>(await saved()).cursor).toBe(olderAlphaIndex);
+ const beforeBranch=await saved();
+ await menu.click();await expect(recentMenu).toBeVisible();
+ assert.deepEqual(await menuKeys(recentMenu,'data-place-key'),beforeBranch.recent.map(placeKey));
+ assert.equal((await menuKeys(recentMenu,'data-place-key')).filter(key=>key===placeKey(olderAlpha)).length,1);
+ await expect(placeRow(page,olderAlpha)).toHaveAttribute('aria-current','page');
+ await expect(placeRow(page,olderAlpha)).toBeDisabled();
+ await page.screenshot({path:path.join(out,'history-recent-unique-places.png')});
+ await placeRow(page,{kind:'chat',id:c}).click();
+ await expect.poll(async()=>{
+  const trail=await saved();
+  return trail.cursor===beforeBranch.cursor+1&&trail.entries.length===beforeBranch.cursor+2&&
+   trail.entries.at(-1)?.id===c&&!beforeBranch.entries.some(row=>row.key===trail.entries.at(-1)?.key);
+ }).toBe(true);
+ await expect(menu).toBeEnabled();
+ const branched=await saved();
+ assert.deepEqual(branched.entries.slice(0,-1),beforeBranch.entries.slice(0,beforeBranch.cursor+1));
+ assert.equal(branched.cursor,beforeBranch.cursor+1);
+ assert.ok(!beforeBranch.entries.some(row=>row.key===branched.entries.at(-1).key),'Recent selects a normal destination, not a previous visit key');
+ assert.deepEqual(branched.recent.slice(0,3).map(row=>row.id),[c,a,b]);
+ await expect(forward).toBeDisabled();
+ // The destination trail consumes projected metadata, not a hidden full catalog.
+ // Visit each target before renaming so its authoritative metadata is observed.
+ // Renaming that selected target must not add a visit or bump MRU.
+ await action('session.select',{id:a});
+ const beforeRenameA=await saved();
+ await action('session.rename',{id:a,title:'Shared navigation name'});
+ assert.deepEqual((await saved()).entries.map(row=>row.key),beforeRenameA.entries.map(row=>row.key));
+ assert.deepEqual((await saved()).recent.map(placeKey),beforeRenameA.recent.map(placeKey));
+ await action('session.select',{id:b});
+ const beforeRenameB=await saved();
+ await action('session.rename',{id:b,title:'Shared navigation name'});
+ const renamed=await saved();
+ assert.deepEqual(renamed.entries.map(row=>row.key),beforeRenameB.entries.map(row=>row.key));
+ assert.equal(renamed.cursor,beforeRenameB.cursor);assert.deepEqual(renamed.recent.map(placeKey),beforeRenameB.recent.map(placeKey));
+ await menu.click();
+ const sameNames=recentMenu.getByRole('menuitem').filter({hasText:'Shared navigation name'});
+ await expect(sameNames).toHaveCount(2);
+ assert.equal(new Set(await sameNames.allTextContents()).size,2,'Same-title destinations need visible identity disambiguation');
+ await expect(placeRow(page,{kind:'chat',id:a})).toContainText(a);
+ await expect(placeRow(page,{kind:'chat',id:b})).toContainText(b);
+ await placeRow(page,{kind:'chat',id:a}).click();
+ await expect.poll(async()=>(await saved()).recent[0].id).toBe(a);
+ assert.equal((await state()).selectedSessionId,a);
+ await action('session.rename',{id:a,title:'Alpha renamed'});
+ const afterRename=await saved();
+ assert.ok(afterRename.entries.filter(row=>row.id===a).every(row=>row.label==='Alpha renamed'));
+ assert.equal(afterRename.recent.find(row=>row.id===a).label,'Alpha renamed');
+ assert.equal(afterRename.recent[0].id,a,'Renaming the projected target is not another visit');
+ await action('session.rename',{id:a,title:'Alpha'});await action('session.select',{id:b});await action('session.rename',{id:b,title:'Beta'});
+ await writeFile(path.join(out,'history-menu-semantics.json'),JSON.stringify({mouseHoldMs,penHoldMs,
+  repeatedVisitKeys:[olderAlpha.key,newerAlpha.key],backNearestFirst:true,forwardNearestFirst:true,
+  uniqueRecent:true,normalRecentBranch:true,sameTitleIdentity:true,renameWithoutVisit:true},null,2));
+ // Select the original saved Alpha visit, not a new Recent activation; all
+ // draft ownership and attachments remain intact.
+ await keyboardSteps(page,back,'Back');await visitRow(backMenu,originalAlpha.key).click();
+ await expect.poll(async()=>{const trail=await saved();return trail.entries[trail.cursor]?.key}).toBe(originalAlpha.key);
  await expect(composer).toHaveText('Unsent Alpha draft');await expect(page.getByRole('button',{name:'Remove note.txt',exact:true})).toBeVisible();
  const alpha=await saved();await action('session.draft',{});await expect.poll(async()=>(await state()).selectedSessionId).toBeNull();
  assert.equal((await saved()).entries.length,alpha.entries.length);await back.click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(a);
  await expect(composer).toHaveText('Unsent Alpha draft');
  // Home is a destination, not a visit for every view/filter or reading change.
- await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true}).click();
+ await headerHome.click();
  await expect.poll(async()=>(await saved()).entries.at(-1).kind).toBe('home');
  const homeTrail=await saved();
  await action('view.update',{patch:{workHomeView:'focus',workHomeFilter:'working'}});
@@ -345,6 +492,23 @@ try{
  const preReload=await saved();await page.reload();await expect(menu).toBeEnabled();
  await expect.poll(saved).toEqual(preReload);
  assert.equal((await state()).view.workSurface,'workspace');
+ // A failed Recent activation preserves both the trail and MRU, even though
+ // the destination still exists in the chooser. It cannot fall back elsewhere.
+ const preRecentReject=await saved(),recentRejectState=await state();let recentRejectRequests=0;
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='session.select'&&body.args.id===a){
+   recentRejectRequests++;await route.fulfill({status:404,contentType:'application/json',body:'{"error":"Synthetic Recent destination unavailable"}'});
+  }else await route.continue();
+ });
+ await menu.click();await placeRow(page,{kind:'chat',id:a}).click();
+ await expect(page.getByRole('alert').filter({hasText:'Synthetic Recent destination unavailable'})).toBeVisible();
+ await expect(menu).toBeEnabled();assert.equal(recentRejectRequests,1);
+ assert.deepEqual(await saved(),preRecentReject);
+ const recentRejectedState=await state();
+ for(const key of ['selectedSessionId','selectedWorkspaceId'])assert.equal(recentRejectedState[key],recentRejectState[key]);
+ for(const key of ['workSurface','workWorkspaceId','workWorkspaceTab'])assert.equal(recentRejectedState.view[key],recentRejectState.view[key]);
+ await page.unroute('**/api/actions');
  // Explicit traversal rejection leaves cursor and entries unchanged; no missing-target fallback.
  const preReject=await saved();let rejected=false;
  await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(!rejected&&body?.action==='session.select'){rejected=true;await route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Synthetic destination unavailable'})})}else await route.continue()});
@@ -434,6 +598,10 @@ try{
  await back.click();await expect(page.getByRole('alert').filter({hasText:/viewer edit/})).toBeVisible();
  assert.equal((await state()).selectedSessionId,b);assert.deepEqual(await saved(),dirtyTrail);
  await expect(editor).toHaveValue('UNSAVED HISTORY EDIT');assert.equal(await editor.getAttribute('data-mount'),mount);
+ await menu.click();await expect(placeRow(page,{kind:'chat',id:a})).toBeEnabled();await placeRow(page,{kind:'chat',id:a}).click();
+ await expect(recentMenu).toHaveCount(0);await expect(menu).toBeEnabled();
+ assert.equal((await state()).selectedSessionId,b);assert.deepEqual(await saved(),dirtyTrail,'Recent must honor the same dirty Canvas guard');
+ await expect(editor).toHaveValue('UNSAVED HISTORY EDIT');assert.equal(await editor.getAttribute('data-mount'),mount);
  await action('view.update',{patch:{workSurface:'workspaces'}});await expect(editor).toBeHidden();
  const browsedDirtyTrail=await saved();
  await back.click();await expect(editor).toBeVisible();await expect(editor).toHaveValue('UNSAVED HISTORY EDIT');
@@ -456,6 +624,11 @@ try{
  await expect(page.getByRole('alertdialog')).toBeVisible();
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
  assert.equal((await state()).selectedSessionId,b);assert.deepEqual(await saved(),settingsTrail);
+ await expect(privateEdit).toHaveValue('{"unsaved-history-input":');
+ await menu.click();await placeRow(page,{kind:'chat',id:a}).click();
+ await expect(page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ assert.equal((await state()).selectedSessionId,b);assert.deepEqual(await saved(),settingsTrail,'Cancelling Recent must retain private Settings edits and MRU');
  await expect(privateEdit).toHaveValue('{"unsaved-history-input":');
  // Discard resolves the guard, not the asynchronous tab-close command. Observe
  // that original command and its authoritative successor before hiding Canvas.
@@ -514,21 +687,102 @@ try{
  await expect.poll(async()=>(await state()).canvas.id).toBe(successor.id);
  assert.deepEqual(await saved(),settingsTrail);
  await action('canvas.visibility',{open:false});
- // Narrow target dimensions and no reintroduced remembered-chat strip.
+ // Keep the existing chrome spacing and New chat geometry; do not mistake
+ // deduplication for permission to redesign the sidebar or shrink touch targets.
+ const layoutMeasurements=[],longTitle='Beta — a deliberately long chat title for reviewing navigation without losing the current working context',
+  longWorkspace='History project — a deliberately long workspace name that must not consume the current chat title';
+ const originalScheme=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme);
+ const scheme=async value=>{
+  await page.evaluate(async scheme=>{
+   const s=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
+   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:s.revision,
+    composition:{...s.effectiveComposition,presentation:{...s.effectiveComposition.presentation,scheme}}});
+   if(!prepared.accepted)throw Error('Could not prepare test appearance');
+   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:s.revision,changeId:prepared.result.id});
+   if(!applied.accepted)throw Error('Could not apply test appearance');
+  },value);
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme)).toBe(value);
+  if(value==='light'||value==='dark')await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',value);
+ };
+ const newChatGeometry=async(width,screenshot)=>{
+  await action('view.update',{patch:{navExpanded:true,navPinned:width>900}});
+  const newChat=page.locator('#workspace-navigation').getByRole('button',{name:'New chat',exact:true});
+  await expect(newChat).toBeVisible();await expect(newChat).toHaveAttribute('data-action','session.draft');
+  const measurement=await newChat.evaluate(button=>{
+   const style=getComputedStyle(button),box=button.getBoundingClientRect(),rail=button.closest('.a-nav-rail').getBoundingClientRect(),
+    modes=button.previousElementSibling,icon=button.querySelector('svg').getBoundingClientRect(),round=n=>Math.round(n*100)/100;
+   return {text:button.textContent.trim(),modesImmediatelyBefore:modes.classList.contains('a-sidebar-modes'),
+    box:{x:round(box.x-rail.x),y:round(box.y-rail.y),width:round(box.width),height:round(box.height)},
+    afterModes:round(box.y-modes.getBoundingClientRect().bottom),icon:{width:round(icon.width),height:round(icon.height)},
+    style:Object.fromEntries(['minHeight','paddingTop','paddingRight','paddingBottom','paddingLeft','marginTop','marginBottom','borderRadius','gap','fontSize','lineHeight'].map(key=>[key,style[key]]))};
+  });
+  assert.equal(measurement.text,'New chat');assert.equal(measurement.modesImmediatelyBefore,true);
+  // Existing main's authored dimensions, not measurements inferred from the
+  // proposed mockup. The full measured box is also compared across conditions.
+  assert.equal(measurement.style.minHeight,width<=760?'44px':'38px');
+  assert.equal(measurement.style.borderRadius,'8px');
+  assert.equal(measurement.style.marginTop,'4px');assert.equal(measurement.style.marginBottom,'4px');
+  assert.equal(measurement.style.paddingTop,'9px');assert.equal(measurement.style.paddingBottom,'9px');
+  assert.equal(measurement.style.paddingLeft,'10px');assert.equal(measurement.style.paddingRight,'10px');
+  assert.equal(measurement.style.gap,'12px');assert.deepEqual(measurement.icon,{width:18,height:18});
+  assert.ok(measurement.box.height>=(width<=760?44:38));
+  await expect(page.locator('#workspace-navigation .a-sidebar-home')).toHaveCount(1);
+  await expect(page.locator('#workspace-navigation .a-sidebar-home')).toBeVisible();
+  if(screenshot)await page.screenshot({path:path.join(out,screenshot)});
+  await action('view.update',{patch:{navExpanded:false,navPinned:false}});
+  return measurement;
+ };
  for(const width of [1440,390,360]){
-  await page.setViewportSize({width,height:900});await menu.click();await expect(page.getByRole('menu')).toBeVisible();
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-  if(width<=390){
-   for(const control of [back,forward,menu]){const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44)}
-   await expect(page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true})).toBeVisible();
-   const heading=await page.locator('[data-part="header"] .a-work-heading>strong').boundingBox();
-   assert.ok(heading.width>=100,'History controls must leave a readable chat title');
-   const popup=await page.locator('.a-destination-menu').boundingBox();
-   const header=await page.locator('[data-part="header"]').boundingBox();
-   assert.ok(popup.x>=0&&popup.x+popup.width<=width&&popup.y>=header.y+header.height-1,'Menu must fit below the header');
+  await page.setViewportSize({width,height:900});
+  await action('session.rename',{id:b,title:'Beta'});await action('workspace.rename',{id:workspace.id,name:'History project'});
+  await scheme('light');
+  const shortNewChat=await newChatGeometry(width);
+  await action('session.rename',{id:b,title:longTitle});await action('workspace.rename',{id:workspace.id,name:longWorkspace});
+  for(const appearance of ['light','dark']){
+   await scheme(appearance);
+   await expect(headerHome).toBeVisible();await expect(headerHome).toHaveAccessibleName('Home');
+   await expect(page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true})).toHaveCount(0);
+   const title=page.locator('[data-part="header"] .a-work-heading>strong');
+   await expect(title).toHaveText(longTitle);await expect(title).toHaveAttribute('title',longTitle);
+   const homeBox=await headerHome.boundingBox(),heading=await title.boundingBox(),backBox=await back.boundingBox();
+   assert.ok(heading.width>=100,'History controls must leave a readable context title');
+   assert.ok(Math.abs((homeBox.y+homeBox.height/2)-(backBox.y+backBox.height/2))<1,'Home belongs in the top navigation row, not the context row');
+   const chrome=await page.locator('[data-part="header"]').evaluate(header=>{
+    const style=getComputedStyle(header);
+    return {gap:style.gap,padding:style.padding,buttons:[...header.querySelectorAll('button')].filter(button=>button.getClientRects().length).map(button=>{
+     const r=button.getBoundingClientRect();return {label:button.getAttribute('aria-label')||button.textContent.trim(),x:r.x,y:r.y,width:r.width,height:r.height};
+    })};
+   });
+   assert.equal(chrome.gap,width<=760?'4px':'14px');assert.equal(chrome.padding,width<=760?'6px 8px':'7px 16px');
+   for(let i=0;i<chrome.buttons.length;i++)for(const other of chrome.buttons.slice(i+1)){
+    const first=chrome.buttons[i],overlapX=Math.min(first.x+first.width,other.x+other.width)-Math.max(first.x,other.x),
+     overlapY=Math.min(first.y+first.height,other.y+other.height)-Math.max(first.y,other.y);
+    assert.ok(overlapX<=1||overlapY<=1,`Header controls overlap: ${first.label} / ${other.label}`);
+   }
+   if(width<=390){
+    for(const control of [headerHome,back,forward,menu]){const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44)}
+    assert.ok(heading.y>=homeBox.y+homeBox.height-1,'Narrow context title stays below top-row site navigation');
+   }else{
+    const brand=page.getByRole('button',{name:'Amplifier Home',exact:true});await expect(brand).toBeVisible();
+    assert.equal(await brand.evaluate(node=>node.tagName),'BUTTON','Brand Home must be a native keyboard control');
+   }
+   await menu.click();await expect(recentMenu).toBeVisible();
+   const popup=await page.locator('.a-destination-menu').boundingBox(),header=await page.locator('[data-part="header"]').boundingBox();
+   assert.ok(popup.x>=0&&popup.x+popup.width<=width,'Recent places must fit the viewport');
+   if(width<=390)assert.ok(popup.y>=header.y+header.height-1,'Menu must fit below the complete narrow header');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+   await page.screenshot({path:path.join(out,appearance==='light'?`history-${width}.png`:`history-${width}-dark.png`)});
+   await page.keyboard.press('Escape');
+   const longNewChat=await newChatGeometry(width,`history-sidebar-${width}-${appearance}.png`);
+   assert.deepEqual(longNewChat,shortNewChat,'Long names and color scheme must not restyle or reposition New chat');
+   layoutMeasurements.push({width,appearance,home:homeBox,heading,popup,chrome,newChat:longNewChat});
   }
-  await page.screenshot({path:path.join(out,`history-${width}.png`)});await page.keyboard.press('Escape');
  }
+ await action('session.rename',{id:b,title:'Beta'});await action('workspace.rename',{id:workspace.id,name:'History project'});
+ if(originalScheme)await scheme(originalScheme);
+ await writeFile(path.join(out,'history-layout-measurements.json'),JSON.stringify({schema:1,
+  baseline:'Existing authored New chat dimensions and same-run short-title geometry; not a pre-change screenshot comparison',
+  conditions:layoutMeasurements},null,2));
  // The separate mobile Canvas overlay close is deliberately retained by Scope A.
  await expect(page.locator('[data-part="header"]').getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);
  const working=await page.request.post(url+'/fixture/activity',{data:{sessionId:b,status:'working'}});
@@ -579,7 +833,7 @@ try{
  assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.sent,[]);
  const serialized=JSON.stringify(await saved());assert.doesNotMatch(serialized,/Unsent Alpha draft|Synthetic preview|cHJlc2VydmU=/);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','Home filters','canonical card acceptance and rejection','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390/360 layout','1024 coarse-pointer Home and old-selector negative','All workspaces label','no runtime start or input'],pageErrors:errors}));
+ console.log(JSON.stringify({status:'passed',checks:['confirmed traversal recency','repeated directional visits and unique Recent places','normal Recent forward branching','same-title and renamed identities','draft and attachment retention','detached New chat','Home filters','canonical card acceptance and rejection','workspace tabs','file preview','trail and Recent reload','traversal and Recent rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings for both menus','keyboard and mouse/pen hold','1440/390/360 light/dark long-name layout','unchanged New chat dimensions','1024 coarse-pointer Home, native brand, touch-hold exclusion and hide negative','All workspaces label','no runtime start or input'],pageErrors:errors}));
 }catch(error){scenarioFailure=error;throw error}finally{
  if(settingsDiagnostic)try{await settingsDiagnostic.save(scenarioFailure?'failure-before-teardown':'completed-before-teardown')}
  catch(error){console.error('Settings diagnostic retention failed:',error.name)}
