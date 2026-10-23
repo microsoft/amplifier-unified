@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from amplifier_web.service import AppError, AppService
-from amplifier_worktrees.git import git
+from amplifier_worktrees.git import MAX_FILES, git
 from amplifier_worktrees import GitWorktrees
 from test_worktrees import repository, settle
 
@@ -150,6 +150,49 @@ async def test_non_git_home_moves_between_selected_repositories_and_back_without
     assert (carried_path / 'a.txt').read_text() == 'staged\nunstaged\n'
     assert (carried_path / 'untracked.txt').read_text() == 'keep untracked'
     assert (original / 'ignored.txt').read_text() == 'keep ignored'
+
+
+@pytest.mark.parametrize('side', ['source', 'target'])
+async def test_handoff_keeps_large_retained_history_without_building_a_manifest(multi, side, monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+
+    app, sid, workspace, repos = multi
+    source = await create(app, sid, repos[0], 'history-source')
+    target = await create(app, sid, repos[0], 'history-target')
+    assert (await move(app, sid, source, 'enter-history-source'))['phase'] == 'applied'
+    paths = {name: Path(checkout['path']) for name, checkout in (('source', source), ('target', target))}
+    retained = paths[side] / 'retained-history'
+    retained.mkdir()
+    for index in range(MAX_FILES + 1):
+        (retained / f'{index}.txt').write_bytes(f'Retained evidence {index}\n'.encode())
+    # Manifest-producing inspection still refuses. Only placement is exempt
+    # from copy limits; no new ignore rule, copying or history cleanup is needed.
+    with pytest.raises(ValueError, match='Too many untracked files'):
+        app.worktrees.git.inspect(paths[side])
+    before = {name: {str(path.relative_to(root)): path.read_bytes()
+                     for path in root.rglob('*') if path.is_file()}
+              for name, root in paths.items()}
+    session = app._session(sid)
+    session['messages'] = [{'id': 'retained-message', 'role': 'user', 'text': 'Keep this evidence'}]
+    messages = copy.deepcopy(session['messages'])
+
+    # Exercise the supported action through the real idle-runtime release and
+    # Foundation ownership store, not a mocked successful release response.
+    monkeypatch.setenv('AMPLIFIER_SESSION_STATE_HOME', str(workspace / 'session-state'))
+    app.runtime = RuntimeManager()
+    app.worktrees.bind_runtime()
+    receipt = await move(app, sid, target, 'leave-history-source', agent=True)
+    assert receipt['phase'] == 'applied', receipt
+    assert receipt['release']['quiesced'] and receipt['release']['releaseOwner']['acquisition_id']
+    assert receipt['release']['releasedOwner'] is None  # No active model writer in this synthetic smoke.
+    assert not receipt['inputsReplayed'] and not app.runtime.workers
+    assert session['workingDirectory'] == target['path'] and session['executionRevision'] == 2
+    assert session['workspace'] == str(workspace) and session['messages'] == messages
+    assert {name: {str(path.relative_to(root)): path.read_bytes()
+                   for path in root.rglob('*') if path.is_file()}
+            for name, root in paths.items()} == before
+    with pytest.raises(ValueError, match='Too many untracked files'):
+        app.worktrees.git.inspect(paths[side])
 
 
 @pytest.mark.parametrize('destination', ['source', 'target'])
