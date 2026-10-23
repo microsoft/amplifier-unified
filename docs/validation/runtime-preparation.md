@@ -116,6 +116,15 @@ through its actual checked stage receipt; an unchecked group URI is not branch
 proof. Resolving ambiguous refs later requires selected-source reconciliation with
 exact repository ref evidence, not a guess from names such as `main`.
 
+Fresh runtime preparation mirrors retained fixed Git sources into resolver
+overrides, so a dependent module's moving URL does not force a conflicting second
+source for the same package. This preserves the selected pin; it does not recover
+branch authority. Authored overrides and constraints remain protected. Generated
+mirrors carry exact provenance and advance only with the separately verified
+selected-dependency reconciliation. Before freezing the candidate, installed
+version requirements and activated extras for those overridden packages are
+checked independently, so source preservation cannot hide an incompatible version.
+
 `runtime-sources.json` records `policyOrigin` beside each newly captured policy:
 its basis, original ref, exact source identity, and (for prepared declarations)
 the manifest digest. Ambiguous names use `unresolved-reference` and `originalRef`;

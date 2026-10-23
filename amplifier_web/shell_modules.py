@@ -68,9 +68,9 @@ COMPOSITION = {'type': 'object', 'additionalProperties': False, 'required': ['in
         'executionDetail': {'enum': ['minimal', 'standard', 'detailed']},
         'executionVisibility': {'type': 'object', 'additionalProperties': False, 'properties': {
             scope: {'type': 'boolean'} for scope in ('step', 'turn', 'conversation')}},
-        'executionMetrics': {'type': 'array', 'uniqueItems': True, 'maxItems': 9, 'items': {'enum': [
+        'executionMetrics': {'type': 'array', 'uniqueItems': True, 'maxItems': 10, 'items': {'enum': [
             'elapsedSeconds', 'grossInputTokens', 'outputTokens', 'grossTotalTokens',
-            'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'costUsd', 'calls']}},
+            'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'voiceSeconds', 'costUsd', 'calls']}},
         'conversationStatus': {'type': 'boolean'},
         'interfaceDetail': {'enum': ['minimal', 'standard', 'detailed']},
         'workStartView': {'enum': ['appearance', 'focus', 'brief', 'studio']},

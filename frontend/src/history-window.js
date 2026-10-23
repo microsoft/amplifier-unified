@@ -25,7 +25,10 @@ export function validateHistoryPage(result,window){
 // A bounded display page is ready independently of canonical execution hydration.
 export function conversationHistoryPending(session,navigationPending=false,messages=session?.messages){
  if(navigationPending)return true;
+ // Canonical history may hydrate again during live work. A readable page,
+ // local outgoing message or streamed reply must stay mounted during that read.
+ if(session?.historyError||messages?.length||session?.streaming)return false;
  if(session?.messageWindow?.mode==='cursor'||session?.messageWindow?.status==='ready')
-  return !session.historyError&&!!session.historyLoading&&!messages?.length;
- return !session?.historyError&&(session?.historyLoaded===false||!!session?.historyLoading&&!messages?.length);
+  return !!session.historyLoading;
+ return session?.historyLoaded===false||!!session?.historyLoading;
 }

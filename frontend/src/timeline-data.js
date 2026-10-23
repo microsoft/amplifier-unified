@@ -63,13 +63,14 @@ export function elapsedLabel(record,now=Date.now()/1000){
 }
 export function usageLabel(usage){
  if(!usage)return null;
- if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return null;
+ if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd&&usage.voiceSeconds==null)return null;
  const reported=usage.totalTokens??((usage.inputTokens!=null||usage.outputTokens!=null)?(usage.inputTokens||0)+(usage.outputTokens||0):null);
  const tokens=usage.grossTotalTokens??(reported===null?null:reported+(usage.cacheWriteTokens||0));
  const type=usage.costType||((usage.costUsd!=null&&usage.unknownCalls===0)?'reported':'unavailable');
  const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(usage.costUsd>=1?2:3)}`:null;
  const pieces=[];
  if(tokens!=null&&!(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls))pieces.push(`${compactTokens(tokens)} tokens`);
+ if(Number.isFinite(usage.voiceSeconds))pieces.push(`${Number(usage.voiceSeconds.toFixed(1))} voice seconds${usage.voiceIncompleteCalls>0||usage.usageStatus==='incomplete'?' · Incomplete':usage.voicePendingCalls>0||usage.usageStatus==='running'?' · Live':''}`);
  if(cost)pieces.push(cost);
  if(!pieces.length)return null;
  const grossInput=usage.grossInputTokens??(usage.inputTokens!=null?usage.inputTokens+(usage.cacheWriteTokens||0):null);
@@ -150,6 +151,16 @@ export function segmentUsage(nodes){
  value.metricKnownCalls={};
  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens']){value[key]=0;value.metricKnownCalls[key]=0}
  for(const node of calls){const usage=node.usage||{},pending=isRunning(node);
+  if(Number.isFinite(usage.voiceSeconds)&&usage.voiceSeconds>=0){
+   value.voiceSeconds=(value.voiceSeconds||0)+usage.voiceSeconds;
+   value.voiceKnownCalls=(value.voiceKnownCalls||0)+1;
+  }
+  if('voiceSeconds' in usage||'usageFinalized' in usage){
+   value.voiceSessionCalls=(value.voiceSessionCalls||0)+1;
+   value.voiceKnownCalls??=0;
+   value.voicePendingCalls=(value.voicePendingCalls||0)+(pending?1:0);
+   value.voiceIncompleteCalls=(value.voiceIncompleteCalls||0)+(!pending&&usage.usageFinalized!==true?1:0);
+  }
   for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens'])if(Number.isFinite(usage[key])){value[key]+=usage[key];value.metricKnownCalls[key]++}
   if(usage.totalTokens==null&&(usage.inputTokens!=null||usage.outputTokens!=null)){value.totalTokens+=(usage.inputTokens||0)+(usage.outputTokens||0);value.metricKnownCalls.totalTokens++}
   if(usage.totalTokens==null&&usage.inputTokens==null&&usage.outputTokens==null){value.tokenUnknownCalls++;if(pending)value.tokenPendingCalls++}
@@ -229,6 +240,15 @@ export function combinedWork(turns,now){
   usage.tokenUnknownCalls+=unknownTokens;
   usage.costPendingCalls+=value.costPendingCalls??(isRunning(turn)?Math.max(0,calls-priced):0);
   usage.tokenPendingCalls+=value.tokenPendingCalls??(isRunning(turn)?unknownTokens:0);
+  if(Number.isFinite(value.voiceSeconds)&&value.voiceSeconds>=0){
+   usage.voiceSeconds=(usage.voiceSeconds||0)+value.voiceSeconds;
+  }
+  if('voiceSeconds' in value||'usageFinalized' in value||value.voiceSessionCalls!=null){
+   usage.voiceSessionCalls=(usage.voiceSessionCalls||0)+(value.voiceSessionCalls??1);
+   usage.voiceKnownCalls=(usage.voiceKnownCalls||0)+(value.voiceKnownCalls??(Number.isFinite(value.voiceSeconds)?1:0));
+   usage.voicePendingCalls=(usage.voicePendingCalls||0)+(value.voicePendingCalls??(value.usageStatus==='running'?1:0));
+   usage.voiceIncompleteCalls=(usage.voiceIncompleteCalls||0)+(value.voiceIncompleteCalls??(value.usageFinalized===false&&value.usageStatus!=='running'?1:0));
+  }
   for(const key of amounts){
    if(Number.isFinite(value[key]))usage[key]=(usage[key]||0)+value[key];
    usage.metricKnownCalls[key]=(usage.metricKnownCalls[key]||0)+(value.metricKnownCalls?.[key]??(Number.isFinite(value[key])?(key==='costUsd'?priced:Math.max(0,calls-unknownTokens)):0));

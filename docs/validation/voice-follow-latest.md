@@ -51,3 +51,19 @@ current Work before comparing raw scroll coordinates and additionally checks the
 visible message identifier and offset. Full voice following, ordinary chat
 scrolling and the controller regression passed on the built candidate. These
 remain synthetic signaling checks, with the physical-audio limits above.
+
+October 23 follow-up reproduced two additional ways to pause following without
+scrolling back. A downward wheel at the bottom moved no content but paused the
+call. With fractional display scaling, collapsing Work clamped `scrollTop` to
+1299.0908 while integer height metrics reported a bottom of 1300; exact equality
+mistook that browser adjustment for reading intent. The controller ignores wheel
+gestures that cannot move vertically during call following, and
+allows one CSS pixel of rounding only in its bottom-geometry checks. Deliberate
+scrollback, browser focus movement and another conversation retain their behavior.
+
+`frontend/tests/chat-scroll-call-boundaries-browser.mjs` exercises fractional
+geometry, Work collapse/growth, resize, boundary wheel gestures and intentional
+scrollback. `frontend/tests/voice-follow-latest-browser.mjs` also checks starting
+a call from a saved reading position and new transcript delivery after a downward
+wheel at the bottom. These reproduce mechanisms consistent with the reported
+failure; the user's original browser input sequence was not recorded.

@@ -17,6 +17,7 @@ on:
       - 'tests/test_assignment_brief.py'
       - 'amplifier_web/workspace_awareness.py'
       - 'amplifier_web/coordination_delivery.py'
+      - 'amplifier_web/coordination_guidance.py'
       - 'frontend/src/workspace-awareness.jsx'
       - 'frontend/tests/workspace-awareness-browser.mjs'
       - 'tests/test_workspace_awareness.py'
@@ -66,6 +67,8 @@ on:
       - 'amplifier_web/incus_environment_worker.py'
       - 'amplifier_web/test_environment_*.py'
       - 'amplifier_web/test_queue.py'
+      - 'amplifier_web/test_reservation_maintenance.py'
+      - 'tests/test_background_reservation_recovery.py'
       - 'frontend/src/workspace-managed-resources.jsx'
       - 'frontend/src/workspace-test-environments.jsx'
       - 'frontend/src/work-shell.jsx'
@@ -151,6 +154,7 @@ jobs:
           tests/test_test_outcome_acknowledgement.py
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
+          tests/test_background_reservation_recovery.py
           tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py

@@ -207,7 +207,7 @@ def lifecycle(app, monkeypatch):
     monkeypatch.setattr(environments, 'capacity', lambda *args, **kwargs: {'available': True})
     monkeypatch.setattr(probe.resources, 'reserve', lambda *args: {'supported': True, 'admitted': True})
     monkeypatch.setattr(probe.resources, 'settle', lambda *args, **kwargs: None)
-    monkeypatch.setattr(probe, 'verify_artifact', lambda result: True)
+    monkeypatch.setattr(probe, 'verify_artifact', lambda result, **kwargs: True)
     monkeypatch.setattr(probe.isolation, 'inspect', lambda *args: {'offline': True})
     return calls, invoke
 

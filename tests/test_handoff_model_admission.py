@@ -36,10 +36,13 @@ async def move(app):
     return session, target, receipt
 
 
-async def test_originating_turn_finishes_before_checkout_release(app, providers):
+@pytest.mark.parametrize('prior_display_turn', [False, True])
+async def test_originating_turn_finishes_before_checkout_release(app, providers, prior_display_turn):
     session, target, receipt = await move(app)
     source = session['workspace']
     provider = providers(session)
+    if prior_display_turn:
+        provider.telemetry.turn_id = 'earlier-user-turn'
     provider.release.set()
     await provider.start('finish-current-turn')
     assert provider.called == ['finish-current-turn']

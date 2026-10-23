@@ -301,10 +301,12 @@ async def test_approval_apis_are_410_without_synthetic_human_input(app, origin, 
 
 async def test_child_identity_cannot_borrow_root_generation(app):
     source = app.state["sessions"][0]
-    with pytest.raises(AppError, match="child cannot borrow"):
+    with pytest.raises(AppError, match="child cannot borrow") as refused:
         await app.app_bridge("dispatch", {"action": "coordination.send", "_runtimeSessionId": "actual-child",
             "_generationId": source["collaborationGeneration"]["id"],
             "args": {"sessionId": app.state["sessions"][1]["id"], "text": "Synthetic root claim", "mode": "notify"}}, source["id"])
+    assert 'return the requested action, completed effects' in str(refused.value)
+    assert 'existing Stop, scope and permission restrictions still apply' in str(refused.value)
     assert app.runtime.inputs == []
 
 

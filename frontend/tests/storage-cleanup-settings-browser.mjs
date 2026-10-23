@@ -47,7 +47,73 @@ try{
  const observe=async()=>{const response=await page.request.get(base+'/fixture/storage-cleanup-observations');assert.equal(response.ok(),true);return response.json()};
  await page.goto(base);await page.waitForSelector('#amp-one');
  const before=await observe();
+ const evidenceRequests=[];let loseEvidence=false;
+ const evidenceRoute=async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='storage.cleanup.evidence'){
+   evidenceRequests.push(body);
+   if(loseEvidence){loseEvidence=false;await route.fetch();await route.abort('connectionreset');return}
+  }
+  await route.fallback();
+ };
+ await page.route('**/api/actions',evidenceRoute);
  await openSettingsPage(page,'storage');
+ const evidence=page.getByRole('region',{name:'Saved test evidence',exact:true});
+ await expect(evidence.getByRole('button',{name:'Review saved test sizes',exact:true})).toBeVisible();
+ assert.equal(evidenceRequests.length,0,'Opening Storage does not read saved-test pages');
+ await evidence.getByRole('button',{name:'Review saved test sizes',exact:true}).click();
+ await expect(evidence.getByRole('listitem')).toHaveCount(32);
+ await expect(evidence).toContainText('191.0 KB recorded across 31 tests on this page.');
+ await expect(evidence).toContainText('1 other test has incomplete size records.');
+ await expect(evidence).toContainText('not a current disk measurement');
+ await expect(evidence).toContainText('not an all-workspace total');
+ const saved=identity=>evidence.getByRole('listitem').filter({hasText:`Test reference: ${identity}`});
+ const complete=saved('saved-test-33');await complete.locator('summary').click();
+ await expect(complete).toContainText('Original source: 1.0 KB.');
+ await expect(complete).toContainText('Final workspace: 3.0 KB. Test results: 2.0 KB.');
+ const full=saved('saved-test-32');await full.locator('summary').click();
+ await expect(full).toContainText('Final workspace and results are included in a full environment archive: 10.0 KB. Their separate sizes were not recorded.');
+ const remote=saved('saved-test-31');await remote.locator('summary').click();
+ await expect(remote).toContainText('Remote results downloaded; additional copies may remain on the test machine.');
+ const unknown=saved('saved-test-34');await unknown.locator('summary').click();
+ await expect(unknown.locator('summary')).toContainText('Unavailable');
+ await expect(unknown).toContainText('Complete saved-size accounting is unavailable. Its files remain protected.');
+ await expect(unknown).toContainText('Original source: Unavailable.');
+ await expect(unknown).toContainText('Final workspace: Unavailable. Test results: Unavailable.');
+ const passive=await observe();assert.deepEqual(passive.policy,before.policy);
+ assert.deepEqual(passive.writes,before.writes);assert.deepEqual(passive.runtimeCalls,before.runtimeCalls);
+ assert.equal(passive.savedLedgerUnchanged,true);assert.equal(passive.savedWorkIntact,true);
+ assert.equal(passive.unusedExists,true);assert.equal(passive.selectedSessionId,before.selectedSessionId);
+ await evidence.scrollIntoViewIfNeeded();
+ await page.screenshot({path:join(outputDir,'saved-test-sizes-desktop.png'),animations:'disabled'});
+ loseEvidence=true;
+ await evidence.getByRole('button',{name:'Show earlier tests',exact:true}).click();
+ await expect(evidence.getByRole('alert')).toBeVisible();
+ await expect(evidence.getByRole('listitem')).toHaveCount(32);
+ await expect(complete).toContainText('Final workspace: 3.0 KB.');
+ await expect(evidence.getByRole('button',{name:'Show earlier tests',exact:true})).toBeEnabled();
+ await evidence.getByRole('button',{name:'Show earlier tests',exact:true}).click();
+ await expect(evidence.getByRole('listitem')).toHaveCount(3);
+ await expect(evidence).toContainText('18.0 KB recorded across 3 tests on this page.');
+ await expect(saved('saved-test-02')).toHaveCount(1);await expect(saved('saved-test-00')).toHaveCount(1);
+ await expect(saved('saved-test-33')).toHaveCount(0);
+ await expect(evidence.getByRole('button',{name:'Show earlier tests',exact:true})).toHaveCount(0);
+ await expect(evidence.getByRole('alert')).toHaveCount(0);
+ assert.equal(evidenceRequests.length,3);
+ assert.deepEqual(evidenceRequests[1].args,evidenceRequests[2].args,'Retry repeats the passive page cursor');
+ assert.ok(Number.isInteger(evidenceRequests[1].args.before));
+ await evidence.getByRole('button',{name:'Refresh recent test sizes',exact:true}).click();
+ await expect(evidence.getByRole('listitem')).toHaveCount(32);
+ assert.deepEqual(evidenceRequests[3].args,{});
+ await page.setViewportSize({width:390,height:844});
+ await unknown.locator('summary').click();await unknown.scrollIntoViewIfNeeded();
+ assert.equal(await evidence.evaluate(element=>element.scrollWidth<=element.clientWidth),true);
+ assert.equal(await unknown.evaluate(element=>element.getBoundingClientRect().right<=innerWidth),true);
+ await page.screenshot({path:join(outputDir,'saved-test-sizes-mobile.png'),animations:'disabled'});
+ const afterReads=await observe();assert.deepEqual(afterReads.policy,before.policy);
+ assert.deepEqual(afterReads.writes,before.writes);assert.deepEqual(afterReads.runtimeCalls,before.runtimeCalls);
+ assert.equal(afterReads.savedLedgerUnchanged,true);assert.equal(afterReads.savedWorkIntact,true);
+ await page.setViewportSize({width:1100,height:900});await page.unroute('**/api/actions',evidenceRoute);
  const section=page.getByRole('region',{name:'Automatic cleanup',exact:true});
  await section.getByText('Retention and size',{exact:true}).click();
  const days=section.getByLabel('Keep unused copies for days',{exact:true});
@@ -99,7 +165,7 @@ try{
  await section.getByRole('button',{name:'Check the same request',exact:true}).click();
  await expect(section.getByRole('status').filter({hasText:'Cleanup completed'})).toBeVisible();
  assert.equal(cleanupAttempts.length,2);assert.deepEqual(cleanupAttempts[0],cleanupAttempts[1]);
- const after=await observe();assert.equal(after.savedWorkIntact,true);
+ const after=await observe();assert.equal(after.savedWorkIntact,true);assert.equal(after.savedLedgerUnchanged,true);
  assert.equal(after.lastCleanup.status,'completed');assert.ok(after.lastCleanup.removedFileBytes>=4096);
  await expect(section.getByRole('status').filter({hasText:'Cleanup completed'})).toContainText('4.2 KB');
  assert.deepEqual(after.runtimeCalls,before.runtimeCalls);assert.equal(after.selectedSessionId,before.selectedSessionId);
@@ -118,7 +184,11 @@ try{
   providerCalls:false,removedFileBytes:after.lastCleanup.removedFileBytes,checks:[
    'global retention and size settings','stale save retains private draft','lost save acknowledgment exact retry after reopen',
    'read-only preview keeps files','actual canonical unused generation retirement','lost cleanup acknowledgment reobserves same receipt',
-   'source/result archives and project work remain','no worker starts or stops','desktop and narrow draft protection']};
+   'source/result archives and project work remain','no worker starts or stops','desktop and narrow draft protection',
+   'saved test sizes load only on explicit read','canonical receipt roles stay distinct from current disk use',
+   'bounded saved-test pagination and refresh','unknown accounting remains unavailable and protected',
+   'lost passive page response preserves last page and supports retry','saved-test reads preserve ledger and policy',
+   'saved test sizes fit desktop and mobile']};
  await writeFile(join(outputDir,'result.json'),JSON.stringify(result,null,2));
  console.log(JSON.stringify({outputDir,...result}));
 }catch(error){failure=error;await writeFile(join(outputDir,'fixture-stderr.log'),stderr);console.error(stderr);throw error}

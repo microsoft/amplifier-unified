@@ -371,6 +371,14 @@ by inference. Existing command receipts own membership, revisions and Stop;
 existing execution receipts own call usage and reservation metadata. Native
 children use their enclosing root's private model-call admission gate.
 
+Provider admission uses the input of the current native turn separately from
+its visible execution ancestry. A delegated worker's return may start a service
+observation turn while its model calls remain displayed under the originating
+user turn. That observation is not fresh human authority to clear a budget pause.
+Child runs retain the input of their spawning call; a later root observation
+cannot renew an older child's admission. Existing generation, Stop, settings,
+worker ownership and allowance checks still apply before any provider request.
+
 The owner can set aggregate token/cost allowances, per-call reservations and
 concurrent-call limits. Admission serializes comparison and durable reservation
 before provider invocation. Actual usage replaces each call's allowance without

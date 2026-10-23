@@ -290,6 +290,21 @@ test('background history refresh preserves the loaded conversation layout withou
  await renderAct(async()=>root.unmount());
 });
 
+test('local outbox and streaming text suppress only the initial history notice',async()=>{
+ let root;
+ const session={id:'live-chat',historyLoaded:false,historyLoading:true,messages:[]};
+ const render=(patch={},messages)=>React.createElement(SessionHistoryControls,{session:{...session,...patch},messages,hideEarlier:true,act:()=>{}});
+ await renderAct(async()=>{root=create(render({},[{id:'outbox'}]))});
+ assert.equal(root.toJSON(),null);
+ await renderAct(async()=>root.update(render({streaming:'Live response'})));
+ assert.equal(root.toJSON(),null);
+ await renderAct(async()=>root.update(render({historyError:'Read failed'},[{id:'outbox'}])));
+ assert.match(JSON.stringify(root.toJSON()),/Read failed/);
+ await renderAct(async()=>root.update(render()));
+ assert.match(JSON.stringify(root.toJSON()),/Loading conversation/);
+ await renderAct(async()=>root.unmount());
+});
+
 test('workspace chat actions offer Archive but neither Remove nor Delete',async()=>{
  const state=initial(),calls=[];let root;
  const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};

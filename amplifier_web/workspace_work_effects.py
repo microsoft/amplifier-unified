@@ -45,7 +45,7 @@ SAFE_ACTIONS = frozenset({
     'history.list', 'history.shared.list', 'history.shared.view',
     'assignment.brief', 'assignment.read', 'assignment.tasks.list', 'assignment.tasks.read',
     'assignment.tasks.wait', 'workspace.environments.removal.read',
-    'workspace.environments.removal.list',
+    'workspace.environments.removal.list', 'settings.connection.services',
 })
 SAFE_TOOLS = frozenset({'read_file', 'grep', 'glob'})
 

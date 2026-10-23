@@ -7,7 +7,7 @@ import React,{useEffect,useRef,useState,useContext} from 'react';
 import {Plus,ArrowLeft,RefreshCw,Sparkles,ExternalLink} from 'lucide-react';
 import {SettingsLink} from './settings-everyday';
 import {SettingsActions,SettingsLayoutContext} from './settings-layout';
-import {useSettingsDraft} from './settings-drafts';
+import {useSettingsDraft,useGuardedSettingsDraft} from './settings-drafts';
 import {ResultNotice} from './settings-ui';
 import {ModelSelect} from './model-select';
 import {modelOptions} from './setup-data';
@@ -21,15 +21,25 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
  const setup=state.setup||{},providers=(setup.providers||[]).filter(p=>p.enabled!==false);
  const labels=new Map(providerOptions(providers.map(p=>({...p,info:{id:p.module,display_name:aiService(p.module).name}}))).map(row=>[row.id,row.label]));
  const editorKey=imagesOnly?'imageSettingsEditor':'aiConnectionEditor';
- const d=state.view?.[editorKey]||{},step=d.step||'list',service=aiService(d.module),selected=providers.find(p=>p.id===d.id);
  const configId=useConfigurationId();
+ const requested=state.view?.[editorKey]||{};
+ const identity=value=>configId('connection')+':'+(value.id||'')+':'+(value.module||'');
+ const d=useGuardedSettingsDraft(requested,identity(requested),draft=>act('view.update',{patch:{[editorKey]:draft}}));
+ const step=d.step||'list',service=aiService(d.module),selected=providers.find(p=>p.id===d.id);
  const scope=useConfigurationScope(d.scope);
  const authMode=chatGPTMode(d.authMode||selected?.config?.auth_mode);
  const loginArgs={id:d.id,authMode,scope:scope};
- const [key,setKey]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[pending,setPending]=useState(null),[completed,setCompleted]=useState(false);
+ const draftIdentity=identity(d);
+ const [privateKey,setPrivateKey]=useState(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[pending,setPending]=useState(null),[completed,setCompleted]=useState(false),[transitionPending,setTransitionPending]=useState(false);
+ // An agent may select a different connection while this component stays
+ // mounted. A private key belongs only to the exact editor that received it.
+ const key=privateKey?.identity===draftIdentity?privateKey.value:'';
+ const setKey=value=>setPrivateKey({identity:draftIdentity,value});
+ const editor=useRef(requested),transition=useRef(0);editor.current=requested;
  const sending=useRef(false),context=useRef(session?.workspace),requestVersion=useRef(0),alive=useRef(true);
  const edit=patch=>act('view.update',{patch:{[editorKey]:{...d,...patch}}});
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;requestVersion.current++}},[]);
+ useEffect(()=>{requestVersion.current++;setPrivateKey(null);setCompleted(false);setPending(null);setError('');setNotice('');sending.current=false;},[draftIdentity]);
  useEffect(()=>{if(context.current!==session?.workspace){requestVersion.current++;context.current=session?.workspace;setCompleted(false);setKey('');setPending(null);sending.current=false;edit({step:'list',id:'',model:''});}act('providers.list',session?{sessionId:session.id}:{});act('routing.list');},[session?.workspace]);
  async function run(action,args={},next=''){
   if(sending.current)return;
@@ -41,7 +51,8 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
    setPending({action,id:args.id||args.module||'',commandId:receipt.operationId,next});
   }catch(e){if(alive.current&&version===requestVersion.current){setError(e.message);setPending(null);sending.current=false;}}
  }
- const operation=matchingSetupOperation(state,pending),busy=!!pending;
+ const credentialOperation=setup.operations?.['providers.credentials:'+d.module];
+ const operation=matchingSetupOperation(state,pending),busy=!!pending||transitionPending||setupPending(credentialOperation);
  const listOperation=setup.operations?.['providers.list:'];
  const providersLoaded=!!setup.providersLoadedAt;
  const loadError=listOperation?.phase==='error'?listOperation.error:' ';
@@ -71,10 +82,23 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
  },[step,d.saved,login?.status,login?.loginId,busy,layout.active]);
  const catalog=setup.providerCatalogs?.[d.id],models=modelOptions(catalog?.models||setup.modelCatalogs?.[d.id]||[]);
  const modelBusy=setupPending(setup.operations?.['providers.models:'+d.id])||catalog?.phase==='working';
- const credential=setup.credentialCheck?.module===d.module?setup.credentialCheck:null;
+ const credential=!setupPending(credentialOperation)&&setup.credentialCheck?.module===d.module?setup.credentialCheck:null;
  const credentialMode=d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':credential?.available?'environment':'private'):(d.credentialMode||'private');
  const scanCredentials=module=>{if(aiService(module).auth!=='signin')run('providers.credentials',{module});};
- const choose=s=>{if(sending.current)return;setCompleted(false);setKey('');setError('');setNotice('');edit({step:'connect',settingDefault:false,module:s.module,id:s.module.replace('provider-','')+'-'+crypto.randomUUID().slice(0,8),model:'',baseUrl:'',previousLoginId:null,scope,authMode:'chatgpt_codex',saved:false,credentialMode:'auto',initializeRouting:providers.length===0});scanCredentials(s.module);};
+ async function changeConnection(action,args={}){
+  if(sending.current||transitionPending)return;
+  const version=++transition.current,previousId=d.id;setTransitionPending(true);sending.current=true;setError('');setNotice('');setCompleted(false);setKey('');
+  try{
+   const receipt=await act(action,{scope,...args});
+   if(!alive.current||version!==transition.current)return;
+   if(!receipt?.accepted)throw Error(receipt?.error||'The connection editor could not be opened. Please try again.');
+   const selected=receipt.result?.editor,check=receipt.result?.credentialCheck;
+   if(editor.current.id!==previousId&&editor.current.id!==selected?.id)return;
+   if(check?.operationId&&check.action==='providers.credentials')setPending({action:check.action,id:args.module,commandId:check.operationId,next:''});
+  }catch(e){if(alive.current&&version===transition.current)setError(e.message)}
+  finally{if(alive.current&&version===transition.current){setTransitionPending(false);sending.current=false}}
+ }
+ const choose=s=>changeConnection('settings.connection.select',{module:s.module});
  const saveConnection=()=>run('providers.save',{id:d.id,module:d.module,config:{...selected?.config,...(service.auth==='optional-key'?{base_url:d.baseUrl?.trim()}: {})},scope:scope,...(service.auth==='signin'?{}:credentialMode==='environment'?{apiKeyEnv:credential?.envVar}:credentialMode==='github-cli'?{useGitHubCli:true}:{apiKey:key})},service.auth==='signin'?'signin':'models');
  const back=()=>{setError('');edit({step:['services','detail','images'].includes(step)?'list':step==='model'?'detail':'services'});};
  const openImages=()=>navigate('image-generation');
@@ -82,12 +106,12 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
  const unsaved=!!d.imageEdited||!!key||(step==='connect'&&!!d.baseUrl&&d.baseUrl!==(selected?.config?.base_url||''))||(step==='model'&&!!d.model&&d.model!==(selected?.config?.default_model||selected?.config?.model||''));
  useSettingsDraft(imagesOnly?'image-generation':'ai-connections',{label:'AI connection setup',dirty:unsaved,
   review:()=>{navigate(imagesOnly?'image-generation':'ai-connections');edit({step:d.imageEdited?'list':step,...(d.imageEdited?{imageFocus:crypto.randomUUID()}:{})})},
-  discard:()=>{setKey('');setError('');edit({step:'list',id:'',module:'',model:'',baseUrl:'',saved:false,imageMode:null,imageProviderId:null,imageModel:null,imagesEnabled:null,imageEdited:false})}});
+  discard:()=>{setKey('');setError('');if(identity(editor.current)===draftIdentity)edit({step:'list',id:'',module:'',model:'',baseUrl:'',saved:false,imageMode:null,imageProviderId:null,imageModel:null,imagesEnabled:null,imageEdited:false})}});
  return <section data-part="ai-connections" className="a-ai-form">
   {imagesOnly?<ImageGenerationSettings key={session?.workspace||'global'} state={state} session={session} providers={providers} labels={labels} draft={d} edit={edit} act={act} run={run} pending={pending} busy={busy} navigate={navigate}/>:['list','images'].includes(step)?<>
    <p className="a-everyday-intro">Connect the AI services Amplifier can use for your work.</p>
    {completed&&onReturnToChat&&<div className="a-ai-welcome"><h4>Your connection is saved</h4><p>Return to chat to write a message or attach a file. Your unfinished message is kept.</p><button type="button" className="a-primary" disabled={busy} onClick={onReturnToChat}>Return to chat</button>{selected&&setup.metadata?.[selected.module]?.imageGeneration&&<button type="button" className="a-soft" disabled={busy} onClick={openImages}>Image preferences</button>}</div>}
-   {!providersLoaded&&!providers.length?<div role="status">{listOperation?.phase==='error'?<><p>Could not load AI connections. {loadError}</p><button type="button" className="a-soft" onClick={()=>act('providers.list',{})}>Retry loading connections</button></>:'Loading AI connections…'}</div>:!providers.length?<div className="a-ai-welcome"><Sparkles aria-hidden="true"/><h4>Start with one connection</h4><p>Choose a service, connect your account, and choose a model. You can add more later.</p><button className="a-primary" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect AI</button></div>:<><div className="a-everyday-list">{providers.map(p=><SettingsLink key={p.id} disabled={busy} title={<>{labels.get(p.id)}{p.authenticationRequired&&<AttentionBadge count={1}/>}</>} description={(p.config?.default_model||p.config?.model||'Choose a model')+' · '+(p.authenticationRequired?'Sign-in needed':p.accountConnected?'Account connected':p.credentialsConfigured?'Credentials available':p.keySource==='provider-managed'?'Account sign-in':'Connection needs setup')+(p.credential?.preview?.masked?' · Key '+p.credential.preview.masked:'')} onClick={()=>{setError('');setNotice('');edit({step:'detail',id:p.id,module:p.module,authMode:chatGPTMode(p.config?.auth_mode),model:p.config?.default_model||p.config?.model||'',scope,baseUrl:p.config?.base_url||'',previousLoginId:setup.login?.loginId,saved:true,initializeRouting:false})}}/>)}</div><button className="a-soft" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect another service</button></>}
+   {!providersLoaded&&!providers.length?<div role="status">{listOperation?.phase==='error'?<><p>Could not load AI connections. {loadError}</p><button type="button" className="a-soft" onClick={()=>act('providers.list',{})}>Retry loading connections</button></>:'Loading AI connections…'}</div>:!providers.length?<div className="a-ai-welcome"><Sparkles aria-hidden="true"/><h4>Start with one connection</h4><p>Choose a service, connect your account, and choose a model. You can add more later.</p><button className="a-primary" data-action="settings.connection.start" disabled={busy} onClick={()=>changeConnection('settings.connection.start')}><Plus/>Connect AI</button></div>:<><div className="a-everyday-list">{providers.map(p=><SettingsLink key={p.id} disabled={busy} title={<>{labels.get(p.id)}{p.authenticationRequired&&<AttentionBadge count={1}/>}</>} description={(p.config?.default_model||p.config?.model||'Choose a model')+' · '+(p.authenticationRequired?'Sign-in needed':p.accountConnected?'Account connected':p.credentialsConfigured?'Credentials available':p.keySource==='provider-managed'?'Account sign-in':'Connection needs setup')+(p.credential?.preview?.masked?' · Key '+p.credential.preview.masked:'')} onClick={()=>{setError('');setNotice('');edit({step:'detail',id:p.id,module:p.module,authMode:chatGPTMode(p.config?.auth_mode),model:p.config?.default_model||p.config?.model||'',scope,baseUrl:p.config?.base_url||'',previousLoginId:setup.login?.loginId,saved:true,initializeRouting:false})}}/>)}</div><button className="a-soft" data-action="settings.connection.start" disabled={busy} onClick={()=>changeConnection('settings.connection.start')}><Plus/>Connect another service</button></>}
    {setup.active&&providers.length>0&&<div className="a-ai-hint">Your model rules are saved. <button className="a-link" data-action="view.update" onClick={()=>navigate('routing')}>Advanced model rules</button></div>}
    <div className="a-everyday-footer"><p className="a-caption">Connections are stored on the Amplifier host. Existing conversations keep their settings.</p><button className="a-link" data-action="view.update" onClick={advanced}>Advanced connection settings<ExternalLink/></button></div>
   </>:<>
@@ -126,7 +150,7 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
     <details className="a-everyday-disclosure"><summary>More options</summary><div><ConfigurationScopeSelect id={configId('ai-scope')} value={scope} disabled={busy} onChange={scope=>edit({scope})}/>{step==='model'&&<><label htmlFor={configId('ai-model-manual')}>Model ID</label><input id={configId('ai-model-manual')} value={d.model||''} disabled={busy} data-action="view.update" onChange={e=>edit({model:e.target.value})}/></>}<button className="a-link" data-action="view.update" onClick={advanced}>Full provider configuration</button></div></details>
    </>}
   </>}
-  {error&&<ResultNotice phase="error" message={error}/>}
+  {(error||credentialOperation?.phase==='error')&&<ResultNotice phase="error" message={error||credentialOperation.error||'Could not check credentials on this host.'}/>}
   {notice&&<ResultNotice phase="ready" message={notice}/>}
   {busy&&<ResultNotice phase="working" message="Working on this connection…"/>}
   {!busy&&setup.test?.providerId===d.id&&step==='detail'&&<ResultNotice phase={setup.test.reachable===false?'error':'ready'} message={setup.test.reachable===false?'Connection check failed.':'Model catalog check passed.'}/>}

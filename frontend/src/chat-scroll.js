@@ -19,6 +19,9 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  let callId=null,callSessionId=null,callPaused=false;
  let anchorLoad=null,attemptedAnchor=null,unresolvedPosition=null;
  const followingCall=()=>!!callId&&callSessionId===sessionId&&!callPaused;
+ // Heights are integer CSS pixels; scrollTop can be fractional after scaling.
+ // This is geometry rounding, not a proximity threshold for reading intent.
+ const atBottom=()=>Math.abs(pane.scrollHeight-pane.clientHeight-pane.scrollTop)<=1;
  const messages=()=>[...pane.querySelectorAll('[data-message-id]')];
  const capture=()=>{
   const top=pane.getBoundingClientRect().top,rows=messages();
@@ -67,7 +70,10 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  const stop=()=>{if(callId&&callSessionId===sessionId)callPaused=true;anchorLoad=null;unresolvedPosition=null;submitted=null;following.current=false;restore=null;initial=false};
  // Clicking/selecting transcript content is not scrollback. Actual scrollbar
  // moves are detected by scroll(); wheel/touch/keyboard express reading intent.
- const wheel=()=>stop();
+ const wheel=e=>{
+  if(followingCall()&&(!e.deltaY||e.deltaY>0&&atBottom()||e.deltaY<0&&pane.scrollTop<=0))return;
+  stop();
+ };
  const keyDown=e=>{if(!e.target.closest('input,textarea,select,[contenteditable="true"]')&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key))stop()};
  // Our own moves capture their final position synchronously in flush(). A
  // different position here came from outside this controller, including the
@@ -80,7 +86,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
   // Wheel/touch/key intent has already stopped following; other external
   // scrolls, including browser focus moves, retain their existing behavior.
   const limit=Math.max(0,pane.scrollHeight-pane.clientHeight);
-  if(snapshot&&followingCall()&&snapshot.top>limit&&pane.scrollTop===limit){update();return}
+  if(snapshot&&followingCall()&&snapshot.top>limit&&atBottom()){update();return}
   if(snapshot)stop();report();
  };
  const resize=new view.ResizeObserver(update),observed=new Set();

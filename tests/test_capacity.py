@@ -72,6 +72,35 @@ def test_policy_reports_estimates_pending_unknown_and_inflight_overshoot():
     assert empty['value'] is None and empty['status'] == 'empty'
 
 
+def test_voice_duration_uses_only_voice_receipts_and_retains_incomplete_numeric_updates():
+    backend = call()
+    voice = call('voice:call:session', provider='OpenAI voice', phase='running', endedAt=None,
+                 usage={'voiceSeconds': 12.5, 'usageFinalized': False, 'usageStatus': 'running'})
+    live = aggregate([backend, voice])
+    assert live['voiceSeconds']['value'] == 12.5
+    assert live['voiceSeconds']['knownCalls'] == 1
+    assert live['voiceSeconds']['pendingCalls'] == 1
+    assert live['voiceSeconds']['unknownCalls'] == 0
+    assert live['voiceSeconds']['status'] == 'pending'
+    assert live['grossTotalTokens']['value'] == 10
+    assert live['costUsd']['value'] == .01
+    voice.update(phase='incomplete', endedAt=4)
+    voice['usage']['usageStatus'] = 'incomplete'
+    incomplete = aggregate([backend, voice])['voiceSeconds']
+    assert incomplete['value'] == 12.5 and incomplete['unit'] == 'seconds'
+    assert incomplete['pendingCalls'] == 0 and incomplete['incompleteCalls'] == 1
+    assert incomplete['status'] == 'partial'
+    voice.update(phase='completed')
+    voice['usage'].update(voiceSeconds=0, usageFinalized=True, usageStatus='final')
+    final = aggregate([voice])
+    assert final['voiceSeconds']['value'] == 0 and final['voiceSeconds']['status'] == 'known'
+    assert final['grossTotalTokens']['value'] is None and final['costUsd']['value'] is None
+    voice.update(phase='incomplete', usage={})
+    missing = aggregate([voice])['voiceSeconds']
+    assert missing['value'] is None and missing['incompleteCalls'] == 1
+    assert 'voiceSeconds' not in aggregate([backend])
+
+
 async def setup(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     app = AppService(tmp_path, workspace=tmp_path)
@@ -431,3 +460,48 @@ async def test_fresh_human_recovery_rechecks_current_host_budget_without_reset(t
     assert await restored.tasks.continuation_allowed()
     await restored.close()
     await worker.close()
+
+
+@pytest.mark.parametrize('case', ['fresh', 'native', 'unbound', 'wrong-origin', 'old', 'background', 'terminal', 'other-input', 'exhausted'])
+async def test_spoken_input_rechecks_derived_denial_only_with_exact_current_provenance(tmp_path, case):
+    app = AppService(tmp_path, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    sid, identity = session['id'], 'voice:call:request'
+    message = app._message(session, 'user', 'Continue the task', 'call',
+                           voiceId='call', voiceItemId='utterance', inputOrigin='voice', voiceInputId=identity)
+    message['createdAt'] = 20
+    session['collaborationGeneration'] = {'id': 'current', 'inputIds': [identity], 'terminal': False}
+    row = call('fresh-call', sid, rootSessionId=sid, turnId=identity,
+               phase='running', endedAt=None, usage={})
+    if case == 'native':
+        message.update(source='native', nativeInputId=identity, voiceDelegation=True)
+    elif case == 'unbound':
+        message.pop('voiceInputId')
+    elif case == 'wrong-origin':
+        message['inputOrigin'] = 'peer'
+    elif case == 'old':
+        message['createdAt'] = 5
+    elif case == 'background':
+        row['lifecycle'] = 'background'
+    elif case == 'terminal':
+        session['collaborationGeneration']['terminal'] = True
+    elif case == 'other-input':
+        message['voiceInputId'] = 'voice:call:unrelated'
+    elif case == 'exhausted':
+        ingest(session, call('previous', sid, rootSessionId=sid, usage={'totalTokens': 100}))
+    saved = {'capacity': {'revision': 1, 'enabled': True, 'maxTotalTokens': 100},
+             'capacityLastDenial': {'budgetRevision': 1, 'at': 10, 'reasons': ['Old assignment allowance denied']}}
+    path = app.data_dir / 'sessions' / sid / 'control-state.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(saved))
+    try:
+        result = await admission(app, sid, {'call': row})
+        assert result['allowed'] is (case in {'fresh', 'native'})
+        if case == 'exhausted':
+            assert any('limit reached' in reason for reason in result['reasons'])
+        elif case not in {'fresh', 'native'}:
+            assert 'Old assignment allowance denied' in result['reasons']
+        assert json.loads(path.read_text()) == saved  # No budget or saved evidence reset.
+    finally:
+        await app.close()

@@ -20,6 +20,7 @@ LATEST = 'storage-cleanup-latest'
 def definitions(schema, string):
     return {
         'storage.cleanup.read': ('Read global automatic cleanup settings and the last receipt without scanning or starting work.', schema({}, [])),
+        'storage.cleanup.evidence': ('Read one bounded page of recorded saved test sizes. Does not measure current files, connect to machines, start work or delete evidence.', schema({'before': {'type': 'integer', 'minimum': 1, 'maximum': 2**53-1}}, [])),
         'storage.cleanup.save': ('User-only: save global unused component/test-runner code retention. Saved test sources, results, chats and working folders are always kept.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0}, 'enabled': {'type': 'boolean'},
             'keepDays': {'type': 'integer', 'minimum': 0, 'maximum': 3650},
@@ -236,6 +237,12 @@ async def dispatch(app, action, args, origin, command_id):
     from .service import AppError
     if action == 'storage.cleanup.read':
         return {'accepted': True, 'result': read(app)}
+    if action == 'storage.cleanup.evidence':
+        from .saved_test_storage import read as evidence
+        try:
+            return {'accepted': True, 'result': await asyncio.to_thread(evidence, app, args.get('before'))}
+        except ValueError as exc:
+            raise AppError(str(exc), 400) from None
     if action == 'storage.cleanup.preview':
         async with lock(app):
             return {'accepted': True, 'result': await preview(app)}

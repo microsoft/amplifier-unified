@@ -20,7 +20,7 @@ def target(session):
 
 def pending_input(service, session):
     """Use existing admission evidence, never load retired display payloads."""
-    from .execution import LIVE_PHASES
+    from .execution import LIVE_PHASES, voice_usage_turns
     generation = session.get('collaborationGeneration') or {}
     if generation.get('id') and not generation.get('terminal'):
         return True
@@ -31,9 +31,14 @@ def pending_input(service, session):
     if not dict.__contains__(session, 'execution') and reference is not None:
         if reference.get('pendingWork') is not False:
             return True  # Legacy/unknown is not proof that input has settled.
-    elif any(turn.get('phase') in LIVE_PHASES
-             for turn in dict.get(session, 'execution', {}).get('turns', [])):
-        return True
+    else:
+        tree = dict.get(session, 'execution', {})
+        voice_turns = voice_usage_turns(tree)
+        # The call owns its duration/response receipts independently of manager
+        # work. A spoken input's manager turn still blocks configuration.
+        if any(turn.get('phase') in LIVE_PHASES and turn['id'] not in voice_turns
+               for turn in tree.get('turns', [])):
+            return True
     # Keep original admission receipts authoritative even if presentation
     # status has become ready before delivery is acknowledged.
     return service.db.execute("""SELECT 1 FROM commands
@@ -211,6 +216,11 @@ def validate_selection(selected, catalog):
         raise ValueError('Model compatibility is unavailable. Refresh the catalog or choose a known model before sending.')
     if entry.get('supported', True):
         models = {row if isinstance(row, str) else row.get('id') for row in entry.get('models', [])}
+        # Discovery can omit a configured deployment/alias. Match the controls'
+        # choices, using only this connection's explicit default.
+        configured = provider.get('info', {}).get('defaults', {}).get('model')
+        if configured:
+            models.add(configured)
         if selected['model'] not in models:
             raise ValueError('The saved model is not in this connection’s catalog. Choose a compatible model.')
     elif selected['model'] != provider.get('info', {}).get('defaults', {}).get('model'):
@@ -220,7 +230,7 @@ def validate_selection(selected, catalog):
         schema = entry.get('metadata', {}).get('configSchema', {})
         config = {'model': selected['model'], 'default_model': selected['model']}
         def shown(field):
-            for key, expected in field.get('show_when', {}).items():
+            for key, expected in (field.get('show_when') or {}).items():
                 actual, value = str(config.get(key, '')).lower(), str(expected).lower()
                 if value.startswith('matches:'):
                     try:

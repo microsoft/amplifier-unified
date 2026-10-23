@@ -74,6 +74,8 @@ class TestQueue:
         self.active_cursor = 0
         self.job_wakeups = {}
         self.poll_seconds = 5
+        from .test_reservation_maintenance import ReservationMaintenance
+        self.reservations = ReservationMaintenance(app)
         app.db.execute("""CREATE INDEX IF NOT EXISTS workspace_test_queue ON commands(
             json_extract(receipt,'$.job.status'), json_extract(receipt,'$.senderSessionId'))
             WHERE json_extract(receipt,'$.commandAction')='workspace.tests.submit'""")
@@ -446,12 +448,15 @@ class TestQueue:
             pass
 
     async def tick(self):
+        await self.reservations.tick()
         for identity, task in list(self.tasks.items()):
             if task.done():
                 # Consume exceptions and release completed job working sets.
                 if not task.cancelled():
                     task.exception()
                 self.tasks.pop(identity, None)
+        from . import test_runner_enrollment
+        test_runner_enrollment.schedule(self)
         notifications = self.app.db.execute("""SELECT rowid,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='workspace.tests.submit'
                 AND json_extract(receipt,'$.terminalOutcome.status')='observed'

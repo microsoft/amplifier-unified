@@ -57,3 +57,47 @@ The first development controller exposed the system interpreter's older archive 
 - Shared authority across different OS users, older clients, Docker Desktop/VM hosts and additional remote backends.
 - More representative workload/load benchmarks and any cost-aware or geographic routing policy. Current routing chooses the first compatible available approved target.
 - Automatic removal of historical retained user data is not introduced. Sources, artifacts and recovery receipts remain preserved.
+
+## Connect and check
+
+New registrations use **Connect and check**. The saved SSH connection and target
+must already be trusted and configured; this is not automatic server provisioning.
+The fixed controller validates its package, native machine/account, backend and
+configured adapter. A durable connection request then uses the existing test
+scheduler, allocation journal and target admission ledgers for one small Python
+check. It transfers only a fixed synthetic Git working folder, checks isolation
+and execution, downloads and verifies the exact result, and confirms owned cleanup
+before enabling a new machine. No new capacity pool or count-limit exemption is
+used. Waiting and unknown outcomes stay with the original owner across restart;
+missing acknowledgements are read from target receipts, not re-executed.
+
+Settings distinguishes **Allowed for new checks** from the last completed
+connection check. Availability is still observed at each job admission. Historical
+registrations remain usable but are labeled not yet checked. Supported profile
+names describe controller capabilities; the connection check does not claim every
+project's dependency installation has been qualified. Refresh checks the current
+controller before replacing the saved route, preserves a concurrent Pause, and
+leaves existing owners and failed-refresh registrations unchanged.
+
+Cancellation prevents further test work and cleans only the original owner.
+Unknown creation or cleanup is retained and never automatically enables a target.
+The existing global settings authority governs these requests; a revoked grant or
+stopped authorizing chat permits cleanup only. The global default queue wait and
+profile timing are frozen when the request is accepted. Ordinary work and cleanup
+continue while a connection check waits for capacity.
+
+App shutdown waits for an admitted bounded operation to settle its receipt. An
+update or closing host defers subsequent operations and publication; revocation
+or cancellation admits cleanup only. Admission is checked again after read-only
+inspection, so an earlier inspection cannot authorize a later test command.
+
+Qualification for this flow includes the real AppService/TestQueue, immutable
+remote controller, existing native Incus adapter, one CPU/512 MiB offline guest,
+fixed-source check, artifact download and verified guest/lease removal before
+registration. The isolated origin used a credential-free test transport to relay
+the product's unchanged SSH arguments through an already trusted host connection;
+it does not prove direct SSH credential setup inside that origin. Existing
+registrations and production settings were not changed. Mounted Settings tests
+cover saved progress, lost acknowledgement without resubmission, close/reopen,
+named unsaved edits, unknown-result recovery and paused refresh. Portable origin
+receipt/source checks also run in the Windows, macOS and Linux CI lane.

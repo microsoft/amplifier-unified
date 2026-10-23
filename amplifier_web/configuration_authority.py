@@ -52,7 +52,7 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
-    if action in {'testing.capacity.save', 'testing.machine.save', 'testing.runners.register', 'testing.runners.refresh', 'testing.runners.enable', 'testing.runners.machine.save', 'testing.runners.capacity.save', 'testing.execution.save'}:
+    if action in {'testing.capacity.save', 'testing.machine.save', 'testing.runners.register', 'testing.runners.refresh', 'testing.runners.enable', 'testing.runners.enrollment.cancel', 'testing.runners.enrollment.reconcile', 'testing.runners.machine.save', 'testing.runners.capacity.save', 'testing.execution.save'}:
         return 'host_defaults', 'global'
     if action in {'workspace.environments.setup', 'workspace.environments.setup.cleanup'}:
         return 'test_host_setup', 'global'

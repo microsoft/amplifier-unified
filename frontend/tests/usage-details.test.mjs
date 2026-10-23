@@ -49,3 +49,27 @@ test('available metrics render without placeholders and new results appear as ca
  assert.equal(compactBreakdown(resolved),'In 30 · Out 5');
  assert.equal(usageRows(usageMetrics(resolved)).find(row=>row.key==='reasoningTokens').metric.value,2);
 });
+
+test('voice duration stays separate from backend tokens through segment and combined summaries',()=>{
+ const voice=segmentUsage([{kind:'llm',phase:'incomplete',usage:{voiceSeconds:12.5,usageFinalized:false,usageStatus:'incomplete'}}]);
+ const backend=segmentUsage([{kind:'llm',phase:'completed',usage:{inputTokens:10,outputTokens:2}}]);
+ const metrics=usageMetrics(combinedWork([{aggregateUsage:voice},{aggregateUsage:backend}],100).usage);
+ assert.deepEqual(metrics.voiceSeconds,{value:12.5,unit:'seconds',knownCalls:1,pendingCalls:0,incompleteCalls:1,status:'partial'});
+ assert.equal(metrics.grossTotalTokens.value,12);assert.equal(metrics.costUsd.value,null);
+ assert.equal(usageMetrics(voice).grossTotalTokens.value,null);
+ assert.equal(usageRows(metrics).find(row=>row.key==='voiceSeconds').label,'Voice seconds');
+ const missing=segmentUsage([{kind:'llm',phase:'incomplete',usage:{usageFinalized:false,usageStatus:'incomplete'}}]);
+ const mixed=usageMetrics(combinedWork([{aggregateUsage:voice},{aggregateUsage:missing}],100).usage).voiceSeconds;
+ assert.equal(mixed.value,12.5);assert.equal(mixed.incompleteCalls,2);
+});
+
+test('reported zero, live duration and incomplete finalization remain distinct',()=>{
+ const live=usageMetrics({voiceSeconds:12.5,usageFinalized:false,usageStatus:'running'}).voiceSeconds;
+ assert.equal(live.status,'pending');assert.equal(live.incompleteCalls,0);
+ const final=usageMetrics({voiceSeconds:0,usageFinalized:true,usageStatus:'final'}).voiceSeconds;
+ assert.equal(final.value,0);assert.equal(final.status,'known');
+ const missing=usageRows(usageMetrics({usageFinalized:false,usageStatus:'incomplete'}));
+ assert.equal(missing.length,1);assert.equal(missing[0].metric.value,null);assert.equal(missing[0].metric.incompleteCalls,1);
+ assert.equal(usageMetrics({totalTokens:12}).voiceSeconds,undefined);
+ assert.equal(usageRows(usageMetrics({totalTokens:12}),undefined,{includeUnavailable:true}).some(row=>row.key==='voiceSeconds'),false);
+});

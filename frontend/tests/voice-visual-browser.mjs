@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -11,7 +12,7 @@ try {
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{
-  class Peer extends EventTarget {constructor(){super();this.connectionState='new'} createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){}}
+  class Peer extends EventTarget {constructor(){super();this.connectionState='new';this.iceGatheringState='complete'} createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){}}
   window.RTCPeerConnection=Peer;
   navigator.mediaDevices.getUserMedia=async()=>new MediaStream();
   navigator.mediaDevices.getDisplayMedia=async()=>{
@@ -21,7 +22,7 @@ try {
    Object.defineProperty(track,'label',{value:'Synthetic test window'});track.getSettings=()=>({displaySurface:'window'});track.addEventListener('ended',()=>clearInterval(timer));window.captureTrack=track;return stream;
   };
  });
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const openComputerAccess=async()=>{
   await page.getByRole('button',{name:'Chat',exact:true}).click();

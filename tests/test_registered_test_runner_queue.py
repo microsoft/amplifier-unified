@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import threading
 from types import SimpleNamespace
 
@@ -6,6 +7,7 @@ import pytest
 
 from amplifier_web import task_environments as environments
 from amplifier_web import registered_test_runners as runners
+from amplifier_web import test_runner_enrollment as enrollment
 from test_test_queue import app, backend, queue, submit, record
 from test_task_environments import scope
 from test_coordination_generation import until
@@ -145,3 +147,59 @@ async def test_remote_only_waiting_check_can_choose_second_frozen_machine_after_
     assert selected['remoteRunner']['id'] == 'second'
     assert calls == ['second']
     assert backend == []
+
+
+@pytest.mark.parametrize('changed', [None, 'controller', 'packageDigest', 'connection', 'backendIdentity', 'incus'])
+async def test_waiting_remote_check_survives_only_observation_metadata_refresh(app, queue, backend, monkeypatch, changed):
+    runner = {'id': 'remote-only', 'name': 'Remote only', 'enabled': True, 'connection': 'fixture', 'configPath': '',
+              'machineId': 'a'*32, 'accountId': 'account', 'profiles': ['linux-python'], 'incus': {'project': 'test'},
+              'controller': '/private/old-controller', 'packageDigest': 'a'*64,
+              'backendIdentity': {'backend': 'incus', 'daemon': 'remote', 'project': 'test'},
+              'lastCheck': {'requestId': 'old-check', 'checkedAt': 1, 'status': 'passed'}}
+    runners.publish(app, {'version': 1, 'runners': [runner]})
+    monkeypatch.setattr(environments, 'configuration', _real_origin_configuration)
+    monkeypatch.setattr(environments, 'SUPPORTED_HOST', False)
+    available = False
+    monkeypatch.setattr(runners, 'call', lambda *a, **kw: {'ok': True, 'available': available})
+    invoke = environments.invoke
+    def remote_invoke(config, home, row, action, args):
+        result = invoke(config, home, row, action, args)
+        return {**result, 'backendIdentity': runner['backendIdentity']}
+    monkeypatch.setattr(environments, 'invoke', remote_invoke)
+    await submit(app, waitSeconds=0)
+    original = copy.deepcopy(record(queue, app)['job'])
+    await queue.tick()
+    assert record(queue, app)['job']['status'] == 'queued' and not backend
+
+    # The qualification effects are covered separately through the actual
+    # controller. Here use their completed receipt at the real publication
+    # boundary while a normal remote-only queued check retains its old route.
+    response = await runners.dispatch(app, 'testing.runners.refresh', {'id': runner['id'], 'requestId': 'recheck',
+        'expectedRevision': runners.snapshot(app)['revision']}, None)
+    identity = response['result']['enrollments'][0]['id']
+    receipt = enrollment.read(app, identity)
+    candidate = copy.deepcopy(runner)
+    if changed:
+        candidate[changed] = {'project': 'different'} if changed == 'incus' else (
+            {**runner['backendIdentity'], 'daemon': 'different'} if changed == 'backendIdentity' else 'different')
+    enrollment.qualification.save(enrollment.path(app, identity), receipt, runner=candidate,
+        probeState='qualified', proof={'checkPassed': True, 'artifactVerified': True, 'probeRemoved': True})
+    await enrollment.finish(app, receipt)
+    assert enrollment.read(app, identity)['status'] == 'connected'
+    assert runners.store(app)['runners'][0]['lastCheck']['requestId'] == identity
+
+    available = True
+    queue.backoff.clear()
+    await queue.tick()
+    await asyncio.gather(*queue.tasks.values())
+    saved = record(queue, app)['job']
+    assert saved['runnerCandidates'] == original['runnerCandidates']
+    if changed:
+        assert saved['status'] == 'queued' and not backend
+        return
+    assert saved['status'] == 'passed', saved
+    assert saved['backendKey'] == original['backendKey']
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']
+    assert (await submit(app, waitSeconds=0))['duplicate']
+    await queue.tick()
+    assert [action for action, _ in backend].count('execute') == 1

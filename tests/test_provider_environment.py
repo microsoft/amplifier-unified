@@ -235,7 +235,10 @@ async def test_failed_preflight_is_atomic_and_preserves_named_account_priority_a
     assert vars(bundle) == original and prepared.mount_plan == original_plan
     assert failure.value.failures[0]["instance_id"] == "named-account"
     assert failure.value.failures[0]["reason_code"] == "provider_configuration_failed"
-    assert "required credentials" in str(failure.value)
+    assert failure.value.failures[0]['diagnostic'] == {
+        'stage': 'configuration', 'category': 'missing_credential', 'errorType': 'ProviderConfigurationError'}
+    assert 'required credential is missing' in str(failure.value)
+    assert 'authentication rejection' not in str(failure.value)
 
 
 @pytest.mark.asyncio
