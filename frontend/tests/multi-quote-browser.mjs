@@ -537,7 +537,11 @@ try{
  const countReply=request=>{if(request.url().endsWith('/api/actions')&&request.postDataJSON()?.action==='message.reply')refusedRequests++;};
  page.on('request',countReply);
  for(const width of [1280,320]){
-  await page.setViewportSize({width,height:844});await selectContents('p:last-child');
+  await page.setViewportSize({width,height:844});
+  // Escape deliberately keeps the old selection dismissed through resize.
+  // The next viewport case needs a new source gesture, not a replayed Range.
+  await c.locator('.a-detail-text p:last-child').dispatchEvent('pointerdown');
+  await selectContents('p:last-child');
   const explanation=page.locator('.a-quote-selection [role=status]');
   await expect(explanation).toHaveText('This selection includes controls or unmapped text. Nothing was added.');
   await expect(explanation).toBeInViewport();await expect(page.locator('.a-quote-selection button')).toHaveCount(0);
