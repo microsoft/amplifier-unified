@@ -14,7 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 _retention_spec = importlib.util.spec_from_file_location('_environment_retention', Path(__file__).with_name('environment_retention.py'))
@@ -29,6 +29,10 @@ _jobs_spec.loader.exec_module(jobs)
 _host_spec = importlib.util.spec_from_file_location('_host_resources', Path(__file__).with_name('test_host_resources.py'))
 host_resources = importlib.util.module_from_spec(_host_spec)
 _host_spec.loader.exec_module(host_resources)
+
+_transfer_spec = importlib.util.spec_from_file_location('_source_transfer', Path(__file__).with_name('test_source_transfer.py'))
+source_transfer = importlib.util.module_from_spec(_transfer_spec)
+_transfer_spec.loader.exec_module(source_transfer)
 
 
 def selected_profile(payload):
@@ -690,42 +694,55 @@ def execute_call(payload):
             # Source snapshot is immutable and retained even when launch fails.
             snapshot = serialize(lib.export_repository_snapshot(Path(payload['source']), root / 'source.tar'))
             (root / 'snapshot.json').write_text(json.dumps(snapshot))
+            try:
+                source_transfer.preflight(root / 'source.tar', snapshot)
+            except (OSError, ValueError):
+                return {'ok': False, 'status': 'not-started', 'effectAdmitted': False,
+                        'universeId': identity, 'snapshot': snapshot, 'code': 'source-transfer-invalid',
+                        'message': 'The source snapshot changed or exceeds the 512 MiB transfer limit. No dependency preparation, environment or test command was started.'}
             return {'ok': True, 'universeId': identity, 'snapshot': snapshot, 'backendIdentity': backend,
                     'hostTarget': host_resources.local_target(payload.get('dockerHost'), {'dockerd'})}
         if action == 'start':
             source_identity(identity, snapshot)
-            compose = root / 'compose.json'
-            compose.write_text(json.dumps(profile(payload['image'], payload)))
-            try:
-                with docker_admission(payload) as capacity:
-                    if capacity['scope']['daemon'] != backend['daemon']:
-                        return {'ok': False, 'effectAdmitted': False, 'status': 'not-started', 'code': 'backend_changed',
-                                'message': 'The actual daemon changed before admission. Nothing was launched.'}
-                    if not capacity['available']:
-                        return {'ok': False, 'admissionDenied': True, 'status': 'not-started', 'capacity': capacity,
-                            'message': 'Capacity changed before launch. No backend effect was admitted.'}
-                    reservation = reserve_admission(payload, capacity)
-                    universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
-                    retain_settlement(payload, identity, backend, 'launched')
-                    reservation.unlink()
-            except BlockingIOError:
-                return {'ok': False, 'admissionDenied': True, 'status': 'not-started',
-                    'message': 'Another cooperating launch owns admission. No environment was started.'}
-            identity = universe.id
-            lib.push_files(identity, root / 'source.tar', '/artifacts/.source.tar', config=config)
-            unpack = lib.execute(identity, 'python -c "import tarfile; tarfile.open(\'/artifacts/.source.tar\').extractall(\'/workspace\', filter=\'data\')" && rm /artifacts/.source.tar',
-                workdir='/', timeout_seconds=60, max_output_bytes=32768, config=config)
-            if unpack.exit_code != 0:
-                return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
-                        'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
-            initialized = lib.execute(identity, jobs.initialize_command(selected_profile(payload)['preparationRequired']),
-                workdir='/', timeout_seconds=120, max_output_bytes=32768, config=config)
-            if initialized.exit_code != 0:
-                return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
-                        'message': 'The owned source and dependency initialization did not complete. It was not repeated.'}
-            retain_source_ready(root, identity, snapshot)
-            return {'ok': True, 'universeId': identity, 'sourceReady': True,
-                    'status': universe.state, 'services': [serialize(item) for item in universe.services]}
+            with ExitStack() as transfer:
+                try:
+                    upload, destination, size, chunked = transfer.enter_context(source_transfer.staged(root / 'source.tar', snapshot))
+                except (OSError, ValueError):
+                    return {'ok': False, 'status': 'not-started', 'effectAdmitted': False,
+                            'universeId': identity, 'snapshot': snapshot, 'code': 'source-transfer-invalid',
+                            'message': 'The frozen source could not be prepared for transfer. No environment or test command was started; source and preparation evidence are retained.'}
+                compose = root / 'compose.json'
+                compose.write_text(json.dumps(profile(payload['image'], payload)))
+                try:
+                    with docker_admission(payload) as capacity:
+                        if capacity['scope']['daemon'] != backend['daemon']:
+                            return {'ok': False, 'effectAdmitted': False, 'status': 'not-started', 'code': 'backend_changed',
+                                    'message': 'The actual daemon changed before admission. Nothing was launched.'}
+                        if not capacity['available']:
+                            return {'ok': False, 'admissionDenied': True, 'status': 'not-started', 'capacity': capacity,
+                                'message': 'Capacity changed before launch. No backend effect was admitted.'}
+                        reservation = reserve_admission(payload, capacity)
+                        universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
+                        retain_settlement(payload, identity, backend, 'launched')
+                        reservation.unlink()
+                except BlockingIOError:
+                    return {'ok': False, 'admissionDenied': True, 'status': 'not-started',
+                        'message': 'Another cooperating launch owns admission. No environment was started.'}
+                identity = universe.id
+                lib.push_files(identity, upload, destination, config=config)
+                unpack = lib.execute(identity, source_transfer.command(destination, size, snapshot, chunked),
+                    workdir='/', timeout_seconds=60, max_output_bytes=32768, config=config)
+                if unpack.exit_code != 0:
+                    return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
+                            'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
+                initialized = lib.execute(identity, jobs.initialize_command(selected_profile(payload)['preparationRequired']),
+                    workdir='/', timeout_seconds=120, max_output_bytes=32768, config=config)
+                if initialized.exit_code != 0:
+                    return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
+                            'message': 'The owned source and dependency initialization did not complete. It was not repeated.'}
+                retain_source_ready(root, identity, snapshot)
+                return {'ok': True, 'universeId': identity, 'sourceReady': True,
+                        'status': universe.state, 'services': [serialize(item) for item in universe.services]}
         if not identity:
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
