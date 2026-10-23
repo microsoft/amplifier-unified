@@ -98,7 +98,7 @@ async def main(home):
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins']=app['allowed_origins']|{url}
-    print(json.dumps({'url':url,'ownerId':owner['id'],'sessionId':current,'scheduleId':record['id']}),flush=True)
+    print(json.dumps({'url':url,'ownerId':owner['id'],'ownerWorkspace':owner['workspace'],'sessionId':current,'scheduleId':record['id']}),flush=True)
     stopped=asyncio.Event()
     for sig in (signal.SIGINT,signal.SIGTERM):asyncio.get_running_loop().add_signal_handler(sig,stopped.set)
     try:await stopped.wait()

@@ -16,6 +16,17 @@ try{
  const call=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const get=async()=>{const value=await page.request.get(info.url+'/fixture/inspect');assert.equal(value.status(),200);return value.json()};
  const post=async path=>{const value=await page.request.post(info.url+path);assert.equal(value.status(),200,await value.text());return value.json()};
+ const assertRowLayout=async(target,width)=>{
+  const geometry=await target.evaluate(el=>{
+   const box=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width}};
+   const cells=['.a-automation-identity','.a-automation-owner','.a-automation-outcome','.a-automation-row-actions'].map(s=>el.querySelector(s));
+   return {row:box(el),cells:cells.map(box),clipped:cells.some(e=>e.scrollWidth>e.clientWidth+1),columns:getComputedStyle(el).gridTemplateColumns.split(' ').length};
+  });
+  assert.equal(geometry.columns,width===390?1:4);
+  assert.equal(geometry.clipped,false,'row cells do not clip content horizontally');
+  for(const cell of geometry.cells){assert.ok(cell.left>=geometry.row.left&&cell.right<=geometry.row.right+1);assert.ok(cell.width>0)}
+  for(let i=1;i<geometry.cells.length;i++)assert.ok(width===390?geometry.cells[i].top>=geometry.cells[i-1].bottom-1:geometry.cells[i].left>=geometry.cells[i-1].right-1,'cells do not overlap');
+ };
  await page.goto(info.url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);await call('session.select',{id:info.sessionId});
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Keep my automation test draft');await expect(composer).toHaveDraft('Keep my automation test draft');
  const other=await page.context().newPage();await other.goto(info.url);await other.waitForFunction(()=>window.amplifier?.getState()?.client?.id);await other.evaluate(async id=>{await window.amplifier.dispatch('session.select',{id});await window.amplifier.dispatch('view.update',{patch:{draft:'Other client draft',panel:null}})},info.ownerId);
@@ -25,10 +36,9 @@ try{
  const hub=page.getByRole('region',{name:'Automation overview'}),row=hub.locator(`[data-automation-id="${info.scheduleId}"]`);
  await expect(row).toBeVisible();timings.openToRowsMs=Date.now()-opened;await expect(row).toContainText('Exited report owner');await expect(row).toContainText('Needs review');
  assert.equal(await hub.locator('[data-automation-id]').count(),30);
- const ownerWorkspace=(await state()).sessions.find(item=>item.id===info.ownerId).workspace;
+ const ownerWorkspace=info.ownerWorkspace;
  await expect(row.locator('[data-part="automation-workspace"]')).toHaveText(ownerWorkspace);
- const columns=await row.evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);
- assert.equal(columns,4,'desktop rows keep identity, timing/owner, outcome and actions in separate columns');
+ await assertRowLayout(row,1280);
  const exceptions=hub.locator('.a-automation-exceptions');
  await expect(exceptions).toHaveJSProperty('open',true);
  await exceptions.locator(':scope > summary').focus();await page.keyboard.press('Enter');
@@ -153,7 +163,7 @@ try{
   await page.setViewportSize({width,height:900});await call('view.update',{patch:{scheme}});
   await expect.poll(()=>page.locator('#amp-one').evaluate(el=>getComputedStyle(el).colorScheme)).toBe(scheme);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  assert.equal(await hub.locator('[data-automation-id]').first().evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width===390?1:4);
+  await assertRowLayout(hub.locator('[data-automation-id]').first(),width);
   await page.screenshot({path:output+`/populated-${width}-${scheme}.png`,animations:'disabled'});
  }
  await hub.getByRole('button',{name:'Open owning chat',exact:true}).click();
@@ -215,6 +225,8 @@ try{
  await expect(outcomeRow.locator('[data-part="automation-schedule-state"]')).toHaveText('Scheduled');
  await expect(outcomeRow.locator('[data-part="automation-run-state"]')).toHaveText('Failed');
  assert.equal(await outcomeRow.evaluate(el=>getComputedStyle(el).borderLeftStyle),'solid');
+ assert.equal(await outcomeRow.evaluate(el=>getComputedStyle(el).borderLeftWidth),'4px');
+ assert.equal(await outcomeRow.evaluate(el=>getComputedStyle(el).borderLeftColor),await outcomeRow.locator('[data-part="automation-run-state"]').evaluate(el=>getComputedStyle(el).color));
  await page.screenshot({path:output+'/failed-mobile.png',animations:'disabled'});
  phase='unknown-evidence-no-replay';
  await post('/fixture/uncertain?id='+encodeURIComponent(beforeCreate.id));
