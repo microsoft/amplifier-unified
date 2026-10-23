@@ -241,7 +241,7 @@ function measureOwner(element,probe) {
 }
 const fixture = spawn(process.env.AMPLIFIER_TEST_PYTHON || root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
   {stdio: ['ignore', 'pipe', 'inherit']});
-let browser,page,diagnosticOwner,restoredOwnerStyle,lastOwnerMeasurement;
+let browser,context,page,diagnosticOwner,restoredOwnerStyle,lastOwnerMeasurement;
 const ownerDiagnostics=[];
 const saveOwnerDiagnostics=()=>writeFileSync(root+'test-results/delegate-work-stream-owner-diagnostics.json',
   JSON.stringify({scope:'synthetic fixture only; frame samples are not proof of settled layout',
@@ -312,7 +312,11 @@ try {
       startedAt: start, endedAt: start + 40}], nodes}
   }}});
   browser = await chromium.launch({headless: true, args: ['--no-zygote', '--single-process', '--disable-gpu']});
-  page = await browser.newPage({extraHTTPHeaders: headers});
+  // Keep one explicit context: closing an implicitly owned context between
+  // scenes terminates this ARM64 single-process Chromium. Tabs still have
+  // independent sessionStorage, so replaced transcripts get fresh anchors.
+  context=await browser.newContext({extraHTTPHeaders:headers});
+  page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   observeApi(page,url);
@@ -443,7 +447,7 @@ try {
   // reuse another scene's saved reading anchor after replacing its transcript.
   await diagnosticOwner?.dispose();diagnosticOwner=null;await page.close();
   scene='observer';
-  page=await browser.newPage({extraHTTPHeaders:headers});
+  page=await context.newPage();
   page.on('pageerror',error=>errors.push(error.message));observeApi(page,url);
   page.on('request',request=>{
     if(request.url().includes('/api/conversation/detail?'))fieldRequests.push({
@@ -506,7 +510,7 @@ try {
   writeFileSync(root+'test-results/delegate-work-stream-transitions.json',JSON.stringify(transitionChecks,null,2));
   assert.equal(removed.status,400);
   assert.match(removedBody.error,/This message is no longer available/);
-  page=await browser.newPage({extraHTTPHeaders:headers});
+  page=await context.newPage();
   page.on('pageerror',error=>errors.push(error.message));observeApi(page,url);
   for(const [name,viewport] of viewports) {
     await page.setViewportSize(viewport);
