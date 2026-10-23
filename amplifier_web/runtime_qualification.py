@@ -281,6 +281,8 @@ async def freeze(manager, generation, project):
     receipt = environments.receipt_directory(manager.home, generation)
     if (receipt / 'runtime.lock').exists():
         raise ValueError('A recorded worker generation cannot be refreshed.')
+    from .runtime_retained_dependencies import verify as verify_retained_dependencies
+    await asyncio.to_thread(verify_retained_dependencies, project)
     # Filesystem scans and payload hashing must not stall the serving event
     # loop while existing conversations continue on their pinned generation.
     graph = await asyncio.to_thread(installed_graph, project)
