@@ -40,7 +40,7 @@ function measureOwner(element) {
 }
 const fixture = spawn(root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
   {stdio: ['ignore', 'pipe', 'inherit']});
-let browser;
+let browser,page;
 try {
   const ready = await new Promise((resolve, reject) => {
     let text = '';
@@ -99,7 +99,7 @@ try {
       startedAt: start, endedAt: start + 40}], nodes}
   }}});
   browser = await chromium.launch({headless: true, args: ['--no-zygote', '--single-process', '--disable-gpu']});
-  const page = await browser.newPage({extraHTTPHeaders: headers});
+  page = await browser.newPage({extraHTTPHeaders: headers});
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   mkdirSync(root + 'test-results', {recursive: true});
@@ -187,6 +187,9 @@ try {
       const covered=await owner.evaluate(measureOwner);
       assert.ok(covered.problems.some(value=>value.startsWith('covered word:')),'Readability check must detect obscured owner text');
       await page.locator('#readability-negative-cover').evaluate(element=>element.remove());
+      // Restore the inspected position after the artificial reflow/overlay.
+      // The app may have applied its reading anchor while this control ran.
+      await owner.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest'}));
       await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
       writeFileSync(root+'test-results/delegate-work-stream-negative-controls.json',JSON.stringify({split,covered},null,2));
       await page.screenshot({path:root+'test-results/delegate-work-stream-mobile-owner.png'});
@@ -280,6 +283,11 @@ try {
   assert.equal(inspection.runtimeStarts, 0);
   assert.equal(inspection.runtimeSends, 0);
   console.log('PASS: synthetic interleaving/layout/actor attribution plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
+} catch(error) {
+  if(page&&!page.isClosed()) {
+    await page.screenshot({path:root+'test-results/delegate-work-stream-failure.png'}).catch(()=>{});
+  }
+  throw error;
 } finally {
   await browser?.close();
   fixture.kill();
