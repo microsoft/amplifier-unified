@@ -46,11 +46,13 @@ async function observeCards(stage){
 }
 async function visibleCardControls(stage,card){
  await card.evaluate(card=>{
-  const editor=card.closest('[role=textbox]'),header=card.querySelector('.a-composer-quote-head');
+  const editor=card.closest('[role=textbox]'),header=card.querySelector('.a-composer-quote-head'),excerpt=card.querySelector('pre');
   editor.scrollTop=0;
   // Deliberately show the excerpt after the natural header position has
   // scrolled away. A merely present or Playwright-"visible" button is not enough.
-  editor.scrollTop=card.getBoundingClientRect().top-editor.getBoundingClientRect().top+header.offsetHeight/2;
+  // A short rendered-code quote has no Markdown fence lines. Do not scroll
+  // its entire readable payload behind an enlarged, wrapped sticky header.
+  editor.scrollTop=card.getBoundingClientRect().top-editor.getBoundingClientRect().top+Math.min(header.offsetHeight/2,excerpt.offsetHeight/2);
  });
  await page.evaluate(()=>new Promise(requestAnimationFrame));
  const actual=await card.evaluate(card=>{
