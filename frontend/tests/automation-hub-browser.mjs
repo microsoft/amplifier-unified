@@ -164,6 +164,10 @@ try{
   await expect.poll(()=>page.locator('#amp-one').evaluate(el=>getComputedStyle(el).colorScheme)).toBe(scheme);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await assertRowLayout(hub.locator('[data-automation-id]').first(),width);
+  if(width===1280){
+   await page.getByRole('dialog').evaluate(el=>{el.scrollTop=0});
+   await expect(hub.locator('[data-automation-id]').first().getByRole('button',{name:'Open owning chat',exact:true})).toBeInViewport({ratio:1});
+  }
   await page.screenshot({path:output+`/populated-${width}-${scheme}.png`,animations:'disabled'});
  }
  await hub.getByRole('button',{name:'Open owning chat',exact:true}).click();
