@@ -349,10 +349,15 @@ def augmented_manifest(content, rows):
     Explicit installed Git overrides retain their source/ref. Configured local
     modules still belong to the bundle loader; never guess an upstream for them.
     """
+    from packaging.requirements import Requirement
+    from .updates import pinned
+
     data = tomllib.loads(content.decode())
     sources = data.get('tool', {}).get('uv', {}).get('sources', {})
     declared = {package_name(name): name for name in sources}
     references, changed = [], False
+    overrides = list(data.get('tool', {}).get('uv', {}).get('override-dependencies', []))
+    generated = {}
     for row in rows:
         if row.get('kind') != 'runtime dependency':
             continue
@@ -378,7 +383,18 @@ def augmented_manifest(content, rows):
         uri = 'git+' + row['url'] + '@' + row['ref']
         if row.get('subdirectory'):
             uri += '#subdirectory=' + row['subdirectory']
-        references.append(name + ' @ ' + uri)
+        reference = name + ' @ ' + uri
+        references.append(reference)
+        if pinned(row['ref']):
+            # A direct requirement alone cannot preserve a retained pin when a
+            # module declares the same dependency at a moving Git ref. Apply
+            # this existing choice transitively without changing authored policy.
+            existing = [value for value in overrides if package_name(Requirement(value).name) == name]
+            if existing and (len(existing) != 1 or Requirement(existing[0]) != Requirement(reference)):
+                raise ProtectedRuntimeSource(name)
+            if not existing:
+                overrides.append(reference)
+                generated[name] = reference
     if references:
         uv = data.setdefault('tool', {}).setdefault('uv', {})
         # This is the app-owned runtime manifest, never a user's project.
@@ -387,6 +403,14 @@ def augmented_manifest(content, rows):
         uv['default-groups'] = ['unified-managed-runtime']
         data['dependency-groups'] = {'unified-managed-runtime': sorted(set(references))}
         changed = True
+    if generated:
+        owner = data.setdefault('tool', {}).setdefault('amplifier-unified', {})
+        if 'generated-source-overrides' in owner:
+            raise ValueError('The runtime manifest already owns generated source overrides.')
+        # Exact provenance distinguishes these mirrors from an identical authored
+        # override when a later, separately proven reconciliation advances a pin.
+        owner['generated-source-overrides'] = generated
+        data['tool']['uv']['override-dependencies'] = overrides
     if not changed:
         return content
     return ('# Generated worker sources; resolved revisions are recorded separately.\n' +

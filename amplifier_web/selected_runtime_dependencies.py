@@ -196,6 +196,27 @@ async def refresh(manager, stage, project, selected):
         changed.add(name)
     if changed != set(selected):
         raise ValueError('A selected dependency lacks an exact generated source entry.')
+    generated = data.get('tool', {}).get('amplifier-unified', {}).get('generated-source-overrides', {})
+    overrides = data.get('tool', {}).get('uv', {}).get('override-dependencies', [])
+    rebound = set()
+    for index, value in enumerate(overrides):
+        requirement = Requirement(value)
+        name = package_name(requirement.name)
+        if name not in selected:
+            continue
+        row = selected[name]
+        old = git_source(requirement.url)
+        if (generated.get(name) != value or name in rebound or requirement.marker or requirement.extras
+                or old is None or any(old[key] != row[key] for key in ('url', 'subdirectory'))
+                or old['ref'] != row['previousRevision']):
+            raise ValueError('An authored or changed resolver override protects this dependency.')
+        uri = 'git+' + row['url'] + '@' + row['revision']
+        if row['subdirectory']:
+            uri += '#subdirectory=' + row['subdirectory']
+        overrides[index] = generated[name] = name + ' @ ' + uri
+        rebound.add(name)
+    if set(generated).intersection(selected) != rebound:
+        raise ValueError('A generated resolver override is missing before reconciliation.')
     write_private(path, '\n'.join(json.dumps(key) + ' = ' + toml_value(value) for key, value in data.items()) + '\n')
     uv = shutil.which('uv')
     await process(uv, 'lock', '--project', str(project), '--python', '3.13',
