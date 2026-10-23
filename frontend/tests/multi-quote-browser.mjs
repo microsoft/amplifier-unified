@@ -568,6 +568,9 @@ try{
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await editor.fill('');
  await page.setViewportSize({width:1280,height:900});await expect(page.locator('.a-quote-selection')).toHaveCount(0);
  // Source revision changes before snapshot admission reject the captured digest.
+ // This is a fresh source gesture after editor/quote removal, not a synthetic
+ // selectionchange replay while the transcript's prior gesture is dismissed.
+ await c.locator('.a-detail-text p:nth-of-type(2)').dispatchEvent('pointerdown');
  await selectContents('p:nth-of-type(2)');
  await page.route('**/api/actions',async route=>{
   if(route.request().postDataJSON()?.action==='message.reply'){
