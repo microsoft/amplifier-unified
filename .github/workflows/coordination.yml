@@ -8,6 +8,7 @@ on:
       - 'amplifier_web/outcome_acknowledgement.py'
       - 'tests/test_request_cancellation.py'
       - 'tests/test_outcome_acknowledgement.py'
+      - 'tests/test_test_outcome_acknowledgement.py'
       - 'frontend/tests/request-cancellation-browser.mjs'
       - 'amplifier_web/collaboration*.py'
       - 'amplifier_web/app_guidance.py'
@@ -149,6 +150,7 @@ jobs:
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
           tests/test_coordination_revisions.py tests/test_request_cancellation.py tests/test_outcome_acknowledgement.py
+          tests/test_test_outcome_acknowledgement.py
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
           tests/test_background_reservation_recovery.py

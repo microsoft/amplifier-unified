@@ -71,6 +71,14 @@ content. A private, durable readiness receipt binds successful source extraction
 to that exact universe and snapshot digest. A running container without that
 receipt remains unready for checks; inspection never repeats source extraction.
 Stop and preservation before removal remain available for partial source copies.
+Docker source archives are limited to 512 MiB and checked before dependency
+preparation and guest admission. Archives up to 128 MiB use the supported file
+upload; larger archives use the supported directory upload with parts no larger
+than 64 MiB. The guest checks the complete archive size and SHA-256 before the
+same confined extraction. These parts are transport data, never readiness proof.
+Successful extraction removes guest transport scratch; the host's immutable
+snapshot remains. Failed transfers retain source and partial guest data for
+existing inspection and preservation, without automatically replaying launch.
 Tracked files and nonignored untracked files are included; symlink text
 is preserved without reading its targets; extraction refuses links that leave
 the container working folder. Git credentials, repository hooks and

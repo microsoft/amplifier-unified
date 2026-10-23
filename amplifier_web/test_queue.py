@@ -205,6 +205,10 @@ class TestQueue:
                 result = job[phase]
                 value[phase] = {key: result[key] for key in ('requestId', 'state', 'message') if key in result}
         value['notification'] = receipt['subscription']['status']
+        from .outcome_acknowledgement import reference
+        review = reference(receipt)
+        if review is not None:
+            value['notificationReview'] = review
         from .test_queue_recovery import outcome
         recovered = outcome(self.app, receipt)
         if recovered is not None:

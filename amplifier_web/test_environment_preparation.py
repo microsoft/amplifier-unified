@@ -28,8 +28,9 @@ except ImportError:  # Capability inspection must remain usable on Windows.
     fcntl = None
 
 from . import test_environment_profiles as profiles
+from . import test_source_transfer as transfer
 
-MAX_ARCHIVE = 512 * 1024 * 1024
+MAX_ARCHIVE = transfer.MAX_ARCHIVE
 MAX_INPUT = 16 * 1024 * 1024
 PREPARATION_SECONDS = 1800
 LOG_BYTES = 128 * 1024
@@ -81,9 +82,8 @@ def plan(archive, snapshot, profile_id):
         raise ValueError('The small Python profile does not require dependency preparation.')
     if archive.is_symlink() or not archive.is_file() or archive.stat().st_size > MAX_ARCHIVE:
         raise ValueError('The source archive is unavailable or exceeds the preparation limit.')
-    source_hash = digest(archive)
-    if source_hash != snapshot.get('archive_sha256'):
-        raise ValueError('The frozen source archive changed before dependency preparation.')
+    transfer.preflight(archive, snapshot)
+    source_hash = snapshot['archive_sha256']
     files = {}
     names = set()
     total_bytes = 0

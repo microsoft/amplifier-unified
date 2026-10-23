@@ -58,6 +58,14 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   every original uncertain operation, storage owner, source and result archive.
   Registered target reservations remain the target controller's responsibility;
   this maintenance does not scan other installations or issue remote work.
+- After reviewing an exact completed check, the requester can use the
+  `notificationReview` handle from these test reads with
+  `coordination.acknowledge` and a stable command ID. This retires only that
+  result’s still-queued notification. It never cancels accepted input, changes
+  the check outcome or its qualification, or retries an uncertain effect. Reads
+  alone never acknowledge. Stop, cancellation, changed placement/task or a newer
+  outcome invalidate an old review; later changed outcomes remain eligible for
+  notification. Checks submitted with `notify:false` need no acknowledgment.
 - Cancellation before admission starts no command. New admitted checks run in a
   durable guest supervisor, independent of host request/connection lifetime.
   Cancellation requests termination of the exact command group; the supervisor
