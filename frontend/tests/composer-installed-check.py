@@ -3,6 +3,7 @@
 Uses the existing browser runner and the managed multi-quote fresh-venv pattern.
 Run after the bundled frontend build. Prepared dependencies remain read-only.
 """
+import argparse
 import hashlib
 import json
 import os
@@ -39,6 +40,10 @@ def command(name, args, *, cwd=ROOT, env=None):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--header-only', action='store_true',
+                        help='Fixed header-occlusion regression plus served-asset parity.')
+    args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=False)
     result = {'status': 'running', 'limits': ['Read-only locked development dependencies, not minimal production dependency install', 'Synthetic runtime, no real provider/physical IME/audio']}
     write('result.json', result)
@@ -90,7 +95,10 @@ print(json.dumps({'packageRoot':str(root),'verified':True,'fileCount':len(expect
         (harness / 'frontend/node_modules').symlink_to(ROOT / 'frontend/node_modules', target_is_directory=True)
         (harness / '.venv').symlink_to(venv, target_is_directory=True)
         scenarios = []
-        for name in ['composer-fidelity', 'composer-options', 'compact-composer', 'composer-primary-action', 'message-delivery']:
+        selected = (['composer-header', 'compact-composer'] if args.header_only else
+                    ['composer-fidelity', 'composer-options', 'compact-composer', 'composer-primary-action', 'message-delivery'])
+        result['selection'] = selected
+        for name in selected:
             output = OUT / name
             scenarios.append({'id': name, 'command': ['node', f'tests/{name}-browser.mjs'],
                               'env': {'AMPLIFIER_TEST_PYTHON': str(python), 'AMPLIFIER_TEST_PACKAGE_ROOT': package,

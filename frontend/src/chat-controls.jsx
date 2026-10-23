@@ -199,7 +199,9 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
  const delayed=isDraft&&checkingDefaults&&discovery.delayed;
  const renderPanel=embedded?content=>content:renderPopover,Advanced=embedded?'details':React.Fragment;
  const paged=compact&&!embedded;
- const option=(id,label,value,sub)=> <button type="button" className="a-composer-option" data-composer-option={id} aria-label={label} aria-describedby={`${descriptionId}-${id}`} onClick={()=>navigate(id)}><span id={`${descriptionId}-${id}`}>{value}{sub&&<small>{sub}</small>}</span><ChevronRight/></button>;
+ // These text rows already expose their purpose/value. An icon-label tooltip
+ // on focus covers the compact menu heading instead of adding useful help.
+ const option=(id,label,value,sub)=> <button type="button" className="a-composer-option" data-tooltip="off" data-composer-option={id} aria-label={label} aria-describedby={`${descriptionId}-${id}`} onClick={()=>navigate(id)}><span id={`${descriptionId}-${id}`}>{value}{sub&&<small>{sub}</small>}</span><ChevronRight/></button>;
  return <div className="a-model-control" ref={popover}>
   {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" aria-haspopup={compact?'dialog':undefined} disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{!effective.model&&(delayed||failure)?'Model settings unavailable':compact?modelAndEffort:modelLabel}</span>{(session?.pendingModelSelection||pendingBundle)&&<small>Next message</small>}<ChevronDown/></button>}
   {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":`a-model-popover a-compact-popover${compact?' a-composer-options-panel':''}`} style={embedded?undefined:position} role={compact?'dialog':undefined} aria-label={compact?'Chat options':'Conversation model'} aria-describedby={paged?`${descriptionId}-heading`:undefined}>
