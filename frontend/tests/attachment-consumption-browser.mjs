@@ -19,6 +19,7 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDioAAAAASUVORK5CYII=','base64');
 const names=['detector-countercheck','accepted-two-cycle','response-before-frame','failed-recovery','unknown-reload'];
 const report={schemaVersion:1,scenario:'attachment-consumption',runtime:'synthetic',liveProvider:false,
+ negativeControl:process.env.AMPLIFIER_TEST_PRECOMMIT_NOTIFY==='1'?'precommit-work-notification':null,
  cases:names.map(id=>({id,status:'unrun'})),errors:[],routeLifecycle:[],traces:[],observations:[]};
 await mkdir(output,{recursive:true});
 const save=()=>writeFile(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');
@@ -89,20 +90,44 @@ async function setupPage(){
  await context.addInitScript(()=>{
   const Native=window.WebSocket;
   window.attachmentSockets=[];
-  // Hold actual state-frame delivery only. No payload/revision/draft is edited.
-  window.attachmentFrameGate={arm:false,active:false,held:[],events:[],
-   release(){this.arm=false;this.active=false;for(const [handler,event] of this.held.splice(0))handler(event);}};
+  window.attachmentStateRecovery=[];
+  const nativeFetch=window.fetch;
+  window.fetch=async(...args)=>{
+   const url=new URL(typeof args[0]==='string'?args[0]:args[0].url,location.href);
+   const row=url.pathname==='/api/state'?{url:url.pathname,beforeRevision:window.amplifier?.getState()?.revision}:null;
+   if(row)window.attachmentStateRecovery.push(row);
+   const response=await nativeFetch(...args);
+   if(row){
+    const body=await response.clone().json();Object.assign(row,{status:response.status,revision:body.revision,clientId:body.client?.id});
+    const gate=window.attachmentFrameGate;
+    if(gate?.active){
+     row.held=true;
+     await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(Error('Recovery response release deadline')),10000);
+      gate.recoveries.push(()=>{clearTimeout(timer);row.released=true;resolve();});
+     });
+    }
+   }
+   return response;
+  };
+  // Hold actual state delivery, including HTTP recovery. No payload is edited.
+  window.attachmentFrameGate={arm:false,active:false,held:[],events:[],recoveries:[],
+   release(){this.arm=false;this.active=false;for(const [handler,event] of this.held.splice(0))handler(event);for(const resolve of this.recoveries.splice(0))resolve();}};
   window.WebSocket=class extends Native{constructor(...args){super(...args);window.attachmentSockets.push(this);
    Object.defineProperty(this,'onmessage',{set(handler){this.addEventListener('message',event=>{
     const gate=window.attachmentFrameGate,frame=JSON.parse(event.data);
+    const beforeRevision=window.amplifier?.getState()?.revision;
     if(gate.active&&['state','state-delta'].includes(frame.event)){
-     gate.held.push([handler,event]);gate.events.push({kind:'held',revision:frame.data.revision});return;
+     gate.held.push([handler,event]);gate.events.push({kind:'held',frameKind:frame.event,revision:frame.data.revision,beforeRevision});return;
     }
     handler(event);
     const state=window.amplifier?.getState(),session=state?.sessions.find(row=>row.id===state.selectedSessionId);
     const sent=session?.messages.find(row=>row.text==='Response-first submission');
-    if(gate.arm&&sent?.delivery?.status==='sending'){
+    if(gate.arm&&!gate.identity&&sent?.delivery?.status==='sending'){
      gate.active=true;gate.admission=state.revision;gate.command=sent.inputId;
+     gate.identity={clientId:state.client.id,sessionId:session.id,inputId:sent.inputId,
+      hostInstanceId:state.client.hostInstanceId,frameKind:frame.event,frameRevision:frame.data.revision,
+      beforeRevision,afterRevision:state.revision,rawFrame:frame.data};
     }
    });}});
   }};
@@ -260,6 +285,17 @@ async function responseFirst(page,owner){
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  const file=await upload(page,'response-first.png');await watch(page,owner,[file.id]);
  await composer.fill('Response-first submission');
+ // Reproduce the publication boundary: a real current Work window must be
+ // invalidated by admission, not merely absent when the send happens to run.
+ await withActionRoute(page,{label:'work-ready-before-admission',trace:report.routeLifecycle,handle:async route=>{
+  const body=route.request().method()==='POST'?route.request().postDataJSON():null;
+  if(body?.action==='conversation.send'&&body.args.text==='Response-first submission'){
+   await expect.poll(async()=>(await inspect(page)).drafts[owner]).toBe('');
+   await control(page,{op:'read-work',sessionId:owner});
+   assert.equal((await inspect(page)).workStatus[owner].current,true);
+  }
+  await route.continue();
+ }},async()=>{
  await page.evaluate(()=>{window.attachmentFrameGate.arm=true;});
  const responsePromise=page.waitForResponse(response=>{
   try{return response.request().postDataJSON()?.action==='conversation.send';}catch{return false;}
@@ -270,16 +306,42 @@ async function responseFirst(page,owner){
   const inputId=await waitRuntimeSend(page,owner,0);
   await control(page,{op:'accept',inputId});await control(page,{op:'finish',inputId});
   const response=await responsePromise,receipt=await response.json();assert.equal(response.status(),200);
-  const gate=await page.evaluate(()=>({admission:window.attachmentFrameGate.admission,events:window.attachmentFrameGate.events}));
-  report.observations.push({label:'Response before attachment-consumption frame',receipt,gate});
+  const gate=await page.evaluate(()=>({admission:window.attachmentFrameGate.admission,identity:window.attachmentFrameGate.identity,
+   events:window.attachmentFrameGate.events,recovery:window.attachmentStateRecovery,browserRevision:window.amplifier.getState().revision}));
+  const saved=(await observation(page,'Response-first exact saved receipt evidence')).sends.find(row=>row.inputId===inputId);
+  report.observations.push({label:'Response before attachment-consumption frame',receipt,gate,saved});
   assert.equal(receipt.delivery,'accepted');
+  assert.equal(saved.initial.receipt.inputId,inputId);
+  assert.equal(saved.initial.receipt.sessionId,owner);
+  assert.equal(saved.initial.receipt.delivery,'sending');
+  assert.equal(saved.initial.receipt.revision,saved.accepted.receipt.revision,'Acceptance preserves exact saved admission');
+  assert.equal(saved.initial.receipt.revision,saved.final.receipt.revision,'Runtime return preserves exact saved admission');
+  assert.equal(receipt.revision,saved.initial.receipt.revision,'HTTP preserves exact saved admission');
+  assert.equal(receipt.stateRevision,saved.accepted.receipt._deliveryStateRevision,'HTTP observes exact consumption marker');
+  assert.equal(receipt.stateRevision,saved.accepted.stateRevision,'Consumption marker names acceptance publication');
+  assert.equal(gate.identity.inputId,inputId);
+  assert.equal(gate.identity.sessionId,owner);
+  assert.equal(gate.identity.clientId,(await state(page)).client.id);
+  assert.equal(gate.identity.hostInstanceId,receipt.hostInstanceId);
+  assert.ok(['state','state-delta'].includes(gate.identity.frameKind),'Gate is an actual app-state frame');
+  assert.equal(gate.identity.frameRevision,receipt.revision,'Admission frame has the exact command revision');
   assert.equal(receipt.revision,gate.admission,'Durable command retains its admission revision');
   assert.ok(receipt.stateRevision>gate.admission,'Accepted response observes later attachment consumption');
+  assert.ok(gate.browserRevision<receipt.stateRevision,'HTTP response precedes browser consumption state');
+  // Exercise the real recovery fetch too; do not let it silently satisfy this
+  // response-before-state scenario while only WebSocket delivery is gated.
+  await page.waitForFunction(()=>window.attachmentStateRecovery.some(row=>row.held&&!row.released));
+  const protectedOutbox=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')||'[]'));
+  assert.deepEqual(protectedOutbox.find(row=>row.commandId===inputId)?.attachmentIds,[file.id],
+   'Accepted receipt retains attachment protection until consumption state arrives');
   // Queue a normal second send while the first receipt awaits its state frame.
   // Its optimistic outbox must already exclude the first consumed upload.
   await composer.fill('Adjacent cycle');await page.getByRole('button',{name:'Send message',exact:true}).click();
   const next=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')||'[]').find(row=>row.text==='Adjacent cycle'));
   assert.ok(next);assert.deepEqual(next.attachmentIds,[],'Adjacent send never reuses the first attachment');
+  assert.ok((await state(page)).revision<receipt.stateRevision,'Adjacent send was checked before consumption state');
+  report.observations.push({label:'Response-first recovery held through adjacent send',
+   recovery:await page.evaluate(()=>window.attachmentStateRecovery),protectedOutbox,next});
   await cleanTrace(page,'Accepted HTTP response while later frames are held');
   await page.evaluate(()=>window.attachmentFrameGate.release());
   const second=await waitRuntimeSend(page,owner,1);
@@ -289,6 +351,7 @@ async function responseFirst(page,owner){
   assert.equal(actual.sends.filter(row=>row.sessionId===owner).length,2,'Two explicit sends, no replay');
   await cleanTrace(page,'Response-first two-cycle settlement');await original(page,file);
  }finally{await page.evaluate(()=>window.attachmentFrameGate.release());}
+ });
 }
 
 async function recovery(page,owner,mode){
