@@ -552,10 +552,17 @@ try{
   await page.keyboard.press('Escape');await expect(page.locator('.a-quote-selection')).toHaveCount(0);
  }
  page.off('request',countReply);assert.equal(refusedRequests,0,'Unmappable selection must not request a quote');
- await editor.focus();await page.keyboard.insertText(' kept');
- await enteredCommentary('After the saved quote kept');
+ // Test the app's remembered insertion caret without refocusing the DOM
+ // contenteditable (native focus may establish a new browser selection).
+ await b.getByRole('button',{name:'Reply to message',exact:true}).click();await expect(quotes).toHaveCount(2);
+ const caretQuote=references(await documentValue())[1];
+ await expectLayout('refusal preserves remembered quote caret',[...projectDocument(refusalDocument),caretQuote,'']);
+ await quotes.nth(1).getByRole('button',{name:'Remove quote',exact:true}).click();
+ await editor.focus();await editor.press('ControlOrMeta+End');await page.keyboard.insertText('New text after refusal');
+ await enteredCommentary('New text after refusal');
  await page.reload();await expect(quotes).toHaveCount(1);
- await expect(editor).toContainText('Keep this draft');await expect(editor).toContainText('After the saved quote kept');
+ await expect(editor).toContainText('Keep this draft');await expect(editor).toContainText('After the saved quote');
+ await expect(editor).toContainText('New text after refusal');
  await expect(page.getByRole('button',{name:'Remove refusal.txt',exact:true})).toBeVisible();await noPassageEditor(page);
  await page.getByRole('button',{name:'Remove refusal.txt',exact:true}).click();
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await editor.fill('');
