@@ -227,6 +227,15 @@ def step(app, identity, guard=None):
 async def finish(app, record):
     """Publish only this qualified target; unrelated settings edits are retained."""
     async with app.lock:
+        value = runners.store(app)
+        current = next((r for r in value['runners'] if r['id'] == record['runner']['id']), None)
+        if current and current.get('lastCheck', {}).get('requestId') == record['id']:
+            # Publication is already committed. A later cancel/revocation is
+            # not a rollback; observe it without republishing or re-enabling.
+            detail = ('Connection check completed and was saved. Use Pause on this machine to prevent new checks.'
+                      if current['enabled'] else 'Connection check completed and was saved. This machine is paused.')
+            qualification.save(path(app, record['id']), record, status='connected', detail=detail)
+            return
         if suspended(app):
             qualification.save(path(app, record['id']), record, status='paused', detail=MESSAGES['paused'])
             return
@@ -237,15 +246,11 @@ async def finish(app, record):
         if cancelled(app, record['id']):
             qualification.save(path(app, record['id']), record, status='cancelled', detail=MESSAGES['cancelled'])
             return
-        value = runners.store(app)
         prior = record.get('prior')
-        current = next((r for r in value['runners'] if r['id'] == record['runner']['id']), None)
         runner = {**record['runner'], 'enabled': current['enabled'] if current else True,
                   'lastCheck': {'checkedAt': time.time(), 'status': 'passed', 'requestId': record['id'],
                                 'profileId': 'linux-python', 'proof': record['proof']}}
-        if current and current.get('lastCheck', {}).get('requestId') == record['id']:
-            pass  # Publication succeeded before a lost local acknowledgement.
-        elif (prior is None and current is not None) or (prior is not None and
+        if (prior is None and current is not None) or (prior is not None and
                 (current is None or {k:v for k,v in prior.items() if k != 'enabled'} != {k:v for k,v in current.items() if k != 'enabled'})):
             qualification.save(path(app, record['id']), record, status='changed', detail=MESSAGES['changed'])
             return

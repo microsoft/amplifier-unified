@@ -207,7 +207,12 @@ def enabled(app, config):
     runner = config.get('remoteRunner')
     if not runner:
         return True
-    return any(row.get('enabled') and row == runner for row in store(app)['runners'])
+    # Check observations do not change the executable route already retained
+    # by queued work. Every other field, including Pause, remains exact.
+    expected = {key: value for key, value in runner.items() if key != 'lastCheck'}
+    return any(row.get('enabled') and
+               {key: value for key, value in row.items() if key != 'lastCheck'} == expected
+               for row in store(app)['runners'])
 
 
 def qualify_retained(app, config):

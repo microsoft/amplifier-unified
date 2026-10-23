@@ -214,6 +214,40 @@ async def test_refresh_preserves_pause_made_during_check_and_does_not_replace_un
     assert saved[1] == other
 
 
+@pytest.mark.parametrize('paused', [False, True])
+@pytest.mark.parametrize('interruption', ['cancel', 'revoked'])
+async def test_cancel_after_published_result_gap_recovers_completed_check_without_replay(origin, route, monkeypatch, paused, interruption):
+    identity, _ = await accepted(origin)
+    save = probe.save
+    interrupted = False
+    def lost_terminal_save(path, record, **changes):
+        nonlocal interrupted
+        if changes.get('status') == 'connected' and not interrupted:
+            interrupted = True
+            raise OSError('publication committed before terminal receipt was saved')
+        return save(path, record, **changes)
+    monkeypatch.setattr(probe, 'save', lost_terminal_save)
+    await enrollment.run(origin.test_queue, identity)
+    assert interrupted
+    current = runners.store(origin)['runners'][0]
+    assert current['enabled'] and current['lastCheck']['requestId'] == identity
+    assert enrollment.read(origin, identity)['status'] == 'unknown'
+    if paused:
+        await runners.dispatch(origin, 'testing.runners.enable', {'id': current['id'], 'enabled': False,
+            'expectedRevision': runners.snapshot(origin)['revision']}, None)
+    if interruption == 'cancel':
+        await runners.dispatch(origin, 'testing.runners.enrollment.cancel', {'id': identity}, None)
+    else:
+        origin.configuration_authority.check.side_effect = ValueError('authority revoked after publication')
+    result = await completed(origin, identity)
+    assert result['status'] == 'connected'
+    assert 'did not enable' not in result['detail']
+    assert ('paused' in result['detail']) if paused else ('Pause' in result['detail'])
+    assert runners.store(origin)['runners'][0]['enabled'] is (not paused)
+    for action in ['start', 'job_start', 'stop', 'remove']:
+        assert route[1].count(action) == 1
+
+
 async def test_revoked_authority_only_cleans_original_work(origin, route):
     identity, _ = await accepted(origin)
     # Advance synchronously to a running owner, before the test command.
