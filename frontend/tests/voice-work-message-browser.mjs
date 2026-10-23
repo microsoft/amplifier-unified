@@ -54,7 +54,21 @@ try{
  await expect(row('backend-result')).not.toContainText('via call');
  await row('backend-result').getByRole('button',{name:'Copy message as Markdown'}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe('**The requested change is complete.**');
- await expect(row('backend-result').getByRole('button',{name:'Choose passage',exact:true})).toBeVisible();
+ // Main quotes directly from rendered text; nested work uses the same action.
+ await expect(row('backend-result').getByRole('button',{name:'Choose passage',exact:true})).toHaveCount(0);
+ const passage=row('backend-result').locator('strong');
+ await passage.dispatchEvent('pointerdown');
+ await passage.evaluate(element=>{
+  document.activeElement?.blur();
+  const range=document.createRange();range.selectNodeContents(element);
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
+ });
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();
+ const quote=page.getByRole('textbox',{name:'Message Amplifier'}).locator('[data-quote-instance]');
+ await expect(quote.locator('pre')).toHaveText('The requested change is complete.');
+ await quote.getByRole('button',{name:'Remove quote',exact:true}).click();
+ await expect(quote).toHaveCount(0);
  await second.locator(':scope > button').first().click();
  await expect(second.locator('[data-message-id="backend-second"]')).toHaveCount(1);
  await expect(second.locator('[data-message-id="backend-result"]')).toHaveCount(0);
