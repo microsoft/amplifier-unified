@@ -102,7 +102,7 @@ function measureOwner(element,probe) {
       scrollHeight:pane.scrollHeight,clientHeight:pane.clientHeight}:null,
     jumpContainer:geometry(jump),jumpControl:geometry(jump?.querySelector('button'))};
 }
-const fixture = spawn(root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
+const fixture = spawn(process.env.AMPLIFIER_TEST_PYTHON || root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
   {stdio: ['ignore', 'pipe', 'inherit']});
 let browser,page,diagnosticOwner,restoredOwnerStyle,lastOwnerMeasurement;
 const ownerDiagnostics=[];
