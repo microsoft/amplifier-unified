@@ -14,8 +14,118 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const mobileOnly=process.argv.includes('--mobile-only');
 const desktop={width:1280,height:1000},mobile={width:390,height:844};
-const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mobile]];
+const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mobile],['small',{width:320,height:844}]];
 const navigationEntries=[];
+const layoutChecks=[],apiFailures=[],responseReads=[],transitionChecks=[];
+let scene='stream';
+function observeApi(page,origin) {
+  page.on('response',response=>{
+    const url=new URL(response.url());
+    if(url.origin!==origin||!url.pathname.startsWith('/api/')||response.status()<400)return;
+    const record={scene,method:response.request().method(),path:url.pathname+url.search,status:response.status()};
+    apiFailures.push(record);
+    responseReads.push(response.text().then(body=>{record.body=body.slice(0,2000)},error=>{record.bodyError=error.message}));
+  });
+}
+async function cleanScene(page) {
+  await Promise.all(responseReads);
+  writeFileSync(root+'test-results/delegate-work-stream-api-failures.json',JSON.stringify(apiFailures,null,2));
+  await expect(page.getByText(/Invalid request: This message is no longer available/)).toHaveCount(0);
+  assert.deepEqual(apiFailures,[],'Normal scene must not issue rejected API requests');
+}
+// Measure the CURRENT scroll position; unlike the centered owner oracle, this
+// catches a floating control covering any visible reply, header or owner glyph.
+function visibleWorkGeometry(work) {
+  const pane=work.closest('[data-part="messages"]'),p=pane.getBoundingClientRect();
+  const clip={left:Math.max(0,p.left+pane.clientLeft),top:Math.max(0,p.top+pane.clientTop),
+    right:Math.min(innerWidth,p.left+pane.clientLeft+pane.clientWidth),bottom:Math.min(innerHeight,p.top+pane.clientTop+pane.clientHeight)};
+  const hits=[],problems=[];
+  for(const region of work.querySelectorAll('.a-delegate-message header,.a-delegate-markdown,.a-work-actor')) {
+    const walker=document.createTreeWalker(region,NodeFilter.SHOW_TEXT);
+    for(let text=walker.nextNode();text;text=walker.nextNode())for(const match of text.textContent.matchAll(/\S+/gu)) {
+      const range=document.createRange();range.setStart(text,match.index);range.setEnd(text,match.index+match[0].length);
+      for(const rect of range.getClientRects()) {
+        const left=Math.max(rect.left,clip.left),right=Math.min(rect.right,clip.right);
+        const top=Math.max(rect.top,clip.top),bottom=Math.min(rect.bottom,clip.bottom);
+        if(right-left<2||bottom-top<2)continue;
+        for(const fraction of [.2,.5,.8]) {
+          const x=left+(right-left)*fraction,y=(top+bottom)/2,hit=document.elementFromPoint(x,y);
+          const inside=!!hit&&text.parentElement.contains(hit);
+          hits.push({word:match[0],x,y,inside,hit:hit?{tag:hit.tagName,class:hit.getAttribute('class'),id:hit.id}:null});
+          if(!inside)problems.push(`Obscured visible text: ${match[0]}`);
+        }
+      }
+    }
+  }
+  const jump=work.closest('[data-part="conversation"]').querySelector('.a-chat-jump button');
+  const composer=work.closest('[data-part="conversation"]').querySelector('[data-part="composer"]');
+  return {hits,problems,pane:p.toJSON(),jump:jump?.getBoundingClientRect().toJSON()??null,
+    composer:composer.getBoundingClientRect().toJSON(),scrollTop:pane.scrollTop};
+}
+async function checkWorkLayout(page,work,label) {
+  const measured=await work.evaluate(visibleWorkGeometry);
+  layoutChecks.push({label,viewport:page.viewportSize(),...measured});
+  writeFileSync(root+'test-results/delegate-work-stream-layout.json',JSON.stringify(layoutChecks,null,2));
+  assert.ok(measured.hits.length,'Visible Work glyphs must actually be sampled');
+  assert.deepEqual(measured.problems,[],label+': visible Work text is readable');
+  if(measured.jump) {
+    assert.ok(measured.pane.bottom<=measured.jump.top+1,label+': jump control must sit outside message pane');
+    assert.ok(measured.jump.bottom<=measured.composer.top+1,label+': jump control must not cover composer');
+  }
+  assert.ok(measured.composer.bottom<=page.viewportSize().height+1,label+': composer remains in viewport');
+}
+async function checkHeader(page,region,label) {
+  const heading=region.locator('header>span').first();
+  await heading.scrollIntoViewIfNeeded();
+  const measured=await heading.evaluate(element=>{
+    const range=document.createRange();range.selectNodeContents(element);
+    return {text:element.textContent,lines:[...new Set([...range.getClientRects()].map(r=>Math.round(r.top)))]};
+  });
+  assert.equal(measured.lines.length,1,label+': heading must not split mid-word');
+  const copy=region.getByRole('button',{name:new RegExp('^Copy '+label.toLowerCase()+'$')});
+  await expect(copy).toBeEnabled();await expect(copy).toBeInViewport();
+}
+async function checkLatest(page,work,label) {
+  const jump=page.getByRole('button',{name:'Jump to latest messages',exact:true});
+  const pane=page.locator('[data-part="messages"]');
+  if(await pane.evaluate(el=>el.scrollHeight-el.clientHeight<=80)) {
+    await expect(jump).toHaveCount(0);return;
+  }
+  if(!await jump.isVisible()) {
+    await pane.hover();await page.mouse.wheel(0,-240);
+    await expect.poll(()=>pane.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeGreaterThan(80);
+  }
+  await expect(jump).toBeVisible();
+  await checkWorkLayout(page,work,label);
+  await jump.focus();await expect(jump).toBeFocused();await jump.press('Enter');
+  await expect.poll(()=>pane.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThanOrEqual(2);
+  await expect(jump).toHaveCount(0);
+}
+async function checkReadingAnchor(page,operation) {
+  const button=operation.locator(':scope > button');
+  await button.scrollIntoViewIfNeeded();
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const pane=page.locator('[data-part="messages"]');
+  const anchor=await pane.evaluate(el=>{
+    const top=el.getBoundingClientRect().top;
+    const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>top);
+    return row?{id:row.dataset.messageId,offset:row.getBoundingClientRect().top-top}:null;
+  });
+  assert.ok(anchor,'Reading-position check needs an actual message anchor');
+  const offset=()=>pane.evaluate((el,id)=>{
+    const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===id);
+    return row?row.getBoundingClientRect().top-el.getBoundingClientRect().top:null;
+  },anchor.id);
+  await button.click();
+  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  await button.click();
+  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  const viewport=page.viewportSize();
+  await page.setViewportSize({...viewport,width:viewport.width+12});
+  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  await page.setViewportSize(viewport);
+  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+}
 async function enterStreamConversation(page,expectedSessionId,stage) {
   // Keep the shared Home-to-chat setup and desktop pinned preference intact.
   await showFixtureConversation(page);
@@ -205,6 +315,7 @@ try {
   page = await browser.newPage({extraHTTPHeaders: headers});
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  observeApi(page,url);
   mkdirSync(root + 'test-results', {recursive: true});
   for (const [name, viewport] of viewports) {
     await page.setViewportSize(viewport);
@@ -260,6 +371,8 @@ try {
     await expect(rows[0]).toBeVisible();
     await expect(operations[0].locator(':scope > button')).toHaveAttribute('aria-expanded', 'false');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
+    await checkReadingAnchor(page,operations[0]);
+    await checkWorkLayout(page,work,`stream-${name}-opened`);
     const readability=[];
     for(const operation of operations) {
       const owner=operation.locator(':scope > button > .a-work-actor');
@@ -315,7 +428,10 @@ try {
     }
     writeFileSync(root+`test-results/delegate-work-stream-${name}-readability.json`,JSON.stringify(readability,null,2));
     await work.scrollIntoViewIfNeeded();
+    await checkWorkLayout(page,work,`stream-${name}-saved-position`);
     await page.screenshot({path: root + `test-results/delegate-work-stream-${name}.png`, fullPage: true});
+    await checkLatest(page,work,`stream-${name}-latest`);
+    await cleanScene(page);
   }
   // The separate live scenario drives actual metadata-only observer hooks and
   // UUID-stamped canonical records through the registered-browser UI. The
@@ -323,15 +439,20 @@ try {
   const instruction='OBSERVER REQUEST café\n'+('request body 日本語\n'.repeat(1200))+'REQUEST-END';
   const reply='OBSERVER REPLY\n'+('reply body café\n'.repeat(1500))+'REPLY-END';
   const fieldRequests=[];
+  // A new tab for new synthetic message identities; never clear app errors or
+  // reuse another scene's saved reading anchor after replacing its transcript.
+  await diagnosticOwner?.dispose();diagnosticOwner=null;await page.close();
+  scene='observer';
+  page=await browser.newPage({extraHTTPHeaders:headers});
+  page.on('pageerror',error=>errors.push(error.message));observeApi(page,url);
   page.on('request',request=>{
     if(request.url().includes('/api/conversation/detail?'))fieldRequests.push({
       query:new URL(request.url()).searchParams,client:request.headers()['x-amplifier-client']});
   });
-  // The already-open page can read published observer records before control
-  // returns; observe that boundary before triggering it, including warm reads.
+  // Install the request observer before first navigation and canonical reads.
   await control({op:'delegate-observer',instruction,reply,olderRecords:true});
   await page.setViewportSize(mobileOnly?mobile:desktop);
-  await page.reload();
+  await page.goto(url);
   await enterStreamConversation(page,alpha,'observer');
   const observed=page.locator('[data-group-id="observer-turn@observer-question"]');
   const observedToggle=observed.locator(':scope > button');
@@ -357,6 +478,9 @@ try {
   const source=observerInspection.sessions.find(row=>row.id===alpha);
   assert.ok(source.execution.nodes.every(row=>!Object.hasOwn(row,'input')&&!Object.hasOwn(row,'output')),
     'UI inspection must not inject canonical bodies into live observer metadata');
+  await cleanScene(page);
+  await page.close();
+  scene='nested';
   // The original V3 requires real actor labels, not a Main chat guess when
   // only a nested recipient is loaded. These are synthetic projection inputs,
   // independent of the actual observer/copy case above.
@@ -372,9 +496,21 @@ try {
     execution:{turns:[{id:turnId,anchorMessageId:'question',phase:'completed',startedAt:start,endedAt:start+8}],
       nodes:[orphanRequest,orphanWorker,orphanOperation]}
   }}});
+  // Negative evidence for the former banner: this fixture transition removes
+  // observer-question under the same synthetic session. Probe that exact guard,
+  // separately from the clean browser scene; do not waive any browser failure.
+  const removed=await fetch(url+`/api/conversation/navigation?sessionId=${alpha}&messageId=observer-question&window=true`,{headers});
+  const removedBody=await removed.json();
+  transitionChecks.push({from:'observer',to:'nested',removedMessageId:'observer-question',
+    request:removed.url,status:removed.status,body:removedBody});
+  writeFileSync(root+'test-results/delegate-work-stream-transitions.json',JSON.stringify(transitionChecks,null,2));
+  assert.equal(removed.status,400);
+  assert.match(removedBody.error,/This message is no longer available/);
+  page=await browser.newPage({extraHTTPHeaders:headers});
+  page.on('pageerror',error=>errors.push(error.message));observeApi(page,url);
   for(const [name,viewport] of viewports) {
     await page.setViewportSize(viewport);
-    await page.reload();await enterStreamConversation(page,alpha,`nested-${name}`);
+    await page.goto(url);await enterStreamConversation(page,alpha,`nested-${name}`);
     const work=page.locator(`[data-group-id="${turnId}@question"]`),toggle=work.locator(':scope > button');
     await expect(toggle).toBeVisible();
     if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
@@ -391,11 +527,16 @@ try {
     const operation=work.locator('[data-node-id="orphan-read"]');
     await expect(operation.locator(':scope > button')).toHaveAttribute('aria-expanded','false');
     await expect(operation.locator('.a-work-actor')).toContainText('Delegate · Inner review');
+    await checkHeader(page,request,'Request');
+    await checkHeader(page,reply,'Reply');
     await request.scrollIntoViewIfNeeded();
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Nested attribution must not overflow');
+    await checkWorkLayout(page,work,`nested-${name}-saved-position`);
     await page.screenshot({path:root+`test-results/delegate-work-stream-attribution-${name}.png`});
+    await checkLatest(page,work,`nested-${name}-latest`);
     await toggle.click();
     await expect(request).toBeHidden();await expect(reply).toBeHidden();
+    await cleanScene(page);
   }
   assert.deepEqual(errors, []);
   const inspection = await control({op: 'inspect-work-source'});
@@ -403,6 +544,8 @@ try {
   assert.equal(inspection.runtimeSends, 0);
   console.log('PASS: synthetic interleaving/layout/actor attribution plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
 } catch(error) {
+  await Promise.all(responseReads);
+  writeFileSync(root+'test-results/delegate-work-stream-api-failures.json',JSON.stringify(apiFailures,null,2));
   if(page&&!page.isClosed()) {
     // Do not recenter, hide overlays, or change styles to obtain failure evidence.
     if(diagnosticOwner)await recordOwnerDiagnostics('failure').catch(diagnosticError=>{
