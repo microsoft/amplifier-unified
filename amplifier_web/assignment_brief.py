@@ -36,7 +36,8 @@ def dispatch(owner, args, origin, caller):
         actor = PRINCIPAL.get()
         native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
         if origin not in {'ui', 'user'} and actor and actor != native:
-            service.collaboration.error("A child cannot borrow its root's collaboration authority.")
+            from .coordination_guidance import ROOT_SCOPE_MESSAGE
+            service.collaboration.error(ROOT_SCOPE_MESSAGE)
         if source.get('sessionKind', 'root') != 'root':
             service.collaboration.error('Collaboration belongs to ordinary root conversations.')
         if source['id'] != args['sessionId']:
