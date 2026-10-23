@@ -10,7 +10,7 @@ const validator=source.slice(source.indexOf('const referenceFields='),source.ind
  .replace('export function validateChatReferenceMetadata','function validateChatReferenceMetadata');
 const validate=runInNewContext(`${validator}\nvalidateChatReferenceMetadata`);
 const item=()=>({id:'saved-output',sessionId:'source',messageId:'reply',version:1,revision:1,
- targetSessionId:'destination',title:'Investigation',workspace:'Example',archived:false,available:true});
+ targetSessionId:'destination',title:'Investigation',originalTitle:'Investigation',workspace:'Example',archived:false,available:true});
 
 test('chat reference metadata is a fixed bounded data shape',()=>{
  const input={items:[item()],overflow:false};
@@ -18,6 +18,11 @@ test('chat reference metadata is a fixed bounded data shape',()=>{
  assert.equal(validate({items:[],overflow:true},'source','reply').overflow,true);
  const untrusted={...item(),title:'<img src=x onerror=alert(1)>'};
  assert.equal(validate({items:[untrusted],overflow:false},'source','reply').items[0].title,untrusted.title);
+ const renamed={...item(),title:'Current title',originalTitle:'<b>Original title</b>'};
+ assert.equal(validate({items:[renamed],overflow:false},'source','reply').items[0].originalTitle,renamed.originalTitle);
+ for(const originalTitle of [undefined,'','x'.repeat(201),'original\nname']){
+  assert.throws(()=>validate({items:[{...item(),originalTitle}],overflow:false},'source','reply'),/Malformed chat reference metadata/);
+ }
 });
 
 for(const [name,change] of [

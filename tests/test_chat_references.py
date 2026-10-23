@@ -487,11 +487,17 @@ async def test_reference_metadata_is_current_bounded_and_message_owned(reference
     item = result["result"]["items"][0]
     assert item["id"] == record["id"] and item["messageId"] == args["messageId"]
     assert item["available"] and item["workspace"] and not result["result"]["overflow"]
+    assert item["originalTitle"] == item["title"] == "Investigation destination"
     await app.dispatch("session.rename", {"id": args["targetSessionId"], "title": "Current destination"})
     await app.dispatch("session.archive", {"id": args["targetSessionId"]})
     current = (await command(app, "outputs.chatReferences", read))["result"]["items"][0]
     assert current["title"] == "Current destination" and current["archived"]
+    assert current["originalTitle"] == item["title"]
     assert current["id"] == item["id"] and current["revision"] == item["revision"]
+    # Renaming again must not replace the original host-saved label.
+    await app.dispatch("session.rename", {"id": args["targetSessionId"], "title": "Latest destination"})
+    latest = (await command(app, "outputs.chatReferences", read))["result"]["items"][0]
+    assert latest["title"] == "Latest destination" and latest["originalTitle"] == item["title"]
     with pytest.raises(AppError):
         await command(app, "outputs.chatReferences", {**read, "messageId": "not-an-assistant"})
     await app.dispatch("outputs.unlink", {"sessionId": args["sessionId"], "id": record["id"],

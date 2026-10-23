@@ -18,7 +18,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/chat_reference_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page,exit,primaryFailure,recordCaptureLayout;
 const secondaryFailures=[],routeTrace=[],errors=[];
-const captures=[],captureLayout=[];
+const captures=[],captureLayout=[],fidelity=[];
 const identityBoundary={id:'app004-same-document',attempted:false};
 const negativeReload=process.env.CHAT_REFERENCE_NEGATIVE_RELOAD==='1';
 const pendingActions=[];
@@ -260,7 +260,7 @@ try{
  }catch(error){
   identityBoundary.verdict='failed';error.boundary=identityBoundary.id;throw error;
  }
- await expect(page.locator(`[data-part="messages"][data-session-id="${target}"]`)).toBeFocused();
+ await expect(page.getByRole('heading',{name:'Investigation destination',exact:true})).toBeFocused();
  assert.equal(context.pages().length,2,'Click must not open a tab/window');
  assert.equal(additionalPages,0,'Even a short-lived popup must be detected');
  assert.equal(await selected(peer),other);
@@ -329,10 +329,12 @@ try{
  assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390);
  await card().focus();await expect(card()).toBeFocused();await card().press('Enter');
  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+  await expect(page.getByRole('heading',{name:'Investigation destination',exact:true})).toBeFocused();
  assert.deepEqual(await marker(page),before);
  await act(page,'session.select',{id:source});
  await card().focus();await card().press('Space');
  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+  await expect(page.getByRole('heading',{name:'Investigation destination',exact:true})).toBeFocused();
  await act(page,'session.select',{id:source});
  await captureCard('card-mobile.png');
  // Reload is explicit here, not part of card activation. Its saved association survives.
@@ -347,10 +349,74 @@ try{
  // This race needs two genuinely visible surfaces, unlike the mobile Canvas overlay.
  await page.setViewportSize({width:1440,height:1000});
  await act(page,'session.rename',{id:target,title:'Renamed investigation destination'});
- const renamed=sourceArticle.getByRole('button',{name:/^Open chat.*Renamed investigation destination/});
+ const renamed=sourceArticle.getByRole('button',{name:/^Open (?:archived )?chat.*Renamed investigation destination/});
  await expect(renamed).toBeVisible();
+ await expect(sourceArticle.locator('.a-chat-reference-original')).toHaveText(
+  'Originally shared as “Investigation destination”. Same chat, current title.');
  await renamed.click();await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+ await expect(page.getByRole('heading',{name:'Renamed investigation destination',exact:true})).toBeFocused();
  await act(page,'session.select',{id:source});
+ // The approved rename note and long labels must remain readable in the actual
+ // card, not a separately rendered mockup. Appearance changes affect this fixture.
+ const longTitle='Renamed investigation destination — saved findings, next steps and exact chat identity — مرحباً';
+ await act(page,'session.rename',{id:target,title:longTitle});
+ for(const [width,scheme] of [[1440,'light'],[390,'dark'],[320,'light']]){
+  await page.setViewportSize({width,height:width===1440?1000:844});
+  const revision=await bounded(page.evaluate(async scheme=>{
+   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
+   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,
+    composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,scheme}}});
+   if(prepared.accepted!==true)throw Error('Fixture appearance preparation refused');
+   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
+   if(applied.accepted!==true)throw Error('Fixture appearance refused');
+   return applied.result.revision;
+  },scheme),20000,'Fixture appearance did not settle');
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
+  await expect(renamed).toHaveAccessibleName(`Open chat: ${longTitle} · ${attached.result.workspace}`);
+  await expect(sourceArticle.locator('.a-chat-reference-original')).toHaveText(
+   'Originally shared as “Investigation destination”. Same chat, current title.');
+  await expect(sourceArticle.locator('.a-chat-reference-original')).toBeVisible();
+  await sourceArticle.locator('.a-chat-reference').scrollIntoViewIfNeeded();
+  await renamed.focus();await page.keyboard.press('Shift+Tab');await page.keyboard.press('Tab');
+  await expect(renamed).toBeFocused();
+  const frame=async()=>renamed.evaluate(node=>{
+   const box=node.getBoundingClientRect(),style=getComputedStyle(node),card=node.closest('.a-chat-reference');
+   const original=card.querySelector('.a-chat-reference-original'),note=original.getBoundingClientRect(),noteStyle=getComputedStyle(original);
+   const noteHit=document.elementFromPoint(note.x+note.width/2,note.y+note.height/2);
+   return {box:{x:box.x,y:box.y,width:box.width,height:box.height},
+    note:{x:note.x,y:note.y,width:note.width,height:note.height},
+    noteVisible:note.width>0&&note.height>0&&note.y>=0&&note.bottom<=innerHeight&&
+     noteStyle.display!=='none'&&noteStyle.visibility==='visible'&&Number(noteStyle.opacity)>0&&
+     original.contains(noteHit),
+    hit:node.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)),
+    noteFits:original.scrollWidth<=original.clientWidth,
+    contentFits:node.scrollWidth<=node.clientWidth,
+    outlineWidth:parseFloat(style.outlineWidth),outlineStyle:style.outlineStyle,
+    viewport:innerWidth,documentWidth:document.documentElement.scrollWidth};
+  });
+  let last,stable=0;
+  await expect.poll(async()=>{
+   const next=JSON.stringify(await frame());stable=next===last?stable+1:0;last=next;return stable>=2;
+  },{timeout:15000,intervals:[50,100,100]}).toBe(true);
+  const beforeFrame=await frame(),row={width,scheme,before:beforeFrame};
+  fidelity.push(row);
+  assert.ok(beforeFrame.hit&&beforeFrame.box.height>=44&&beforeFrame.box.x>=0);
+  assert.ok(beforeFrame.box.x+beforeFrame.box.width<=width);
+  assert.ok(beforeFrame.note.x>=0&&beforeFrame.note.x+beforeFrame.note.width<=width);
+  assert.ok(beforeFrame.noteVisible&&beforeFrame.contentFits&&beforeFrame.noteFits&&beforeFrame.documentWidth<=width);
+  assert.ok(beforeFrame.outlineWidth>=2&&beforeFrame.outlineStyle!=='none');
+  await page.screenshot({path:join(evidence,`card-renamed-${width}-${scheme}.png`)});
+  row.after=await frame();assert.deepEqual(row.after,row.before);
+  await renamed.press('Enter');await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+  await expect(page.getByRole('heading',{name:longTitle,exact:true})).toBeFocused();
+  assert.deepEqual(await marker(page),reloaded);
+  await act(page,'session.select',{id:source});
+  await expect(composer(page)).toHaveDraft('Source draft before debounced save');
+  await expect(page.getByRole('button',{name:'Remove reference-note.txt'})).toBeVisible();
+ }
+ await page.setViewportSize({width:1440,height:1000});
+ await act(page,'session.rename',{id:target,title:'Renamed investigation destination'});
  // Queue an earlier reference behind an existing dirty-report barrier, then a
  // newer ordinary selection. The older card must not overtake that intent.
  let releaseBarrier,barrierHeld=false;
@@ -391,6 +457,13 @@ try{
  });
  await act(page,'session.select',{id:source});
  await act(page,'canvas.close');
+ await act(page,'session.archive',{id:target});
+ await expect(renamed).toHaveAccessibleName(/^Open archived chat:/);
+ await expect(sourceArticle.getByText('Opens here for viewing. The chat stays archived; no message is sent or work started.',{exact:true})).toBeVisible();
+ await renamed.click();await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+ await expect(page.getByRole('heading',{name:'Renamed investigation destination',exact:true})).toBeFocused();
+ assert.ok(Object.hasOwn((await authoritative(page)).conversationOrganization.archived,target));
+ await act(page,'session.select',{id:source});
  let uncertainPosts=0;
  const loseReference=async route=>{
   const body=route.request().postDataJSON();
@@ -446,7 +519,7 @@ try{
   ...(error instanceof AggregateError?{errors:error.errors.map(child=>({name:child.name,message:child.message,stack:child.stack}))}:{})}:null;
  try{await writeFile(join(evidence,'outcome.json'),JSON.stringify({
   primary:describe(primaryFailure),secondary:secondaryFailures.map(describe),fixtureExit:exit??null,
-  negativeReload,qualificationToken:process.env.APP004_QUALIFICATION_TOKEN??null,identityBoundary,browserErrors:errors,captures,
+  negativeReload,qualificationToken:process.env.APP004_QUALIFICATION_TOKEN??null,identityBoundary,browserErrors:errors,captures,fidelity,
  },null,2)+'\n')}catch(error){secondaryFailures.push(error)}
 }
 const failure=combinedFailure(primaryFailure,secondaryFailures);
