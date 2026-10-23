@@ -234,6 +234,7 @@ try{
   });
  }
  await first.getByRole('button',{name:/^Preview here:/}).click();
+ await first.locator('[data-full-artifact-preview]').scrollIntoViewIfNeeded();
  await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
  await expect(first.getByRole('heading',{name:'Latest document v2'})).toHaveCount(0);
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
@@ -242,6 +243,7 @@ try{
  await expect.poll(()=>page.evaluate(()=>({id:window.amplifier.getState().canvas.id,version:window.amplifier.getState().canvas.selectedVersion}))).toEqual({id:review.markdown.id,version:1});
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
  await first.getByRole('button',{name:/^Preview here:/}).click();
+ await first.locator('[data-full-artifact-preview]').scrollIntoViewIfNeeded();
  await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
  await first.getByRole('button',{name:/^Hide preview:/}).click();
  await expect(first.locator('[data-full-artifact-preview]')).toHaveCount(0);
