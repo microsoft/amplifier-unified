@@ -14,8 +14,9 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),reads=[],errors=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().includes('/api/conversation/detail'))reads.push(r.url())});
  await page.goto('http://127.0.0.1:8958/');await showFixtureConversation(page);
- // Voice Work owns the disclosure; its embedded turn mounts only when opened.
- const third=page.locator('[data-voice-work-group="true"][data-group-id="voice:third"]'),toggle=third.locator(':scope > button.a-execution-turn-line');await toggle.waitFor();
+ // Voice Work owns the disclosure; group IDs include a message-gap suffix,
+ // while the input attribute retains the exact owner across its segments.
+ const third=page.locator('[data-voice-work-group="true"][data-work-input-id="voice:third"]'),toggle=third.locator(':scope > button.a-execution-turn-line');await toggle.waitFor();
  assert.equal(await third.count(),1,'one disclosure belongs to this exact voice owner');
  assert.equal(reads.length,0,'collapsed groups do not read steps');
  const execution=await page.evaluate(()=>{const s=window.amplifier.getState();return s.sessions.find(x=>x.id===s.selectedSessionId).execution});
