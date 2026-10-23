@@ -287,13 +287,9 @@ async def install_app_access(coordinator, bridge):
                 # execution identity; calls without that seam stay unbound.
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
                 execution_id = dispatch.get('tool_call_id')
-                bridge_args = input.get('args', {})
-                if input['operation'] == 'dispatch':
-                    # Bundled tools ask for the action receipt, not a fresh
-                    # application overview. Raw control/API defaults retain
-                    # their separately released response contract.
-                    bridge_args = {**bridge_args, 'responseMode': 'receipt'}
-                result = await bridge(input['operation'], bridge_args)
+                # Preserve the exact model body for the worker's Work witness.
+                # The worker supplies response preferences as private transport.
+                result = await bridge(input['operation'], input.get('args', {}))
                 result = delivery.remember_work(result, input, execution_id=execution_id)
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') in {'voice.visual.capture', 'computer.visual.capture'}:
                     result = delivery.remember(result)

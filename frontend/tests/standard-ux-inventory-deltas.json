@@ -2830,6 +2830,46 @@
         }
       ],
       "qualification": "docs/clients/live-sessions.md"
+    },
+    {
+      "id": "delta.1153",
+      "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/1153",
+      "reason": "Add four single Extended browser owners for voice refinement; preserve frozen readiness and existing voice/scroll owners.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.voice-refinement",
+          "family": "conversation",
+          "title": "Keep voice work, reading position and background refresh coherent",
+          "scope": "standard-path",
+          "entryPath": ["Conversation", "Voice call", "Settings"],
+          "prerequisites": ["Built bundled client and isolated synthetic fixtures; no live provider or physical audio"],
+          "steps": [
+            "Cross call start/end boundaries while reading earlier messages",
+            "Read and compose while history refreshes",
+            "Expand matching voice work without combining unrelated activity",
+            "Open Settings and select a connection draft through shared actions"
+          ],
+          "expectedResults": [
+            "Call transitions preserve explicit reading position; follow-latest remains intentional.",
+            "Refresh retains useful content and local drafts while initial loading and failures remain distinguishable.",
+            "Voice work retains its originating input, controls and exact quote/source behavior.",
+            "Settings actions preserve client ownership and recoverable drafts without implicitly saving credentials."
+          ],
+          "variants": ["desktop-pointer", "narrow-layout", "synthetic-call", "background-refresh"],
+          "existingTests": [
+            {"path": "frontend/tests/chat-scroll-call-boundaries-browser.mjs", "relation": "Single Extended owner for call-boundary reading-position assertions"},
+            {"path": "frontend/tests/semantic-settings-browser.mjs", "relation": "Single Extended owner for real service Settings actions"},
+            {"path": "frontend/tests/history-refresh-browser.mjs", "relation": "Single Extended owner for bounded synthetic refresh, composition and loading states"},
+            {"path": "frontend/tests/voice-work-message-browser.mjs", "relation": "Single Extended owner for voice work association, controls and direct quotation"}
+          ],
+          "limits": [
+            "Registration records ownership, not passing execution evidence.",
+            "Synthetic browser checks do not establish physical audio, live-provider overlap or final installed-wheel acceptance.",
+            "Existing readiness voice and scroll scenarios remain unchanged; no new publication gate is added."
+          ]
+        }
+      ],
+      "qualification": "docs/clients/live-sessions.md"
     }
   ]
 }

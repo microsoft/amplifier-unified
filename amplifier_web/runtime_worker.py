@@ -210,7 +210,7 @@ class Worker:
             # Neither approval nor generation identity is model-supplied.
             args = {key: value for key, value in args.items()
                     if key not in {"_coordinationApproval", "_generationId", "_configurationWait", "_workOrigin",
-                                   "_workDispatchGuarded"}}
+                                   "_workDispatchGuarded", "_responseMode"}}
             if assigned is None:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
@@ -238,6 +238,10 @@ class Worker:
                 if operation == 'work.effect.check':
                     programmatic = coordinator.get_capability('web.work_programmatic_guarded')
                     args['_workDispatchGuarded'] = bool(callable(programmatic) and programmatic())
+            if operation == 'dispatch':
+                # Host-owned response preference, added only after observing the
+                # original call. Never alter identity-bound public arguments.
+                args['_responseMode'] = 'receipt'
             if operation.startswith('context.'):
                 context = self.context_bindings if assigned_context is None else assigned_context
                 bindings = [context[i] for i in ids if i in context]

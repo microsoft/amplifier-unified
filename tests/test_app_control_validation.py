@@ -112,7 +112,7 @@ async def test_wrong_type_action_args_never_reaches_bridge(value):
      {'path': '/sessions/17/title', 'revision': 12, 'directoryRevision': 'observed-directory'}),
     ({'operation': 'list_actions', 'args': {'prefix': 'session.'}}, {'prefix': 'session.'}),
 ])
-async def test_valid_requests_preserve_action_args_and_request_compact_dispatch_receipts(payload, expected_args):
+async def test_valid_requests_preserve_exact_model_args(payload, expected_args):
     receipt = {'ok': True, 'revision': 13, 'commandId': 'stable-command'}
     bridge = AsyncMock(return_value=receipt)
     tool = await mounted_tool(bridge)
@@ -120,8 +120,6 @@ async def test_valid_requests_preserve_action_args_and_request_compact_dispatch_
     result = await tool.execute(payload)
     assert result.success and result.output == receipt
     assert payload == before
-    if payload['operation'] == 'dispatch':
-        expected_args = {**expected_args, 'responseMode': 'receipt'}
     bridge.assert_awaited_once_with(payload['operation'], expected_args)
 
 

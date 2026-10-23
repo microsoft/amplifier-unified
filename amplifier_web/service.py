@@ -4868,7 +4868,7 @@ class AppService:
         transport = args
         args = {key: value for key, value in args.items()
                 if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
-                               '_workOrigin', '_workDispatchGuarded'}}
+                               '_workOrigin', '_workDispatchGuarded', '_responseMode'}}
         from .workspace_work_effects import APP_EFFECT, app_request
         token = APP_EFFECT.set(app_request(operation, args, session_id))
         try:
@@ -5013,7 +5013,9 @@ class AppService:
             return read_actions(self.get_actions(), args)
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
-            receipt_mode = args.get('responseMode') == 'receipt'
+            from .collaboration import BINDING
+            receipt_mode = (args.get('responseMode') == 'receipt'
+                            or (BINDING.get() or {}).get('_responseMode') == 'receipt')
             action_args=copy.deepcopy(args.get('args',{}))
             if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief'}:
                 # Do not infer nativeProject, flush progress or build a snapshot:

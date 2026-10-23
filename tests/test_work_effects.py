@@ -209,6 +209,55 @@ async def test_app_effect_requires_coverage_but_safe_reads_stay_available(app):
     assert result['accepted'] and child['id'] in app._state['pinnedSessionIds']
 
 
+@pytest.mark.parametrize('public_mode', [None, 'receipt'])
+async def test_private_receipt_hint_keeps_final_work_hash_exact(app, public_mode):
+    from amplifier_web.service import AppError
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'receipt-hint')
+    _, child = await assert_available_commission(app, owner, item, 'receipt-hint-commission')
+    required = (await current_work(app, child))['required']
+    payload = {'action': 'session.pin', 'args': {'id': child['id'], 'pinned': True}, 'id': 'hint-pin'}
+    if public_mode is not None:
+        payload['responseMode'] = public_mode
+    witness = trusted_fixture(child, required, {'toolName': 'app_control',
+        'toolInput': {'operation': 'dispatch', 'args': payload}, 'toolCallId': 'hint-pin:call'})
+    envelope = {**transport(child), '_workOrigin': witness, '_responseMode': 'receipt'}
+    before = retained_bytes(app)
+    # Public response preferences remain identity-bound even though they affect
+    # formatting only. A different body cannot borrow this exact witness.
+    changed = {**payload, 'responseMode': 'receipt' if public_mode is None else 'state'}
+    with pytest.raises(AppError, match='coverage'):
+        await app.app_bridge('dispatch', {**changed, **envelope}, child['id'])
+    assert retained_bytes(app) == before
+    result = await app.app_bridge('dispatch', {**payload, **envelope}, child['id'])
+    assert result['accepted'] and child['id'] in app._state['pinnedSessionIds']
+    assert 'view' not in result['state']
+
+
+async def test_work_bound_settings_catalog_read_has_no_mutation_or_settings_exemption(app):
+    import copy
+    from amplifier_web.service import AppError
+    from amplifier_web.workspace_work_effects import recovery_read
+    owner = app.state['sessions'][0]
+    item = await prepared_work(app, owner, 'settings-catalog')
+    _, child = await assert_available_commission(app, owner, item, 'settings-catalog-commission')
+    before = retained_bytes(app)
+    clients, revision = copy.deepcopy(app.clients.records), app.state['revision']
+    inputs = list(app.runtime.inputs)
+    result = await app_effect(app, child, 'settings.connection.services', {}, 'catalog-uncovered')
+    assert result['accepted']
+    assert result['result']['kind'] == 'supported-services'
+    assert result['result']['savedConnections'] is False
+    assert retained_bytes(app) == before
+    assert app.clients.records == clients and app.state['revision'] == revision
+    assert app.runtime.inputs == inputs
+    for action in ('settings.open', 'settings.close', 'settings.connection.start', 'settings.connection.select'):
+        assert not recovery_read('app_control', {'operation': 'dispatch', 'args': {'action': action}})
+    with pytest.raises(AppError, match='originating-call coverage'):
+        await app_effect(app, child, 'settings.connection.start', {}, 'settings-uncovered')
+    assert retained_bytes(app) == before and app.clients.records == clients
+
+
 @pytest.mark.parametrize('change', [False, True])
 async def test_peer_notify_rechecks_after_real_history_await(app, monkeypatch, change):
     from amplifier_web.service import AppError

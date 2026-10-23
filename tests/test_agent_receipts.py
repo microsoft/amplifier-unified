@@ -63,6 +63,7 @@ async def test_native_tool_requests_compact_receipt_without_changing_raw_bridge_
     from unittest.mock import AsyncMock
     from amplifier_web.service import AppService
     from test_app_control_validation import mounted_tool
+    from test_work_origin import worker_scope
 
     app = AppService(tmp_path, SimpleNamespace(close=AsyncMock()), workspace=tmp_path)
     try:
@@ -73,7 +74,10 @@ async def test_native_tool_requests_compact_receipt_without_changing_raw_bridge_
         args = {'action': 'session.rename', 'args': {'id': session_id, 'title': 'First'}}
         raw = await bridge('dispatch', args)
         assert 'view' in raw['state']
-        tool = await mounted_tool(bridge)
+        worker, coordinator, _, worker_bridge = worker_scope()
+        coordinator.session_id = session_id
+        worker.bridge = bridge
+        tool = await mounted_tool(worker_bridge)
         result = await tool.execute({'operation': 'dispatch', 'args': {
             'action': 'session.rename', 'id': 'rename-second',
             'args': {'id': session_id, 'title': 'Second'}}})
@@ -92,6 +96,31 @@ async def test_native_tool_requests_compact_receipt_without_changing_raw_bridge_
         assert app.state['revision'] == revision
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('public_mode', [None, 'receipt'])
+async def test_worker_receipt_hint_never_changes_identity_bound_arguments(public_mode):
+    import asyncio
+    from test_work_origin import worker_scope
+    worker, coordinator, capabilities, bridge = worker_scope()
+    seen = []
+    async def observe(data):
+        seen.append(copy.deepcopy(data))
+        return {'complete': False, 'effectAuthorized': False}
+    capabilities['web.work_effect_origin'] = observe
+    coordinator._tool_dispatch_contexts = {asyncio.current_task(): {'tool_call_id': 'exact-call'}}
+    original = {'action': 'session.pin', 'args': {'id': 'root', 'pinned': True}, 'id': 'pin-one'}
+    if public_mode is not None:
+        original['responseMode'] = public_mode
+    body = {**copy.deepcopy(original), '_responseMode': 'forged'}
+    before = copy.deepcopy(body)
+    await bridge('dispatch', body)
+    assert body == before
+    assert seen == [{'tool_call_id': 'exact-call', 'tool_name': 'app_control',
+                     'tool_input': {'operation': 'dispatch', 'args': original}}]
+    sent = worker.bridge.call_args.args[1]
+    assert sent['_responseMode'] == 'receipt'
+    assert {k: v for k, v in sent.items() if not k.startswith('_')} == original
 
 
 async def test_compact_canvas_receipt_readback_stays_with_calling_client(app):
