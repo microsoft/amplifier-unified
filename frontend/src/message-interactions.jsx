@@ -1,7 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Reply,Smile,X} from 'lucide-react';
-import {readDetail} from './detail-read';
 import {Markdown} from './markdown';
 import {clientId,request} from './api';
 import {createReactionController,reactionControllers} from './message-reactions';
@@ -25,19 +24,6 @@ export function QuotedDocument({document,sessionId,dispatch}){
   <Markdown key={index} text={part.text} userContent/>)}</div>;
 }
 
-function PassagePicker({text,reason,onAdd,onClose}){
- const dialog=useRef(null),area=useRef(null),[range,setRange]=useState([0,0]),[error,setError]=useState('');
- useEffect(()=>{const previous=document.activeElement;dialog.current.showModal();area.current.focus();return()=>{if(previous?.isConnected)previous.focus({preventScroll:true});};},[]);
- const select=()=>setRange([area.current.selectionStart,area.current.selectionEnd]);
- return <dialog ref={dialog} className="a-quote-picker" onCancel={onClose} onClick={event=>{if(event.target===dialog.current)onClose();}}>
-  <h3>Choose exact source passage</h3><p>Select only the text to quote. Markdown source, whitespace and Unicode are kept exactly.</p>
-  {reason&&<p role="status">{reason} Select from the source below; nothing was added automatically.</p>}
-  <textarea ref={area} readOnly aria-label="Message source for quotation" value={text} onSelect={select} onKeyUp={select}/>
-  <small>{[...text.slice(...range)].length} characters selected</small>
-  <div><button type="button" onClick={onClose}>Cancel</button><button type="button" disabled={range[0]===range[1]} onClick={async()=>{try{await onAdd(...range);onClose();}catch(error){setError(error.message);}}}>Add selected passage</button></div>{error&&<p role="alert">{error}</p>}
- </dialog>;
-}
-
 export function QuoteCard({quote,sessionId,dispatch}){
  const [error,setError]=useState('');
  if(!quote)return null;
@@ -54,7 +40,7 @@ export function ReplyPreview({quote,sessionId,dispatch}){
 export function MessageInteractions({message,sessionId,dispatch}){
  const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const owner=JSON.stringify([sessionId,message.id]),current=useRef(owner),controller=useRef(null),[,refresh]=useState(0);current.current=owner;
- const anchor=useRef(null),selectionTool=useRef(null),[selected,setSelected]=useState(null),[picker,setPicker]=useState(null);
+ const anchor=useRef(null),selectionTool=useRef(null),[selected,setSelected]=useState(null);
  const selectedRef=useRef(null),activeSelection=useRef(null),dismissedSelection=useRef(null);selectedRef.current=selected;
  useEffect(()=>{
   if(typeof document==='undefined')return;
@@ -76,7 +62,7 @@ export function MessageInteractions({message,sessionId,dispatch}){
    if(dismissedSelection.current&&dismissedSelection.current.source===result.source){setSelected(null);return;}
    const rect=range.getBoundingClientRect(),pane=article.closest('.a-messages')?.getBoundingClientRect();
    if(pane&&(rect.bottom<pane.top||rect.top>pane.bottom)){setSelected(null);return;}
-   setSelected({...intent,left:Math.max(8,Math.min(rect.left,window.innerWidth-224)),top:Math.max(8,Math.min(rect.bottom+8,window.innerHeight-56))});
+   setSelected({...intent,left:Math.max(8,Math.min(rect.left,window.innerWidth-224)),top:Math.max(8,Math.min(rect.bottom+8,window.innerHeight-(result.error?104:56)))});
   };
   const dismiss=event=>{if(event.key==='Escape'){if(selectedRef.current)dismissedSelection.current=selectedRef.current;setSelected(null);}};
   const reselect=event=>{if(anchor.current?.closest('[data-message-id]')?.querySelector('.a-detail-text')?.contains(event.target)){activeSelection.current=null;dismissedSelection.current=null;}};
@@ -107,11 +93,10 @@ export function MessageInteractions({message,sessionId,dispatch}){
   catch(e){if(current.current===owner)setError(e.message)}finally{if(current.current===owner)setBusy(false)}
  }
  const addPassage=(source,selection)=>{if(current.current!==owner)return Promise.reject(Error('Conversation changed; select the passage again.'));return dispatch('message.reply',{sessionId,messageId:message.id,selection},{quoteSource:source});};
- const choosePassage=async()=>{try{setError('');const reason=selected?.error||'',text=message.textDetail?await readDetail(message.textDetail):message.text;if(current.current===owner){setPicker({text,reason});dismissedSelection.current=selectedRef.current;setSelected(null);}}catch(error){setError(error.message);}};
  const quoteSelected=async()=>{
   const captured=selected;
   try{
-   if(captured.error)throw Error(captured.error+' Use Choose passage; nothing was added.');
+   if(captured.error)throw Error(captured.error+' Nothing was added.');
    const range=captured.range,article=anchor.current?.closest('[data-message-id]');
    const fresh=selectedQuote(article,{isCollapsed:range.collapsed,rangeCount:1,getRangeAt:()=>range});
    if(!fresh||fresh.error||fresh.source!==captured.source||JSON.stringify(fresh.spans)!==JSON.stringify(captured.spans))throw Error('The source or selection changed. Select the passage again.');
@@ -124,11 +109,10 @@ export function MessageInteractions({message,sessionId,dispatch}){
   }catch(error){setError(error.message);}
  };
  return <><button ref={anchor} type="button" className="a-icon" aria-label="Reply to message" title="Quote whole message" data-action="message.reply" disabled={busy} onMouseDown={event=>{if(event.button===0)event.preventDefault();}} onClick={()=>action('message.reply',{})}><Reply/></button>
- <button type="button" className="a-link a-quote-fallback" title="Select from the exact source when rendered text cannot be mapped" disabled={busy} onClick={choosePassage}>Choose passage</button>
  {selected&&createPortal(<div ref={selectionTool} className="a-quote-selection" style={{left:selected.left,top:selected.top}} onMouseDown={event=>event.preventDefault()}>
-  <button type="button" disabled={busy} title={selected.error||'Add this exact passage without leaving your place'} onClick={selected.error?choosePassage:quoteSelected}>{selected.error?'Choose passage':'Quote selection'}</button>
+  {selected.error?<span className="a-quote-selection-error" role="status">{selected.error} Nothing was added.</span>:
+   <button type="button" disabled={busy} title="Add this exact passage without leaving your place" onClick={quoteSelected}>Quote selection</button>}
  </div>,anchor.current?.closest('#amp-one')||document.body)}
- {picker!==null&&<PassagePicker text={picker.text} reason={picker.reason} onClose={()=>setPicker(null)} onAdd={(start,end)=>addPassage(picker.text,{start:[...picker.text.slice(0,start)].length,end:[...picker.text.slice(0,end)].length})}/>}
  <div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
   <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={e=>{const pane=e.currentTarget.closest('.a-messages')?.getBoundingClientRect();setBelow(e.currentTarget.getBoundingClientRect().top-(pane?.top||0)<110);setOpen(!open)}}><Smile/></button>
   {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} data-action="message.reaction" onClick={e=>{reaction.set(emoji,!chosen.includes(emoji));setOpen(false);e.currentTarget.closest('.a-reaction-control')?.querySelector('button')?.focus({preventScroll:true})}}>{emoji}</button>)}</div>}

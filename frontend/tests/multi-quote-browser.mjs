@@ -83,6 +83,29 @@ const canonicalDraft=async()=>{
  const response=await context.request.get(url+'/fixture/quote-draft?'+new URLSearchParams({clientId:id}));
  assert.equal(response.status(),200);return response.json();
 };
+async function quoteRendered(page,article,text){
+ const body=article.locator('.a-detail-text');
+ await body.scrollIntoViewIfNeeded();
+ await body.dispatchEvent('pointerdown');
+ await body.evaluate((root,text)=>{
+  document.activeElement?.blur();
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),nodes=[];let node,rendered='';
+  while((node=walker.nextNode())){nodes.push({node,start:rendered.length});rendered+=node.textContent;}
+  const start=rendered.indexOf(text),end=start+text.length;
+  if(start<0||rendered.indexOf(text,start+1)!==-1)throw Error('Expected one exact rendered fixture passage');
+  const first=nodes.find(row=>row.start+row.node.length>start),last=nodes.find(row=>row.start+row.node.length>=end);
+  const range=document.createRange();range.setStart(first.node,start-first.start);range.setEnd(last.node,end-last.start);
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
+ },text);
+ await page.getByRole('button',{name:'Quote selection',exact:true}).click();
+ await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+}
+async function noPassageEditor(page){
+ await expect(page.getByRole('button',{name:'Choose passage',exact:true,includeHidden:true})).toHaveCount(0);
+ await expect(page.locator('.a-quote-picker,.a-quote-fallback')).toHaveCount(0);
+ await expect(page.getByRole('textbox',{name:'Message source for quotation',includeHidden:true})).toHaveCount(0);
+}
 async function enteredCommentary(text,{canonicalReady=true}={}){
  const observed=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>{
   const state=window.amplifier.getState(),selection=window.getSelection();
@@ -153,6 +176,7 @@ try{
   catch(error){comparisonError=error;writeFileSync(join(proof,'comparison-failure.json'),JSON.stringify({message:error.message},null,2));}
  }
  await page.goto(url);await page.waitForSelector('#amp-one');await showFixtureConversation(page);
+ await noPassageEditor(page);
  const editor=page.getByRole('textbox',{name:'Message Amplifier'}),quotes=editor.locator('[data-quote-instance]');
  await editor.fill(BEFORE);
  await expect(editor).toHaveText(BEFORE);
@@ -161,20 +185,16 @@ try{
  await page.getByRole('button',{name:'Remove synthetic.txt',exact:true}).waitFor();
  const a=page.locator('.a-message').filter({hasText:'Quote fixture source A'}).first(),b=page.locator('.a-message').filter({hasText:'Quote fixture source B'}).first();
  const sourceA=await a.getAttribute('data-message-id'),sourceB=await b.getAttribute('data-message-id');
+ const originalA=(await observe()).sessions.flatMap(s=>s.messages).find(m=>m.id===sourceA).text;
  async function passage(startMarker,endMarker){
-  await a.getByRole('button',{name:'Choose passage',exact:true}).click();
-  const area=page.getByRole('textbox',{name:'Message source for quotation'}),text=await area.inputValue(),start=text.indexOf(startMarker),end=endMarker?text.indexOf(endMarker,start):text.length;
+  const text=originalA,start=text.indexOf(startMarker),end=text.indexOf(endMarker,start);
   assert.ok(start>=0&&end>start);
-  await area.evaluate((node,{start,end})=>{node.focus();node.setSelectionRange(start,end);node.dispatchEvent(new Event('select',{bubbles:true}));},{start,end});
-  // React's selection plugin observes native keyboard/mouse events rather
-  // than a synthetic DOM `select` event alone.
-  await area.press('Shift');
-  await expect(page.getByRole('button',{name:'Add selected passage',exact:true})).toBeEnabled();
-  await page.getByRole('button',{name:'Add selected passage',exact:true}).click();
-  await page.locator('.a-quote-picker').waitFor({state:'hidden'});
+  await quoteRendered(page,a,text.slice(start,end));
   return {text:text.slice(start,end),start:[...text.slice(0,start)].length,end:[...text.slice(0,end)].length};
  }
- const first=await passage('  café','\n\n* first');await expect(quotes).toHaveCount(1);
+ // Select only rendered words, not invisible paragraph indentation or code
+ // fences. The code payload below still proves exact leading whitespace/tabs.
+ const first=await passage('café','\n\n* first');await expect(quotes).toHaveCount(1);
  const firstQuote=references(await documentValue())[0];
  assert.equal(firstQuote.quote.excerpt,first.text);assert.equal(firstQuote.quote.messageId,sourceA);
  assert.deepEqual(firstQuote.quote.spans,[{start:first.start,end:first.end}]);
@@ -192,7 +212,7 @@ try{
  await editor.click();await editor.press('ControlOrMeta+End');await editor.pressSequentially('Between the passages');
  await enteredCommentary('Between the passages');
  await expectLayout('between typed',[BEFORE,firstQuote,BETWEEN]);
- const second=await passage('```py','\n\nlast passage');await expect(quotes).toHaveCount(2);
+ const second=await passage('    name','```');await expect(quotes).toHaveCount(2);
  const secondQuote=references(await documentValue())[1];
  assert.equal(secondQuote.quote.excerpt,second.text);assert.equal(secondQuote.quote.messageId,sourceA);
  assert.deepEqual(secondQuote.quote.spans,[{start:second.start,end:second.end}]);
@@ -247,6 +267,7 @@ try{
  await quotes.nth(2).getByRole('button',{name:'Collapse quote'}).click();
  assert.equal(await page.evaluate(()=>typeof window.untrusted),'undefined');
  await page.reload();await expect(quotes).toHaveCount(3);assert.deepEqual(await documentValue(),doc);
+ await noPassageEditor(page);
  await expectLayout('reload',expected);
  await observeCards('three quotes reconstructed after reload');
  await visibleCardControls('reload scrolled quote',quotes.first());
@@ -360,7 +381,7 @@ try{
  await editor.fill(Array.from({length:30},(_,i)=>'Plain draft line '+i).join('\n'));
  assert.ok((await editor.boundingBox()).height<=181,'Removing every quote restores the ordinary draft height cap');
  await editor.fill('');
- // Native transcript selection, not just the source picker.
+ // Native transcript selection also works in an empty draft.
  await page.setViewportSize({width:1280,height:900});
  await a.locator('.a-detail-text').scrollIntoViewIfNeeded();
  await a.locator('.a-detail-text').evaluate(node=>{
@@ -413,7 +434,9 @@ try{
    else{range.setStartBefore(gap);range.setEndAfter(next);}
    const selected=window.getSelection();selected.removeAllRanges();selected.addRange(range);document.dispatchEvent(new Event('selectionchange'));
   },edge);
-  await expect(page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true})).toBeVisible();
+  await expect(page.locator('.a-quote-selection [role=status]')).toHaveText('This boundary whitespace cannot be quoted exactly. Nothing was added.');
+  await expect(page.locator('.a-quote-selection button')).toHaveCount(0);
+  await noPassageEditor(page);
   await expect(quotes).toHaveCount(0);await page.keyboard.press('Escape');
  }
  // Second occurrence, across formatting, with Unicode nearby: no text search
@@ -498,17 +521,38 @@ try{
  await selectContents('p:nth-of-type(2)');await page.getByRole('button',{name:'Quote selection',exact:true}).focus();
  await page.locator('.a-messages').evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'));});
  await expect(page.locator('.a-quote-selection')).toHaveCount(0);
- // A transformed entity cannot silently turn into decoded or broader source.
- await selectContents('p:last-child');
- await expect(page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true})).toBeVisible();
- await expect(quotes).toHaveCount(0);
- await page.locator('.a-quote-selection').getByRole('button',{name:'Choose passage',exact:true}).click();
- await expect(page.locator('.a-quote-picker [role=status]')).toContainText('This selection includes controls or unmapped text.');
- await page.setViewportSize({width:320,height:844});
- await expect(page.locator('.a-quote-picker [role=status]')).toBeVisible();
- await expect(page.getByRole('textbox',{name:'Message source for quotation'})).toHaveValue(sourceC);
- if(proof)await page.locator('.a-quote-picker').screenshot({path:join(proof,'fallback-320.png')});
- await page.getByRole('button',{name:'Cancel',exact:true}).click();await expect(quotes).toHaveCount(0);
+ // Unmappable text refuses in place, without a fallback editor, quote request
+ // or mutation of the saved commentary, existing quote, caret or attachment.
+ await editor.fill('Keep this draft');
+ await b.getByRole('button',{name:'Reply to message',exact:true}).click();await expect(quotes).toHaveCount(1);
+ await editor.focus();await editor.press('ControlOrMeta+End');await page.keyboard.insertText('After the saved quote');
+ await enteredCommentary('After the saved quote');
+ await page.locator('.a-file-input').setInputFiles({name:'refusal.txt',mimeType:'text/plain',buffer:Buffer.from('Keep this attachment')});
+ await page.getByRole('button',{name:'Remove refusal.txt',exact:true}).waitFor();
+ await editor.focus();await editor.press('ControlOrMeta+End');
+ const refusalDocument=await documentValue(),refusalCanonical=await canonicalDraft();
+ let refusedRequests=0;
+ const countReply=request=>{if(request.url().endsWith('/api/actions')&&request.postDataJSON()?.action==='message.reply')refusedRequests++;};
+ page.on('request',countReply);
+ for(const width of [1280,320]){
+  await page.setViewportSize({width,height:844});await selectContents('p:last-child');
+  const explanation=page.locator('.a-quote-selection [role=status]');
+  await expect(explanation).toHaveText('This selection includes controls or unmapped text. Nothing was added.');
+  await expect(explanation).toBeInViewport();await expect(page.locator('.a-quote-selection button')).toHaveCount(0);
+  await noPassageEditor(page);
+  assert.deepEqual(await documentValue(),refusalDocument);assert.deepEqual(await canonicalDraft(),refusalCanonical);
+  await expect(page.getByRole('button',{name:'Remove refusal.txt',exact:true})).toBeVisible();
+  if(proof)await page.screenshot({path:join(proof,`refusal-${width}.png`)});
+  await page.keyboard.press('Escape');await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ }
+ page.off('request',countReply);assert.equal(refusedRequests,0,'Unmappable selection must not request a quote');
+ await editor.focus();await page.keyboard.insertText(' kept');
+ await enteredCommentary('After the saved quote kept');
+ await page.reload();await expect(quotes).toHaveCount(1);
+ await expect(editor).toContainText('Keep this draft');await expect(editor).toContainText('After the saved quote kept');
+ await expect(page.getByRole('button',{name:'Remove refusal.txt',exact:true})).toBeVisible();await noPassageEditor(page);
+ await page.getByRole('button',{name:'Remove refusal.txt',exact:true}).click();
+ await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await editor.fill('');
  await page.setViewportSize({width:1280,height:900});await expect(page.locator('.a-quote-selection')).toHaveCount(0);
  // Source revision changes before snapshot admission reject the captured digest.
  await selectContents('p:nth-of-type(2)');
@@ -607,10 +651,7 @@ try{
     const index=specimen.sources.findIndex(source=>source.id===block.source.id),article=page.locator('[data-message-id="'+ids[index]+'"]');
     if(block.kind==='whole')await article.getByRole('button',{name:'Reply to message',exact:true}).click();
     else{
-     await article.getByRole('button',{name:'Choose passage',exact:true}).click();
-     const area=page.getByRole('textbox',{name:'Message source for quotation'});
-     await area.evaluate((node,block)=>{node.focus();node.setSelectionRange(block.from,block.to);},block);await area.press('Shift');
-     await page.getByRole('button',{name:'Add selected passage',exact:true}).click();await page.locator('.a-quote-picker').waitFor({state:'hidden'});
+     await quoteRendered(page,article,block.excerpt);
     }
     await expect(editor.locator('[data-quote-instance]')).toHaveCount(++comparedQuotes);
    }
