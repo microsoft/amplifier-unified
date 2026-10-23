@@ -236,10 +236,14 @@ cleanup always names one exact resource and revision.
 Environment inspection also recovers a held compute reservation when the original
 native owner proves a stopped or absent environment **and** settled launch
 admission. Local reads rotate one extra ownership probe through the requested
-page; no background inventory or history scan is introduced. Registered targets
-perform the same proof under their own owner lock and release only their own
-machine reservation. Unknown launches, active preparation, changed ownership and
-unavailable backends retain capacity. Merely reporting `stopped` is insufficient.
+page. Existing host queue maintenance also rotates through up to 32 canonical
+local allocation records, with at most one exact native ownership probe per
+30-second pass. This reaches older owners without opening their chats; it does
+not scan sessions or history, discover foreign machines, or inspect other
+installations. Registered targets perform the same proof under their own owner
+lock and release only their own machine reservation. Unknown launches, active
+preparation, changed ownership and unavailable backends retain capacity. Merely
+reporting `stopped` is insufficient.
 
 A separate `reservationRecovery` observation is saved before release. The original
 check, stop and cleanup receipts remain unchanged; freed CPU/memory does not mean
