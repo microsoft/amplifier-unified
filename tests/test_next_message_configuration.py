@@ -327,6 +327,18 @@ def valid_catalog():
         'metadata': {'configSchema': {'fields': [{'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}}}}
 
 
+def test_nullable_provider_visibility_allows_valid_effort_and_rejects_unknown():
+    from amplifier_web.next_message_configuration import validate_selection
+    catalog = valid_catalog()
+    # Real provider metadata serializes an unconditional field as null, rather
+    # than omitting show_when. It still advertises finite supported efforts.
+    catalog['catalogs']['one']['metadata']['configSchema']['fields'][0]['show_when'] = None
+    selected = {'instance': 'one', 'model': 'chosen', 'effort': 'low'}
+    validate_selection(selected, catalog)
+    with pytest.raises(ValueError, match='reasoning effort'):
+        validate_selection({**selected, 'effort': 'unsupported'}, catalog)
+
+
 @pytest.mark.parametrize('fault', ['offline', 'model', 'effort', 'provider'])
 def test_invalid_choices_never_pass_validation(fault):
     from amplifier_web.next_message_configuration import validate_selection

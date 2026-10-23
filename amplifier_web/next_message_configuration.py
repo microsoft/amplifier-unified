@@ -225,7 +225,7 @@ def validate_selection(selected, catalog):
         schema = entry.get('metadata', {}).get('configSchema', {})
         config = {'model': selected['model'], 'default_model': selected['model']}
         def shown(field):
-            for key, expected in field.get('show_when', {}).items():
+            for key, expected in (field.get('show_when') or {}).items():
                 actual, value = str(config.get(key, '')).lower(), str(expected).lower()
                 if value.startswith('matches:'):
                     try:
