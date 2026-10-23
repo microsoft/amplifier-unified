@@ -231,14 +231,55 @@ try {
   await expect.poll(()=>page.evaluate(()=>window.copied)).toBe(reply);
   assert.ok(fieldRequests.some(item=>item.query.get('part')==='tool'&&item.client),'Real browser must follow saved-tool lookup');
   assert.ok(fieldRequests.some(item=>item.query.get('field')==='delegateResponse'&&Number(item.query.get('offset'))>0),'Long reply must use more than one field chunk');
-  assert.deepEqual(errors, []);
-  const inspection = await control({op: 'inspect-work-source'});
-  const source=inspection.sessions.find(row=>row.id===alpha);
+  const observerInspection=await control({op:'inspect-work-source'});
+  const source=observerInspection.sessions.find(row=>row.id===alpha);
   assert.ok(source.execution.nodes.every(row=>!Object.hasOwn(row,'input')&&!Object.hasOwn(row,'output')),
     'UI inspection must not inject canonical bodies into live observer metadata');
+  // The original V3 requires real actor labels, not a Main chat guess when
+  // only a nested recipient is loaded. These are synthetic projection inputs,
+  // independent of the actual observer/copy case above.
+  const orphanRequest={...common,id:'orphan-request',kind:'tool',label:'delegate',
+    sessionId:'outside-loaded-parent',startedAt:start+2,endedAt:start+7,
+    input:JSON.stringify({instruction:'NESTED REQUEST'}),output:JSON.stringify({success:true,output:{response:'NESTED REPLY'}})};
+  const orphanWorker={...worker,id:'orphan-worker',sessionId:'inner-review',parentId:orphanRequest.id,
+    label:'Inner review',startedAt:start+2,endedAt:start+7};
+  const orphanOperation={...read,id:'orphan-read',sessionId:orphanWorker.sessionId,parentId:orphanWorker.id,
+    startedAt:start+3,endedAt:start+4};
+  await control({op:'patch',sessions:{[alpha]:{
+    messages:[{id:'question',role:'user',text:'Inspect a nested delegate.',createdAt:start}],
+    execution:{turns:[{id:turnId,anchorMessageId:'question',phase:'completed',startedAt:start,endedAt:start+8}],
+      nodes:[orphanRequest,orphanWorker,orphanOperation]}
+  }}});
+  for(const [name,viewport] of [['desktop',{width:1280,height:1000}],['mobile',{width:390,height:844}]]) {
+    await page.setViewportSize(viewport);
+    await page.reload();await showFixtureConversation(page);
+    const work=page.locator(`[data-group-id="${turnId}@question"]`),toggle=work.locator(':scope > button');
+    await expect(toggle).toBeVisible();
+    if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
+    const request=work.getByRole('region',{name:'Request',exact:true});
+    const reply=work.getByRole('region',{name:'Reply',exact:true});
+    await expect(request).toContainText('NESTED REQUEST');
+    await expect(reply).toContainText('NESTED REPLY');
+    await request.scrollIntoViewIfNeeded();
+    await page.screenshot({path:root+`test-results/delegate-work-stream-attribution-${name}.png`});
+    await expect(request.locator('header')).toContainText('Worker (owner unavailable) → Delegate');
+    await expect(reply.locator('header')).toContainText('Delegate → Worker (owner unavailable)');
+    await expect(request.locator('header')).not.toContainText('Main chat');
+    await expect(reply.locator('header')).not.toContainText('Main chat');
+    const operation=work.locator('[data-node-id="orphan-read"]');
+    await expect(operation.locator(':scope > button')).toHaveAttribute('aria-expanded','false');
+    await expect(operation.locator('.a-work-actor')).toContainText('Delegate · Inner review');
+    await request.scrollIntoViewIfNeeded();
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Nested attribution must not overflow');
+    await page.screenshot({path:root+`test-results/delegate-work-stream-attribution-${name}.png`});
+    await toggle.click();
+    await expect(request).toBeHidden();await expect(reply).toBeHidden();
+  }
+  assert.deepEqual(errors, []);
+  const inspection = await control({op: 'inspect-work-source'});
   assert.equal(inspection.runtimeStarts, 0);
   assert.equal(inspection.runtimeSends, 0);
-  console.log('PASS: synthetic interleaving/layout plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
+  console.log('PASS: synthetic interleaving/layout/actor attribution plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
 } finally {
   await browser?.close();
   fixture.kill();

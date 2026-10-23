@@ -103,3 +103,39 @@ for(const action of ['cancel','finish','list'])test(`${action} hint is an ordina
  const node={id:'control',kind:'tool',tool:'live_worker',turnId:'t',inputSummary:{action}};
  assert.deepEqual(workStream({nodes:[node]},'t').entries.map(entry=>entry.kind),['operation']);
 });
+
+test('a nested request with unloaded ancestry does not impersonate Main chat',()=>{
+ const request={id:'nested-request',kind:'tool',label:'delegate',turnId:'t',sessionId:'unloaded-worker',rootSessionId:'main',
+  startedAt:1,endedAt:3,exchange:{id:'nested-request',sessionId:'unloaded-worker',startedAt:1,endedAt:3,delegateRequest:'inspect',delegateResponse:'checked'}};
+ const worker={id:'inner',kind:'worker',turnId:'t',sessionId:'child',parentId:request.id,label:'Inner',exchange:request.exchange};
+ const data={sessionId:'main',nodes:[request,worker]};
+ const before=JSON.stringify(data),entries=workStream(data,'t').entries.filter(row=>row.kind==='exchange');
+ assert.deepEqual(entries.map(row=>row.direction),['Worker (owner unavailable) → Delegate','Delegate → Worker (owner unavailable)']);
+ assert.equal(JSON.stringify(data),before);
+ // A paged worker header still carries its request's source session, not a
+ // fabricated root sender inferred from the absent parent row.
+ assert.deepEqual(workStream({sessionId:'main',nodes:[worker]},'t').entries.filter(row=>row.kind==='exchange').map(row=>row.direction),
+  entries.map(row=>row.direction));
+});
+
+test('exact root request and exact nested caller keep their own directions',()=>{
+ const root={id:'root-request',kind:'tool',label:'delegate',turnId:'t',sessionId:'main',rootSessionId:'main',
+  exchange:{id:'root-request',sessionId:'main',delegateRequest:'root ask',delegateResponse:'root reply'}};
+ assert.deepEqual(workStream({sessionId:'main',nodes:[root]},'t').entries.map(row=>row.direction),
+  ['Main chat → Delegate','Delegate → Main chat']);
+ const ancestor={id:'ancestor',kind:'worker',sessionId:'outer',label:'Outer',turnId:'t'};
+ const caller={id:'caller',kind:'worker',sessionId:'parent',label:'Reviewer',turnId:'t',parentWorkerId:'ancestor',ancestors:[ancestor]};
+ const failed={...root,id:'failed',sessionId:'parent',parentId:'caller',delegate:caller,phase:'error',
+  exchange:{id:'failed',sessionId:'parent',phase:'error',delegateRequest:'nested ask'}};
+ const entries=workStream({sessionId:'main',nodes:[ancestor,caller,failed]},'t').entries.filter(row=>row.kind==='exchange');
+ assert.deepEqual(entries.map(row=>row.direction),['Delegate · Reviewer → Delegate','Delegate → Delegate · Reviewer']);
+});
+
+test('missing sender evidence stays unavailable and never changes message contents',()=>{
+ const exchange={id:'no-source',delegateRequest:'exact request',delegateResponse:'exact reply'};
+ const node={id:'worker',kind:'worker',turnId:'t',exchange};
+ const entries=workStream({nodes:[node]},'t').entries.filter(row=>row.kind==='exchange');
+ assert.deepEqual(entries.map(row=>row.direction),['Sender unavailable → Delegate','Delegate → Sender unavailable']);
+ assert.equal(entries[0].node.exchange.delegateRequest,exchange.delegateRequest);
+ assert.equal(entries[1].node.exchange.delegateResponse,exchange.delegateResponse);
+});
