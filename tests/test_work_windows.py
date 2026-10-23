@@ -548,8 +548,8 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
         service.clients.attach(identity, kind='web')
         with service.clients.bind(identity):
             await service.dispatch('session.select', {'id': selection})
-    # Complete initial catalog reconciliation before admitting observed Work.
-    # Joining only transcript readers cannot fence its later publication.
+    # Settle initial catalog work; the lock below also fences later refreshes.
+    # Joining only transcript readers cannot exclude catalog publication.
     await service.history.refresh(force=False)
     windows = service.event_log_view.windows
     projector = FakeProjector(service.data_dir)
@@ -573,61 +573,78 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
             assert initial['event'] == 'state'
             assert initial['data']['client']['id'] == identity
             assert not service.shell.resources.registered(identity)
-        # Initial transcript reads notify this same outer cache. Join their real
-        # per-session owners before isolating the Work notification below.
-        async with asyncio.timeout(5):
-            for identity in (sid, other_sid):
-                await service.history.load(identity, only_if_changed=True, display=True)
-        # Startup diagnostics independently publishes a global frame. Settle
-        # that first snapshot before isolating Work's status-only notification.
-        await service.diagnostics.publish()
-        # A real requested physical page waits at the projector boundary. Only
-        # its completion may set ready; no status injection or broad publish.
-        read = windows.request(sid)
-        assert read is not None
-        async with asyncio.timeout(5):
-            while not any(inputs['session']['id'] == sid for inputs in projector.inputs):
-                await asyncio.sleep(0)
-        response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
-        assert response.status == 200, await response.text()
-        before = await response.json()
-        before_session = next(row for row in before['sessions'] if row['id'] == sid)
-        assert before_session['workProjection']['current'] is False
-        cached_before = service._client_snapshots['notice-web']
-        projector.gate.set()
-        await asyncio.wait_for(asyncio.shield(read), timeout=5)
-        assert windows.status[sid]['current'] is True and windows.status[sid]['status'] == 'ready'
-        # No await between stale-frame evidence and the corrected notification:
-        # background state publications cannot manufacture this discriminator.
-        with service.clients.bind('notice-web'):
-            stale = service.browser_state()
-        assert stale is cached_before
-        stale_session = next(row for row in stale['sessions'] if row['id'] == sid)
-        assert stale_session['workProjection']['current'] is False
-        with service.clients.bind('unrelated-web'):
-            unrelated = service.browser_state()
-        unrelated_token = service.shell.change_token('unrelated-web')
-        selected_token = service.shell.change_token('notice-web')
-        monkeypatch.setattr(service.event_log_view, '_notify_work', original_notice)
-        original_notice(sid)
-        assert 'notice-web' not in service._client_snapshots
-        assert service.shell.change_token('notice-web') != selected_token
-        assert service._client_snapshots['unrelated-web'] is unrelated
-        assert service.shell.change_token('unrelated-web') == unrelated_token
-        with service.clients.bind('notice-web'):
-            current = service.browser_state()
-        projected = next(row for row in current['sessions'] if row['id'] == sid)
-        assert projected['workProjection']['status'] == 'ready'
-        assert projected['workProjection']['current'] is True
-        assert projected['workProjection']['receipt'] == windows.status[sid]['receipt']
-        response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
-        assert response.status == 200, await response.text()
-        external = await response.json()
-        projected = next(row for row in external['sessions'] if row['id'] == sid)
-        assert projected['workProjection']['status'] == 'ready' and projected['workProjection']['current']
-        assert not service.shell.resources.registered('notice-web')
-        print('WORK-NOTIFICATION-CONTROL', {'legacyExternalCurrent': False, 'internalCurrent': True,
-              'correctedExternalCurrent': True, 'unrelatedCacheAndTokenUnchanged': True})
+        # Catalog refresh owns this lock through publication. Work completion,
+        # transcript loading and HTTP reads do not acquire it; they remain real.
+        async with service.history.lock:
+            # Initial transcript reads notify this same outer cache. Join their
+            # per-session owners before isolating the Work notification below.
+            async with asyncio.timeout(5):
+                for identity in (sid, other_sid):
+                    await service.history.load(identity, only_if_changed=True, display=True)
+            # Startup diagnostics independently publishes a global frame. Settle
+            # that first snapshot before isolating Work's status-only notification.
+            await service.diagnostics.publish()
+            # A real requested physical page waits at the projector boundary. Only
+            # its completion may set ready; no status injection or broad publish.
+            read = windows.request(sid)
+            assert read is not None
+            async with asyncio.timeout(5):
+                while not any(inputs['session']['id'] == sid for inputs in projector.inputs):
+                    await asyncio.sleep(0)
+            response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
+            assert response.status == 200, await response.text()
+            before = await response.json()
+            before_session = next(row for row in before['sessions'] if row['id'] == sid)
+            assert before_session['workProjection']['current'] is False
+            cached_before = service._client_snapshots['notice-web']
+            with service.clients.bind('unrelated-web'):
+                unrelated = service.browser_state()
+            unrelated_token = service.shell.change_token('unrelated-web')
+            selected_token = service.shell.change_token('notice-web')
+            shared_revision = service._state['revision']
+            catalog = service.projections.sessions(service._state)
+            projector.gate.set()
+            await asyncio.wait_for(asyncio.shield(read), timeout=5)
+            assert windows.status[sid]['current'] is True and windows.status[sid]['status'] == 'ready'
+            # The negative interval must not be rescued by a catalog/global frame
+            # or another notifier while the physical Work read completes.
+            assert service._state['revision'] == shared_revision
+            assert service.projections.sessions(service._state) is catalog
+            assert service.shell.change_token('notice-web') == selected_token
+            assert service._client_snapshots['unrelated-web'] is unrelated
+            assert service.shell.change_token('unrelated-web') == unrelated_token
+            with service.clients.bind('notice-web'):
+                stale = service.browser_state()
+            assert stale is cached_before
+            stale_session = next(row for row in stale['sessions'] if row['id'] == sid)
+            assert stale_session['workProjection']['current'] is False
+            monkeypatch.setattr(service.event_log_view, '_notify_work', original_notice)
+            original_notice(sid)
+            assert 'notice-web' not in service._client_snapshots
+            assert service.shell.change_token('notice-web') != selected_token
+            assert service._client_snapshots['unrelated-web'] is unrelated
+            assert service.shell.change_token('unrelated-web') == unrelated_token
+            assert service._state['revision'] == shared_revision
+            assert service.projections.sessions(service._state) is catalog
+            with service.clients.bind('notice-web'):
+                current = service.browser_state()
+            projected = next(row for row in current['sessions'] if row['id'] == sid)
+            assert projected['workProjection']['status'] == 'ready'
+            assert projected['workProjection']['current'] is True
+            assert projected['workProjection']['receipt'] == windows.status[sid]['receipt']
+            response = await client.get('/api/state', headers={'X-Amplifier-Client': 'notice-web'})
+            assert response.status == 200, await response.text()
+            external = await response.json()
+            projected = next(row for row in external['sessions'] if row['id'] == sid)
+            assert projected['workProjection']['status'] == 'ready' and projected['workProjection']['current']
+            assert projected['workProjection']['receipt'] == windows.status[sid]['receipt']
+            assert service._state['revision'] == shared_revision
+            assert service.projections.sessions(service._state) is catalog
+            assert service._client_snapshots['unrelated-web'] is unrelated
+            assert service.shell.change_token('unrelated-web') == unrelated_token
+            assert not service.shell.resources.registered('notice-web')
+            print('WORK-NOTIFICATION-CONTROL', {'legacyExternalCurrent': False, 'internalCurrent': True,
+                  'correctedExternalCurrent': True, 'unrelatedCacheAndTokenUnchanged': True})
     finally:
         projector.gate.set()
         if read is not None:

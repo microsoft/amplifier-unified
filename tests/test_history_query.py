@@ -38,7 +38,8 @@ async def test_search_and_read_are_passive_scoped_and_paginated(tmp_path, monkey
 def test_stream_and_compaction_event_bridge():
     kind, value = normalize_event({"type": "assistant.delta", "text": "visible", "request_id": "r", "secret": "private"}, "s")
     assert kind == "assistant.delta"
-    assert value == {"sessionId": "s", "text": "visible", "requestId": "r", "blockIndex": None}
+    assert value == {"sessionId": "s", "text": "visible", "requestId": "r", "blockIndex": None,
+                     "inputId": None, "generationId": None, "inputIds": []}
     kind, value = normalize_event({"type": "runtime.activity", "phase": "compacting", "detail": "Making room"}, "s")
     assert kind == "runtime.status" and value["phase"] == "compacting"
 
