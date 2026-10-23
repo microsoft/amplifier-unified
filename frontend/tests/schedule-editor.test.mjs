@@ -17,6 +17,7 @@ const view=(session,dispatch,focused=true)=>React.createElement(ScheduleControls
 const button=name=>root.root.findAllByType('button').find(node=>node.children.join('')===name);
 const field=id=>root.root.findByProps({id});
 const text=()=>JSON.stringify(root.toJSON());
+const content=node=>node.children.map(child=>typeof child==='string'?child:content(child)).join('');
 const change=async(id,value)=>act(async()=>field(id).props.onChange({target:{value}}));
 const click=async name=>act(async()=>button(name).props.onClick());
 const passive=(calls)=>(action,args)=>{calls.push({action,args});return Promise.resolve({accepted:true,result:action==='schedule.preview'?preview(args):{items:[]}})};
@@ -39,6 +40,53 @@ test('focused entry opens and focuses the owner editor, reads schedules once, an
  await act(async()=>root.update(view({...session},dispatch)));assert.equal(calls.length,1);
  await change('schedule-prompt','Focus review after preview');await click('Preview schedule');assert.equal(focused.at(-1),'h4');
  await click('Cancel');assert.equal(focused.at(-1),'button');
+});
+
+test('editor and same-task confirmation show the owning workspace, not the execution directory',async()=>{
+ const calls=[],session=owner('workspace-owner',{workspace:'/projects/reports',workingDirectory:'/checkouts/report-run'}),dispatch=passive(calls);
+ await act(async()=>{root=create(view(session,dispatch))});
+ assert.ok(root.root.findAllByType('p').map(content).includes('Workspace: /projects/reports'));
+ assert.doesNotMatch(text(),/\/checkouts\/report-run/);
+ await change('schedule-prompt','Review in the owning workspace');await click('Preview schedule');
+ const review=root.root.findByProps({'data-part':'schedule-preview'});
+ assert.ok(review.findAllByType('p').map(content).includes('Workspace: /projects/reports'));
+ assert.ok(review.findAllByType('p').map(content).includes('Continue this saved task.'));
+ assert.doesNotMatch(content(review),/\/checkouts\/report-run/);
+ assert.deepEqual(calls.map(row=>row.action),['schedule.list','schedule.preview']);
+ await act(async()=>root.update(view({...session,workspace:'/projects/updated-reports'},dispatch)));
+ assert.equal(button('Save and activate schedule'),undefined);
+ assert.ok(root.root.findAllByType('p').map(content).includes('Workspace: /projects/updated-reports'));
+});
+
+test('new-task confirmation keeps its bound execution workspace beside the owning workspace context',async()=>{
+ const calls=[],session=owner('new-task-workspace-owner',{workspace:'/projects/reports',workingDirectory:'/checkouts/current'});
+ const dispatch=(action,args)=>{calls.push({action,args});const result=action==='schedule.preview'?preview(args):{items:[]};if(action==='schedule.preview')result.binding.newTaskConfiguration.workspace='/checkouts/new-task';return Promise.resolve({accepted:true,result})};
+ await act(async()=>{root=create(view(session,dispatch))});
+ await change('schedule-prompt','Run a fresh report');await change('schedule-destination','new_task');await click('Preview schedule');
+ const review=root.root.findByProps({'data-part':'schedule-preview'}),destination=review.findByProps({'data-part':'schedule-destination-preview'});
+ assert.ok(review.findAllByType('p').map(content).includes('Workspace: /projects/reports'));
+ assert.ok(destination.findAllByType('p').map(content).includes('Workspace: /checkouts/new-task'));
+ assert.doesNotMatch(content(review),/\/checkouts\/current/);
+ assert.deepEqual(calls.map(row=>row.action),['schedule.list','schedule.preview']);
+});
+
+for(const [spec,expected] of [
+ [{kind:'once',timezone:'America/Los_Angeles',startAt:'2027-01-16T01:30:00+00:00'},'2027-01-15'],
+ [{kind:'interval',timezone:'Asia/Tokyo',startAt:'2027-01-15T18:30:00+00:00',intervalSeconds:3600},'2027-01-16'],
+ [{kind:'daily',timezone:'America/Los_Angeles',startDate:'2027-01-16',localTime:'09:30'},'2027-01-16'],
+ [{kind:'weekly',timezone:'America/Los_Angeles',startDate:'2027-01-18',localTime:'09:30',weekdays:[0]},'2027-01-18'],
+])test(`${spec.kind} confirmation shows Start date from the normalized binding in its timezone`,async()=>{
+ const calls=[],session=owner(`start-date-${spec.kind}`);
+ const dispatch=(action,args)=>{calls.push({action,args});return Promise.resolve({accepted:true,result:action==='schedule.preview'?preview({...args,spec}):{items:[]}})};
+ await act(async()=>{root=create(view(session,dispatch))});
+ await change('schedule-prompt','Show the reviewed start date');await change('schedule-recurrence',spec.kind);
+ await change('schedule-date','2027-02-01');await change('schedule-zone','UTC');await click('Preview schedule');
+ const review=root.root.findByProps({'data-part':'schedule-preview'}),details=review.findByType('dl').children;
+ const label=details.findIndex(node=>node.type==='dt'&&content(node)==='Start date');
+ assert.notEqual(label,-1);assert.equal(details[label+1].type,'dd');
+ assert.equal(content(details[label+1]),`${expected} (${spec.timezone})`);
+ assert.equal(field('schedule-date').props.value,'2027-02-01');assert.equal(field('schedule-zone').props.value,'UTC');
+ assert.deepEqual(calls.map(row=>row.action),['schedule.list','schedule.preview']);
 });
 
 test('normal entry waits for Create; every field choice survives Cancel, reopen, and panel unmount without retaining a preview',async()=>{
