@@ -25,3 +25,12 @@ test('missing, reported zero, partial and live duration are distinct',()=>{
  assert.deepEqual(out.metrics.elapsedSeconds,{value:4,status:'pending',unit:'seconds'});assert.equal(metricState(out.metrics.elapsedSeconds),'Live');
  assert.equal(metricExport({record:{phase:'cancelled',startedAt:5},observedAt:9,presentation:{executionMetrics:['elapsedSeconds']}}).metrics.elapsedSeconds.value,null);
 });
+
+test('selected voice exports preserve the last duration and incomplete state without inventing cost',()=>{
+ const metrics=usageMetrics({voiceSeconds:37.5,usageFinalized:false,usageStatus:'incomplete'});
+ const out=metricExport({scope:'step',metrics,presentation:{executionMetrics:['voiceSeconds','costUsd']}});
+ assert.deepEqual(out.metrics.voiceSeconds,{value:37.5,unit:'seconds',knownCalls:1,pendingCalls:0,incompleteCalls:1,status:'partial'});
+ assert.equal(metricState(out.metrics.voiceSeconds),'Incomplete');assert.equal(out.metrics.costUsd.value,null);
+ assert.equal(metricState(usageMetrics({voiceSeconds:38,usageFinalized:false,usageStatus:'running'}).voiceSeconds),'Live');
+ assert.ok(selectedMetrics({}).includes('voiceSeconds'));
+});

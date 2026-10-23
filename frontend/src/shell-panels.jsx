@@ -49,21 +49,21 @@ export function WorkspaceRail({state,session,act,selectSession,newSession,shell,
  </aside></ChatShortcutScope></NavigationOpen.Provider>;
 }
 
-export function SessionHistoryControls({session,act,onLoadEarlier,hideEarlier=false}){
+export function SessionHistoryControls({session,messages=session?.messages,act,onLoadEarlier,hideEarlier=false}){
  if(!session)return null;
  const unavailable=session.workspaceAvailable===false,readOnly=session.historyReadOnlyReason;
- const pending=conversationHistoryPending(session),earlier=!hideEarlier&&Number(session.sharedHistoryOffset)>0;
+ const pending=conversationHistoryPending(session,false,messages),earlier=!hideEarlier&&Number(session.sharedHistoryOffset)>0;
  const notices=session.historyActivity?.diagnostics||[],partial=notices.some(item=>['activity_scan_limit','scan_limit','invalid_event','incomplete_event','unreadable_file'].includes(item.code)),recovered=notices.some(item=>item.code==='recovered_backup');
  const retry=()=>act('session.select',{id:session.id});
  const loadEarlier=()=>{onLoadEarlier?.();return act('session.history',{id:session.id,before:session.sharedHistoryOffset,limit:100})};
  // A refresh with retained messages has no loading notice. Even an empty flex
  // child adds a gap and can disturb the independent reading-position owner.
- if(!(pending&&!session.messages?.length)&&!session.historyError&&!earlier&&!unavailable&&!readOnly&&!partial&&!recovered)return null;
+ if(!(pending&&!messages?.length)&&!session.historyError&&!earlier&&!unavailable&&!readOnly&&!partial&&!recovered)return null;
  return <div className="a-session-history" data-part="session-history">
   {(unavailable||readOnly)&&<p role="status"><FolderOpen/>{readOnly||'This workspace folder is unavailable. You can read its saved chats here.'}</p>}
   {recovered&&<p role="status"><AlertCircle/>Showing a recovered history backup. Original files are unchanged.</p>}
   {partial&&<p role="status"><AlertCircle/>Some saved activity is unavailable or outside the loaded window. Conversation text comes from the saved transcript.</p>}
-  {pending&&!session.messages?.length&&<p role="status"><LoaderCircle className="a-progress-spinner"/>Loading conversation…</p>}
+  {pending&&!messages?.length&&<p role="status"><LoaderCircle className="a-progress-spinner"/>Loading conversation…</p>}
   {session.historyError&&<div className="a-session-history-error" role="alert"><AlertCircle/><span>{session.historyError}</span><button type="button" className="a-link" data-action="session.select" disabled={pending} onClick={retry}>Try again</button></div>}
   {earlier&&<button type="button" className="a-soft" data-action="session.history" disabled={pending} onClick={loadEarlier}>{pending?'Loading earlier messages…':'Load earlier messages'}</button>}
  </div>;

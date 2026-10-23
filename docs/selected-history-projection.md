@@ -126,8 +126,12 @@ turning a read failure into a conversation failure.
 The host coalesces complete reads per canonical identity and admits at most eight
 jobs. Bundled browser subscriptions use requested windows instead of this queue;
 ordinary selection does not add an exhaustive descendant read. Worker computation
-remains serial within the bounded queue. Loading/retry/ready status is visible while existing
-conversation and Work remain readable. Transient retries back off 3–30 seconds.
+remains serial within the bounded queue. Initial empty loading shows progress;
+routine refreshes keep readable conversation, local outgoing text, streaming replies
+and retained Work in place without inserting a loading row. Explicit earlier-history
+reads retain their paging feedback. Retry and unavailable notices remain visible,
+and the DOM receipt continues to distinguish pending Work from a current result.
+Transient retries back off 3–30 seconds.
 Deterministic input/output limits instead show an unavailable state. At most eight
 small negative receipts suppress repeated encoding/projection of that same rejected
 generation. Input changes, or a changed proven source generation for output limits,

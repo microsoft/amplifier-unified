@@ -1,7 +1,10 @@
 import React,{useCallback,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {foldInterimRows,groupForMessage,interimResponse,interimOpen,retainInterimIds} from './interim-replies.js';
 import {WorkTimeline} from './timeline';
-import {MessageEntry} from './message-actions';
+import {MessageEntry,StreamingMessage} from './message-actions';
+import {retainVoiceWorkIds} from './voice-work-rows.js';
+import {detailOpen} from './interface-detail';
+import {useShellContext} from './shell/runtime';
 import {InlineMedia} from './inline-media';
 import {ArtifactLinks} from './inline-artifacts';
 
@@ -44,12 +47,13 @@ export function useInterimReplies(rows,data,enabled,sessionId,pane,expanded,act)
  },[state,pane,enabled]);
  // Until the first layout effect has checked reading intent, retain live rows.
  const deferred=new Set([...state.deferred,...[...candidates].filter(id=>!state.seen.has(id))]);
- const folded=useMemo(()=>retainInterimIds(foldInterimRows(rows,data,enabled,{deferred}),state.rows),[rows,data,enabled,state,revision]);
+ const folded=useMemo(()=>retainInterimIds(retainVoiceWorkIds(foldInterimRows(rows,data,enabled,{deferred}),state.rows),state.rows),[rows,data,enabled,state,revision]);
  useLayoutEffect(()=>{state.rows=folded},[state,folded]);
  const ensureVisible=useCallback(async id=>{
   const row=groupForMessage(folded,id);if(!row)return false;
-  const opened=new Set(expanded||[]);if(interimOpen(opened,row))return false;
-  opened.delete('closed:'+row.id);opened.add(row.id);
+  const opened=new Set(expanded||[]),key=row.voiceWork?row.summaryId:row.id;
+  if(row.voiceWork?opened.has(key):interimOpen(opened,row))return false;
+  opened.delete('closed:'+key);opened.add(key);
   for(const item of row.items)if(item.message)opened.add('interim-message:'+item.message.id);
   await act('view.update',{patch:{executionExpanded:[...opened]}});
   return true;
@@ -57,16 +61,17 @@ export function useInterimReplies(rows,data,enabled,sessionId,pane,expanded,act)
  return {rows:folded,ensureVisible};
 }
 
-export function ConversationWork({row,data,state,act,dispatch,session,working}){
- const open=row.interim&&interimOpen(new Set(state.view?.executionExpanded||[]),row);
+export function ConversationWork({row,data,state,act,dispatch,session,working,renderMessage}){
+ const shell=useShellContext(),detail=shell?.composition?.presentation?.interfaceDetail||shell?.composition?.presentation?.executionDetail||'standard';
+ const expanded=new Set(state.view?.executionExpanded||[]),open=row.interim?interimOpen(expanded,row):row.voiceWork&&detailOpen(expanded,row.summaryId,detail);
  const outputs=message=><div data-interim-output={message.id}>
   <InlineMedia sessionId={session.id} messageId={message.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>
   <ArtifactLinks state={state} message={message} act={act} dispatch={dispatch}/>
  </div>;
  return <>
   <WorkTimeline row={row} items={row.items} data={data} state={state} act={act}
-   renderMessage={message=><><MessageEntry message={message} session={session} state={state} act={act} dispatch={dispatch} working={working} omitMedia/>{outputs(message)}</>}/>
-  {row.interim&&!open&&row.items.filter(item=>item.message).map(({message})=>
+   renderMessage={message=>message.streaming?<StreamingMessage session={session} state={state} embedded/>:<>{renderMessage?renderMessage({id:message.id,message},{workEmbedded:!!row.voiceWork,omitMedia:true}):<MessageEntry message={message} session={session} state={state} act={act} dispatch={dispatch} working={working} workEmbedded={!!row.voiceWork} omitMedia/>}{outputs(message)}</>}/>
+  {(row.interim||row.voiceWork)&&!open&&row.items.filter(item=>item.message&&!item.message.streaming).map(({message})=>
    <React.Fragment key={message.id}>{outputs(message)}</React.Fragment>)}
  </>;
 }

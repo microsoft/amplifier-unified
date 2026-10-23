@@ -9,6 +9,7 @@ import {createChatLinkReceiver} from './chat-deep-link';
 import {DictationButton} from './dictation-controls';
 import {ChatPlan} from './chat-plan';
 import {WorkProjectionStatus} from './work-projection-status';
+import {voiceWorkRows,voiceWorkStream} from './voice-work-rows.js';
 import {workProjectionReceipt} from './work-projection-receipt.js';
 import {hasEarlierWindow,conversationHistoryPending} from './history-window.js';
 import {ChatPages,chatPageTitles} from './chat-pages';
@@ -45,7 +46,7 @@ import {ownershipState,actionErrorMessage} from './ownership.js';
 import {ArtifactLinks} from './inline-artifacts';
 import {withArtifactRows} from './artifact-placement';
 import {ReplyPreview,MessageFocus} from './message-interactions';
-import {MessageEntry,newestMessageIds,completedTurnEnds} from './message-actions';
+import {MessageEntry,StreamingMessage,newestMessageIds,completedTurnEnds} from './message-actions';
 import {PeerPresentation,PeerRun} from './peer-message';
 import {chatArtifacts} from './canvas-library';
 import {peerRuns} from './peer-groups.js';
@@ -129,7 +130,7 @@ function App(){
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const [awayFromBottom,setAwayFromBottom]=useState(false);
  const questionReviewState=useState({});
- const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
+ const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),voiceControlQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
  const [connectionFailure,setConnectionFailure]=useState(null);
  const chatLinkReceiver=useRef(null),[chatLink,setChatLink]=useState(null);
  const reportError=useCallback(error=>{
@@ -157,14 +158,14 @@ function App(){
      try{let content=effect.content;if(effect.type==='clipboard.url'){const response=await fetch(effect.url);if(!response.ok)throw Error('Source unavailable');content=await response.text()}await navigator.clipboard.writeText(content);await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'ready',message:'Source copied'}}})}
      catch(e){await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'error',message:'Clipboard unavailable: '+e.message}}});throw e}
     }
-    if(effect.type==='call.start'){try{await voiceClient.current.start(effect.args||{})}catch(error){await request('/api/voice/end',{method:'POST',body:{id:null}}).catch(()=>{});throw error}}
+    if(effect.type==='call.start')await voiceClient.current.start(effect.args||{});
     if(effect.type==='canvas.checkpoint')await checkpointSurfaces(effect.sessionId,effect.id);
     if(effect.type==='voice.visual.capture')await visualClient.current?.capture(effect);
     if(effect.type==='computer.visual.capture')await computerClient.current?.capture(effect);
-    if(effect.type==='call.end')await voiceClient.current.end();
+    if(effect.type==='call.end')await voiceClient.current.control('call.end',effect.args||{});
     if(effect.type==='call.resumeAudio')voiceClient.current.callAudio.resumePlayback();
     if(effect.type==='call.keepAwake')voiceClient.current.setKeepAwake(effect.enabled??effect.args?.enabled??true);
-    if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
+    if(effect.type==='call.mute')await voiceClient.current.control('call.mute',effect.args||{});
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();window.dispatchEvent(new Event('amplifier:notification-permission'));await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
    }).catch(e=>reportError(e));
   }
@@ -217,6 +218,16 @@ function App(){
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,superseded:!!chatReference&&meta.chatReferenceIntent!==archiveRevision.current,error:'Settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
+  if(action==='call.start')args={attemptId:crypto.randomUUID(),...args};
+  const localVoiceControl=action==='call.mute'||action==='call.end';
+  if(localVoiceControl){
+   const scope=voiceClient.current?.scope();
+   if(!scope)return Promise.resolve({accepted:true,result:{ignored:true}});
+   args={...scope,...args,controlId:args.controlId||crypto.randomUUID()};
+   // Device privacy controls take effect before either HTTP or the command queue.
+   // The shared action still records the same scoped intent for other clients.
+   voiceClient.current.control(action,args).catch(reportError);
+  }
   if(action==='message.reply'&&!meta.quotePrepared){
    if(addingQuote.current||!quoteApi.current||args.sessionId!==latest.current?.selectedSessionId)return Promise.reject(Error('Choose an available message in this conversation; a quote may already be pending.'));
    const api=quoteApi.current,target=api.capture(),sessionId=args.sessionId;
@@ -266,7 +277,9 @@ function App(){
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
-  const settleTracking=trackAction(),settleFeedback=meta.feedback===false?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
+  // Mute stays reversible while host bookkeeping is pending. Hangup renders
+  // its own ending state as soon as local media has been silenced.
+  const settleTracking=trackAction(),settleFeedback=meta.feedback===false||localVoiceControl?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
@@ -308,7 +321,7 @@ function App(){
   // Optional plan summaries have their own exact read result; they must not
   // hold up browsing or ordered mutations while canonical files are read.
   const planRead=action==='session.plans';
-  const queue=usesNavigationQueue(action,args)?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  const queue=usesNavigationQueue(action,args)?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
   const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead&&!choiceRead?commandQueue.current:null).then(result=>{
@@ -425,7 +438,8 @@ function App(){
  useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(saved?.delivery?.status==='accepted')outbox.update(entry.id,null)}},[state]);
  const turnEnds=useMemo(()=>completedTurnEnds(session),[session?.messages,session?.sharedHistoryUserTurnOffset,session?.execution?.turns,session?.status]);
  const workPlacement=useMemo(()=>turnPlacements(messages,execution),[messages,execution]),newest=useMemo(()=>newestMessageIds(messages),[messages]);
- const rawConversationRows=useMemo(()=>withArtifactRows(conversationWorkRows(messages,workPlacement)),[messages,workPlacement]);
+ const voiceStream=useMemo(()=>voiceWorkStream(session),[session?.streaming,session?.streamingId,session?.streamingInputId]);
+ const rawConversationRows=useMemo(()=>withArtifactRows(voiceWorkRows(conversationWorkRows(messages,workPlacement),execution,voiceStream)),[messages,workPlacement,execution,voiceStream]);
  const interim=useInterimReplies(rawConversationRows,execution,shell.composition?.presentation?.collapseInterimReplies===true,session?.id,messagesPane,state?.view?.executionExpanded,act);
  const artifactBoundaries=useMemo(()=>new Set([
   ...chatArtifacts(state||{}).flatMap(row=>(row.publications||[{messageId:row.messageId}]).map(link=>link.messageId)),
@@ -446,7 +460,7 @@ function App(){
   if(!row)return;
   const group=row.items.some(item=>item.turnId===requested)?requested:row.items.filter(item=>observations.has(item.turnId)).at(-1).turnId;
   const expanded=new Set(state.view?.executionExpanded||[]);
-  for(const key of [row.interim?row.id:'work:'+row.items[0].turnId,'turn:'+group]){expanded.delete('closed:'+key);expanded.add(key)}
+  for(const key of [row.summaryId||(row.interim?row.id:'work:'+row.items[0].turnId),'turn:'+group]){expanded.delete('closed:'+key);expanded.add(key)}
   await act('view.update',{patch:{executionExpanded:[...expanded]}});
   setRecordingTarget({sessionId:session?.id,group});
  };
@@ -472,8 +486,8 @@ function App(){
   });
  },[session?.id,session?.messageWindow,session?.sharedHistoryOffset,session?.historyLoading,detail.busy,act,shell.ready]);
  useLayoutEffect(()=>{const saved=historyScrollAnchor.current;if(!saved||!messagesPane.current)return;historyScrollAnchor.current=null;if(saved.sessionId!==session?.id)return;const pane=messagesPane.current,anchor=[...(pane?.querySelectorAll('[data-message-id]')||[])].find(node=>node.dataset.messageId===saved.messageId);if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-saved.top},[session?.id,session?.sharedHistoryOffset,session?.messageWindow,session?.executionWindow,shell.ready]);
- // Work status occupies space above the transcript. Preserve the current
- // reading intent in the same commit, before a loading/retry notice can paint.
+ // Initial Work and genuine retry notices occupy space above the transcript.
+ // Preserve reading intent in the same commit when those notices change.
  useLayoutEffect(()=>{chatScroll.current?.settleLayout()},[session?.workProjection?.status,session?.id,shell.ready]);
  useLayoutEffect(()=>{resizeComposer(composerRef.current);chatScroll.current?.update()},[draft,state?.selectedSessionId,shell.ready]);
  useEffect(()=>{const resize=()=>resizeComposer(composerRef.current);window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize)},[]);
@@ -491,6 +505,7 @@ function App(){
  useEffect(()=>{voiceClient.current=new VoiceClient({request,onAction:(name,args)=>dispatch(name,args),onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:reportError});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});computerClient.current=new ComputerVisualClient({request,onState:setComputerVisual,getSession:()=>latest.current?.selectedSessionId});return()=>{computerClient.current?.dispose();visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
  useEffect(()=>{computerClient.current?.sync(null,connected,state?.computerVisual)},[connected,state?.computerVisual,state?.selectedSessionId]);
  useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
+ useEffect(()=>{voiceClient.current?.sync(state?.voice,connected)},[state?.voice,connected,voice.id]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
  const open=p=>{if(p==='new-session'){newChat();return;}if(!latest.current?.view?.panel)panelReturnFocus.current=document.activeElement;setError('');act('view.update',{patch:{panel:p,toolbarMenuOpen:false,...(p==='settings'&&window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}})};
  useEffect(()=>{
@@ -718,8 +733,8 @@ function App(){
   setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};
  const previewVisible=!!peerPreview.active&&!browsing;
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:previewVisible?{...settingsState,peerPreview:true,canvas:{...state?.canvas,open:true}}:settingsState;
- const renderMessage=row=><MessageEntry key={row.id} message={row.message} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch}/>;
- const renderRow=row=>row.kind==='artifacts'?<ArtifactLinks key={row.id} state={state} message={row.message} act={act} dispatch={dispatch}/>:row.kind==='work'?<ConversationWork key={row.id} row={row} data={execution} state={state} act={act} dispatch={dispatch} session={session} working={working}/>:row.kind==='peers'?<PeerRun key={row.id} row={row} session={session} state={state} renderMessage={renderMessage}/>:renderMessage(row);
+ const renderMessage=(row,options={})=><MessageEntry key={row.id} message={row.message} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch} {...options}/>;
+ const renderRow=row=>row.kind==='artifacts'?<ArtifactLinks key={row.id} state={state} message={row.message} act={act} dispatch={dispatch}/>:row.kind==='work'?<ConversationWork key={row.id} row={row} data={execution} state={state} act={act} dispatch={dispatch} session={session} working={working} renderMessage={renderMessage}/>:row.kind==='peers'?<PeerRun key={row.id} row={row} session={session} state={state} renderMessage={renderMessage}/>:renderMessage(row);
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
  return <PeerPresentation.Provider value={peerPresentation}><ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
   {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
@@ -735,7 +750,7 @@ function App(){
   {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} act={act}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
   <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act} dispatch={dispatch}/>
-   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-message-body"><Markdown text={session.streaming}/></div></article>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
+   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session} messages={messages}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} messages={messages} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{!voiceStream&&<StreamingMessage session={session} state={state}/>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
    {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    <LiveActivity session={state.sessions.find(row=>row.id===session?.id)||session}/>

@@ -61,8 +61,7 @@ try{
  const requests=[];page.on('request',request=>requests.push(new URL(request.url()).pathname));
  await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
  const pane=page.locator('.a-messages'),input=page.getByRole('textbox',{name:'Message Amplifier'});
- // Work notices can change the content above a message during streaming.
- // Capture one settled frame and preserve the reader's message/offset; raw
+ // Capture a settled frame and preserve the reader's message/offset; raw
  // scrollTop is invariant only when that message's content position is too.
  const readingPosition=()=>pane.evaluate(element=>new Promise((resolve,reject)=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
   const bounds=element.getBoundingClientRect(),top=bounds.top,rows=[...element.querySelectorAll('[data-message-id]')];
@@ -206,23 +205,19 @@ try{
  const savedPosition=await readingPosition();
  await grow();await page.waitForTimeout(200);
  await checkReading(savedPosition,'streaming must preserve scrollback');
- // Retain the original raw-position invariant explicitly at a stable Work
- // boundary as well as checking notice-changing geometry above.
+ // Retain the original raw-position invariant at a stable Work boundary.
  await workReady();
- // Observe the actual React-owned Work notice at mutation delivery, before
- // the next animation frame can hide a one-frame reading jump. The prior
- // settled anchor remains authoritative through both loading and ready.
+ // A routine Work refresh must not insert any loading row above live text,
+ // even for one frame. Observe actual React mutations before paint.
  await pane.evaluate(element=>{
   const top=element.getBoundingClientRect().top,rows=[...element.querySelectorAll('[data-message-id]')];
   const anchor=rows.find(row=>row.getBoundingClientRect().bottom>top)||rows.at(-1);
   const offset=anchor.getBoundingClientRect().top-top;
-  let notice=!!element.querySelector('[data-part="work-projection-status"]');
   window.workNoticeFrames=[];
   window.workNoticeObserver=new MutationObserver(()=>{
-   const next=!!element.querySelector('[data-part="work-projection-status"]');if(next===notice)return;notice=next;
-   window.workNoticeFrames.push({notice:next,expected:offset,actual:anchor.getBoundingClientRect().top-element.getBoundingClientRect().top});
+   if(window.workNoticeFrames.length<100)window.workNoticeFrames.push({notice:!!element.querySelector('[data-part="work-projection-status"]'),expected:offset,actual:anchor.getBoundingClientRect().top-element.getBoundingClientRect().top});
   });
-  window.workNoticeObserver.observe(element,{subtree:true,childList:true});
+  window.workNoticeObserver.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['data-work-projection']});
  });
  const stableBefore=await readingPosition();
  await grow();await workReady();const stableAfter=await readingPosition();
@@ -230,9 +225,12 @@ try{
  assertReading(stableBefore,stableAfter,'streaming with stable geometry preserves raw scrollback');
  readingChecks.push({message:'stable Work geometry',before:stableBefore,after:stableAfter});
  const noticeFrames=await page.evaluate(()=>{window.workNoticeObserver.disconnect();return window.workNoticeFrames});
- assert.ok(noticeFrames.some(row=>row.notice)&&noticeFrames.some(row=>!row.notice),'Exercise actual Work notice insertion and removal');
- for(const frame of noticeFrames)assert.ok(Math.abs(frame.actual-frame.expected)<3,'Work notice preserves reading position before paint: '+JSON.stringify(frame));
- console.log('Work notice pre-paint positions:',JSON.stringify(noticeFrames));
+ assert.ok(noticeFrames.length>0,'Observe actual streaming or Work projection mutations');
+ for(const frame of noticeFrames){
+  assert.equal(frame.notice,false,'Live Work refresh must not insert a history-loading row');
+  assert.ok(Math.abs(frame.actual-frame.expected)<3,'Work refresh preserves reading position before paint: '+JSON.stringify(frame));
+ }
+ console.log('Quiet Work refresh pre-paint positions:',JSON.stringify(noticeFrames));
  // Counterchecks exercise real scroll changes without a compensating layout
  // change: an 80px reading shift and a jump to latest must both be rejected.
  const beforeShift=await readingPosition();

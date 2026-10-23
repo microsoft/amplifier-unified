@@ -9,10 +9,13 @@ import {usePendingMessageEdit} from './pending-message-edits';
 import {InlineMedia} from './inline-media';
 import {ChatReferences} from './chat-reference';
 import {PeerMessage,isPeerMessage} from './peer-message';
+import {VoiceWorkMessage} from './voice-work-message.jsx';
+import {isVoiceWorkMessage} from './voice-work-message.js';
+import {Markdown} from './markdown';
 
 export function newestMessageIds(messages){
  const latest=new Map();
- for(const message of messages)if(!message.observation&&['user','assistant'].includes(message.role))latest.set(message.role,message.id);
+ for(const message of messages)if(!message.observation&&['user','assistant'].includes(message.role))latest.set(isVoiceWorkMessage(message)?'work':message.role,message.id);
  return new Set(latest.values());
 }
 
@@ -40,7 +43,15 @@ const MessageText=memo(function MessageText({text,reference,role,sessionId,messa
  return <DetailText text={text} reference={reference} markdown userContent={role==='user'} automatic={role==='assistant'} writingContext={writingContext} fileContext={fileContext}/>;
 });
 
-export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false,omitMedia=false}){
+export function StreamingMessage({session,state,embedded=false}){
+ if(!session?.streaming)return null;
+ const message={id:session.streamingId||'streaming',role:'assistant',source:'amplifier',inputId:session.streamingInputId,streaming:true};
+ const body=<div className="a-message-body"><Markdown text={session.streaming}/></div>;
+ return isVoiceWorkMessage(message)?<VoiceWorkMessage key={session.id+':'+message.id} message={message} session={session} state={state} embedded={embedded}>{body}</VoiceWorkMessage>:
+  <article className="a-message a-assistant">{body}</article>;
+}
+
+export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false,omitMedia=false,workEmbedded=false}){
  const [loadingEdit,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const pendingEdit=usePendingMessageEdit(JSON.stringify([state.client?.hostInstanceId,state.client?.id,session.id,m.inputId||m.commandId||m.id]),setDetailError),saving=loadingEdit||pendingEdit.pending;
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null),submitting=useRef(false);
@@ -64,7 +75,8 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  };
  if(m.observation)return null;
  if(isPeerMessage(m))return <PeerMessage message={m} session={session} state={state} act={act} dispatch={dispatch} date={date} label={label} attribution={attribution} newest={newest}/>;
- return <article className={`a-message a-${external?'external-message':m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>
+ const voiceWork=isVoiceWorkMessage(m);
+ const content=<>
   <div className="a-message-body">
   {m.replyTo?.version!==2&&<QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/>}<AttachmentStrip items={m.attachments} act={act} sessionId={session.id}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" aria-busy={saving||undefined} onSubmit={submit}>
@@ -87,10 +99,12 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
 
    {copied?.status==='ready'&&<span role="status" className="a-copy-result success">Copied Markdown</span>}
    {copied?.status==='error'&&<span role="alert" className="a-copy-result error"><AlertCircle/>{copied.message||'Could not copy'}</span>}
-   {m.via&&!(m.via==='peer'&&attribution)&&<span className="a-message-channel">{m.via==='observation'?'Background follow-up':`via ${m.via}`}</span>}
-   {date&&<time className="a-message-date" aria-label={date.full} dateTime={date.iso}>{date.text}</time>}
+   {!voiceWork&&m.via&&!(m.via==='peer'&&attribution)&&<span className="a-message-channel">{m.via==='observation'?'Background follow-up':`via ${m.via}`}</span>}
+   {!voiceWork&&date&&<time className="a-message-date" aria-label={date.full} dateTime={date.iso}>{date.text}</time>}
   </div>}
- </article>;
+ </>;
+ return voiceWork?<VoiceWorkMessage key={session.id+':'+m.id} message={m} session={session} state={state} date={date} newest={newest} embedded={workEmbedded}>{content}</VoiceWorkMessage>:
+  <article className={`a-message a-${external?'external-message':m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>{content}</article>;
 }
 export function ForkTurn({session,turn,act,working}){
  return <button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':working?'Wait for the current work to finish':'Fork a new chat from here')} aria-label={turn.turn===null?'Fork conversation after this turn':`Fork conversation after turn ${turn.turn}`} disabled={working||session.configurationBusy||session.workspaceAvailable===false||!!session.historyReadOnlyReason} data-action="session.fork" onClick={()=>act('session.fork',{id:session.id,afterMessageId:turn.messageId})}><GitBranch/></button>;

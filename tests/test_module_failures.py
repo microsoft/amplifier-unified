@@ -36,8 +36,12 @@ def test_provider_instance_diagnostic_is_allowlisted_without_endpoint_or_raw_err
 
 
 @pytest.mark.asyncio
-async def test_real_worker_protocol_preserves_only_safe_diagnostics(tmp_path):
-    failures=[{'module':'tool-fixture','type':'tool','reason_code':'invalid_entry_point','error':'private-token'}]
+@pytest.mark.parametrize('failure', [
+    {'module':'tool-fixture','type':'tool','reason_code':'invalid_entry_point','error':'private-token'},
+    {'module':'provider-fixture','type':'provider','instance_id':'account','reason_code':'provider_mount_failed',
+     'diagnostic':{'stage':'mount','category':'unknown','errorType':'ValueError','message':'private-token'}}])
+async def test_real_worker_protocol_preserves_only_safe_diagnostics(tmp_path, failure):
+    failures=[failure]
     script='import sys,json\njson.loads(sys.stdin.readline())\nprint('+repr(json.dumps({'type':'runtime.error','code':'module_load_failed','moduleFailures':failures,'error':'private-token'}))+',flush=True)\n'
     runtime=RuntimeManager(command=[sys.executable,'-c',script],startup_timeout=3)
     events=[]
@@ -46,7 +50,7 @@ async def test_real_worker_protocol_preserves_only_safe_diagnostics(tmp_path):
         with pytest.raises(ConfiguredModuleError):
             await runtime.start({'id':'fixture','workspace':str(tmp_path),'bundle':'work'},emit)
         payload=next(data for kind,data in events if kind=='runtime.error')
-        assert payload['moduleFailures'][0]['reason_code']=='invalid_entry_point'
+        assert payload['moduleFailures']==safe_failures(failures)
         assert 'private-token' not in json.dumps(events)
     finally:await runtime.close()
 
