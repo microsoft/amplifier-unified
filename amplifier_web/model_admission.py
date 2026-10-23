@@ -5,6 +5,7 @@ import copy
 import time
 
 from .collaboration import BINDING
+from .model_admission_identity import input_id
 
 
 class ModelAdmissionPaused(ValueError):
@@ -30,7 +31,7 @@ def binding(session, args):
             or not isinstance(row.get('id'), str) or len(row['id']) > 200
             or not isinstance(generation, str) or len(generation) > 200
             or len(inputs) > 64 or any(not isinstance(value, str) or len(value) > 200 for value in inputs)
-            or row.get('turnId') not in inputs):
+            or input_id(row) not in inputs):
         return None
     return {'generationId': generation, 'inputIds': list(inputs),
             'interruptionRevision': session.get('interruptionRevision', 0),

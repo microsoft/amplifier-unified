@@ -9,6 +9,7 @@ from .collaboration import BINDING, PRINCIPAL
 from .management import Management
 from .handoff_admission import finishing_turn
 from .model_capacity_settings import policy
+from .model_admission_identity import input_id
 
 
 async def admit(service, sid, args):
@@ -43,7 +44,7 @@ async def admit(service, sid, args):
                current.get('interruptionRevision', 0), current.get('configurationPendingRevision', 0))
         if (PRINCIPAL.get() != (current.get('runtimeSessionId') or sid)
                 or not expected[0] or now != expected or active.get('terminal')
-                or row.get('turnId') not in expected[1]
+                or input_id(row) not in expected[1]
                 or current.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}):
             return 'The input or generation changed while waiting; no provider request was sent.'
         if (current.get('configurationBusy') and not finishing_turn(service, current, row)
