@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/generated_images_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page,releaseSwapGate,primaryFailure,swapObserving=false;
-const swapDiagnostic={schema:2,kind:'generated-image-preview-swap',records:[],dropped:0,controls:[],boundaries:null,cleanup:[]};
+const swapDiagnostic={schema:2,kind:'generated-image-preview-swap',initial:null,records:[],dropped:0,controls:[],boundaries:null,cleanup:[]};
 let swapPhase=null;
 const assertPlacement=(result,label)=>assert.equal(result.problem,null,label);
 function installPreviewProbe(pane,targets){
@@ -22,22 +22,32 @@ function installPreviewProbe(pane,targets){
   const buttons=rails.length===1?[...rails[0].querySelectorAll(':scope > button')]:[];
   const pressed=buttons.filter(button=>button.getAttribute('aria-pressed')==='true');
   const preview=previews.length===1?previews[0]:null,frame=frames.length===1?frames[0]:null;
-  const titles=preview?.querySelectorAll(':scope > .a-inline-artifact-heading > strong')||[];
-  const versions=preview?.querySelectorAll(':scope > .a-inline-artifact-heading > span')||[];
+  const headers=preview?.querySelectorAll(':scope > button.a-document-output-open[data-action="canvas.select"]')||[];
+  const header=headers.length===1?headers[0]:null;
+  const titles=header?.querySelectorAll(':scope > span > strong')||[];
+  const versions=header?.querySelectorAll(':scope > span > small')||[];
+  const fullPreviews=preview?.querySelectorAll('[data-full-artifact-preview]')||[];
+  const fullPreview=fullPreviews.length===1?fullPreviews[0]:null;
   const target=pressed.length===1?targets.find(row=>buttons[row.slot-1]===pressed[0]&&
    pressed[0].getAttribute('aria-label')===`Image ${row.slot}: ${row.title}`&&
+   preview?.getAttribute('data-artifact-id')===row.resourceId&&preview?.getAttribute('data-artifact-version')===String(row.version)&&
+   fullPreview?.getAttribute('data-full-artifact-preview')===row.resourceId&&fullPreview?.getAttribute('data-artifact-version')===String(row.version)&&
+   header?.getAttribute('aria-label')===`Open ${row.title} in canvas`&&
    preview?.getAttribute('aria-label')===row.title&&titles.length===1&&titles[0].textContent===row.title&&
-   versions.length===1&&versions[0].textContent===`Version ${row.version}`):null;
+   versions.length===1&&versions[0].textContent===`Image · Version ${row.version}`):null;
   const panes=pane.ownerDocument.querySelectorAll('.a-messages'),currentGalleries=pane.querySelectorAll('.a-inline-gallery');
   return{frame,preview,buttons,target,identity:{
    sameAnchors:!!(pane.isConnected&&gallery?.isConnected&&panes.length===1&&panes[0]===pane&&
     currentGalleries.length===1&&currentGalleries[0]===gallery&&gallery.closest('.a-messages')===pane),
-   currentFrame:!!(frame?.isConnected&&preview?.isConnected&&frame.parentElement===preview&&
+   currentFrame:!!(frame?.isConnected&&preview?.isConnected&&fullPreview?.isConnected&&
+    frame.parentElement===fullPreview&&fullPreview.closest('section.a-inline-artifact[data-image-frame]')===preview&&
+    header?.parentElement===preview&&
     preview.parentElement===gallery&&frame.closest('.a-inline-gallery')===gallery),
    selectedTarget:!!(target&&buttons.length===targets.length&&targets.every(row=>
     buttons[row.slot-1].getAttribute('aria-label')===`Image ${row.slot}: ${row.title}`)&&
     (!observedEntries||observedEntries.includes(target.entry))&&(!expectedEntry||target.entry===expectedEntry)),
-   previewCount:previews.length,frameCount:frames.length,railCount:rails.length,pressedCount:pressed.length,
+   previewCount:previews.length,fullPreviewCount:fullPreviews.length,headerCount:headers.length,
+   frameCount:frames.length,railCount:rails.length,pressedCount:pressed.length,
    entry:target?.entry??null,resourceId:target?.resourceId??null,version:target?.version??null}};
  };
  const initialFrame=resolveFrame().frame;
@@ -311,7 +321,8 @@ try{
  assert.deepEqual(publication.publications,[{messageId:'origin',version:1}]);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false);
  // Freeze only the three synthetic public identities, not artifact bodies or URLs.
- // The DOM has title/version/pressed-slot identity, not a resource-id attribute.
+ // Bind the current card and full preview's public resource/version markers to
+ // the visible title, version and pressed slot.
  const targets=await page.evaluate(firstId=>{
   const state=window.amplifier.getState();
   return ['first','second','third'].map((entry,index)=>{
@@ -327,7 +338,8 @@ try{
  assert.equal(new Set(targets.map(row=>row.title)).size,3,'Synthetic public titles must distinguish entries');
  assert.equal(targets[1].title,'Second concept');assert.equal(targets[2].title,'Third concept');
  await page.locator('.a-messages').evaluate(installPreviewProbe,targets);
- assertPlacement(await page.evaluate(()=>{const probe=window.imagePreviewProbe,value=probe.snapshot('first');return{problem:probe.compare(value,value)}}),'Controls target the first synthetic entry');
+ swapDiagnostic.initial=await page.evaluate(()=>{const probe=window.imagePreviewProbe,value=probe.snapshot('first');return{value,problem:probe.compare(value,value)}});
+ assertPlacement(swapDiagnostic.initial,'Controls target the first synthetic entry');
  swapDiagnostic.controls=await page.evaluate(()=>window.imagePreviewProbe.controls());
  for(const result of swapDiagnostic.controls){
   if(result.replacementWitness)for(const [name,value] of Object.entries(result.replacementWitness))assert.equal(value,true,'Replacement witness: '+name);
@@ -387,7 +399,7 @@ try{
  await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  assert.equal((await geometry('third')).box.height,before.box.height,'Portrait uses the same frame');
  await gallery.getByRole('button',{name:'Image 2: Second concept',exact:true}).click();
- await gallery.getByRole('button',{name:'Open Second concept in full view',exact:true}).first().click();
+ await gallery.getByRole('button',{name:'Open Second concept in canvas',exact:true}).first().click();
  await expect(page.locator('.a-canvas-workspace img').first()).toBeVisible();
  await page.evaluate(async()=>{await window.amplifier.dispatch('view.update',{patch:{canvasFocused:false}});await window.amplifier.dispatch('canvas.close')});
  await page.screenshot({path:'/tmp/unified-generated-images-complete.png'});
