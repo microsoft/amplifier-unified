@@ -206,6 +206,13 @@ try{
  assert.equal(targetWrites,1);
  await expect(targetsRegion.getByText('Waiting for room on this test machine. Existing work can continue.',{exact:true})).toBeVisible();
  assert.equal(targets.runners.length,0);
+ await targetsRegion.getByRole('heading',{name:'Connected test machines',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:'/tmp/connection-check-narrow.png'});
+ await page.setViewportSize({width:1100,height:900});
+ await expect(targetsRegion.getByText('Waiting for room on this test machine. Existing work can continue.',{exact:true})).toBeVisible();
+ await targetsRegion.getByRole('heading',{name:'Connected test machines',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:'/tmp/connection-check-desktop.png'});
+ await page.setViewportSize({width:390,height:844});
  await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'testing');
  await expect(targetsRegion.getByText('Waiting for room on this test machine. Existing work can continue.',{exact:true})).toBeVisible();
  assert.equal(targetWrites,1);
