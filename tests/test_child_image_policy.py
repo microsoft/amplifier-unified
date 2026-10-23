@@ -113,6 +113,227 @@ def test_child_image_environment_paths_resolve_before_intersection(tmp_path, mon
     assert plan["tools"][0]["config"]["allowed_read_paths"] == [str(tmp_path / "images")]
 
 
+@pytest.mark.parametrize("omission", ["inheritance", "spawn", "retained"])
+@pytest.mark.parametrize("restriction,value", [
+    ("allow_paid", False), ("routing_blocked", True),
+    ("allowed_read_paths", []), ("allowed_write_paths", ["images"]),
+    ("denied_read_paths", ["private"]), ("denied_write_paths", ["originals"]),
+])
+def test_image_free_intermediate_keeps_ancestor_restriction(tmp_path, omission, restriction, value):
+    parent = {"tools": [image({"allow_paid": True, restriction: value})]}
+    options = {"working_dir": tmp_path}
+    if omission == "inheritance":
+        options["tool_inheritance"] = {"exclude_tools": ["tool-image"]}
+    elif omission == "spawn":
+        parent["spawn"] = {"tools": []}
+    else:
+        options["retained_image_tools"] = []
+    original = copy.deepcopy(parent)
+    middle = child_plan(parent, {}, **options)
+    assert middle["tools"] == []
+    saved_middle = copy.deepcopy(middle)
+    grandchild = child_plan(middle, {
+        # An explicit tool is allowed, but neither a new identity nor an
+        # attempted replacement of the internal ceiling can widen authority.
+        "_unified_image_policy": {},
+        "spawn": {},
+        "tools": [image({"allow_paid": True, "routing_blocked": False,
+                        "allowed_read_paths": [str(tmp_path)], "allowed_write_paths": [str(tmp_path)],
+                        "denied_read_paths": [], "denied_write_paths": [],
+                        "backend": "explicit-child-backend"}, instance_id="grandchild-image")],
+    }, working_dir=tmp_path / "different-cwd")
+    actual, = grandchild["tools"]
+    expected = [str(tmp_path / path) for path in value] if isinstance(value, list) else value
+    assert actual["config"][restriction] == expected
+    if restriction == "routing_blocked":
+        assert actual["config"]["allow_paid"] is False
+    assert actual["config"]["backend"] == "explicit-child-backend"
+    assert parent == original and middle == saved_middle
+
+
+def test_image_free_intermediate_without_restrictions_does_not_ban_redeclaration(tmp_path):
+    middle = child_plan({"tools": [image({"allow_paid": True})]}, {},
+                        tool_inheritance={"exclude_tools": ["tool-image"]}, working_dir=tmp_path)
+    assert middle["tools"] == []
+    grandchild = child_plan(middle, {"tools": [image({"allow_paid": True})]}, working_dir=tmp_path)
+    assert grandchild["tools"][0]["config"]["allow_paid"] is True
+    assert not grandchild["tools"][0]["config"].get("routing_blocked")
+
+
+def test_image_ceiling_never_carries_paid_grants_into_new_declarations(tmp_path):
+    parent = {"tools": [image({"allow_paid": True})]}
+    partial = child_plan(parent, {"tools": [image({"model_role": "other-role"})]}, working_dir=tmp_path)
+    assert partial["tools"][0]["config"]["allow_paid"] is True
+    middle = child_plan(parent, {}, tool_inheritance={"exclude_tools": ["tool-image"]}, working_dir=tmp_path)
+    assert "allow_paid" not in middle["_unified_image_policy"]
+    new = child_plan(middle, {"tools": [image({"model_role": "other-role"})]}, working_dir=tmp_path)
+    # The mounted tool requires literal True; an omitted new grant stays omitted.
+    assert new["tools"][0]["config"].get("allow_paid") is not True
+
+
+@pytest.mark.parametrize("invalid", [None, [], "disabled"])
+def test_malformed_inherited_image_ceiling_fails_closed(tmp_path, invalid):
+    with pytest.raises(ValueError, match="image policy must be a dictionary"):
+        child_plan({"tools": [], "_unified_image_policy": invalid},
+                   {"tools": [image({"allow_paid": True})]}, working_dir=tmp_path)
+
+
+@pytest.mark.parametrize("boundary", ["parent", "retained"])
+@pytest.mark.parametrize("policy", [{"allow_paid": 0}, {"allow_paid": None}, {"routing_blocked": "true"}])
+def test_malformed_image_ceiling_flags_cannot_disappear(tmp_path, boundary, policy):
+    parent = {"tools": []}
+    options = {}
+    if boundary == "parent":
+        parent["_unified_image_policy"] = policy
+    else:
+        options["retained_image_policy"] = policy
+    with pytest.raises(ValueError, match="flags must be booleans"):
+        child_plan(parent, {"tools": [image({"allow_paid": True})]}, working_dir=tmp_path, **options)
+
+
+def test_image_ceiling_contains_restrictions_not_selection_or_credentials(tmp_path):
+    middle = child_plan({"tools": [image({
+        "allow_paid": False, "allowed_write_paths": ["images"],
+        "backend": "parent-account", "model_role": "image-gen", "model": "parent-model",
+        "provider_preferences": [{"provider": "account-a"}], "api_key": "not-policy",
+    })]}, {}, tool_inheritance={"exclude_tools": ["tool-image"]}, working_dir=tmp_path)
+    assert middle["_unified_image_policy"] == {
+        "allow_paid": False, "allowed_write_paths": [str(tmp_path / "images")]}
+    sibling = child_plan(middle, {"tools": [image({"allow_paid": True})]}, working_dir=tmp_path)
+    sibling["_unified_image_policy"]["allowed_write_paths"].clear()
+    assert middle["_unified_image_policy"]["allowed_write_paths"] == [str(tmp_path / "images")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", [False, True])
+@pytest.mark.parametrize("current_scope", ["omitted", "broad", "narrow"])
+async def test_image_free_native_child_checkpoint_and_resume_retains_ceiling(tmp_path, restricted, current_scope):
+    """Real Foundation/Core config and checkpoint; no image mount or provider call.
+
+    A finite test orchestrator drives the public nested spawn boundary. The
+    grandchild is inspected before mounting the unavailable fixture image tool.
+    """
+    import importlib.util
+    from amplifier_foundation.bundle import PreparedBundle, BundleModuleResolver
+
+    workspace = tmp_path / "execution"
+    workspace.mkdir()
+    session_config = {"orchestrator": {"module": "loop-live"},
+                      "context": {"module": "context-simple"}}
+    config = {"allow_paid": not restricted, "backend": "parent-account"}
+    expected = {}
+    if restricted:
+        config.update(routing_blocked=True, allowed_read_paths=[],
+                      allowed_write_paths=["images"], denied_read_paths=["private"],
+                      denied_write_paths=["originals"])
+        expected = {"allow_paid": False, "routing_blocked": True, "allowed_read_paths": [],
+                    "allowed_write_paths": [str(workspace / "images")],
+                    "denied_read_paths": [str(workspace / "private")],
+                    "denied_write_paths": [str(workspace / "originals")]}
+    parent_plan = {"session": session_config, "tools": [image(config)]}
+    initial_parent = copy.deepcopy(parent_plan)
+    paths = {name: Path(importlib.util.find_spec(
+        "amplifier_module_" + name.replace("-", "_")).origin).parent
+        for name in ("loop-live", "context-simple")}
+    resolver = BundleModuleResolver(paths)
+    mounted, grandchildren = [], []
+
+    class StopBeforeImageMount(Exception):
+        pass
+
+    class Finite:
+        async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+            assert not providers
+            assert not any(row.get("module") == "tool-image" for row in coordinator.config["tools"])
+            assert coordinator.config["_unified_image_policy"] == expected
+            child = mounted[-1]
+            with pytest.raises(StopBeforeImageMount):
+                await coordinator.get_capability("session.spawn")(
+                    agent_name="image-worker", instruction="must not dispatch", parent_session=child,
+                    sub_session_id="grandchild-" + prompt,
+                    agent_configs={"image-worker": {"_unified_image_policy": {},
+                        "tools": [image({"allow_paid": True, "routing_blocked": False,
+                                        "allowed_read_paths": [str(workspace)],
+                                        "allowed_write_paths": [str(workspace)],
+                                        "denied_read_paths": [], "denied_write_paths": [],
+                                        "backend": "explicit-grandchild"}, instance_id="new-image")]}})
+            await context.add_message({"role": "user", "content": prompt})
+            await context.add_message({"role": "assistant", "content": "done " + prompt})
+            return "done " + prompt
+
+    @dataclass
+    class Prepared(PreparedBundle):
+        async def create_session(self, **kwargs):
+            if kwargs["session_id"].startswith("grandchild-"):
+                grandchildren.append(copy.deepcopy((self.mount_plan, self.bundle.tools)))
+                raise StopBeforeImageMount
+            assert self.mount_plan["tools"] == self.bundle.tools == []
+            child = await super().create_session(**kwargs)
+            assert child.coordinator.config["_unified_image_policy"] == expected
+            await child.coordinator.mount("orchestrator", Finite())
+            mounted.append(child)
+            return child
+
+    coordinator = SimpleNamespace(config=parent_plan, get=lambda _: None,
+        get_capability=lambda name: str(workspace) if name == "session.working_dir" else None)
+    parent = SimpleNamespace(session_id="parent", coordinator=coordinator)
+    store = SessionStore(tmp_path / "history")
+    children = Children(SimpleNamespace(inbox=asyncio.Queue()), store, None)
+    children.prepared["parent"] = Prepared(parent_plan, resolver, Bundle(
+        name="parent", session=session_config, tools=copy.deepcopy(parent_plan["tools"])))
+    await children.spawn("self", "first", parent, sub_session_id="middle",
+                         tool_inheritance={"exclude_tools": ["tool-image"]})
+    messages, saved = store.load("middle")
+    assert saved["mount_plan"]["tools"] == []
+    assert saved["mount_plan"]["_unified_image_policy"] == expected
+    assert parent_plan == initial_parent
+    # Lose every original declaration in the current parent. Resume must use
+    # the saved restriction-only ceiling, not manufacture a tool or a grant.
+    current = {"session": copy.deepcopy(session_config), "tools": []}
+    if current_scope != "omitted":
+        current_config = {"allow_paid": True, "routing_blocked": False,
+                          "allowed_read_paths": [str(workspace)],
+                          "allowed_write_paths": [str(workspace)],
+                          "denied_read_paths": [], "denied_write_paths": []}
+        if current_scope == "narrow":
+            current_config.update(allow_paid=False, allowed_write_paths=[str(workspace / "images/nested")],
+                                  denied_write_paths=[str(workspace / "images/current-deny")])
+        current["tools"] = [image(current_config)]
+        expected = {
+            "allowed_read_paths": [] if restricted else [str(workspace)],
+            "allowed_write_paths": [str(workspace / (
+                "images/nested" if current_scope == "narrow" else "images"))] if restricted
+                or current_scope == "narrow" else [str(workspace)],
+            "denied_read_paths": [str(workspace / "private")] if restricted else [],
+            "denied_write_paths": ([str(workspace / "originals")] if restricted else [])
+                                  + ([str(workspace / "images/current-deny")] if current_scope == "narrow" else []),
+            **({"allow_paid": False} if restricted or current_scope == "narrow" else {}),
+            **({"routing_blocked": True} if restricted else {}),
+        }
+    before_current = copy.deepcopy(current)
+    parent.coordinator.config = current
+    children = Children(SimpleNamespace(inbox=asyncio.Queue()), SessionStore(tmp_path / "history"), None)
+    children.prepared["parent"] = Prepared(current, resolver, Bundle(
+        name="current", session=session_config, tools=copy.deepcopy(current["tools"])))
+    await children.resume("middle", "again", parent)
+    resumed_messages, resumed = children.store.load("middle")
+    assert resumed_messages[:len(messages)] == messages
+    assert resumed_messages[-1]["content"] == "done again"
+    assert resumed["mount_plan"]["tools"] == []
+    assert resumed["mount_plan"]["_unified_image_policy"] == expected
+    assert len(mounted) == len(grandchildren) == 2
+    for index, (plan, bundle_tools) in enumerate(grandchildren):
+        assert plan["tools"] == bundle_tools
+        row, = bundle_tools
+        assert row["config"]["backend"] == "explicit-grandchild"
+        effective = saved["mount_plan"]["_unified_image_policy"] if index == 0 else expected
+        for key, value in effective.items():
+            assert row["config"][key] == value
+        assert row["config"]["allow_paid"] is (not restricted and not (index == 1 and current_scope == "narrow"))
+    assert current == before_current
+    assert not children.sessions
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("resumed", [False, True])
 async def test_prepared_child_mount_and_bundle_share_narrowed_policy_before_execution(tmp_path, monkeypatch, resumed):
