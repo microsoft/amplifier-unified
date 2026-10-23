@@ -43,15 +43,15 @@ const MessageText=memo(function MessageText({text,reference,role,sessionId,messa
  return <DetailText text={text} reference={reference} markdown userContent={role==='user'} automatic={role==='assistant'} writingContext={writingContext} fileContext={fileContext}/>;
 });
 
-export function StreamingMessage({session,state}){
+export function StreamingMessage({session,state,embedded=false}){
  if(!session?.streaming)return null;
- const message={id:session.streamingId||'streaming',role:'assistant',source:'amplifier',inputId:session.streamingInputId};
+ const message={id:session.streamingId||'streaming',role:'assistant',source:'amplifier',inputId:session.streamingInputId,streaming:true};
  const body=<div className="a-message-body"><Markdown text={session.streaming}/></div>;
- return isVoiceWorkMessage(message)?<VoiceWorkMessage key={session.id+':'+message.id} message={message} session={session} state={state}>{body}</VoiceWorkMessage>:
+ return isVoiceWorkMessage(message)?<VoiceWorkMessage key={session.id+':'+message.id} message={message} session={session} state={state} embedded={embedded}>{body}</VoiceWorkMessage>:
   <article className="a-message a-assistant">{body}</article>;
 }
 
-export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false,omitMedia=false}){
+export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false,omitMedia=false,workEmbedded=false}){
  const [loadingEdit,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const pendingEdit=usePendingMessageEdit(JSON.stringify([state.client?.hostInstanceId,state.client?.id,session.id,m.inputId||m.commandId||m.id]),setDetailError),saving=loadingEdit||pendingEdit.pending;
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null),submitting=useRef(false);
@@ -103,7 +103,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    {!voiceWork&&date&&<time className="a-message-date" aria-label={date.full} dateTime={date.iso}>{date.text}</time>}
   </div>}
  </>;
- return voiceWork?<VoiceWorkMessage key={session.id+':'+m.id} message={m} session={session} state={state} date={date} newest={newest}>{content}</VoiceWorkMessage>:
+ return voiceWork?<VoiceWorkMessage key={session.id+':'+m.id} message={m} session={session} state={state} date={date} newest={newest} embedded={workEmbedded}>{content}</VoiceWorkMessage>:
   <article className={`a-message a-${external?'external-message':m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>{content}</article>;
 }
 export function ForkTurn({session,turn,act,working}){

@@ -90,13 +90,14 @@ export function WorkTimeline({items,data,state,act,row,renderMessage}){
  const shell=useShellContext(),detail=shell?.composition?.presentation?.interfaceDetail||shell?.composition?.presentation?.executionDetail||'standard';
  const presentation=shell?.composition?.presentation||{},show=metricsVisible(presentation,'turn'),fields=selectedMetrics(presentation);
  const turns=items.filter(item=>item.turnId).map(item=>data.turns.find(turn=>turn.id===item.turnId)).filter(Boolean);
- const expanded=new Set(state.view?.executionExpanded||[]),summaryId=row?.interim?row.id:`work:${items[0].turnId}`;
+ const firstTurn=items.find(item=>item.turnId)?.turnId;
+ const expanded=new Set(state.view?.executionExpanded||[]),summaryId=row?.summaryId||(row?.interim?row.id:`work:${firstTurn}`);
  const open=row?.interim?interimOpen(expanded,row):detailOpen(expanded,summaryId,detail),ticking=turns.some(isRunning);
  const [now,setNow]=useState(()=>hostNow());
  useEffect(()=>{if(!ticking)return;setNow(hostNow());const timer=setInterval(()=>setNow(hostNow()),1000);return()=>clearInterval(timer)},[ticking]);
- if(items.length===1&&!row?.interim)return <TurnTimeline data={data} turnId={items[0].turnId} state={state} act={act}/>;
+ if(items.length===1&&!row?.interim&&!row?.voiceWork)return <TurnTimeline data={data} turnId={firstTurn} state={state} act={act}/>;
  const observation=turns.some(turn=>turn.observationWindow===true),partial=turns.some(turn=>turn.observationWindow||turn.partialWindow);
- const summary=combinedWork(turns,now),label=observation?'Saved work pages':workLabel(summary.phase,show&&fields.includes('elapsedSeconds')?summary.elapsed:null,summary.running);
+ const summary=turns.length?combinedWork(turns,now):{phase:'recorded',running:false,usage:{calls:0}},label=observation?'Saved work pages':workLabel(summary.phase,show&&fields.includes('elapsedSeconds')?summary.elapsed:null,summary.running);
  const reportLabel=summary.running&&!observation?workLabel(summary.phase,null,true):label;
  const updates=items.filter(item=>item.message).length;
  const toggle=()=>{
@@ -107,7 +108,7 @@ export function WorkTimeline({items,data,state,act,row,renderMessage}){
   }
   act('view.update',{patch:{executionExpanded:[...next]}});
  };
- return <section className="a-execution-turn a-execution-content a-work-group" data-part="execution-group" data-interim-group={row?.interim?row.id:undefined} aria-label="Work between messages">
+ return <section className="a-execution-turn a-execution-content a-work-group" data-part="execution-group" data-group-id={row?.voiceWork?firstTurn||row.id:undefined} data-voice-work-group={row?.voiceWork||undefined} data-work-input-id={row?.voiceInputIds?.length===1?row.voiceInputIds[0]:undefined} data-interim-group={row?.interim?row.id:undefined} aria-label="Work between messages">
   <button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" data-view-label={`${reportLabel}${updates>0?` · ${updates} ${updates===1?'update':'updates'}`:''} · expand work details`} aria-expanded={open} onClick={toggle}>
    <ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}{updates>0&&` · ${updates} ${updates===1?'update':'updates'}`}</span>{!partial&&<Usage usage={summary.usage} scope="turn" pending={summary.running}/>}<Status status={summary.phase}/>
   </button>

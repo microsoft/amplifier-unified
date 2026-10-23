@@ -407,9 +407,48 @@ async def test_interleaved_live_transcripts_keep_role_and_delivery_order():
     await call.record('assistant','Okay',delta=True,at=110)
     await call.record('user','check it.',delta=True,at=120)
     assert [row[0] for row in service.transcripts]==['user','assistant','user']
-    assert service.transcripts[0][2]['item_id']==service.transcripts[2][2]['item_id']
+    assert service.transcripts[0][2]['item_id']!=service.transcripts[2][2]['item_id']
+    assert service.transcripts[2][2]['append'] is False
     assert service.transcripts[1][2]['item_id']!=service.transcripts[0][2]['item_id']
     assert call.user_text=='Please check it.'
+
+
+async def test_spoken_boundaries_split_display_without_splitting_backend_request(tmp_path):
+    from amplifier_web.service import AppService
+    service = AppService(tmp_path / 'app', workspace=tmp_path)
+    await service.dispatch('session.create', {})
+    sid = service.state['selectedSessionId']
+    call = VoiceCall(VoiceService(service), sid)
+    call.id, call.socket = 'live', Socket()
+    call.execute = AsyncMock(return_value={'response': 'Done'})
+    try:
+        await call.record('user', 'Sure.', delta=True, at=100)
+        await call.record('assistant', 'I can ', delta=True, at=200)
+        await call.record('assistant', 'continue.', delta=True, at=6000)
+        await call.record('user', ' Are you working', delta=True, at=7000)
+        await call.record('user', ' on that?', delta=True, at=120000)
+        await call.record('assistant', 'Yes.', delta=True, at=121000)
+        await call.record('user', ' I already said sure.', delta=True, at=122000)
+        messages = service._session(sid)['messages']
+        assert [(row['role'], row['text']) for row in messages] == [
+            ('user', 'Sure.'), ('assistant', 'I can continue.'),
+            ('user', ' Are you working on that?'), ('assistant', 'Yes.'),
+            ('user', ' I already said sure.'),
+        ]
+        assert len({row['voiceItemId'] for row in messages}) == 5
+        assert call.execute.await_count == 0
+        # Speaker changes only place display rows. They cannot manufacture
+        # provider delegations, consume fragments, or split accepted commands.
+        assert all(not row['consumed'] for row in call.transcript_fragments)
+        await call.delegate_live('one-request')
+        call.execute.assert_awaited_once_with(
+            'Sure. Are you working on that? I already said sure.', 'one-request', spoken_item_id=None)
+        assert len(service._session(sid)['messages']) == 5
+    finally:
+        call.final.set()
+        await call.close()
+        await service.close()
+
 
 async def test_observer_catches_generation_finished_during_call_handshake():
     service,socket=Service(),Socket();queue=asyncio.Queue()

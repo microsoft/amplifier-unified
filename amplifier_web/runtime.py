@@ -170,6 +170,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             **{key:event[key] for key in ("retryAttempt", "retryMax") if key in event}}
     if kind == "assistant.delta":
         return "assistant.delta", {**base, "text": event.get("text", ""),
+            "inputId": (event.get("input_ids") or [input_id])[-1],
+            "generationId": event.get("generation_id"), "inputIds": event.get("input_ids", []),
             "requestId": event.get("request_id"), "blockIndex": event.get("block_index")}
     if kind == "assistant.message":
         from .assistant_messages import metadata

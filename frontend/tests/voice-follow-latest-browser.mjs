@@ -45,6 +45,19 @@ try {
  await workReady(observer);const observerTop=await observerPane.evaluate(el=>el.scrollTop);
  await action('call.start');await page.getByRole('button',{name:'End call',exact:true}).waitFor();await bottom();
  await append(call,2);await bottom();
+ // A retained user bubble can still receive a late fragment after an assistant
+ // reply. Growth above that reply must not strand it below the viewport. New
+ // alternating speech also follows without any backend delegation/tool call.
+ const speak=async messages=>{const response=await page.request.post(url+'/fixture/transcript',{data:{sessionId:call,messages}});assert.equal(response.status(),200);await workReady()};
+ await speak([{id:'growth-user',role:'user',text:'Sure.'},{id:'growth-answer',role:'assistant',text:'Here are the findings you asked for.'}]);
+ await expect(pane).toContainText('Here are the findings you asked for.');await bottom();
+ for(const size of [20,60,120]){
+  await speak([{id:'growth-user',role:'user',text:'Sure. '+('Later transcript detail. '.repeat(size))}]);
+  await expect(pane).toContainText('Later transcript detail. '.repeat(size).trim());await bottom();
+ }
+ await speak([{id:'later-user',role:'user',text:'Are you working on that?'},{id:'later-answer',role:'assistant',text:'The requested answer is ready to explain.'}]);
+ await expect(pane).toContainText('The requested answer is ready to explain.');await bottom();
+ assert.equal(await pane.getByText('The requested answer is ready to explain.',{exact:true}).evaluate(el=>{const p=el.closest('.a-messages').getBoundingClientRect(),r=el.getBoundingClientRect();return r.top>=p.top&&r.bottom<=p.bottom}),true,'Newest spoken reply stays inside the conversation viewport');
  // Reading/clicking a transcript is not a request to stop following speech.
  const readingBox=await pane.boundingBox();await page.mouse.click(readingBox.x+60,readingBox.y+readingBox.height-100);
  await append(call,2);await bottom();
@@ -69,5 +82,5 @@ try {
  const geometry=()=>pane.evaluate(el=>({top:el.scrollTop,height:el.scrollHeight,viewport:el.clientHeight,width:el.clientWidth,rect:el.getBoundingClientRect().toJSON(),anchors:[...el.querySelectorAll('[data-message-id]')].filter(n=>n.getBoundingClientRect().bottom>el.getBoundingClientRect().top).slice(0,3).map(n=>({id:n.dataset.messageId,top:n.getBoundingClientRect().top,height:n.getBoundingClientRect().height}))}));const beforeGeometry=await geometry();
  const ended=await top();await append(call,2);await page.waitForTimeout(250);assert.ok(Math.abs(await top()-ended)<3,'Ending the call restores normal reading behavior: '+JSON.stringify({before:beforeGeometry,after:await geometry(),remaining:await remaining()}));
  const result=await(await page.request.get(url+'/fixture')).json();assert.deepEqual(result.sent,[]);assert.deepEqual(errors,[]);
- console.log('Voice view passed: live transcript growth, deliberate scrollback, other chat isolation, paused position on return, explicit latest resumes, mobile/reduced motion and hangup restores reading behavior. Synthetic signaling only; no physical audio acceptance.');
+ console.log('Voice view passed: live transcript growth, late earlier-bubble growth with newer replies visible, alternating speech without delegation, deliberate scrollback, other chat isolation, paused position on return, explicit latest resumes, mobile/reduced motion and hangup restores reading behavior. Synthetic signaling only; no physical audio acceptance.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}

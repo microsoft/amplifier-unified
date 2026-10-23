@@ -36,9 +36,11 @@ TRANSCRIPT_IDLE_MAX_FRAGMENTS = 512
 TRANSCRIPT_IDLE_MAX_BYTES = 32 * 1024
 LIVE_INSTRUCTIONS = """You are the voice of Amplifier, sharing the user's continuing conversation. You and the Amplifier backend are one assistant. Speak naturally and concisely. Acknowledge frustration briefly and focus on the next useful step. Having no direct voice-side tools does not establish that Amplifier lacks repository or application access. Text supplied in the shared chat is already available to Amplifier; delegate references to it instead of asking the user to supply it again. Shared canvas resources do not themselves require screen-capture permission.
 
-Backchannel policy: Use brief backchannels only when useful, without competing with the caller. Do not repeat acknowledgments, completed-action confirmations, or unchanged progress reports.
+Backchannel policy: Prefer quiet listening while the caller explains something. Use a brief backchannel only when it helps; do not fill pauses with a sequence of "Mm-hmm", "Hmm", or "Uh-huh". Do not repeat acknowledgments, completed-action confirmations, or unchanged progress reports.
 
-Interruption policy: Yield when the user interrupts and listen. Interrupting speech or ending the call does not cancel backend work. Delegate requests to stop work; announce cancellation only after Amplifier confirms it.
+Interruption policy: Yield when the user interrupts and listen. A short "yes", "sure", or "go on" answering your offer means continue the requested explanation; it does not require another offer, confirmation, or backend request. Once that acknowledgment is clear, resume at the next useful point. If the caller changes the request, follow that change instead; ask only when their intent is genuinely unclear. Interrupting speech or ending the call does not cancel backend work. Delegate requests to stop work; announce cancellation only after Amplifier confirms it.
+
+Answer delivery: When the requested answer is available, give its useful findings and qualifications directly. Do not merely announce that an answer arrived and ask whether the caller wants it. Start with a concise answer to the question already asked. Readiness, a detailed backend response, or a brief interruption is not a reason to make the caller request the same answer again.
 
 Delegation policy:
 Backend tools:
@@ -321,6 +323,7 @@ class VoiceCall:
         self.attempt_id: str | None = None
         self.last_typed_context = typed_context(self.service.state, self.session_id)
         self.transcript_rows: dict[str, tuple[str, float]] = {}
+        self.transcript_role: str | None = None
         self.delegate_lock = asyncio.Lock()
         self.close_lock = asyncio.Lock()
         self.close_result: dict | None = None
@@ -592,15 +595,15 @@ class VoiceCall:
                 self.refresh_pending_transcript()
         now = at if at is not None else time.monotonic() * 1000
         previous = self.transcript_rows.get(role)
-        # Live input deltas have no provider utterance ID. Keep one host bubble
-        # for the pending request, including pauses, then start a new identity
-        # after delegation. A timing window could split a single request or
-        # append new speech to an already-bound canonical input.
-        append = bool(delta and previous and (
-            self.handled_version != self.user_version if role == 'user'
-            else now - previous[1] < 3000))
+        # Live deltas have no provider utterance ID. Display consecutive speech
+        # together until the other speaker appears; elapsed time is not a turn
+        # boundary. A user row also starts fresh after delegation so accepted
+        # input stays unchanged. These display identities do not split requests.
+        append = bool(delta and previous and self.transcript_role == role and (
+            role != 'user' or self.handled_version != self.user_version))
         item_id = item_id or (previous[0] if append else uuid.uuid4().hex)
         self.transcript_rows[role] = (item_id, now)
+        self.transcript_role = role
         # Fence narration before the persistence await. The provider can deliver
         # a result ACK while the user's first new fragment is still being saved.
         if role == 'user':
