@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import closing
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tarfile
@@ -35,12 +36,21 @@ COMMAND = (
 
 def save(path, record, **changes):
     record.update(changes, updatedAt=time.time())
-    private.write_json(path, record)
+    if record.get('purpose') == 'runner-enrollment':
+        from .test_origin_files import replace
+        replace(path, record)
+    else:
+        private.write_json(path, record)
 
 
 def invoke(config, app, row, action, args):
-    return environments.invoke(capacity.apply(app, config, _qualification=True),
-                               app.data_dir, row, action, args, _qualification=True)
+    qualification = not config.get('remoteRunner')
+    return environments.invoke(capacity.apply(app, config, _qualification=qualification),
+                               app.data_dir, row, action, args, _qualification=qualification)
+
+
+def owner(record):
+    return ('runner-enrollment-' if record.get('purpose') == 'runner-enrollment' else 'runner-update-') + record['id']
 
 
 def source(folder):
@@ -48,8 +58,9 @@ def source(folder):
     marker = folder / 'input.txt'
     if not (folder / '.git').exists():
         marker.write_text('runner-input-v1')
-        environment = {'PATH': '/usr/bin:/bin', 'HOME': str(folder),
-                       'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': '/dev/null'}
+        environment = {'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(folder),
+                       'USERPROFILE': str(folder), **{key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR') if key in os.environ}, 'GIT_CONFIG_NOSYSTEM': '1',
+                       'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_SYSTEM': os.devnull}
         for command in (['init', '--quiet'], ['add', 'input.txt'],
                         ['-c', 'user.name=Runner qualification', '-c', 'user.email=runner@example.invalid',
                          'commit', '--quiet', '-m', 'Qualification input']):
@@ -59,20 +70,49 @@ def source(folder):
     return str(folder)
 
 
-def effect(app, path, record, row, config, action):
+def effect(app, path, record, row, config, action, admission=None):
     effects = record.setdefault('effects', {})
     if action in effects:
+        if config.get('remoteRunner') and effects[action].get('result') is None and action != 'prepare':
+            # Read the exact target dispatch receipt; this operation cannot
+            # submit a missing effect or repeat a lost command.
+            args = effects[action]['args']
+            result = invoke(config, app, row, 'receipt', {**args, 'effectAction': action})
+            if result.get('receiptState') == 'completed':
+                value = result['result']
+                if value.get('archives'):
+                    from . import registered_test_runners
+                    folder = environments.storage.directory(app.data_dir, row)
+                    value['downloadedArchives'] = registered_test_runners.fetch_archives(config['remoteRunner'], folder,
+                        {'requestId': args['requestId'], 'rootOwner': row['sessionId'], 'resourceId': row['id'],
+                         'operationId': row['launchOperationId'], 'backendKey': row['backendKey'],
+                         'snapshot': row['snapshot'], 'profileId': row['profileId'],
+                         'resourceRequest': row['resourceRequest'], 'timingRequest': row['timingRequest']}, value['archives'])
+                effects[action].update(state='returned', result=value)
+                save(path, record)
+                return value
+            return None
         # Snapshot preparation has no external effect and writes only this
         # updater-owned fixed source archive. Its lost response is retryable.
         if action != 'prepare' or effects[action].get('result') is not None:
             return effects[action].get('result')
+    if admission and action in {'prepare', 'start', 'job_start'}:
+        admission()
     args = {'requestId': record['id'] + '-' + action, 'expectedRevision': row['revision'],
-            'jobId': record['id'] + '-check', 'command': COMMAND, 'timeoutSeconds': 30,
+            'jobId': record['id'] + '-check', 'command': COMMAND, 'timeoutSeconds': record.get('checkTimeoutSeconds', 30),
             'retentionMode': 'files'}
-    effects[action] = {'state': 'dispatching', 'requestId': args['requestId']}
+    if action == 'start' and record.get('startAttempt'):
+        args['requestId'] += '-' + str(record['startAttempt'])
+    effects[action] = {'state': 'dispatching', 'requestId': args['requestId'], 'args': args}
     save(path, record)
     try:
         result = invoke(config, app, row, action, args)
+        if config.get('remoteRunner') and result.get('archives') and result.get('evidenceTransfer'):
+            # Exact target export succeeded, but its download is unsettled.
+            # Recover by reading that receipt and its archive, not removing again.
+            effects[action].update(state='unknown', errorType='ArtifactTransferIncomplete')
+            save(path, record)
+            return None
         effects[action].update(state='returned', result=result)
         save(path, record)
         return result
@@ -88,10 +128,10 @@ def observe(app, row, config):
     return value if value.get('ok') and recovery.verify(row, value) else None
 
 
-def verify_artifact(result):
+def verify_artifact(result, *, remote=False):
     # Removal's existing bounded exporter has already verified ownership and
     # archive safety. Independently prove the test's exact artifact survived.
-    for item in result.get('archives', []):
+    for item in result.get('downloadedArchives', []) + ([] if remote else result.get('archives', [])):
         destination = item.get('destination')
         if not destination:
             continue
@@ -118,7 +158,7 @@ def cancel(app, path, record, config):
     if record.get('probeState') in {'qualified', 'failed'} or not record.get('resourceId'):
         save(path, record, probeState='failed')
         return 'failed'
-    row = environments.get(app.data_dir, 'runner-update-' + record['id'], record['resourceId'])
+    row = environments.get(app.data_dir, owner(record), record['resourceId'])
     if 'start' not in record.get('effects', {}):
         resources.settle(row, release=True)
         environments.save(app.data_dir, row, status='retired', environmentState='not-started')
@@ -139,21 +179,23 @@ def cancel(app, path, record, config):
     return advance(app, path, record, config)
 
 
-def advance(app, path, record, config):
+def advance(app, path, record, config, *, admission=None):
     """Advance a bounded step; return waiting/qualified/failed/unknown."""
     state = record.get('probeState', 'new')
     if state in {'qualified', 'failed'}:
         return state
     if not record.get('resourceId'):
+        if admission:
+            admission()
         origin = source(path.parent / (record['id'] + '-source'))
         row = environments.prepare(
-            app.data_dir, 'runner-update-' + record['id'], 'runner-qualification',
-            {'sessionId': 'runner-update-' + record['id'], 'principal': 'host-updater'},
-            origin, environments.config_key(config), record['id'], config['installationId'], config,
-            resource_request=profiles.freeze('linux-python', {'cpus': 1, 'memoryMiB': 512}),
-            timing_request=profiles.freeze_timing('linux-python'), _qualification=True)
+            app.data_dir, owner(record), 'runner-qualification',
+            {'sessionId': owner(record), 'principal': 'host-updater' if not config.get('remoteRunner') else 'host-runner-enrollment'},
+            origin, environments.config_key(config), record['id'], config.get('installationId'), config,
+            resource_request=record.get('resourceRequest') or profiles.freeze('linux-python', {'cpus': 1, 'memoryMiB': 512}),
+            timing_request=record.get('timingRequest') or profiles.freeze_timing('linux-python'), _qualification=not config.get('remoteRunner'))
         save(path, record, resourceId=row['id'], probeState='prepare')
-    row = environments.get(app.data_dir, 'runner-update-' + record['id'], record['resourceId'])
+    row = environments.get(app.data_dir, owner(record), record['resourceId'])
     if row['backendKey'] != environments.config_key(config):
         raise ValueError('The original qualification backend changed.')
     state = record['probeState']
@@ -162,7 +204,7 @@ def advance(app, path, record, config):
             row = environments.storage.allocate(app.data_dir, row)
         if row['status'] != 'ready' or environments.storage.observe(app.data_dir, row)['observation'] != 'present':
             return 'unknown'
-        result = effect(app, path, record, row, config, 'prepare')
+        result = effect(app, path, record, row, config, 'prepare', admission)
         if result is None:
             # Re-entry revalidates its exact retained daemon/source binding.
             return 'unknown'
@@ -175,8 +217,13 @@ def advance(app, path, record, config):
         save(path, record, probeState='capacity', hostTarget=result.get('hostTarget'))
         return 'waiting'
     if state == 'capacity':
-        observed = environments.capacity(app, config, _qualification=True)
+        observed = environments.capacity(app, config, _qualification=not config.get('remoteRunner'))
         if not observed.get('available'):
+            return 'waiting'
+        if config.get('remoteRunner'):
+            # The fixed target controller atomically reserves its own machine
+            # and backend budgets at start. No origin reservation duplicates it.
+            save(path, record, probeState='start')
             return 'waiting'
         target = record.get('hostTarget') or {}
         if target.get('supported') is not True:
@@ -188,12 +235,14 @@ def advance(app, path, record, config):
         save(path, record, probeState='start')
         return 'waiting'
     if state == 'start':
-        result = effect(app, path, record, row, config, 'start')
+        result = effect(app, path, record, row, config, 'start', admission)
         if result and result.get('admissionDenied'):
             # Definite refusal: no launch was dispatched, and capacity can be
             # tried again under the same owned intent.
             resources.settle(row, release=True)
             record['effects'].pop('start')
+            if config.get('remoteRunner'):
+                record['startAttempt'] = record.get('startAttempt', 0) + 1
             environments.save(app.data_dir, row, backendAdmitted=False)
             save(path, record, probeState='capacity')
             return 'waiting'
@@ -223,10 +272,10 @@ def advance(app, path, record, config):
                      isolationFailure={'errorType': type(error).__name__, 'detail': str(error)[:1024]})
                 return 'waiting'
             save(path, record, isolation=proof)
-        result = effect(app, path, record, row, config, 'job_start')
+        result = effect(app, path, record, row, config, 'job_start', admission)
         if result is None or not (result.get('job') or {}).get('terminal'):
             result = invoke(config, app, row, 'job_read',
-                            {'jobId': record['id'] + '-check', 'command': COMMAND, 'timeoutSeconds': 30})
+                            {'jobId': record['id'] + '-check', 'command': COMMAND, 'timeoutSeconds': record.get('checkTimeoutSeconds', 30)})
         job = result.get('job') or {}
         if job.get('terminal') is not True:
             return 'unknown' if job.get('state') == 'unknown' else 'waiting'
@@ -246,7 +295,7 @@ def advance(app, path, record, config):
         return 'waiting'
     if state == 'remove':
         result = effect(app, path, record, row, config, 'remove')
-        if result is None:
+        if result is None and not config.get('remoteRunner'):
             observed = observe(app, row, config)
             if observed and observed.get('status') == 'absent':
                 folder = environments.storage.directory(app.data_dir, row)
@@ -268,7 +317,7 @@ def advance(app, path, record, config):
         observed = observe(app, row, config)
         if not observed or observed.get('status') != 'absent':
             return 'unknown'
-        retained = verify_artifact(result)
+        retained = verify_artifact(result, remote=bool(config.get('remoteRunner')))
         environments.save(app.data_dir, row, status='retired', environmentState='removed',
                           retainedFiles=result.get('retainedFiles'), qualificationProof=record['id'])
         resources.settle(row, release=True)

@@ -9,7 +9,13 @@ def inspect(config, home, row):
     payload = {**config, 'rootOwner': row['sessionId'], 'operationId': row['launchOperationId'],
                'universeId': row['universeId']}
     if config.get('remoteRunner'):
-        raise ValueError('This runner needs target-local isolation qualification.')
+        from .task_environments import invoke
+        result = invoke(config, home, row, 'isolation', {})
+        proof = result.get('isolation')
+        if (result.get('ok') is not True or not isinstance(proof, dict)
+                or proof.get('owner') != row['launchOperationId']):
+            raise ValueError('The target could not confirm this check’s isolation.')
+        return proof
     if config.get('backend') == 'incus':
         from . import incus_environment_worker as worker
         settings = config['incus']
