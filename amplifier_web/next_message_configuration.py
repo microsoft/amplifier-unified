@@ -216,6 +216,11 @@ def validate_selection(selected, catalog):
         raise ValueError('Model compatibility is unavailable. Refresh the catalog or choose a known model before sending.')
     if entry.get('supported', True):
         models = {row if isinstance(row, str) else row.get('id') for row in entry.get('models', [])}
+        # Discovery can omit a configured deployment/alias. Match the controls'
+        # choices, using only this connection's explicit default.
+        configured = provider.get('info', {}).get('defaults', {}).get('model')
+        if configured:
+            models.add(configured)
         if selected['model'] not in models:
             raise ValueError('The saved model is not in this connection’s catalog. Choose a compatible model.')
     elif selected['model'] != provider.get('info', {}).get('defaults', {}).get('model'):

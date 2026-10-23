@@ -339,6 +339,24 @@ def test_nullable_provider_visibility_allows_valid_effort_and_rejects_unknown():
         validate_selection({**selected, 'effort': 'unsupported'}, catalog)
 
 
+def test_configured_default_is_selectable_even_when_catalog_omits_it():
+    from amplifier_web.next_message_configuration import validate_selection
+    catalog = valid_catalog()
+    catalog['providers'][0]['info'] = {'defaults': {'model': 'configured-model'}}
+    catalog['providers'].append({'id': 'other', 'sharedCatalogKey': 'other',
+                                'info': {'defaults': {'model': 'other-account-model'}}})
+    selected = {'instance': 'one', 'model': 'configured-model', 'effort': 'low'}
+    validate_selection(selected, catalog)
+    for model in ('unknown-model', 'other-account-model'):
+        with pytest.raises(ValueError, match='catalog'):
+            validate_selection({**selected, 'model': model}, catalog)
+    with pytest.raises(ValueError, match='reasoning effort'):
+        validate_selection({**selected, 'effort': 'unsupported'}, catalog)
+    catalog['catalogs']['one']['phase'] = 'error'
+    with pytest.raises(ValueError, match='compatibility is unavailable'):
+        validate_selection(selected, catalog)
+
+
 @pytest.mark.parametrize('fault', ['offline', 'model', 'effort', 'provider'])
 def test_invalid_choices_never_pass_validation(fault):
     from amplifier_web.next_message_configuration import validate_selection
