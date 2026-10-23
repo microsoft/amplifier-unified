@@ -295,9 +295,12 @@ class Lifecycle:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not 0 < timeout_seconds <= 300:
             raise ValueError("The request timeout must be between 0 and 300 seconds.")
         epoch = connection.catalog_epoch
+        from .maintenance_auxiliary import require_effect_admission
         try:
             result = await connection.request("call_tool", name, arguments, read_timeout_seconds=timeout_seconds,
-                timeout=timeout_seconds + 1, expected_epoch=epoch, **({"dispatch_guard": dispatch_guard} if dispatch_guard else {}))
+                timeout=timeout_seconds + 1, expected_epoch=epoch,
+                admission_guard=lambda: require_effect_admission(self.service),
+                **({"dispatch_guard": dispatch_guard} if dispatch_guard else {}))
             return self._redact(_bounded(result))
         except AuthenticationRequired:
             await self._change(lambda _: self._server(identity).update(status="auth-required", connectionState="auth-required", authorization=connection.challenge, catalogState="stale", loadedSchemas={}))

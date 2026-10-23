@@ -1,0 +1,8 @@
+.a-maintenance-controls{border-top:1px solid var(--a-line);margin-top:24px;padding-top:20px;min-width:0}
+.a-maintenance-controls h3{margin:0 0 16px}.a-maintenance-controls p{overflow-wrap:anywhere}
+.a-maintenance-controls details{margin-top:16px}.a-maintenance-controls summary{cursor:pointer}
+.a-maintenance-controls li{margin:12px 0}.a-maintenance-controls .a-dialog-actions{flex-wrap:wrap}
+.a-maintenance-confirmation{position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;padding:16px;background:rgb(0 0 0 / .35)}
+.a-maintenance-confirmation>[role=alertdialog]{background:var(--a-surface);color:var(--a-ink);border:1px solid var(--a-line);border-radius:16px;padding:24px;width:100%;max-width:520px;max-height:calc(100dvh - 32px);overflow:auto;box-shadow:0 16px 48px rgb(0 0 0 / .25)}
+.a-maintenance-confirmation h4{margin-top:0}
+@media(max-width:480px){.a-maintenance-confirmation>[role=alertdialog]{padding:18px}.a-maintenance-controls .a-dialog-actions>button{min-height:44px}}

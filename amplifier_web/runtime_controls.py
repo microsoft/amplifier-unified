@@ -17,6 +17,15 @@ from .host.config import app_home, write_private
 REDACTED = "[REDACTED]"
 SECTIONS = ("providers", "tools", "hooks")
 PLAN_KEYS = {*SECTIONS, "session", "agents", "spawn", "context", "instruction"}
+# Inspection and explicit stopping remain available while new effects are
+# held. Unknown controls fail closed; a name suffix is not proof of read-only.
+MAINTENANCE_SAFE_CONTROLS = frozenset({
+    "native.status", "configuration.inspect", "configuration.exportResources",
+    "catalog.inspect", "usage.inspect", "goals.get", "budget.get",
+    "task.get", "task.pause", "task.block", "task.complete", "capacity.get",
+    "operations.list", "operations.get", "operations.cancel",
+    "kernels.list", "kernels.interrupt", "kernels.close", "mode.list",
+})
 
 
 def credential_field(key, *, module=None):

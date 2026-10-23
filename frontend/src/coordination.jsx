@@ -7,7 +7,7 @@ import {CoordinationObservations} from './coordination-observations.jsx';
 import {IntegrationEvidence} from './integration-evidence.jsx';
 
 const keyOf=target=>JSON.stringify([target.sessionId,target.workerId||null]);
-const labels={idle:'Ready for follow-up',working:'Working',running:'Working',starting:'Starting',queued:'Queued',stopping:'Interruption requested',completed:'Completed',interrupted:'Outcome unknown',error:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
+const labels={idle:'Ready for follow-up',working:'Working',running:'Working',starting:'Starting',queued:'Queued',paused:'Paused for maintenance',stopping:'Interruption requested',completed:'Completed',interrupted:'Outcome unknown',error:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
 const empty={selected:[],cursors:{},results:{},drafts:{}};
 
 // Selection uses the ordinary navigation owner, including private draft retention.

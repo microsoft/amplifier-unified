@@ -24,10 +24,11 @@ DEFAULT_CHECK_INTERVAL_HOURS = 4
 CHECK_INTERVAL_HOURS = (1, 4, 8, 24)
 
 
-def work_paused(state):
+def work_paused(state, *, include_maintenance=True):
     updates = state.get('updates', {})
     from .app_replacement import pending
-    return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart')) or pending(updates)
+    return (include_maintenance and bool(state.get('hostMaintenance', {}).get('held')) or updates.get('phase') == 'activating'
+            or bool(updates.get('pendingRestart')) or pending(updates))
 
 
 def active_release(home):

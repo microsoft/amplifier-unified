@@ -1,4 +1,5 @@
 import React from 'react';
+import {MaintenanceControls} from './maintenance-controls';
 export function AttentionBadge({state={},section,page,count:explicit,settings=false}){
  const count=explicit??(settings?state.attention?.settingsUnread:page?state.attention?.pages?.[page]:section?state.attention?.sections?.[section]:(state.attention?.badgeUnread??state.attention?.unread));
  return count>0?<span className="a-attention-badge" role="status" aria-label={`${count} unread items`}>{count}</span>:null;
@@ -68,6 +69,7 @@ export function ActivityPanel({state,act}){
  }
  function row(item){return <div className="a-attention-item" key={item.id}><button className="a-attention-open" type="button" data-action={item.sessionId?'session.select':'view.update'} onClick={()=>open(item)}><strong>{item.label||item.title}</strong>{!item.id.startsWith('completion:')&&<span>{item.label?item.title:item.detail}</span>}</button>{!item.read&&item.reviewable!==false&&<button className="a-soft a-attention-dismiss" type="button" disabled={busy} aria-label={`Mark reviewed: ${item.label||item.title}`} onClick={()=>review([item])}>Mark reviewed</button>}</div>}
  return <section className="a-activity-inbox" aria-label="Activity to review">
+ <MaintenanceControls state={state} act={act}/>
  <div className="a-inbox-toolbar"><p>Review updates here without opening every chat.</p><button className="a-soft" type="button" disabled={busy||!reviewable.length} onClick={()=>review(reviewable)}>{busy?'Marking reviewed…':'Mark all reviewed'}</button></div>
  <p className="a-caption">Marking reviewed clears unread notices across your devices. Questions and approvals still wait for your answer.</p>
  {error&&<p role="alert">{error}</p>}

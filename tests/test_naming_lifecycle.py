@@ -147,6 +147,10 @@ async def test_worker_rejects_uncontrolled_naming_before_execute(tmp_path, monke
         hooks.register('session:end', scheduler, name='session-naming-drain')
     co = coordinator(hooks, [row(str(i)) for i in range(count)])
     caps = {}
+    # Maintenance now mounts before naming, using the host's existing native
+    # session store. This test still exercises rejection of the real naming
+    # scheduler before execute, rather than an incomplete host fixture.
+    caps['live.children'] = SimpleNamespace(store=object())
     co.session_id = 'blocked'
     co.get_capability = caps.get
     co.register_capability = caps.__setitem__

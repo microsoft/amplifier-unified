@@ -85,6 +85,11 @@ Identical widgets, compulsory voice/video/canvas rendering in a terminal, or a n
 The exact graceful/force stop support matrix remains to be agreed with runtime owners;
 CX3 forbids misleading equivalence while that work is incomplete.
 
+The approved [maintenance pause contract](../docs/maintenance-pause.md) distinguishes
+holding new work, proven native suspension, explicit resume and emergency stop.
+Support is qualified per runtime/owner; a cleanup grace period is not safe-boundary
+suspension and a global resume cannot override a later user Stop.
+
 ## How the kit checks it
 
 Use the [acceptance journeys](../docs/clients/development-plan.md), with browser and actual

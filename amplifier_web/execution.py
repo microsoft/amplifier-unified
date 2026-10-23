@@ -18,6 +18,101 @@ def interrupt_owned_workers(session, runtime_owner):
                  or worker.get('persistent') and worker.get('status') == 'idle')):
             worker.update(status='interrupted', updatedAt=time.time())
 
+
+def pause_for_maintenance(session, proof):
+    """Project an acknowledged checkpoint without completing its original turn."""
+    epoch = proof['epoch']
+    previous = session.get('maintenancePause')
+    if previous and previous.get('epoch') != epoch:
+        raise ValueError('A different maintenance epoch owns this execution display.')
+    session['maintenancePause'] = {'epoch': epoch, 'checkpointId': proof['checkpointId']}
+    inputs = set(proof.get('inputIds', []))
+    owners = {session['id'], *(row['sessionId'] for row in proof.get('children', []))}
+    tree = session.get('execution', {})
+    for turn in tree.get('turns', []):
+        if (turn.get('inputId') or turn.get('id')) in inputs and turn.get('phase') in LIVE_PHASES:
+            turn['maintenancePhase'] = {'epoch': epoch, 'phase': turn['phase']}
+            turn['phase'] = 'paused'
+    for node in tree.get('nodes', []):
+        if node.get('sessionId') in owners and node.get('phase') in LIVE_PHASES and not node.get('endedAt'):
+            node['maintenancePhase'] = {'epoch': epoch, 'phase': node['phase']}
+            node['phase'] = 'paused'
+    children = {row['sessionId']: row for row in proof.get('children', [])
+                if row.get('status') == 'suspended'}
+    jobs = {row['jobId']: row for row in proof.get('jobOrigins', [])
+            if row.get('status') in {'paused', 'suspended'}}
+    for worker in session.get('workers', []):
+        owned = (jobs if worker.get('kind') == 'job' else children).get(worker.get('id'))
+        if (owned is None or worker.get('status') not in LIVE_PHASES
+                or not owned.get('callId') or worker.get('callId') != owned['callId']
+                or worker.get('kind') != 'job'
+                and worker.get('parentSessionId') != owned.get('parentSessionId')):
+            continue
+        worker['maintenancePhase'] = {'epoch': epoch, 'status': worker['status'],
+            'identity': {key: worker.get(key) for key in ('id', 'kind', 'callId', 'runId', 'parentSessionId')}}
+        worker['status'] = 'paused'
+    session['status'] = 'paused'
+    session['activity'] = {'phase': 'paused', 'label': 'Paused for maintenance',
+                           'activeTools': [], 'updatedAt': time.time()}
+
+
+def leave_maintenance_pause(session, epoch, *, resumed):
+    """Only restore phases that still belong to this pause, never later Stops."""
+    marker = session.get('maintenancePause')
+    if not marker or marker.get('epoch') != epoch:
+        return False
+    tree = session.get('execution', {})
+    for item in [*tree.get('turns', []), *tree.get('nodes', [])]:
+        saved = item.get('maintenancePhase')
+        if saved and saved.get('epoch') == epoch:
+            if item.get('phase') == 'paused':
+                item['phase'] = saved['phase']
+            item.pop('maintenancePhase', None)
+    for worker in session.get('workers', []):
+        saved = worker.get('maintenancePhase')
+        if saved and saved.get('epoch') == epoch:
+            if (worker.get('status') == 'paused'
+                    and saved.get('identity') == {key: worker.get(key) for key in
+                                                 ('id', 'kind', 'callId', 'runId', 'parentSessionId')}):
+                worker['status'] = saved['status']
+            worker.pop('maintenancePhase', None)
+    session.pop('maintenancePause', None)
+    if session.get('status') in {'paused', 'starting', 'ready'}:
+        session['status'] = 'working'
+    if resumed:
+        session['activity'] = {'phase': 'working', 'label': 'Resuming paused work',
+                               'activeTools': [], 'updatedAt': time.time()}
+    return True
+
+
+def stop_maintenance_pause(session, epoch):
+    """Settle only this checkpoint's displays after its owner proves Stop."""
+    tree = session.get('execution', {})
+    rows = [*tree.get('turns', []), *tree.get('nodes', []), *session.get('workers', [])]
+    if (session.get('maintenancePause', {}).get('epoch') != epoch
+            and not any(row.get('maintenancePhase', {}).get('epoch') == epoch for row in rows)):
+        return False
+    ended = time.time()
+    for item in [*tree.get('turns', []), *tree.get('nodes', [])]:
+        if item.get('maintenancePhase', {}).get('epoch') == epoch:
+            if item.get('phase') == 'paused':
+                item.update(phase='stopped', endedAt=ended)
+            item.pop('maintenancePhase', None)
+    for worker in session.get('workers', []):
+        saved = worker.get('maintenancePhase', {})
+        if saved.get('epoch') == epoch:
+            if (worker.get('status') == 'paused' and saved.get('identity') ==
+                    {key: worker.get(key) for key in ('id', 'kind', 'callId', 'runId', 'parentSessionId')}):
+                worker['status'] = 'stopped'
+            worker.pop('maintenancePhase', None)
+    session.pop('maintenancePause', None)
+    if session.get('status') in {'paused', 'stopping'}:
+        session['status'] = 'stopped'
+        session['activity'] = {'phase': 'stopped', 'label': 'Stopped',
+                               'activeTools': [], 'updatedAt': ended}
+    return True
+
+
 def interrupt_unfinished(session):
     """Settle lost execution without interpreting a later warm worker as success."""
     reference = dict.get(session, '_coldFields', {}).get('execution', {})
@@ -253,14 +348,20 @@ def fail_generation(session, input_ids):
 def finish(session,status='completed'):
     tree=session.get('execution',{})
     ended=time.time()
+    phases = LIVE_PHASES | ({'paused'} if status != 'completed' else set())
     for turn in tree.get('turns',[]):
-        if turn.get('phase') in LIVE_PHASES:turn.update(phase=status,endedAt=ended)
+        if turn.get('phase') in phases:
+            turn.update(phase=status,endedAt=ended)
+            turn.pop('maintenancePhase', None)
     for node in tree.get('nodes',[]):
         # Foreground turn settlement cannot end separately scheduled naming
         # or delegated work. Background calls settle from their own provider
         # lifecycle, or after the host confirms their worker process exited.
-        if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in LIVE_PHASES and not node.get('endedAt') and node.get('lifecycle')!='background':
+        if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in phases and not node.get('endedAt') and node.get('lifecycle')!='background':
             node.update(phase='interrupted' if status=='completed' else status,endedAt=ended)
+            node.pop('maintenancePhase', None)
+    if status != 'completed':
+        session.pop('maintenancePause', None)
     if 'nodes' in tree:refresh_usage(tree)
 
 

@@ -16,7 +16,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(setup.sys, 'platform', 'linux')
     home = tmp_path / 'home'
     home.mkdir(mode=0o700)
-    value = SimpleNamespace(data_dir=home, smart_tools=SimpleNamespace(state={'installations': []}, install=AsyncMock(return_value={'id': 'a' * 24, 'commit': owner.DTU_COMMIT, 'extras': []})))
+    value = SimpleNamespace(data_dir=home, state={}, smart_tools=SimpleNamespace(state={'installations': []}, install=AsyncMock(return_value={'id': 'a' * 24, 'commit': owner.DTU_COMMIT, 'extras': []})))
     monkeypatch.setattr(owner, 'configuration', lambda _: (None, 'disabled', 'Not set up'))
     monkeypatch.setattr(owner, 'validate_configuration_value', lambda _, value: (value, 'ready', 'Verified'))
     monkeypatch.setattr(setup, 'inspect_base_image', lambda _: None)

@@ -16,6 +16,17 @@ const accepted=result=>({accepted:true,result});
 const chat={sessionId:'own',title:'Saved work',status:'idle',activityObserved:true,approvals:0,questions:0,handoffs:{items:[]},executionDirectory:'/workspace',executionRevision:0};
 const page=(patch={})=>({sessionId:'own',workspace:'/workspace',capturedAt:2,items:[chat],claims:{status:'unassigned',items:[],total:0},sourceObservations:[],installedApp:{serverVersion:'test',frontend:{id:'build',version:'test'}},nextAfter:null,...patch});
 
+test('maintenance pause review asks for explicit resume without inventing a new objective',async()=>{
+ let root;const calls=[];
+ const dispatch=async(action,args)=>{calls.push([action,args]);return accepted(page({items:[{...chat,status:'paused'}]}))};
+ await act(async()=>{root=create(React.createElement(WorkspaceReview,{dispatch,sessionId:'own',workspace:'/workspace'}))});
+ assert.match(text(root.toJSON()),/Paused for maintenance/);
+ assert.match(text(root.toJSON()),/Use Resume paused work in Activity/);
+ assert.doesNotMatch(text(root.toJSON()),/Review its latest result and give it a current objective/);
+ assert.deepEqual(calls,[['coordination.review',{sessionId:'own',limit:20}]]);
+ await act(async()=>root.unmount());
+});
+
 test('review stays demand-loaded and opening it makes one scoped passive read',async()=>{
  const calls=[];let root;
  const dispatch=async(action,args)=>{calls.push([action,args]);if(action==='coordination.context')return accepted({workspace:'/workspace',requests:[]});if(action==='coordination.list')return accepted({items:[]});if(action==='coordination.review')return accepted(page());throw Error(action)};

@@ -14,6 +14,7 @@ export function activityFor(chat,state){
  if(chat.approvals?.some(row=>row.status==null||row.status==='pending'))return {kind:'attention',label:'Approval requested'};
  if(chat.questions?.some(row=>row.status==='pending'&&row.required))return {kind:'attention',label:'Answer requested'};
  if(chat.questions?.some(row=>['unknown','rejected'].includes(row.delivery?.status)))return {kind:'attention',label:'Check answer delivery'};
+ if(chat.status==='paused')return {kind:'idle',label:'Paused for maintenance'};
  if(['starting','working','running','stopping'].includes(chat.status))return {kind:'working',label:chat.status==='starting'?'Starting':chat.status==='stopping'?'Stopping':'Working'};
  if(chat.status==='blocked'||chat.task?.status==='blocked'||state?.runtimeControl?.[chat.id]?.['task.get']?.task?.status==='blocked')return {kind:'attention',label:'Work blocked'};
  const errorReviewed=state?.attention?.items?.some(item=>item.id==='session:'+chat.id&&item.sessionId===chat.id&&item.read);

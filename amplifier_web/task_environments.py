@@ -684,6 +684,7 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                     result = {'ok': False, 'admissionDenied': True, 'status': 'not-started',
                               'machineResources': reservation, 'message': 'Waiting for room on the test machine. No test or dependency build started.'}
                 else:
+                    admit()  # The machine reservation may have waited for another owner.
                     if profiles.resources(row['profileId'], row.get('resourceRequest'))['preparationRequired']:
                         # Persist ownership before the networked builder can exist.
                         row = save(home, row, preparationPending=True)
@@ -803,6 +804,9 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
             row = get(home, sid, row['id'])
             if row.get('preparationPending'):
                 row, preparation_cleanup = cleanup_preparation(home, row, config)
+        maintenance_deferred = (getattr(exc, 'code', None) == 'maintenance_paused'
+                                and not admitted and not row.get('preparationPending')
+                                and action in {'start', 'execute'})
         confirmation = (action in {'remove', 'finishCleanup'} and isinstance(result, dict) and (
             result.get('ok') is True and result.get('status') == 'removed'
             or isinstance(result.get('removal'), dict) and result['removal'].get('destroyEffect') == 'confirmed'
@@ -810,6 +814,7 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
         request = app.operations.requests.finish(request, 'outcome_unknown' if admitted or row.get('preparationPending') else 'failed', resourceId=row['id'],
             result={'ok': False, 'status': 'not-started' if not admitted else 'unknown',
                     'preparationCleanup': preparation_cleanup,
+                    **({'admissionDenied': True, 'maintenanceDeferred': True, 'effectAdmitted': False} if maintenance_deferred else {}),
                     **({'removal': {'version': 1, 'phase': 'host-persistence',
                                     'code': 'metadata_unconfirmed', 'destroyEffect': 'confirmed'}} if confirmation else {}),
                     'message': 'Removal did not complete; inspect the original retained evidence.' if action in {'remove', 'finishCleanup'} else str(exc)[:500]},
@@ -1016,6 +1021,11 @@ async def dispatch(app, action, args, origin, caller, authority):
     captured = tuple(source.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision'))
     config, availability, reason = configuration(app)
     historical = action.rsplit('.', 1)[-1] in {'stop', 'remove', 'finishCleanup', 'reconcile', 'exportArtifacts'}
+    new_work = action.rsplit('.', 1)[-1] in {'start', 'execute', 'setup'}
+    def require_admission():
+        if new_work:
+            from .maintenance import require_open
+            require_open(app)
     row = None
     def guard():
         current = app._session(sid, hydrate=False)
@@ -1039,6 +1049,7 @@ async def dispatch(app, action, args, origin, caller, authority):
             async def setup_guard():
                 async with app.lock:
                     guard()
+                    require_admission()
             if action == 'workspace.environments.setup.reconcile':
                 value = await setup.reconcile(app, args, actor)
             else:
@@ -1081,10 +1092,12 @@ async def dispatch(app, action, args, origin, caller, authority):
         if action.endswith('.remove') and args.get('retentionMode') == 'full' and config.get('backend', 'docker') != 'incus':
             raise AppError('Full environment retention is available only for this environment’s original Incus backend.', 409)
         guard()
+        require_admission()
         loop = asyncio.get_running_loop()
         async def locked_guard(capacity=False):
             async with app.lock:
                 guard()
+                require_admission()
                 if capacity:
                     return capacity_settings.apply(app, config)
         def admit():

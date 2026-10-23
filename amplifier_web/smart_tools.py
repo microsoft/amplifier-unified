@@ -352,6 +352,8 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
             from .smart_tool_lifecycle import ConnectionUnavailable
             if isinstance(exc, ConnectionUnavailable):
                 operation.update(failureReason='connection_unavailable', requestState='not_sent')
+            elif getattr(exc, 'code', None) == 'maintenance_paused':
+                operation.update(failureReason='maintenance_paused', requestState='not_sent')
             error = self._redact(str(exc))[:1500]
             await self._change(lambda _: finish(status="failed", error=error), defer_publish=defer_publish)
             return None

@@ -1429,6 +1429,78 @@
       "qualification": "docs/validation/standard-ux-inventory-20261015.md#adaptive-home-october-19"
     },
     {
+      "id": "delta.maintenance-pause",
+      "reason": "User-approved host maintenance controls add explicit pause, eligible resume and independently confirmed emergency Stop to standard Activity and Updates. Preserve the frozen inventory.",
+      "workflowsAdded": [
+        {
+          "id": "work.maintenance-controls",
+          "family": "execution",
+          "title": "Pause all, inspect held work, resume eligible work, or confirm emergency Stop",
+          "scope": "standard-path",
+          "entryPath": [
+            "Activity",
+            "Settings > Updates"
+          ],
+          "prerequisites": [
+            "Owned synthetic host with built client and real host-maintenance action owner",
+            "No live data, native provider effects, update installation or shared-host restart"
+          ],
+          "steps": [
+            "Open Activity and Pause all; inspect immediate hold before a safe boundary",
+            "Keep editing the chat draft while Send is held; open pause controls from the composer",
+            "Open Updates and verify the same hold, unsupported work and paged owner status",
+            "Waiting and unsupported work block Resume; positively settle the unsupported owner, then resume eligible work only",
+            "Pause again, reload, and retain the current epoch",
+            "On desktop and phone cancel Stop, use Tab/Shift+Tab/Escape, and reject a stale confirmation",
+            "Confirm independent Stop without a staged update; reopen admission explicitly",
+            "Lose an accepted pause acknowledgement and explicitly retry the same command identity"
+          ],
+          "expectedResults": [
+            "Accepted Pause does not claim all work safely paused; waiting never escalates to Stop.",
+            "Both surfaces use the canonical host summary; owner details are bounded to 25 rows per page.",
+            "Paused chat and turn labels do not claim ready or completed; draft editing remains available while new sends and calls are held.",
+            "Resume follows canonical canResume; waiting, unsupported or uncertain work must settle before admission reopens. Stopped and policy-blocked work is not resumed.",
+            "Reload preserves host pause; new Resume uses the displayed epoch.",
+            "Stop has exact confirmation, usable modal focus and no update/restart effect.",
+            "A lost response is not replayed automatically; explicit retry uses the existing command identity."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-touch",
+            "narrow-keyboard",
+            "reload",
+            "lost-acknowledgement"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/maintenance-controls-browser.mjs",
+              "relation": "Additive extended browser owner with real HTTP/host receipts and synthetic runtime boundaries"
+            },
+            {
+              "path": "frontend/tests/maintenance-controls.test.mjs",
+              "relation": "Shared controls, stale identity and exact request retry contracts"
+            },
+            {
+              "path": "tests/test_maintenance_browser_projection.py",
+              "relation": "Ordinary browser projection includes summary without private root proofs"
+            }
+          ],
+          "performance": {
+            "current": null,
+            "desiredProfile": "standard-interaction",
+            "measurementStatus": "measure pauseHoldVisibleMs in browser result; no live-provider performance claim"
+          },
+          "limits": [
+            "Protocol fixture does not prove native checkpoint contents, provider cancellation or resumed external effects.",
+            "Integrated real-worker checkpoint/restart/resume acceptance remains a separate required feature qualification.",
+            "This additive scenario does not change the frozen census or unrelated release gates."
+          ]
+        }
+      ],
+      "qualification": "docs/maintenance-pause.md"
+    },
+    {
       "id": "delta.914",
       "sourcePullRequest": "https://github.com/microsoft/amplifier-unified/pull/914",
       "reason": "Busy assignment calls wait automatically; global Advanced settings control waiting without per-workspace setup.",

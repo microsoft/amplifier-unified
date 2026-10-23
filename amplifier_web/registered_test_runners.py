@@ -139,10 +139,12 @@ def call(runner, payload, timeout=60):
     return ssh(runner['connection'], ['/usr/bin/python3', '-I', '-B', '-c', VERIFY, controller, runner['packageDigest'], json.dumps(names)], request, timeout)
 
 
-def register(connection, name, config_path=''):
+def register(connection, name, config_path='', admit=None):
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
         raise ValueError('Give the test machine a short name.')
     package = bundle()
+    if admit:
+        admit()
     installed = ssh(connection, ['/usr/bin/python3', '-I', '-B', '-c', INSTALL], {**package, 'configPath': config_path}, timeout=90)
     runner = {'connection': connection, 'controller': installed['controller'], 'packageDigest': package['digest'], 'packageFiles': ['__init__.py', *FILES], 'configPath': config_path}
     observed = call(runner, {'action': 'describe'})
@@ -241,6 +243,7 @@ def invoke(config, folder, payload):
 
 async def dispatch(app, action, args, authority):
     from .service import AppError
+    from .maintenance import require_open
     try:
         if action.endswith('.read') and action == 'testing.runners.read':
             return {'accepted': True, 'result': snapshot(app)}
@@ -261,6 +264,8 @@ async def dispatch(app, action, args, authority):
             return {'accepted': True, 'result': result['machineResources' if '.machine.' in action else 'backendPolicy']}
         async with app.lock:
             app.configuration_authority.check(authority)
+            if action.endswith(('.register', '.refresh')):
+                require_open(app)
             value = store(app)
             if digest(value) != args['expectedRevision']:
                 raise AppError('Test machines changed. Refresh before saving.', 409)
@@ -280,7 +285,31 @@ async def dispatch(app, action, args, authority):
                 original_revision = digest(value)
         if action.endswith(('.register', '.refresh')):
             settings = prior_refresh if action.endswith('.refresh') else args
-            runner = await asyncio.to_thread(register, settings['connection'], settings['name'], settings.get('configPath', ''))
+            from .test_environment_setup import settled_thread
+            from .maintenance_auxiliary import notify_task_settled
+            loop = asyncio.get_running_loop()
+            async def checked():
+                async with app.lock:
+                    app.configuration_authority.check(authority)
+                    require_open(app)
+            def admit():
+                asyncio.run_coroutine_threadsafe(checked(), loop).result(timeout=10)
+            tasks = getattr(app, '_test_setup_tasks', None)
+            if tasks is None:
+                tasks = app._test_setup_tasks = {}
+            key = 'registration-' + uuid.uuid4().hex
+            task = asyncio.create_task(settled_thread(register, settings['connection'], settings['name'],
+                settings.get('configPath', ''), admit), name=key)
+            tasks[key] = task
+            def settled(done):
+                tasks.pop(key, None)
+                if not done.cancelled():
+                    done.exception()
+                notify_task_settled(app)
+            task.add_done_callback(settled)
+            # Caller cancellation cannot drop host accounting while SSH still
+            # runs. This does not claim remote cancellation on a lost reply.
+            runner = await asyncio.shield(task)
             async with app.lock:
                 app.configuration_authority.check(authority)
                 value = store(app)

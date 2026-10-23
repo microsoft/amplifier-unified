@@ -19,6 +19,7 @@ from . import test_environment_profiles as profiles
 from . import test_capacity_settings as capacity_settings
 from . import registered_test_runners as registered_runners
 from . import test_execution_settings as execution_settings
+from .maintenance import held, require_open
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -117,14 +118,16 @@ class TestQueue:
         limits = execution_settings.concurrency(self.app)
         limit = limits['maxEnvironmentsPerChat']
         entries = self.app.db.execute("""SELECT id,coalesce(json_extract(receipt,'$.job.attempt'),0),
-            coalesce(json_extract(receipt,'$.job.independent'),0) FROM commands
+            coalesce(json_extract(receipt,'$.job.independent'),0),
+            coalesce(json_extract(receipt,'$.job.maintenanceAttempt'),0) FROM commands
             WHERE json_extract(receipt,'$.commandAction')=?
             AND json_extract(receipt,'$.senderSessionId')=? AND id!=?
             AND json_extract(receipt,'$.job.status') IN ('queued','starting','checking','stopping','removing')
             AND (rowid<(SELECT rowid FROM commands WHERE id=?)
                  OR json_extract(receipt,'$.job.status')!='queued')""",
             (ACTION, sid, identity, identity)).fetchall()
-        earlier = [{'requestId': item[0], 'attempt': item[1], 'independent': item[2] == 1} for item in entries]
+        earlier = [{'requestId': item[0], 'job': {'attempt': item[1], 'maintenanceAttempt': item[3]},
+                    'independent': item[2] == 1} for item in entries]
         reason = None
         if earlier and (not independent or any(not row['independent'] for row in earlier)):
             reason = 'Waiting for an earlier check in this chat to finish and clean up.'
@@ -132,13 +135,13 @@ class TestQueue:
             owned = [dict(zip(('id', 'commandId', 'backendAdmitted'), row)) for row in db.execute("""SELECT id,json_extract(body,'$.commandId'),json_extract(body,'$.backendAdmitted') FROM allocations WHERE root=?
                 AND status!='retired' AND json_extract(body,'$.kind')=?""", (sid, environments.KIND))]
             total, root_total = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
-        command = identity+':start:'+str(receipt['job'].get('attempt', 0))
+        command = self.effect_id(receipt, 'start')
         own = [row for row in owned if row.get('commandId') == command and not row.get('backendAdmitted')]
         other_owners = [row for row in owned if row not in own]
         # Earlier queued checks reserve FIFO positions. Once allocated, count
         # the same command only once, even before its resourceId is linked.
         occupants = {row.get('commandId', row['id']) for row in other_owners}
-        occupants.update(row['requestId']+':start:'+str(row['attempt']) for row in earlier)
+        occupants.update(self.effect_id(row, 'start') for row in earlier)
         # A terminal queue receipt can still own a live/unknown environment.
         # Preserve its ordinary ordering barrier until that exact owner retires;
         # overlap requires the original check, not only the new one, to opt in.
@@ -147,7 +150,9 @@ class TestQueue:
                 WHERE json_extract(receipt,'$.commandAction')=?
                 AND json_extract(receipt,'$.senderSessionId')=? AND id!=?
                 AND coalesce(json_extract(receipt,'$.job.independent'),0)!=1
-                AND id||':start:'||coalesce(json_extract(receipt,'$.job.attempt'),0)
+                AND id||':start'||CASE WHEN coalesce(json_extract(receipt,'$.job.maintenanceAttempt'),0)!=0
+                    THEN ':maintenance:'||json_extract(receipt,'$.job.maintenanceAttempt') ELSE '' END
+                    ||':'||coalesce(json_extract(receipt,'$.job.attempt'),0)
                     IN (SELECT value FROM json_each(?)) LIMIT 1""",
                 (ACTION, sid, identity, json.dumps([row.get('commandId') for row in other_owners]))).fetchone()
             if barrier:
@@ -212,6 +217,15 @@ class TestQueue:
     def summary(self, request):
         return {key: request[key] for key in ('requestId', 'state', 'message') if key in request}
 
+    def effect_id(self, receipt, action, suffix=None):
+        job = receipt['job']
+        identity = receipt['requestId'] + ':' + (suffix or action)
+        if job.get('maintenanceAttempt'):
+            identity += ':maintenance:' + str(job['maintenanceAttempt'])
+        if action == 'start':
+            identity += ':' + str(job.get('attempt', 0))
+        return identity
+
     def guard(self, receipt):
         job = receipt['job']
         if job.get('cancelRequested'):
@@ -249,7 +263,7 @@ class TestQueue:
         Anything beyond that boundary remains owned for normal reconciliation.
         """
         job, sid = receipt['job'], receipt['senderSessionId']
-        command = receipt['requestId']+':start:'+str(job.get('attempt', 0))
+        command = self.effect_id(receipt, 'start')
         with closing(environments.storage.connect(self.app.data_dir)) as db:
             found = db.execute("""SELECT id FROM allocations WHERE root=? AND status='prepared'
                 AND json_extract(body,'$.kind')=? AND json_extract(body,'$.commandId')=?""",
@@ -315,7 +329,7 @@ class TestQueue:
         if action.endswith('.result'):
             receipt = self.get(identity)
             try:
-                request = self.app.operations.requests.read(source['id'], identity+':execute')
+                request = self.app.operations.requests.read(source['id'], self.effect_id(receipt, 'execute'))
             except ValueError:
                 request = {'state': 'not-started'}
             output = request.get('result', {}).get('result', {})
@@ -366,6 +380,7 @@ class TestQueue:
                 if previous[0] != digest:
                     owner.error('This test request ID already has different arguments.', 409)
                 return {'accepted': True, 'duplicate': True, 'result': self.public(json.loads(previous[1]))}
+            require_open(self.app)
             if origin not in {'ui', 'user'}:
                 owner.active_binding(source)
             if self.app.assignments.blocked(source):
@@ -463,7 +478,8 @@ class TestQueue:
         from .test_runner_routing import RoutingPass
         starting = self.app.db.execute("""SELECT id,json_extract(receipt,'$.job.backendKey'),
             json_extract(receipt,'$.senderSessionId'),json_extract(receipt,'$.job.resourceId'),
-            coalesce(json_extract(receipt,'$.job.attempt'),0) FROM commands
+            coalesce(json_extract(receipt,'$.job.attempt'),0),
+            coalesce(json_extract(receipt,'$.job.maintenanceAttempt'),0) FROM commands
             WHERE json_extract(receipt,'$.commandAction')=?
             AND json_extract(receipt,'$.job.status')='starting'""", (ACTION,)).fetchall()
         with closing(environments.storage.connect(self.app.data_dir)) as db:
@@ -471,12 +487,14 @@ class TestQueue:
                 json_extract(body,'$.commandId') FROM allocations WHERE status!='retired'
                 AND json_extract(body,'$.kind')=? AND json_extract(body,'$.backendAdmitted')=1""", (environments.KIND,)))
         preparing, unadmitted = {}, {}
-        for identity, key, sid, resource, attempt in starting:
+        for identity, key, sid, resource, attempt, maintenance_attempt in starting:
             preparing[key] = preparing.get(key, 0) + 1
             # A delayed start acknowledgment must not add a second retained
             # slot for its already admitted owner. Missing/mismatched ownership
             # remains conservative; final native admission still checks atomically.
-            if (sid, resource, key, identity + ':start:' + str(attempt)) not in admitted:
+            command = self.effect_id({'requestId': identity,
+                'job': {'attempt': attempt, 'maintenanceAttempt': maintenance_attempt}}, 'start')
+            if (sid, resource, key, command) not in admitted:
                 unadmitted[key] = unadmitted.get(key, 0) + 1
         routing = RoutingPass(preparing, unadmitted)
         capacities = {}
@@ -489,8 +507,10 @@ class TestQueue:
             if task:
                 self.tasks.pop(identity)
             if receipt['job']['status'] != 'queued':
-                self.tasks[identity] = asyncio.create_task(self.recover(identity))
+                self.track(identity, self.recover(identity))
                 continue
+            if held(self.app):
+                continue  # Durable waiting work remains queued during maintenance.
             try:
                 if receipt['job'].get('expiresAt') is not None and receipt['job']['expiresAt'] <= time.time():
                     self.finish(receipt, 'expired', 'The saved check expired while waiting for capacity. No environment was started.')
@@ -506,7 +526,7 @@ class TestQueue:
                 selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff, routing)
                 async with self.app.lock:
                     receipt = self.get(identity)
-                    if receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
+                    if held(self.app) or receipt['job']['status'] != 'queued' or receipt['job'].get('cancelRequested'):
                         continue
                     if not self.chat_available(receipt):
                         continue
@@ -533,7 +553,7 @@ class TestQueue:
             async with self.app.lock:
                 receipt = self.get(identity)
                 task = self.tasks.get(identity)
-                if receipt['job']['status'] != 'queued' or (task and not task.done()):
+                if held(self.app) or receipt['job']['status'] != 'queued' or (task and not task.done()):
                     continue
                 try:
                     self.guard(receipt)
@@ -555,7 +575,14 @@ class TestQueue:
                 # planned demand before physical reservations become visible.
                 self.save(receipt)
                 routing.scheduled(key, config, capacity, routing.request(receipt['job']))
-                self.tasks[identity] = asyncio.create_task(self.run(identity, config))
+                self.track(identity, self.run(identity, config))
+
+    def track(self, identity, work):
+        task = self.tasks[identity] = asyncio.create_task(work)
+        def settled(_):
+            from .maintenance_auxiliary import notify_task_settled
+            notify_task_settled(self.app)
+        task.add_done_callback(settled)
 
     async def effect(self, receipt, config, action, *, cleanup=False, suffix=None, previous_request=None):
         job, app = receipt['job'], self.app
@@ -563,9 +590,7 @@ class TestQueue:
         if cleanup:
             active, _, _ = environments.configuration(app)
             config = environments.resolve_configuration(app, row, active)
-        request_id = receipt['requestId'] + ':' + (suffix or action)
-        if action == 'start':
-            request_id += ':'+str(job.get('attempt', 0))
+        request_id = self.effect_id(receipt, action, suffix)
         try:
             return app.operations.requests.read(receipt['senderSessionId'], request_id)
         except ValueError:
@@ -589,6 +614,7 @@ class TestQueue:
                 # waiting authority is revoked. It only stops that exact owner;
                 # it never starts work, changes settings or removes evidence.
                 if not cleanup:
+                    require_open(app)
                     current_config = self.guard(self.get(receipt['requestId']))
                     if capacity:
                         return capacity_settings.apply(app, current_config)
@@ -608,7 +634,7 @@ class TestQueue:
         try:
             async with self.admission:
                 receipt = self.get(identity)
-                if receipt['job']['status'] != 'queued':
+                if held(self.app) or receipt['job']['status'] != 'queued':
                     return
                 config = self.guard(receipt)
                 if not self.chat_available(receipt):
@@ -625,11 +651,17 @@ class TestQueue:
                 job = receipt['job']
                 row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
                     receipt['senderSessionId'], next(w['id'] for w in self.app.state['workspaces'] if w['path']==receipt['workspace']),
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'))
+                    job['actor'], job['source'], job['backendKey'], self.effect_id(receipt, 'start'), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'))
                 # Cancellation may arrive while local allocation is persisted.
                 # Never overwrite the newer cancellation/subscription record.
                 receipt = self.get(identity)
                 job = receipt['job']
+                if held(self.app):
+                    # Only the local allocation exists; no transport effect was admitted.
+                    environments.save(self.app.data_dir, row, status='retired', environmentState='not-started')
+                    job['attempt'] = job.get('attempt', 0) + 1
+                    self.save(receipt)
+                    return
                 try:
                     self.guard(receipt)
                 except Exception:
@@ -676,6 +708,10 @@ class TestQueue:
                 check = await self.effect(receipt, config, 'execute')
             except Exception as exc:
                 check = {'state': 'cancelled', 'message': str(exc)}
+            if (check.get('result') or {}).get('maintenanceDeferred'):
+                receipt = self.get(identity)
+                receipt['job']['maintenanceDeferred'] = True
+                self.save(receipt)
             row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
             if receipt['job'].get('durableVersion') == 1 and row.get('durableJob'):
                 return await self.monitor(identity, config, check)
@@ -729,10 +765,27 @@ class TestQueue:
             if removal['state'] != 'completed':
                 self.finish(receipt, 'unknown', 'The environment is stopped, but evidence export or removal was not confirmed. Its retained files and exact ownership remain available.')
                 return
+            if self.requeue_deferred(receipt):
+                return
             check = receipt['job'].get('check', {'state': 'outcome_unknown'})
             status = ('cancelled' if receipt['job'].get('cancelRequested') else
                       {'completed': 'passed', 'failed': 'failed', 'cancelled': 'cancelled'}.get(check['state'], 'unknown'))
             self.finish(receipt, status, 'The check outcome is '+status+'. Source, artifacts and operation receipts were retained before the owned environment was removed.')
+
+    def requeue_deferred(self, receipt):
+        job = receipt['job']
+        if not job.get('maintenanceDeferred') or job.get('cancelRequested') or job.get('removal', {}).get('state') != 'completed':
+            return False
+        # Only a positively refused check and confirmed exact cleanup can wait
+        # again. The next attempt owns distinct receipts, including after restart.
+        job['maintenanceAttempt'] = job.get('maintenanceAttempt', 0) + 1
+        job['attempt'] = job.get('attempt', 0) + 1
+        for key in ('resourceId', 'launch', 'check', 'cleanup', 'removal', 'previousRemoval', 'maintenanceDeferred'):
+            job.pop(key, None)
+        job.update(status='queued', detail='Waiting for maintenance to finish; no check was executed.')
+        self.save(receipt)
+        self.wakeup.set()
+        return True
 
     def wake_job(self, identity):
         event = self.job_wakeups.get(identity)
@@ -808,6 +861,8 @@ class TestQueue:
                 row = await asyncio.to_thread(environments.resume_preparation_removal, self.app, row, retained)
             if row['status'] == 'retired':
                 self.restore_operations(receipt)
+                if self.requeue_deferred(receipt):
+                    return
                 check = receipt['job'].get('check', {})
                 removal = receipt['job'].get('removal', {})
                 status = {'completed': 'passed', 'failed': 'failed'}.get(check.get('state'), 'unknown') if removal.get('state') == 'completed' else 'unknown'
@@ -837,6 +892,9 @@ class TestQueue:
     def restore_operations(self, receipt):
         for phase, operation in (('check', 'execute'), ('cleanup', 'stop'), ('removal', 'remove'), ('removal', 'finishCleanup')):
             try:
-                receipt['job'][phase] = self.summary(self.app.operations.requests.read(receipt['senderSessionId'], receipt['requestId']+':'+operation))
+                request = self.app.operations.requests.read(receipt['senderSessionId'], self.effect_id(receipt, operation))
+                receipt['job'][phase] = self.summary(request)
+                if operation == 'execute' and request.get('result', {}).get('maintenanceDeferred'):
+                    receipt['job']['maintenanceDeferred'] = True
             except ValueError:
                 pass

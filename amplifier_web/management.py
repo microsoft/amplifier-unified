@@ -433,11 +433,48 @@ class Management:
         return {**session, 'workspace': session.get('workspace') or self.service.state['settings'].get('workspace') or self.service.default_workspace}
 
     def configuration_idle(self,session):
+        from .maintenance import held
+        if held(self.service):
+            return False
         submitting = self.service.db.execute("""SELECT 1 FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.target.sessionId')=?
             AND json_extract(receipt,'$.delivery')='submitting' LIMIT 1""", (session['id'],)).fetchone()
         return not submitting and not self.unresolved_configuration(session) and session['status'] in {'idle','ready','stopped','interrupted','error'} and not session.get('configurationBusy') and not any(w.get('status') in {'running','working','starting','queued'} or w.get('persistent') and w.get('status')=='idle' for w in session.get('workers',[]))
+
+    def maintenance_blockers(self):
+        """Bounded configuration-owner evidence, including dormant records.
+
+        Queued no-effect changes wait behind maintenance and are not active
+        work. Unknown historical effects remain a fence, never an implicit
+        permission to replay or an assertion that settings are being applied.
+        """
+        loaded = {row['id']: row for row in self.service.state.get('sessions', [])}
+        found = {}
+        for session in loaded.values():
+            if not session.get('configurationBusy'):
+                continue
+            pending = session.get('pendingConfiguration') or {}
+            kind = 'configuration-unresolved' if (pending.get('recoveryRequired')
+                or pending.get('phase') == 'error') else 'configuration-active'
+            found.setdefault(kind, session['id'])
+        conditions = {
+            'configuration-unresolved': "(json_extract(value,'$.pendingConfiguration.recoveryRequired')=1 OR json_extract(value,'$.pendingConfiguration.phase')='error')",
+            'configuration-active': "NOT (coalesce(json_extract(value,'$.pendingConfiguration.recoveryRequired'),0)=1 OR coalesce(json_extract(value,'$.pendingConfiguration.phase'),'')='error')",
+        }
+        for kind, condition in conditions.items():
+            if kind in found:
+                continue
+            row = self.service.db.execute("""SELECT id FROM state_records
+                WHERE kind='session' AND json_extract(value,'$.configurationBusy')=1
+                AND id NOT IN (SELECT value FROM json_each(?)) AND """ + condition + ' LIMIT 1',
+                (json.dumps(list(loaded)),)).fetchone()
+            if row:
+                found[kind] = row[0]
+        return [{'kind': kind, 'sessionId': sid, 'label': (
+            'Earlier conversation settings need inspection; no change is being replayed'
+            if kind == 'configuration-unresolved' else 'Conversation settings are still being applied')}
+            for kind, sid in sorted(found.items())]
 
     @staticmethod
     def unresolved_configuration(session):
@@ -672,7 +709,10 @@ class Management:
                 raise ValueError('Restore this project folder before continuing its chat.')
         if not self.service.runtime:raise ValueError('Amplifier runtime is unavailable')
         from .updates import work_paused
-        if work_paused(self.service.state):raise ValueError('An update is activating; retry shortly')
+        # Existing paused workers remain inspectable. RuntimeManager checks
+        # maintenance at its final new-start admission boundary; it must not
+        # turn an existing-worker inspection into an execution permission.
+        if work_paused(self.service.state, include_maintenance=False):raise ValueError('An update is activating; retry shortly')
         # Explicitly using runtime controls makes this a web-owned presentation.
         if session.get('historyManaged') and not session.get('historyLoaded'):
             await self.service.history.ensure_loaded(session['id'])

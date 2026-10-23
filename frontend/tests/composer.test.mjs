@@ -56,3 +56,15 @@ test('pending sends never expose an accidental voice launch and readiness still 
  }
  assert.equal(composerPrimaryAction({voiceStarting:true}).disabled,true);
 });
+
+test('maintenance holds new messages and calls while retaining Stop and end-call controls',()=>{
+ const draft='Keep this unsent draft';
+ const send=composerPrimaryAction({draft,maintenanceHeld:true});
+ assert.equal(send.action,'conversation.send');assert.equal(send.disabled,true);
+ const voice=composerPrimaryAction({maintenanceHeld:true});
+ assert.equal(voice.action,'call.start');assert.equal(voice.disabled,true);
+ const stop=composerPrimaryAction({maintenanceHeld:true,responseActive:true});
+ assert.equal(stop.action,'conversation.stop');assert.equal(stop.disabled,false);
+ const end=composerPrimaryAction({maintenanceHeld:true,voiceStatus:'connected'});
+ assert.equal(end.action,'call.end');assert.equal(end.disabled,false);
+});

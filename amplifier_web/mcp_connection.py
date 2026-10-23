@@ -200,7 +200,7 @@ class Connection:
                     listener = asyncio.create_task(self._listen(client))
                 try:
                     while True:
-                        method, args, kwargs, current, expected_epoch, dispatch_guard = await self.queue.get()
+                        method, args, kwargs, current, expected_epoch, dispatch_guard, admission_guard = await self.queue.get()
                         if current.cancelled():
                             continue
                         try:
@@ -211,6 +211,8 @@ class Connection:
                                 await self.account_guard(client)
                             if dispatch_guard:
                                 dispatch_guard()
+                            if admission_guard:
+                                admission_guard()
                             result = await getattr(client, method)(*args, **kwargs)
                             if not current.done():
                                 current.set_result(_json(result))
@@ -257,12 +259,12 @@ class Connection:
                 await self.changed(self, "closed")
             _private_diagnostics.reset(diagnostic_scope)
 
-    async def request(self, method, *args, timeout=60, expected_epoch=None, dispatch_guard=None, **kwargs):
+    async def request(self, method, *args, timeout=60, expected_epoch=None, dispatch_guard=None, admission_guard=None, **kwargs):
         if self.task.done() or self.failure:
             raise ValueError("The MCP connection is closed. Reconnect before sending another request.")
         future = asyncio.get_running_loop().create_future()
         try:
-            self.queue.put_nowait((method, args, kwargs, future, expected_epoch, dispatch_guard))
+            self.queue.put_nowait((method, args, kwargs, future, expected_epoch, dispatch_guard, admission_guard))
         except asyncio.QueueFull:
             raise ValueError("This tool has too many pending requests. Try again when it finishes.") from None
         try:

@@ -18,8 +18,27 @@ from test_service import Runtime
 
 
 @pytest.fixture
-async def staged(tmp_path, monkeypatch):
+async def staged(tmp_path, monkeypatch, request):
+    legacy = None
+    if getattr(request, 'param', None) == 'legacy-configuration':
+        seed = AppService(tmp_path, Runtime(), workspace=tmp_path)
+        await seed.dispatch('session.create', {'title': 'Retained legacy configuration'})
+        original = seed._session()
+        original.update(status='error', configurationBusy=True,
+                        pendingConfiguration={'phase': 'error', 'error': 'Historical update failure'})
+        from amplifier_web.management import Management
+        seed.management = Management(seed)
+        payload = seed.management.queued_path(original['id'])
+        payload.parent.mkdir(parents=True, exist_ok=True)
+        payload.write_bytes(b'{"config":{"fixture":"private-original-payload"}}\n')
+        legacy = {'id': original['id'], 'payload': payload, 'bytes': payload.read_bytes(),
+                  'mtime': payload.stat().st_mtime_ns}
+        seed._save()
+        await seed.close()
     service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    if legacy:
+        from amplifier_web.management import Management
+        service.management = Management(service)
     await service.dispatch('session.create', {'title': 'Preserved conversation'})
     await service.on_runtime_event('assistant.message', {'sessionId': service._session()['id'], 'text': 'Saved answer'})
     manager = UpdateManager(service)
@@ -68,7 +87,7 @@ async def staged(tmp_path, monkeypatch):
         restarted.set()
     monkeypatch.setattr(app_updates, 'request_managed_restart', restart)
     await manager.publish(phase='app-staged', pendingApp=pending, application={'canInstall': True})
-    value = SimpleNamespace(service=service, manager=manager, folder=folder, pending=pending, calls=calls,
+    value = SimpleNamespace(service=service, manager=manager, folder=folder, pending=pending, calls=calls, legacy=legacy,
                             args={**target(manager), 'confirm': True}, restarted=restarted)
     yield value
     # The synthetic close assertions concern activation, not fixture teardown.
@@ -87,6 +106,7 @@ async def test_busy_waits_normally_but_confirmed_restart_fences_stops_then_promo
     assert any(row['kind'] == 'checkout-handoff' for row in staged.manager.blockers())
     await app_updates.activate(staged.manager, force=staged.args)
     assert staged.calls == ['stop', 'promote', 'probe', 'restart']
+
     assert session['configurationBusy'] is True
     assert session['worktreeHandoffs'] == [{'id': 'unknown', 'phase': 'unknown'}]
     assert session['messages'] == before and not s.runtime.sent
@@ -96,6 +116,57 @@ async def test_busy_waits_normally_but_confirmed_restart_fences_stops_then_promo
     with pytest.raises(RestartRejected):
         await app_updates.activate(staged.manager, force=staged.args)
     assert staged.calls == ['stop', 'promote', 'probe', 'restart']
+
+
+@pytest.mark.parametrize('staged', ['legacy-configuration'], indirect=True)
+@pytest.mark.parametrize('shutdown', ['confirmed', 'unconfirmed', 'still-owned'])
+async def test_legacy_configuration_survives_cold_restore_and_confirmed_update_without_replay(staged, monkeypatch, shutdown):
+    from amplifier_web.management import Management
+    s, legacy = staged.service, staged.legacy
+    session = s._session(legacy['id'])
+    assert session['configurationBusy'] and session['pendingConfiguration']['recoveryRequired']
+    assert not session['pendingConfiguration'].get('operationId')
+    assert not session['pendingConfiguration'].get('requestHash')
+    assert not s.runtime.started and not s.runtime.sent
+    await app_updates.activate(staged.manager)
+    assert not staged.calls  # Absence of a worker never clears the unknown-effect fence.
+    args = dict(staged.args)
+    if shutdown == 'unconfirmed':
+        args['confirm'] = False
+        with pytest.raises((AppError, ValueError)):
+            await s.dispatch('updates.forceRestart', args)
+    else:
+        if shutdown == 'still-owned':
+            s.runtime.workers = {'unconfirmed-native-owner': object()}
+        await app_updates.activate(staged.manager, force=args)
+    assert legacy['payload'].read_bytes() == legacy['bytes']
+    assert legacy['payload'].stat().st_mtime_ns == legacy['mtime']
+    assert not s.runtime.started and not s.runtime.sent
+    assert session['configurationBusy'] and session['pendingConfiguration']['recoveryRequired']
+    assert ('promote' in staged.calls) is (shutdown == 'confirmed')
+    if shutdown != 'confirmed':
+        assert 'restart' not in staged.calls
+        return
+    # A new host observes the same original payload; it cannot reconstruct an
+    # apply permission or replay a native start/input from this legacy record.
+    monkeypatch.setattr(s.runtime, 'close', AsyncMock())
+    await s.close()
+    runtime = Runtime()
+    reopened = AppService(s.data_dir, runtime, workspace=s.default_workspace)
+    try:
+        reopened.management = Management(reopened)
+        restored = reopened._session(legacy['id'])
+        assert restored['configurationBusy'] and restored['pendingConfiguration']['recoveryRequired']
+        assert legacy['payload'].read_bytes() == legacy['bytes']
+        assert legacy['payload'].stat().st_mtime_ns == legacy['mtime']
+        assert not runtime.started and not runtime.sent
+        view = await reopened.dispatch('configuration.operation.read',
+            {'sessionId': legacy['id'], 'includeRecovery': True})
+        assert not view['result']['recovery']['canResume']
+        assert not view['result']['recovery']['canReconcile']
+        assert not runtime.started and not runtime.sent
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.parametrize('field', ['confirm', 'hostInstanceId', 'revision', 'generation', 'attemptId'])

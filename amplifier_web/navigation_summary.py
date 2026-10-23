@@ -20,6 +20,8 @@ def activity(session, unread=False, *, error_reviewed=False, blocked=False):
            for row in session.get('questions', [])):
         return {'kind': 'attention', 'label': 'Check answer delivery'}
     status = session.get('status', 'idle')
+    if status == 'paused' and session.get('maintenancePause'):
+        return {'kind': 'idle', 'label': 'Paused for maintenance'}
     flags = activity_flags(session)
     if flags['execution']:
         return {'kind': 'working', 'label': {'starting': 'Starting', 'stopping': 'Stopping'}.get(status, 'Working')}

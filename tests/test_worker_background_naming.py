@@ -69,6 +69,79 @@ async def test_next_inbox_input_does_not_wait_for_background_name(worker):
         await asyncio.gather(consumer, return_exceptions=True)
 
 
+async def test_maintenance_waits_for_admitted_naming_without_cancelling_it(worker):
+    waiter = asyncio.create_task(worker.settle_maintenance_auxiliaries())
+    try:
+        await asyncio.sleep(0)
+        assert not waiter.done() and not worker.naming.pending.done()
+        worker.finish_name.set()
+        await asyncio.wait_for(asyncio.shield(waiter), 1)
+        assert not worker.naming.pending.cancelled()
+        # Waiting alone cannot release the shared writer or claim a checkpoint.
+        assert worker.shared_handle.active
+        worker.checkpoint.assert_not_awaited()
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
+async def test_maintenance_waits_for_approval_bridge_and_detached_control(worker):
+    worker.finish_name.set()
+    await worker.naming.pending
+    future = asyncio.get_running_loop().create_future()
+    worker.approvals['pending'] = (future, ['allow', 'deny'])
+    waiter = asyncio.create_task(worker.settle_maintenance_auxiliaries())
+    try:
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        worker.approvals.clear()
+        worker.operation_controls = 1
+        worker.maintenance_changed.set()
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        worker.operation_controls = 0
+        worker.bridges['pending'] = future
+        worker.maintenance_changed.set()
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        worker.bridges.clear()
+        worker.maintenance_changed.set()
+        await asyncio.wait_for(waiter, 1)
+        assert not future.done()
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
+async def test_queued_effect_control_rechecks_hold_after_writer_wait(worker, monkeypatch):
+    worker.maintenance = SimpleNamespace(control={'held': False})
+    reached, release = asyncio.Event(), asyncio.Event()
+    replies = []
+    async def acquire():
+        reached.set()
+        await release.wait()
+    monkeypatch.setattr(worker, 'acquire_for_mutation', acquire)
+    invoke = AsyncMock()
+    monkeypatch.setattr(worker, '_command_serial', invoke)
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
+    command = asyncio.create_task(worker.command({
+        'id': 'queued-control', 'op': 'control', 'operation': 'tool.invoke',
+        'arguments': {'name': 'effect'}}))
+    try:
+        await reached.wait()
+        worker.maintenance.control['held'] = True
+        release.set()
+        await command
+        invoke.assert_not_awaited()
+        assert replies[0]['id'] == 'queued-control'
+        assert 'held for maintenance' in replies[0]['error']
+        assert not worker.control_tasks
+    finally:
+        release.set()
+        command.cancel()
+        await asyncio.gather(command, return_exceptions=True)
+
+
 async def test_idle_name_completion_checkpoints_and_releases_once(worker):
     await asyncio.wait_for(worker.park(), .5)
     await asyncio.wait_for(worker.park(), .5)

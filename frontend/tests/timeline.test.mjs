@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {executionData,messageTurnId,treeForTurn,usageLabel,combinedWork,workLabel} from '../src/timeline-data.js';
 
+test('paused execution remains paused in combined work and never claims completion',()=>{
+ const paused={phase:'paused',startedAt:1},completed={phase:'completed',startedAt:1,endedAt:2};
+ const summary=combinedWork([completed,paused],100);
+ assert.equal(summary.phase,'paused');assert.equal(summary.running,false);
+ assert.equal(workLabel(summary.phase,summary.elapsed,summary.running),'Paused for maintenance · 1s');
+ assert.equal(workLabel('paused',null),'Paused for maintenance');
+ assert.equal(combinedWork([paused,{phase:'stopped'}],100).phase,'stopped');
+});
+
 test('stopped work remains terminal while independent running work remains visible',()=>{
  const stopped={phase:'stopped',startedAt:1,endedAt:10};
  assert.equal(combinedWork([stopped],20).phase,'stopped');

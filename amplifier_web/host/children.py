@@ -222,6 +222,16 @@ class StandaloneHostAdapter(HostAdapter):
         if scope and self.registry:
             self.registry.finished(scope, status, result)
 
+    def finite_suspended(self, scope, coordinator, continuation):
+        owner = coordinator.get_capability("web.execution_pause")
+        saved = owner.read(scope) if owner and scope else None
+        if not saved or saved.get("state") != "paused" or saved.get("frame") != continuation:
+            return False
+        row = self.registry.rows[scope]
+        row["status"] = "paused"
+        self.registry._emit(row, "execution.suspended")
+        return True
+
 
 class Children:
     def __init__(self, root, store, approvals, host_adapter=None):
@@ -276,7 +286,8 @@ class Children:
             elif kind == "session.closed":
                 row["status"] = event.get("status", "interrupted")
             if kind in {"session.ready", "input.delivered", "session.idle", "session.closed", "steering.accepted", "steering.deferred"}:
-                self._emit(row, kind)
+                self._emit(row, "execution.suspended" if kind == "session.closed"
+                           and event.get("status") == "paused" else kind)
         return Runtime(row["sessionId"], observer=observe, max_input_chars=200000)
 
     async def install(self, session, prepared):
@@ -294,6 +305,27 @@ class Children:
         async def resume(sub_session_id, instruction, parent_session=None, provider_preferences=None, model_role=None):
             return await self.resume(sub_session_id, instruction, parent_session or session, provider_preferences, model_role)
         coordinator.register_capability("session.resume", resume)
+        registry = self
+        class Suspension:
+            def capture(self, error, delegation):
+                from amplifier_module_loop_streaming.suspension import ExecutionSuspended, ToolExecutionSuspended
+                if not isinstance(error, ExecutionSuspended):
+                    return None
+                identity = delegation.get("child_session_id")
+                owner = coordinator.get_capability("web.execution_pause")
+                saved = owner.read(identity) if owner and identity else None
+                row = registry.rows.get(identity) or {}
+                if not saved or saved.get("state") != "paused":
+                    raise RuntimeError("Child suspension has no durable native receipt")
+                return ToolExecutionSuspended({
+                    "version": 1, "engine": "unified-child", "sessionId": identity,
+                    "rootSessionId": owner.root_id, "checkpointId": saved["checkpointId"],
+                    "epoch": saved["epoch"], "persistent": bool(row.get("persistent")),
+                    "runId": row.get("runId"), "delegation": delegation})
+        coordinator.register_capability("session.suspension", Suspension())
+        async def resume_execution(continuation):
+            return await self.resume_execution(continuation, session)
+        coordinator.register_capability("session.execution_resume", resume_execution)
         coordinator.register_capability("live.children", self)
         coordinator.register_capability("live.host", self.host_adapter)
         delegate = (coordinator.get("tools") or {}).get("delegate")
@@ -366,9 +398,47 @@ class Children:
             metadata.get("agent_name", "resumed"), overlay, provider_preferences=provider_preferences or retained_preferences,
             parent_messages=messages, resumed=True, session_metadata=metadata)
 
+    async def resume_execution(self, continuation, parent):
+        """Continue the original delegate call; never submit another instruction."""
+        owner = parent.coordinator.get_capability("web.execution_pause")
+        identity = continuation.get("sessionId")
+        if (continuation.get("version") != 1 or continuation.get("engine") != "unified-child"
+                or owner is None or continuation.get("rootSessionId") != owner.root_id):
+            raise ValueError("Unknown delegated execution continuation")
+        saved = owner.read(identity)
+        if (not saved or saved.get("state") != "paused"
+                or saved.get("checkpointId") != continuation.get("checkpointId")
+                or saved.get("epoch") != continuation.get("epoch")):
+            raise ValueError("Delegated execution was already consumed or changed")
+        canonical = self.store.load(identity)
+        if not canonical:
+            raise ValueError("Paused child history is unavailable")
+        messages, metadata = canonical
+        if (metadata.get("parent_id") or metadata.get("parent_session_id")) != parent.session_id:
+            raise ValueError("Paused child belongs to a different parent")
+        if metadata.get("status") != "paused":
+            raise ValueError("The child was stopped or changed after pausing")
+        token = _PERSISTENT.set(continuation.get("persistent") is True)
+        try:
+            derivation = metadata.get("execution_derivation")
+            if not isinstance(derivation, dict) or derivation.get("version") != 1:
+                raise ValueError("The paused child has no exact mount derivation")
+            return await self._execute(identity, "", parent, metadata["agent_name"],
+                copy.deepcopy(metadata.get("agent_overlay", {})),
+                tool_inheritance=copy.deepcopy(derivation.get("tool_inheritance")),
+                hook_inheritance=copy.deepcopy(derivation.get("hook_inheritance")),
+                orchestrator_config=copy.deepcopy(derivation.get("orchestrator_config")),
+                provider_preferences=metadata.get("provider_preferences"),
+                parent_messages=messages, resumed=True, session_metadata=metadata,
+                self_delegation_depth=metadata.get("self_delegation_depth", 0),
+                execution_resume=continuation)
+        finally:
+            _PERSISTENT.reset(token)
+
     async def _execute(self, identity, instruction, parent, agent, overlay, *, tool_inheritance=None,
                        hook_inheritance=None, orchestrator_config=None, parent_messages=None,
-                       provider_preferences=None, self_delegation_depth=0, session_metadata=None, resumed=False):
+                       provider_preferences=None, self_delegation_depth=0, session_metadata=None, resumed=False,
+                       execution_resume=None):
         from amplifier_foundation import Bundle, ProviderPreference, apply_provider_preferences_with_resolution
         from amplifier_core import HookResult
         if identity in self.rows and self.rows[identity].get("status") in {"starting", "running", "idle", "stopping"} and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
@@ -491,7 +561,8 @@ class Children:
                     or getattr(parent.coordinator, "_tool_dispatch_context", {}) or {})
         call_id = JOB_CALL.get() or dispatch.get("tool_call_id") or (
             (session_metadata or {}).get("tool_call_id") if not resumed else None)
-        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),
+        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id,
+               "runId": execution_resume["runId"] if execution_resume else str(uuid.uuid4()),
                "agent": agent, "status": "starting", "persistent": persistent, "report": "", "reports": 0,
                "routing": child_routing(parent, overlay, preferences, selection,
                                         preferences_source=preferences_source if routing_policy else None),
@@ -502,10 +573,14 @@ class Children:
         ledger = None
         unregister = None
         metadata = {**(session_metadata or {}), "parent_id": parent.session_id, "agent_name": agent,
-                    "tool_call_id": call_id,
+                    "tool_call_id": call_id, "self_delegation_depth": self_delegation_depth,
                     "agent_overlay": copy.deepcopy(overlay), "workspace": str(cwd), "persistent": persistent,
                     "provider_preferences": [p.to_dict() for p in preferences],
                     "preferences_source": preferences_source, "mount_plan": plan,
+                    "execution_derivation": {
+                        "version": 1, "tool_inheritance": copy.deepcopy(tool_inheritance),
+                        "hook_inheritance": copy.deepcopy(hook_inheritance),
+                        "orchestrator_config": copy.deepcopy(orchestrator_config)},
                     "automatic_default_routing": bool(
                         automatic_routing and routing_hooks(plan) == routing_hooks(parent.coordinator.config))}
         if selection:
@@ -610,7 +685,7 @@ class Children:
             if install_access:
                 await install_access(coordinator)
             unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)
-            if ledger and parent_messages is not None:
+            if ledger and parent_messages is not None and execution_resume is None:
                 # Recover evidence only after original history and admission
                 # setup succeed. A pending dispatch becomes interrupted, never
                 # replayed; failed recovered-context restoration still must not
@@ -622,28 +697,53 @@ class Children:
             checkpoint_ready = True
             row["status"] = "running"
             self._emit(row)
-            await checkpoint()
+            # Preserve paused metadata until the continuation owner verifies
+            # canonical history and the current mounted policy.
+            if execution_resume is None:
+                await checkpoint()
+            pause = parent.coordinator.get_capability("web.execution_pause")
+            if pause is not None:
+                await pause.install(coordinator, restore=execution_resume is not None)
             from .mentions import expand_input
-            instruction = await expand_input(coordinator, instruction,
-                max_chars=row['runtime'].max_input_chars if persistent else None)
+            if execution_resume is None:
+                instruction = await expand_input(coordinator, instruction,
+                    max_chars=row['runtime'].max_input_chars if persistent else None)
             if persistent:
                 owner = asyncio.create_task(child.execute(""))
                 row["_owner"] = owner
-                await row["runtime"].submit(Input("user", instruction))
+                if execution_resume is None:
+                    await row["runtime"].submit(Input("user", instruction))
+                else:
+                    await row["runtime"].wait_for(lambda event: event["type"] == "session.suspended", 30)
+                    await row["runtime"].resume_paused(execution_resume["epoch"])
                 try:
                     output = await owner
                 finally:
                     if not owner.done():
                         owner.cancel()
                         await asyncio.gather(owner, return_exceptions=True)
+                if row["runtime"].pause_epoch is not None:
+                    from amplifier_module_loop_streaming.suspension import ExecutionSuspended
+                    saved = pause.read(identity)
+                    raise ExecutionSuspended(saved.get("frame") or {"live": saved["live"]})
             else:
                 output = await child.execute(instruction)
+                if row["status"] == "paused":
+                    from amplifier_module_loop_streaming.suspension import ExecutionSuspended
+                    saved = pause.read(identity)
+                    raise ExecutionSuspended(saved["frame"])
             terminal = row["status"] if persistent and row["status"] in {"cancelled", "interrupted", "error"} else "completed"
             self.finished(identity, terminal, output)
             await checkpoint(terminal)
             return {"output": output, "session_id": identity, "status": completion.get("status", "success"),
                     "turn_count": completion.get("turn_count", 1), "metadata": completion.get("metadata", {})}
         except BaseException as exc:
+            from amplifier_module_loop_streaming.suspension import ExecutionSuspended
+            if isinstance(exc, ExecutionSuspended):
+                row["status"] = "paused"
+                self._emit(row, "execution.suspended")
+                await checkpoint("paused")
+                raise
             status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
             self.finished(identity, status)
             await checkpoint(status)
@@ -668,6 +768,17 @@ class Children:
             raise ValueError("Worker is no longer active")
         if action not in {"message", "steer", "finish", "cancel"}:
             raise ValueError("Unknown worker action")
+        if row["status"] == "paused":
+            if action != "cancel":
+                raise ValueError("This worker is paused for maintenance; use Resume paused work or Stop")
+            root = self.sessions.get(self.root.session_id)
+            pause = root.coordinator.get_capability("web.execution_pause") if root else None
+            if pause is None:
+                raise ValueError("The suspended execution owner is unavailable")
+            await pause.stop_child(identity)
+            row["status"] = "cancelled"
+            self._emit(row, "execution.cancelled")
+            return {"accepted": True, "sessionId": identity, "action": action, "effects": "not_rolled_back"}
         if not row["persistent"]:
             if action != "cancel":
                 raise ValueError("This finite worker accepts cancellation; resume it for a new instruction")

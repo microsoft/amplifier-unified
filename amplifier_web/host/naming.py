@@ -119,6 +119,8 @@ class LiveSessionNaming:
                         raise ValueError('The selected naming provider is no longer mounted. Choose a provider before naming.')
                     return super()._select_session_provider(providers)
                 async def _call_provider(self, prompt, *args, **kwargs):
+                    if adapter.maintenance_held():
+                        raise ValueError('Automatic naming is held for maintenance.')
                     if getattr(self, 'refresh_title', False):
                         prompt = TITLE_UPDATE_PROMPT.format(
                             name=clip(self.base_metadata.get('name', ''), 800),
@@ -186,7 +188,7 @@ class LiveSessionNaming:
                 self.schedule(periodic=True)
 
     def schedule(self, *, periodic=False):
-        if self.closed or (self.pending and not self.pending.done()):return
+        if self.closed or self.maintenance_held() or (self.pending and not self.pending.done()):return
         count=len(self.completed)
         if not periodic and count<=self.last_attempt:return
         metadata=self.hook._load_metadata(self.directory)
@@ -204,9 +206,9 @@ class LiveSessionNaming:
         self.last_attempt=count
         async def generate():
             try:
-                if self.closed or (periodic and not self.active):return
+                if self.closed or self.maintenance_held() or (periodic and not self.active):return
                 hook=await self._snapshot_hook(metadata, skip_unchanged=True)
-                if self.closed or (periodic and not self.active):return
+                if self.closed or self.maintenance_held() or (periodic and not self.active):return
                 if hook is not None:
                     hook.initial_count=count
                     hook.early_refinement=False
@@ -223,6 +225,10 @@ class LiveSessionNaming:
                 log.warning('Session naming failed; keeping the existing title.',exc_info=True)
         self.pending=asyncio.create_task(generate())
         self.pending.add_done_callback(lambda _:self.schedule())
+
+    def maintenance_held(self):
+        owner = getattr(self.coordinator, 'get_capability', lambda _: None)('web.execution_pause')
+        return bool(owner is not None and owner.control.get('held'))
 
     async def _snapshot_hook(self, metadata, *, skip_unchanged=False):
         """Freeze sampled text and the selected connection without editing context."""
@@ -273,6 +279,8 @@ class LiveSessionNaming:
 
     async def suggest(self):
         """One explicit naming call, with no transcript input or metadata write."""
+        if self.maintenance_held():
+            raise ValueError('Automatic naming is held for maintenance.')
         if not self.hook or self.closed:
             raise ValueError(self.unavailable)
         if self.pending and not self.pending.done():
@@ -281,6 +289,8 @@ class LiveSessionNaming:
         candidate={}
         async def generate():
             hook=await self._snapshot_hook(before)
+            if self.maintenance_held():
+                raise ValueError('Automatic naming is held for maintenance.')
             if hook is None:return
             def capture(directory, metadata):
                 candidate.update(metadata)

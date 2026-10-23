@@ -1,6 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 
-const statuses={working:'Working',running:'Working',starting:'Starting',ready:'Preparing',queued:'Queued',pending:'Pending',stopping:'Stop requested',idle:'Waiting for your next message',completed:'Completed',interrupted:'Interrupted; outcome needs review',error:'Needs attention',failed:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
+const statuses={working:'Working',running:'Working',starting:'Starting',ready:'Preparing',queued:'Queued',pending:'Pending',paused:'Paused for maintenance',stopping:'Stop requested',idle:'Waiting for your next message',completed:'Completed',interrupted:'Interrupted; outcome needs review',error:'Needs attention',failed:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
 const time=value=>value?new Date(value*1000).toLocaleString():'Time unavailable';
 
 export function reviewSteps(row){
@@ -13,6 +13,7 @@ export function reviewSteps(row){
  if(row.historyReadOnlyReason)steps.push('Inspect the saved chat’s continuation limitation');
  if(row.workspaceAvailable===false)steps.push('Check the unavailable workspace folder');
  if(row.executionUnverified)steps.push('Confirm whether the previously active work is still running');
+ if(row.status==='paused')steps.push('Use Resume paused work in Activity to continue eligible saved work');
  if(['interrupted','error','failed'].includes(row.status))steps.push('Inspect prior effects before repeating any work');
  if(!steps.length)steps.push(['working','running','starting','ready','queued','pending','stopping'].includes(row.status)?'Let existing work settle or open the chat to steer it':'Review its latest result and give it a current objective');
  return steps;

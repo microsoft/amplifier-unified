@@ -809,6 +809,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None,
+                          preserve_execution_checkpoint=False,
                           refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, **kwargs):
     if refresh_dependencies and resume:
         raise ValueError("Dependency refresh is limited to a new isolated qualification session.")
@@ -944,8 +945,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if not resume:
             jobs.close()
             raise RuntimeError("Existing job evidence requires explicit resume")
-        messages, recovered = jobs.recover(messages or [])
-    if messages is not None:
+        if not preserve_execution_checkpoint:
+            messages, recovered = jobs.recover(messages or [])
+    # A maintenance remount must present the unchanged canonical history to
+    # its continuation owner. That owner still validates and claims the exact
+    # checkpoint before any effects; this flag grants no execution authority.
+    if messages is not None and not preserve_execution_checkpoint:
         messages = repair_interrupted_receipts(messages)
     approvals = Approvals(runtime, ask)
     session = None

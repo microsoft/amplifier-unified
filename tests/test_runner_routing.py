@@ -187,7 +187,8 @@ async def test_historical_request_without_frozen_resources_keeps_original_profil
 
 
 @pytest.mark.parametrize('phase', ['admitted', 'preparing'])
-async def test_prior_pass_start_counts_only_unadmitted_demand_against_retained_limit(app, queue, backend, monkeypatch, phase):
+@pytest.mark.parametrize('maintenance_attempt', [0, 1])
+async def test_prior_pass_start_counts_only_unadmitted_demand_against_retained_limit(app, queue, backend, monkeypatch, phase, maintenance_attempt):
     """A delayed start reply remains starting after the backend counts its owner."""
     import threading
     from test_coordination_generation import until
@@ -222,6 +223,12 @@ async def test_prior_pass_start_counts_only_unadmitted_demand_against_retained_l
     monkeypatch.setattr(environments, 'capacity', capacity)
     monkeypatch.setattr(queue, 'run', hold_second)
     await submit(app, 'prior', independent=True)
+    if maintenance_attempt:
+        # Restore a requeued receipt after its previous owner was removed.
+        # Maintenance admission tests exercise that actual pause/cleanup path.
+        prior = record(queue, app, 'prior')
+        prior['job'].update(maintenanceAttempt=maintenance_attempt, attempt=maintenance_attempt)
+        queue.save(prior)
     try:
         await queue.tick()
         await until(entered.is_set)

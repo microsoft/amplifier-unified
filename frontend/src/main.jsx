@@ -517,6 +517,7 @@ function App(){
   const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],summary')].filter(el=>el.getClientRects().length);
   if(!dialog.contains(document.activeElement)||!document.activeElement?.getClientRects().length)controls()[0]?.focus();
   const handler=e=>{
+   if(e.defaultPrevented)return;
    if(e.key==='Escape'){if(settingsNavigation.current)settingsNavigation.current.close();else {setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})}}
    if(e.key==='Tab'){const items=controls(),first=items[0],last=items.at(-1);if(!items.includes(document.activeElement)){e.preventDefault();(e.shiftKey?last:first)?.focus()}else if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus()}}
   };
@@ -617,7 +618,7 @@ function App(){
  }
  async function send(e){
   dictationControl.current?.cancel();
-  e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable)return;
+  e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable||state?.hostMaintenance?.held)return;
   preserveOtherDraft(session?.id??null);
   const submittedText=draft,editorDocument=quoteApi.current?.document(),id=crypto.randomUUID(),attachments=availableAttachments;
   const submittedDocument=editorDocument?.segments.some(part=>part.type==='quote')?editorDocument:null;
@@ -668,7 +669,7 @@ function App(){
  const newChatPending=!session&&outbox.entries.some(row=>row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
  const sendingHere=outbox.entries.some(row=>row.sessionId===(session?.id??null)&&row.status==='sending');
- const primaryAction=composerPrimaryAction({draft,attachments:availableAttachments,uploading,working,responseActive,stopping:session?.status==='stopping',voiceStatus:voice.status,voiceStarting,busy,newChatPending,sending:sendingHere,historyPending,executionUnavailable});
+ const primaryAction=composerPrimaryAction({draft,attachments:availableAttachments,uploading,working,responseActive,stopping:session?.status==='stopping',voiceStatus:voice.status,voiceStarting,busy,newChatPending,sending:sendingHere,historyPending,executionUnavailable,maintenanceHeld:!!state?.hostMaintenance?.held});
  const appReload=useAppReload({client:streamClient,canvasWorkspace:state?.canvasWorkspace,blocked:callActive||voiceStarting?'Finish your voice call, then reload.':uploading||sendingHere||busy?'Wait for the current upload or send to finish.':'',prepare:async()=>{
   // Before a first state arrives there is no mounted editor to checkpoint.
   // The existing local draft journal remains intact across this recovery reload.
@@ -743,6 +744,7 @@ function App(){
    {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
    <form className="a-composer a-compact-composer" data-part="composer" data-action="conversation.send" onSubmit={send}>
+    {state.hostMaintenance?.held&&<p role="status" className="a-upload-status">New work is held for maintenance. You can keep editing your draft. <button type="button" className="a-link" onClick={()=>open('activity')}>Open pause controls</button></p>}
     {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>

@@ -54,6 +54,8 @@ class NamingBackfill:
         setup = SetupManager(self.service.data_dir)
         workspace = session['workspace']
         identity, model = await asyncio.to_thread(default_provider, setup, workspace)
+        from .maintenance_auxiliary import require_effect_admission
+        require_effect_admission(self.service)
         result = await setup.probe('naming.complete', {'id': identity, 'model': model, 'prompt': prompt}, workspace)
         return result['text']
 

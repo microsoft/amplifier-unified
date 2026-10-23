@@ -51,7 +51,7 @@ export const liveStates=new Set(['running','working','starting','queued','pendin
 export function isRunning(record){return liveStates.has(record?.status||record?.phase)&&!Number.isFinite(record?.endedAt)}
 export function workLabel(phase,elapsed,running=false){
  if(running)return `Working${elapsed?` · ${elapsed}`:'…'}`;
- const outcome={stopped:'Stopped',cancelled:'Cancelled',interrupted:'Interrupted',error:'Failed',failed:'Failed'}[phase];
+ const outcome={paused:'Paused for maintenance',stopped:'Stopped',cancelled:'Cancelled',interrupted:'Interrupted',error:'Failed',failed:'Failed'}[phase];
  return outcome?`${outcome}${elapsed?` · ${elapsed}`:''}`:elapsed?`Worked for ${elapsed}`:'Work details';
 }
 export function elapsedLabel(record,now=Date.now()/1000){
@@ -236,6 +236,6 @@ export function combinedWork(turns,now){
   if(value.totalTokens==null&&(value.inputTokens!=null||value.outputTokens!=null)){usage.totalTokens=(usage.totalTokens||0)+(value.inputTokens||0)+(value.outputTokens||0);usage.metricKnownCalls.totalTokens+=Math.max(0,calls-unknownTokens)}
  }
  usage.costType=!usage.pricedCalls?'unavailable':usage.unknownCalls?'partial':usage.estimatedCalls?'estimated':'reported';
- return {running,phase:failure?(failure.status||failure.phase):running?'running':turns.every(turn=>['completed','complete','done','success'].includes(turn.status||turn.phase))?'completed':'recorded',
+ return {running,phase:failure?(failure.status||failure.phase):running?'running':turns.some(turn=>(turn.status||turn.phase)==='paused')?'paused':turns.every(turn=>['completed','complete','done','success'].includes(turn.status||turn.phase))?'completed':'recorded',
   elapsed:intervals.length?elapsedLabel({startedAt:0,endedAt:duration}):null,elapsedSeconds:intervals.length?duration:null,usage};
 }

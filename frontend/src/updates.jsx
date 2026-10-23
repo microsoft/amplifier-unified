@@ -10,6 +10,7 @@ import './updates.css';
 import {UpdateDiagnostics,UpdateIssueSummary} from './update-diagnostics.jsx';
 import {UpdateSupport} from './update-support.jsx';
 import {UpdateRestart} from './update-restart.jsx';
+import {MaintenanceControls} from './maintenance-controls';
 import {SmartToolUpdateResults} from './smart-tool-update-results.jsx';
 import {ReleaseHistory,ReleaseNotices,UpdateReleaseSummary} from './release-notes.jsx';
 const sourceName=row=>row.label.split('/').pop().replace(/^amplifier-(bundle-|module-)/,'');
@@ -33,7 +34,7 @@ function ComponentSummary({updates,items,busy}){
   return <div key={tier}><span>{label}</span><strong>{text}</strong></div>;
  })}</div>;
 }
-export function UpdateSettings({state,act}){
+export function UpdateSettings({state,act,active=true}){
  const unread=(state.attention?.items||[]).filter(item=>item.page==='updates'&&!item.read),releaseUnread=unread.filter(item=>item.id.startsWith('release-notice:')),componentUnread=unread.filter(item=>!item.id.startsWith('release-notice:'));
  const updates=state.updates||{},options=state.settings?.updates||{},replacement=updates.pendingReplacement!=null,busy=replacement||['checking','staging','validating','activating'].includes(updates.phase);
  const intervalHours=options.intervalHours??4,legacyInterval=![1,4,8,24].includes(intervalHours);
@@ -74,6 +75,7 @@ export function UpdateSettings({state,act}){
    {overview.waiting&&!overview.runnerOnlyPending&&!!updates.blockers?.length&&<details className="a-update-work" data-part="update-blockers"><summary>View active work ({updates.blockers.length})</summary><ul>{updates.blockers.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul><p className="a-caption">Idle chats alone don’t hold up the update. Background workers, calls, and tools may still need to finish.</p><UpdateRestart updates={updates} act={act}/></details>}
   {overview.tone!=='working'&&<ReadWhenVisible item={unread.find(item=>item.id==='updates:error')} act={act}><ResultNotice phase={resultPhase} message={resultPhase==='error'?resultMessage:''}/></ReadWhenVisible>}
   <AppReloadNotice/>
+  <MaintenanceControls state={state} act={act} active={active}/>
   <SmartToolUpdateResults updates={updates} act={act} busy={busy||!!updates.pendingRestart||!!updates.pendingReplacement}/>
   {application.canInstall===false&&<p className="a-ai-hint" role="status">This is a development preview. App updates are deployed by its owner; this preview cannot replace the installed app.</p>}
   <div className="a-update-controls" data-part="update-controls">

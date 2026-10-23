@@ -281,6 +281,23 @@ class Schedules:
         for schedule in self.store.list():
             if schedule['status'] != 'active' or schedule.get('nextDue') is None or schedule['nextDue'] > now: continue
             sid = schedule['sessionId']
+            async with self.app.lock:
+                if work_paused(self.app.state):
+                    return
+                # Maintenance Resume does not replay occurrences missed during
+                # the hold, including schedules normally using "latest".
+                resumed = self.app.state.get('hostMaintenance', {}).get('lastResumedAt', 0)
+                current = self.store.get(sid, schedule['id'])
+                if (current['status'] == 'active' and current.get('nextDue') is not None
+                        and current['nextDue'] <= resumed):
+                    # Advance only through the held interval. A delayed tick
+                    # must not discard an occurrence due after Resume.
+                    skipped = self.store.claim(sid, current['id'], resumed)
+                    if skipped and skipped['phase'] == 'claimed':
+                        self.store.transition(sid, skipped['id'], ['claimed'], 'skipped', self.clock(),
+                            detail='Occurrence missed during host maintenance; Resume does not replay it.')
+                    self.changed()
+                    continue
             session = self.app._session(sid)
             if session.get('configurationBusy') or session.get('fileAccessPending') or session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
             try:
@@ -299,6 +316,8 @@ class Schedules:
                 continue
             async with self.app.lock:
                 # Refresh authoritative schedule after asynchronous runtime reads.
+                if work_paused(self.app.state):
+                    return
                 current = self.store.get(sid, schedule['id'])
                 if current['revision'] != schedule['revision'] or current['status'] != 'active': continue
                 reason = self.dependency_reason(self.app._session(sid), task, current)
@@ -318,6 +337,11 @@ class Schedules:
                 run, session, task = prepared
             async with self.app.lock:
                 target = session['id']
+                if work_paused(self.app.state):
+                    self.store.transition(sid, run['id'], ['claimed', 'creating'], 'skipped', self.clock(),
+                        detail='Host maintenance began before input admission; no work was replayed.')
+                    self.changed()
+                    continue
                 # This is the durable handoff boundary. A crash from this point
                 # leaves an uncertain input; retries never send it again.
                 run = self.store.transition(sid, run['id'], ['claimed', 'creating'], 'submitting', self.clock(), interruptionRevision=current['interruptionRevision'], executionRevision=current.get('executionRevision', 0), destinationInterruptionRevision=run.get('destinationInterruptionRevision', session.get('interruptionRevision', 0)), destinationExecutionRevision=run.get('destinationExecutionRevision', session.get('executionRevision', 0)), taskId=task['id'], taskRevision=task['revision'])
@@ -334,6 +358,7 @@ class Schedules:
                 # worker command lock, immediately before its nonblocking queue.
                 def guard():
                     latest = self.store.get(sid, current['id'])
+                    if work_paused(self.app.state): return 'Host maintenance began before scheduled input admission.'
                     if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
                     owner = self.app._session(sid)
                     if owner.get('configurationBusy') or owner.get('fileAccessPending') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task configuration changed or its execution folder is moving; this occurrence was skipped.'

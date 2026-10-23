@@ -285,6 +285,7 @@ async def read(app):
 
 
 async def request(app, args, actor, guard=None):
+    from .maintenance import held, require_open
     folder = root(app)
     identity = hashlib.sha256(json.dumps([args['sessionId'], args['requestId']], separators=(',', ':')).encode()).hexdigest()[:32]
     intent = {key: args[key] for key in ('workspaceId', 'sessionId', 'requestId', 'backend')}
@@ -295,7 +296,7 @@ async def request(app, args, actor, guard=None):
     if existing:
         if existing['intent'] != intent or existing['actor'] != actor:
             raise ValueError('This setup request identity already belongs to another intent.')
-        if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
+        if not held(app) and existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
             existing = await complete_retained(app, path, existing, guard)
         observed = await readiness(app, force=True)
         # A crash after atomic publication can be settled by the exact retained
@@ -304,6 +305,7 @@ async def request(app, args, actor, guard=None):
             existing.update(state='completed', phase='ready', detail='The exact verified setup was already saved. No setup effects were repeated.', updatedAt=time.time())
             write_json(path, existing)
         return {'operation': public(existing), 'readiness': observed, 'duplicate': True}
+    require_open(app)
     if not sys.platform.startswith('linux'):
         raise ValueError('Automatic local test setup has only been qualified on Linux.')
     lock = FileLock(str(folder / 'setup.lock'), timeout=0)
@@ -318,6 +320,7 @@ async def request(app, args, actor, guard=None):
             raise ValueError('A previous setup has an uncertain result. Its saved operation must be reconciled before new setup effects.')
         if guard:
             await guard()
+        require_open(app)
         record = {'id': identity, 'intent': intent, 'actor': actor, 'backend': args['backend'], 'state': 'accepted',
                   'phase': 'checking', 'detail': 'Checking the local test runner.', 'createdAt': time.time(), 'updatedAt': time.time()}
         write_json(path, record)
@@ -327,7 +330,11 @@ async def request(app, args, actor, guard=None):
             tasks = app._test_setup_tasks = {}
         task = asyncio.create_task(_run(app, record, lock, guard), name='test-runner-setup-' + identity)
         tasks[identity] = task
-        task.add_done_callback(lambda _: tasks.pop(identity, None))
+        def settled(_):
+            tasks.pop(identity, None)
+            from .maintenance_auxiliary import notify_task_settled
+            notify_task_settled(app)
+        task.add_done_callback(settled)
         return {'operation': public(record), 'duplicate': False}
     except BaseException:
         lock.release()
@@ -337,6 +344,7 @@ async def request(app, args, actor, guard=None):
 async def complete_retained(app, path, record, guard):
     """Explicit same-intent retry may publish its already verified candidate."""
     from .task_environments import validate_configuration_value, invoke
+    from .maintenance import require_open
     lock = FileLock(str(root(app) / 'setup.lock'), timeout=0)
     try:
         lock.acquire()
@@ -351,6 +359,7 @@ async def complete_retained(app, path, record, guard):
             raise ValueError('Another runner configuration was selected. The previous setup will not replace it.')
         if guard:
             await guard()
+        require_open(app)
         config, status, _ = await settled_thread(validate_configuration_value, app, candidate)
         if status != 'ready' or not config:
             raise ValueError('The retained runner still needs qualification; no setup effects were repeated.')
@@ -361,6 +370,7 @@ async def complete_retained(app, path, record, guard):
             raise ValueError('The retained setup backend identity could not be confirmed.')
         if guard:
             await guard()
+        require_open(app)
         if read_json(Path(app.data_dir) / 'test-environments.json') != selected:
             raise ValueError('The runner selection changed before publication.')
         retain_verification(app, candidate, record['proof'])
@@ -384,8 +394,10 @@ async def _run(app, record, lock, guard):
     folder = root(app)
     path = folder / (record['id'] + '.json')
     async def step(phase, detail):
+        from .maintenance import require_open
         if guard:
             await guard()
+        require_open(app)
         record.update(state='running', phase=phase, detail=detail, updatedAt=time.time())
         write_json(path, record)
     try:
@@ -442,6 +454,7 @@ async def _run(app, record, lock, guard):
         normalized, status, _ = await settled_thread(owner.validate_configuration_value, app, config)
         if status != 'ready' or not normalized:
             raise ValueError('The prepared runner did not pass host qualification.')
+        await step('saving', 'Saving the verified runner for this app.')
         if read_json(Path(app.data_dir) / 'test-environments.json') != config_before:
             raise ValueError('The runner configuration changed during setup. The new setup result was retained without replacing it.')
         retain_verification(app, config, proof)
@@ -502,6 +515,7 @@ async def verify_existing(config, raw, owned, record, step):
         return await settled_thread(tracked_command, owned / ('effect-' + identity + '.json'), 'probe', [*prefix, *args], env=env, timeout=120)
     await effect(['init', 'local:' + current['image'], name, '--no-profiles', '--storage', pool, '-c', 'user.amplifier.setup=' + record['id'], '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=512MiB', '-c', 'limits.cpu=1'])
     await effect(['start', name])
+    await step('checking_profile', 'Running the admitted disposable readiness check.')
     probe = json.loads(await settled_thread(command, [*prefix, 'exec', name, '--', 'python3', '-c', "import json,sys,tarfile; assert hasattr(tarfile,'data_filter'); print(json.dumps({'python':sys.version.split()[0]}))"], env=env, timeout=60))
     instance = json.loads(await settled_thread(command, [current['incusExecutable'], '--force-local', 'query', '/1.0/instances/' + name + '?project=' + current['project']], env=env))
     if any(device.get('type') == 'nic' for device in instance.get('expanded_devices', {}).values()):
@@ -552,6 +566,7 @@ async def setup_incus(base, selected, owned, record, step):
     venv = owned / 'adapter'
     await settled_thread(command, [uv, 'venv', '--python', sys.executable, str(venv)], timeout=120)
     python = venv / 'bin/python'
+    await step('installing_runner', 'Installing the approved Incus adapter in its private environment.')
     await settled_thread(command, [uv, 'pip', 'install', '--python', str(python), 'git+' + LEGACY_REPOSITORY + '@' + LEGACY_COMMIT], timeout=600)
     package = json.loads(await settled_thread(command, [str(python), '-I', '-c', 'import importlib.util,importlib.metadata,json; print(json.dumps({"directory":next(iter(importlib.util.find_spec("amplifier_bundle_digital_twin_universe").submodule_search_locations)),"version":importlib.metadata.version("amplifier-bundle-digital-twin-universe")}))']))
     if package.get('version') != CURRENT_QUALIFIED_VERSION or package_digest(package['directory']) != QUALIFIED_PACKAGES[CURRENT_QUALIFIED_VERSION]:
@@ -785,7 +800,11 @@ async def cleanup(app, args, actor, guard=None):
             tasks = app._test_setup_tasks = {}
         task = asyncio.create_task(_cleanup(app, record, path, lock, guard))
         tasks[record['id']] = task
-        task.add_done_callback(lambda _: tasks.pop(record['id'], None))
+        def settled(_):
+            tasks.pop(record['id'], None)
+            from .maintenance_auxiliary import notify_task_settled
+            notify_task_settled(app)
+        task.add_done_callback(settled)
         return {'operation': public(record)}
     except BaseException:
         lock.release()
