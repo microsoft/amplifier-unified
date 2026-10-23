@@ -119,3 +119,38 @@ test('hub Create selects a new draft, while manage and Review retain existing ed
  assert.equal(root.root.findByProps({id:'schedule-prompt'}).props.value,'Unsaved edits to the existing schedule','creating does not discard the existing edit draft');
  assert.equal(button('Save and activate schedule'),undefined);
 });
+
+test('approved fidelity separates schedule/run state and disambiguates workspace in compact row groups',async()=>{
+ const items=[
+  {...row,id:'failed',status:'active',displayState:'active',owner:{id:'a',title:'Planning',workspace:'/teams/alpha'},lastRun:{phase:'failed',dueAt:1799999900}},
+  {...row,id:'unknown',owner:{id:'b',title:'Planning',workspace:'/teams/beta'},lastRun:{phase:'unknown',dueAt:1799999800}}
+ ];
+ const render=()=>React.createElement(AutomationHub,{state:{selectedSessionId:'a',sessions:[items[0].owner]},isCurrent:()=>true,dispatch:async()=>({accepted:true,result:{...page,items}})});
+ await act(async()=>{root=create(render())});
+ for(const item of items){
+  const card=root.root.findByProps({'data-automation-id':item.id});
+  assert.equal(card.props['data-run-state'],item.lastRun.phase);
+  assert.equal(card.findByProps({className:'a-automation-identity'}).findByType('h3').children.join(''),item.prompt);
+  assert.equal(card.findByProps({'data-part':'automation-workspace'}).children.join(''),item.owner.workspace);
+  assert.equal(card.findByProps({'data-part':'automation-run-state'}).children.join(''),item.lastRun.phase==='failed'?'Failed':'Unknown outcome');
+ }
+ assert.match(text(),/\/teams\/alpha/);assert.match(text(),/\/teams\/beta/);
+ assert.equal(root.root.findByProps({'data-part':'automation-next'}).findByProps({'data-part':'automation-workspace'}).children.join(''),'/teams/alpha');
+ const attention=root.root.findByProps({'aria-label':'Needs attention'});
+ const disclosure=attention.findByProps({className:'a-automation-exceptions'});
+ assert.equal(disclosure.props.open,true);
+ assert.match(disclosure.findAllByType('summary')[0].children.join(''),/on this page/);
+ await act(async()=>disclosure.props.onToggle({currentTarget:{open:false}}));
+ await act(async()=>button('Refresh automations').props.onClick());
+ assert.equal(root.root.findByProps({className:'a-automation-exceptions'}).props.open,false,'refresh preserves disclosure choice');
+});
+
+test('approved fidelity states no attention only for a loaded populated page, never global health',async()=>{
+ let result={...page,items:[{...row,status:'paused',displayState:'paused'}],total:40,hasMore:true};
+ await act(async()=>{root=create(view(async()=>({accepted:true,result})))});
+ assert.match(text(),/No schedules need attention on this page/);
+ assert.doesNotMatch(text(),/All schedules are healthy/);
+ result={...page,items:[],total:0};await act(async()=>button('Refresh automations').props.onClick());
+ assert.doesNotMatch(text(),/No schedules need attention on this page/);
+ assert.equal(root.root.findAllByProps({'aria-label':'Needs attention'}).length,0);
+});

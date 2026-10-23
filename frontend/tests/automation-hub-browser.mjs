@@ -25,9 +25,23 @@ try{
  const hub=page.getByRole('region',{name:'Automation overview'}),row=hub.locator(`[data-automation-id="${info.scheduleId}"]`);
  await expect(row).toBeVisible();timings.openToRowsMs=Date.now()-opened;await expect(row).toContainText('Exited report owner');await expect(row).toContainText('Needs review');
  assert.equal(await hub.locator('[data-automation-id]').count(),30);
+ const ownerWorkspace=(await state()).sessions.find(item=>item.id===info.ownerId).workspace;
+ await expect(row.locator('[data-part="automation-workspace"]')).toHaveText(ownerWorkspace);
+ const columns=await row.evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);
+ assert.equal(columns,4,'desktop rows keep identity, timing/owner, outcome and actions in separate columns');
+ const exceptions=hub.locator('.a-automation-exceptions');
+ await expect(exceptions).toHaveJSProperty('open',true);
+ await exceptions.locator(':scope > summary').focus();await page.keyboard.press('Enter');
+ await expect(exceptions).toHaveJSProperty('open',false);await expect(row).not.toBeVisible();
+ await expect(hub.getByRole('region',{name:'Other schedules on this page'})).toBeVisible();
+ await hub.getByRole('button',{name:'Refresh automations',exact:true}).click();
+ await expect(exceptions).toHaveJSProperty('open',false);
+ await exceptions.locator(':scope > summary').focus();await page.keyboard.press('Enter');
+ await expect(row).toBeVisible();
+ await page.screenshot({path:output+'/attention-desktop.png',animations:'disabled'});
  assert.deepEqual(await get(),baseline,'opening overview must not prepare or run any chat');
  const reads=actions.filter(row=>row.action==='schedule.overview').length;await page.waitForTimeout(1200);assert.equal(actions.filter(row=>row.action==='schedule.overview').length,reads,'no idle overview polling');
- await hub.getByRole('button',{name:'More schedules',exact:true}).click();await expect(hub.locator('[data-automation-id]')).toHaveCount(2);await hub.getByRole('button',{name:'Previous schedules',exact:true}).click();await expect(row).toBeVisible();
+ await hub.getByRole('button',{name:'More schedules',exact:true}).click();await expect(hub.locator('[data-automation-id]')).toHaveCount(2);await expect(hub).toContainText('No schedules need attention on this page.');await hub.getByRole('button',{name:'Previous schedules',exact:true}).click();await expect(row).toBeVisible();
  await hub.getByRole('combobox',{name:'Show automations'}).selectOption('all');await expect(hub).toContainText('33 schedules');await hub.getByRole('combobox',{name:'Show automations'}).selectOption('current');await expect(hub).toContainText('32 schedules');
  phase='review-failed-owner';await row.getByRole('button',{name:'Review future runs',exact:true}).click();
  const review=hub.getByRole('region',{name:'Review future scheduled work'});await expect(review).toBeVisible();await expect(review).toContainText('Check the report and compare its state.');await expect(review).toContainText('test-model');
@@ -53,6 +67,7 @@ try{
  await hub.getByRole('button',{name:'Create schedule',exact:true}).click();
  const editor=page.getByRole('region',{name:'Scheduled work'}),prompt=editor.getByLabel('Saved instructions');
  await expect(editor).toContainText('My current chat');
+ await expect(editor.locator('[data-part="schedule-owner-workspace"]')).toHaveText(ownerWorkspace);
  await expect(prompt).toBeVisible();await prompt.fill('Summarize weekday decisions and open risks. Do not send messages.');
  await editor.getByLabel('Repeat',{exact:true}).selectOption('weekly');
  await editor.getByLabel('Timezone',{exact:true}).fill('America/Los_Angeles');
@@ -80,6 +95,8 @@ try{
  await expect(savedPreview.getByRole('listitem')).toHaveCount(5);
  assert.equal(await page.evaluate(()=>Intl.DateTimeFormat().resolvedOptions().timeZone),'Asia/Tokyo');
  await expect(savedPreview.getByRole('listitem').first()).toHaveText('1/18/2027, 8:30:00 AM (America/Los_Angeles)');
+ await expect(savedPreview).toContainText('2027-01-18');
+ await expect(savedPreview).toContainText(ownerWorkspace);
  await page.getByRole('button',{name:'Back to Advanced',exact:true}).click();
  await expect(editor).toHaveCount(0);
  await page.getByRole('button',{name:/Work & automation/}).click();
@@ -130,10 +147,13 @@ try{
  phase='populated-pause-themes';
  await page.getByRole('button',{name:'Back to Automation',exact:true}).click();
  await expect(hub.locator('[data-part="automation-next"]')).toContainText('America/Los_Angeles');
+ await expect(hub.locator('[data-part="automation-next"] [data-part="automation-workspace"]')).toHaveText(ownerWorkspace);
+ await expect(hub).toContainText('No schedules need attention on this page.');
  for(const [width,scheme] of [[1280,'light'],[1280,'dark'],[390,'dark'],[390,'light']]){
   await page.setViewportSize({width,height:900});await call('view.update',{patch:{scheme}});
   await expect.poll(()=>page.locator('#amp-one').evaluate(el=>getComputedStyle(el).colorScheme)).toBe(scheme);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.equal(await hub.locator('[data-automation-id]').first().evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width===390?1:4);
   await page.screenshot({path:output+`/populated-${width}-${scheme}.png`,animations:'disabled'});
  }
  await hub.getByRole('button',{name:'Open owning chat',exact:true}).click();
@@ -188,10 +208,21 @@ try{
  await expect(otherEditor.getByLabel('Saved instructions')).toHaveValue('Other tab edit — do not change');
  await expect(otherEditor).toContainText('This schedule changed.');
  await other.evaluate(async id=>{await window.amplifier.dispatch('session.select',{id});await window.amplifier.dispatch('view.update',{patch:{panel:null}})},info.ownerId);
+ phase='failed-outcome-distinct-from-schedule';
+ await post('/fixture/failure?id='+encodeURIComponent(beforeCreate.id));
+ await page.getByRole('button',{name:'Back to Automation',exact:true}).click();
+ const outcomeRow=hub.locator(`[data-automation-id="${beforeCreate.id}"]`);
+ await expect(outcomeRow.locator('[data-part="automation-schedule-state"]')).toHaveText('Scheduled');
+ await expect(outcomeRow.locator('[data-part="automation-run-state"]')).toHaveText('Failed');
+ assert.equal(await outcomeRow.evaluate(el=>getComputedStyle(el).borderLeftStyle),'solid');
+ await page.screenshot({path:output+'/failed-mobile.png',animations:'disabled'});
  phase='unknown-evidence-no-replay';
  await post('/fixture/uncertain?id='+encodeURIComponent(beforeCreate.id));
- await page.getByRole('button',{name:'Back to Automation',exact:true}).click();
+ await hub.getByRole('button',{name:'Refresh automations',exact:true}).click();
  await expect(hub.getByRole('region',{name:'Needs attention'})).toContainText('Unknown outcome');
+ await expect(outcomeRow.locator('[data-part="automation-run-state"]')).toHaveText('Unknown outcome');
+ assert.equal(await outcomeRow.evaluate(el=>getComputedStyle(el).borderLeftStyle),'dashed');
+ await page.screenshot({path:output+'/unknown-overview-mobile.png',animations:'disabled'});
  await expect(hub.getByRole('button',{name:'Review future runs'})).toHaveCount(0);
  await hub.locator(`[data-automation-id="${beforeCreate.id}"]`).getByRole('button',{name:'Open owning chat',exact:true}).click();
  await expect(saved).toContainText('needs review');

@@ -84,10 +84,17 @@ async def main(home):
         service.schedules.store.review(current, saved['id'], 'A prior run has an uncertain outcome.', now[0])
         service.schedules.changed()
         return web.json_response({'unknown': True})
+    async def failure(request):
+        authorize(request)
+        saved = service.schedules.store.get(current, request.query['id'])
+        service.schedules.store.put_run({'id': 'failed-demo-run', 'sessionId': current, 'scheduleId': saved['id'], 'dueAt': now[0]-1, 'phase': 'failed', 'revision': 1, 'detail': 'Synthetic provider failure; no external call was made.'})
+        service.schedules.changed()
+        return web.json_response({'failed': True})
     app.router.add_get('/fixture/inspect', inspect);app.router.add_post('/fixture/tick', tick);app.router.add_post('/fixture/stop', stop)
     app.router.add_post('/fixture/empty', empty)
     app.router.add_get('/fixture/journey', journey)
     app.router.add_post('/fixture/uncertain', uncertain)
+    app.router.add_post('/fixture/failure', failure)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins']=app['allowed_origins']|{url}
