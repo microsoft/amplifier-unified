@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "releases": [
+    {"version":"0.27.9","title":"Quote directly from messages","changes":["Removed the extra Choose passage control and source-picker dialog. Select rendered text to quote a passage, or use Reply for the whole message.","Selections that cannot be quoted exactly now explain why without changing your draft."],"notices":[]},
     {"version":"0.27.8","title":"Keep image previews steady while switching images","changes":["Keep generated-image previews at a stable height while another image loads or shows an error, so the gallery and conversation do not jump. Image actions stay tied to the loaded image."],"notices":[]},
     {"version":"0.27.7","title":"Keep delayed execution checks from stopping healthy work","changes":["Allow tool execution checks to use the existing host transport deadline, so a briefly busy host does not incorrectly stop a chat or worker after 1.5 seconds. Current permissions, Stop, input and execution-owner checks still apply.","Distinguish a timed-out or disconnected execution check from a Work-precondition refusal, and state when the tool was not run. Checks and tool actions are not automatically replayed."],"notices":[]},
     {"version":"0.27.6","title":"Keep Canvas verification aligned with current controls","changes":["Maintain automated Canvas checks for the current document tabs and file Details controls, including narrow layouts, exact file paths and downloads."],"notices":[]},
