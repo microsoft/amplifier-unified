@@ -346,7 +346,7 @@ def reservation_candidate(app, rows):
     return candidates[index]
 
 
-def recover_reservation(app, row, config, observed):
+def recover_reservation(app, row, config, observed, *, guard=None, blocking=True):
     """The caller holds the environment lock; release compute, never effects.
 
     Ordinary inventory is only a trigger. Exact native reconciliation must also
@@ -359,10 +359,12 @@ def recover_reservation(app, row, config, observed):
                 and row.get('environmentState') != 'unknown')
             or row.get('pendingRequest')
             or row.get('preparationPending') and not row.get('preparedDependencies')
-            or not owner.host_resources.held(row)):
+            or not owner.host_resources.held(row, blocking=blocking)):
         return row
     if observed.get('universeId', row.get('universeId')) != row.get('universeId'):
         raise ValueError('The observed environment identity changed.')
+    if guard:
+        guard()
     result = owner.invoke(config, app.data_dir, row, 'reconcile', {})
     if (result.get('ok') is not True or not verify(row, result)
             or result.get('status') not in {'stopped', 'absent'}
@@ -370,10 +372,14 @@ def recover_reservation(app, row, config, observed):
         return row
     if owner.get(app.data_dir, row['sessionId'], row['id']) != row:
         raise ValueError('The environment changed during capacity inspection.')
+    if guard:
+        guard()
     proof = {'version': 1, 'state': 'observed', 'environmentStatus': result['status'],
              'observation': result['observation'], 'observedAt': time.time()}
     updated = owner.save(app.data_dir, row, reservationRecovery=proof)
-    owner.host_resources.settle(updated, release=True)
+    if guard:
+        guard()
+    owner.host_resources.settle(updated, release=True, blocking=blocking)
     return owner.save(app.data_dir, updated, reservationRecovery={**proof, 'state': 'released'})
 
 

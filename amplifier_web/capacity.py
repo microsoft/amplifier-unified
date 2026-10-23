@@ -10,6 +10,7 @@ import math
 import time
 
 from .token_usage import with_gross_tokens
+from .model_admission_identity import input_id
 
 METRICS = ('inputTokens', 'outputTokens', 'totalTokens', 'grossInputTokens', 'grossTotalTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens', 'costUsd')
 LIVE = {'running', 'working', 'starting', 'queued', 'retrying', 'pending'}
@@ -338,7 +339,7 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
 def fresh_human_input(service, session, row, denial):
     """Recheck a derived pause only for a new host-admitted human input."""
     active = session.get('collaborationGeneration') or {}
-    identity = row.get('turnId')
+    identity = input_id(row)
     if (not active.get('id') or active.get('terminal') or not identity
             or identity not in active.get('inputIds', [])
             or row.get('lifecycle') == 'background'

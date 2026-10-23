@@ -2561,7 +2561,7 @@
           "entryPath": [
             "Chat",
             "Message actions",
-            "Choose passage or Reply to message"
+            "Rendered text selection → Quote selection, or Reply to message"
           ],
           "prerequisites": [
             "Synthetic current-chat messages and attachments; built client; no live history or provider"

@@ -996,7 +996,7 @@ class AppService:
         if worktrees is not None:
             worktrees.resolve_placements(session_ids)
         if getattr(self, 'event_log_view', None) is not None:
-            self.event_log_view.invalidate(session_ids)
+            self.event_log_view.invalidate(session_ids, notify=False)
         if session_ids is None:
             self._history_local_revision += 1
         detail_only = getattr(self, '_publish_detail_only', False)
@@ -1241,7 +1241,7 @@ class AppService:
         if session_ids is not None:
             session_ids = set(session_ids) | handoff_sources
         if getattr(self, 'event_log_view', None) is not None:
-            self.event_log_view.invalidate(session_ids)
+            self.event_log_view.invalidate(session_ids, notify=False)
         # A mixed publication commits the union, never just the newer writer's
         # scope. Unknown writers retain the conservative complete-save path.
         if getattr(self, '_progress_dirty', False):
@@ -1340,6 +1340,8 @@ class AppService:
         self._progress_record_only = True
         self._progress_global_keys = set()
         self._progress_publish_error = None
+        if getattr(self, 'event_log_view', None) is not None:
+            self.event_log_view.flush_work_notifications()
         from .history_residency import retire
         try:
             retire(self)
@@ -1349,7 +1351,7 @@ class AppService:
     def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=(), stream=False):
         """Batch stream/progress updates; final responses and approvals flush now."""
         if getattr(self, 'event_log_view', None) is not None:
-            self.event_log_view.invalidate(session_ids)
+            self.event_log_view.invalidate(session_ids, notify=False)
         if not getattr(self, '_progress_dirty', False):
             self._progress_session_ids = set(session_ids) if session_ids is not None else None
             self._progress_detail_only = detail_only
@@ -4384,7 +4386,7 @@ class AppService:
             from .conversation_steering import observe as observe_steering
             try:
                 for kind, payload in events:
-                    self.event_log_view.invalidate({session['id']})
+                    self.event_log_view.invalidate({session['id']}, notify=False)
                     self.diagnostics.runtime_event(kind, payload, session)
                     runtime_activity(session, kind, payload)
                     self._ingest_runtime_execution(session, payload)
@@ -4410,7 +4412,6 @@ class AppService:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
                 return
-            self.event_log_view.invalidate({session['id']})
             if kind == 'worker.updated' and payload.get('activityOnly'):
                 worker = next((w for w in session.get('workers', []) if w['id'] == payload.get('id')), None)
                 # Progress is not lifecycle authority. Delayed hooks cannot
@@ -4422,6 +4423,7 @@ class AppService:
                 payload = {**{key: payload[key] for key in (
                     'sessionId', 'id', 'phase', 'detail', 'updatedAt', 'retryAttempt', 'retryMax') if key in payload},
                     'status': worker['status'], 'activityOnly': True}
+            self.event_log_view.invalidate({session['id']}, notify=False)
             self.diagnostics.runtime_event(kind,payload,session)
             from .chat_navigation import runtime_activity
             runtime_activity(session, kind, payload)
@@ -4910,11 +4912,13 @@ class AppService:
         if operation == "coordination.current":
             from .workspace_awareness import packet
             from .collaboration import PRINCIPAL
+            from .coordination_guidance import assignment_orientation
+            session = self._session(session_id, hydrate=False)
             reference = self._session(session_id, hydrate=False).get("coordinationReference", {
                 "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
                 "detail": "No retained collaboration reference; discover current coordination.context."})
             return {**reference, 'awareness': packet(self, session_id, principal=PRINCIPAL.get()),
-                    'assignment': self.assignments.summary(self._session(session_id, hydrate=False)),
+                    'assignment': assignment_orientation(session, self.assignments.summary(session), PRINCIPAL.get()),
                     'work': self.work_invocation.current(session_id)}
         def visual_origin(explicit=None):
             if input_origin is None:
@@ -5114,7 +5118,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
             compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
             compact_domain_receipt = compact_domain_receipt or compact_task_receipt

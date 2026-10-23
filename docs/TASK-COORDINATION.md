@@ -1,5 +1,24 @@
 # Task and worker coordination
 
+## Compact orientation and delegated recovery
+
+The current coordination reference offers `assignment.briefRef` to an actual
+root assignment member. Following it reads the existing bounded, paged member
+brief. The reference does not load a roster or peer histories at every model
+call, accumulate another history message, or replace exact constraints and
+Shared Work evidence. Internal children do not receive a root-only action hint.
+
+A refused child/root identity mismatch directs the child to return the requested
+action, completed effects and refusal to its delegating parent. It does not lend
+root authority, retry an operation, or require the human to relay an already
+authorized step. The root must independently satisfy current Stop, scope,
+permission and uncertainty checks before acting.
+
+`effectAuthorized:false` on a read receipt means the read grants no authority.
+That field alone is not an execution denial: preserve the receipt's status,
+coverage and reason, and obtain the ordinary action's current admission result.
+This guidance does not weaken the required-detail or effect admission checks.
+
 ## PR integration status
 
 The grant-free repair is being integrated onto the `0.20.81` mainline at

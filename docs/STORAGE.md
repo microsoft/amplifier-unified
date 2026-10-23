@@ -254,3 +254,27 @@ source, output and test evidence are never dependency-cache cleanup targets.
 Docker measurements exclude the exact immutable base image; shared blocks may
 still remain after removal. Other dependency stores retain their existing
 ownership and preservation rules.
+
+### Saved test evidence
+
+Settings → Storage → **Saved test evidence** reads recorded sizes only when the
+user chooses **Review saved test sizes**. Each page covers at most 32 canonical
+test allocations. Earlier pages replace the displayed page; totals apply only
+to the displayed, fully accounted records. Newly saved or changed records can
+appear after Refresh. This is not a snapshot of all host storage.
+
+Original source, final workspace, and test results are separate roles. Complete
+accounting requires a completed removal receipt bound to the allocation's
+resource, root, environment and source hash, with a verified complete archive
+selection and matching byte totals. A full-environment archive includes the
+workspace and results without inventing separate sizes. Missing or inconsistent
+records remain visible as unavailable, rather than zero. Remote receipts say
+whether downloaded copies are recorded; a total counts one evidence set, not
+every possible local and remote copy.
+
+The `storage.cleanup.evidence` read uses bounded scalar projections from the
+existing ledger, opened read-only, with a query deadline. It never reads archive
+contents, recursively measures directories, loads chat history, starts a worker,
+connects to another machine, changes retention, or deletes files. Recorded file
+bytes are historical evidence, not current allocated disk space or an estimate
+of reclaimable storage. Automatic cleanup continues to protect these files.

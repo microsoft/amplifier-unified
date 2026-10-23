@@ -36,13 +36,9 @@
 #amp-one .a-composer-quote small{display:block;color:var(--a-muted);font-size:.75rem}
 #amp-one .a-composer-quote small:empty{display:none}
 #amp-one .a-composer-quote-caption{line-height:1.5}
-#amp-one .a-quote-picker{max-width:min(700px,calc(100vw - 24px));width:90vw;max-height:85vh;padding:1rem;border:1px solid var(--a-line);border-radius:.7rem;background:var(--a-surface);color:var(--a-ink)}
-#amp-one .a-quote-picker::backdrop{background:#0006}
-#amp-one .a-quote-picker textarea{display:block;width:100%;height:35vh;white-space:pre-wrap;font:inherit;margin:.8rem 0}
-#amp-one .a-quote-picker>div{display:flex;gap:.5rem;justify-content:flex-end}
 #amp-one .a-quoted-document{min-width:0}
 #amp-one .a-quote-selection{position:fixed;z-index:50;max-width:calc(100vw - 16px);padding:3px;border:1px solid var(--a-line);border-radius:.5rem;background:var(--a-surface);box-shadow:0 3px 12px #0003}
 #amp-one .a-quote-selection button{min-height:40px;padding:6px 12px;border:0;border-radius:.3rem;background:var(--a-accent);color:var(--a-accent-ink,#fff);font:inherit;font-size:var(--a-text-sm,13px);cursor:pointer}
 #amp-one .a-quote-selection button:focus-visible{outline:2px solid var(--a-ink);outline-offset:2px}
-#amp-one .a-message-actions .a-quote-fallback{color:var(--a-muted);font-size:var(--a-text-xs,12px)}
+#amp-one .a-quote-selection-error{display:block;max-width:216px;padding:6px 12px;font-size:var(--a-text-sm,13px);line-height:1.4;overflow-wrap:anywhere}
 @media(pointer:coarse){#amp-one .a-composer-quote-head button{min-height:44px;min-width:44px}}

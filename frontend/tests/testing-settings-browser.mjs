@@ -163,7 +163,8 @@ try{
  for(const label of ['Outstanding task chats per manager','Owned test environments per chat','Maximum pending checks per chat'])await expect(execution.getByLabel(label,{exact:true})).toHaveValue('0');
  await expect(execution.getByText('Effective: No count limit',{exact:true})).toHaveCount(2);
  // Mounted remote-target setup is a bounded protocol fixture, not a host install.
- let targets={revision:'r1',runners:[],scope:'Approved machines, shared per account.'},targetWrites=0,refreshes=0,policyWrites=0,losePolicyReply=false;
+ let targets={revision:'r1',runners:[],enrollments:[],scope:'Approved machines, shared per account.'},targetWrites=0,refreshes=0,policyWrites=0,losePolicyReply=false;
+ let candidate;
  const backendDefaults={maxRunning:15,maxInstances:256,minFreeBytes:10*1024**3};
  let targetPolicy={revision:'p1',limits:{},defaults:backendDefaults,effective:backendDefaults,scope:'This target account and Incus project.',behavior:'Lowering limits keeps active checks running.'};
  await page.route('**/api/actions',async route=>{
@@ -173,9 +174,12 @@ try{
   let result;
   if(action==='testing.runners.read') result=targets;
   else if(action==='testing.runners.register'){
-   targetWrites++;targets={...targets,revision:'r2',runners:[{id:'target',machineId:'authority',name:args.name,connection:args.connection,configPath:args.configPath||'',enabled:true,profiles:['linux-python']}]};
+   targetWrites++;candidate={id:'target',machineId:'authority',name:args.name,connection:args.connection,configPath:args.configPath||'',enabled:true,profiles:['linux-python']};
+   targets={...targets,revision:'r2',enrollments:[{id:'check-one',requestId:args.requestId,name:args.name,connection:args.connection,status:'capacity',canCancel:true,detail:'Waiting for room on this test machine. Existing work can continue.'}]};
    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:false,error:'Acknowledgement lost'})});return;
-  }else if(action==='testing.runners.refresh'){refreshes++;result=targets}
+  }else if(action==='testing.runners.refresh'){refreshes++;targets={...targets,enrollments:[{id:'check-two',requestId:args.requestId,name:candidate.name,connection:candidate.connection,status:'unknown',canCancel:true,canReconcile:true,detail:'The last operation is not yet confirmed. Its original owner is retained; the check is not repeated.'}]};result=targets}
+  else if(action==='testing.runners.enrollment.reconcile'){assert.equal(args.id,'check-two');result=targets}
+  else if(action==='testing.runners.enrollment.cancel'){assert.equal(args.id,'check-two');targets={...targets,enrollments:targets.enrollments.map(item=>({...item,status:'cancelled',canCancel:false,canReconcile:false,detail:'Connection check cancelled. This request did not enable the machine.'}))};result=targets}
   else if(action==='testing.runners.enable'){targets={...targets,revision:'r3',runners:targets.runners.map(item=>({...item,enabled:args.enabled}))};result=targets}
   else if(action==='testing.runners.machine.read')result={supported:false,reason:'Machine observation fixture'};
   else if(action==='testing.runners.capacity.read')result=targetPolicy;
@@ -197,10 +201,20 @@ try{
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
  await expect(page.getByRole('alertdialog')).toContainText('Connected test machines');
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
- await targetsRegion.getByRole('button',{name:'Connect test machine',exact:true}).click();
- await expect(targetsRegion.getByRole('status').first()).toContainText('saved test machine matches');
+ await targetsRegion.getByRole('button',{name:'Connect and check',exact:true}).click();
+ await expect(targetsRegion.getByRole('status').first()).toContainText('saved connection check was found');
  assert.equal(targetWrites,1);
- await targetsRegion.getByText('Office testing machine · Available for new checks',{exact:true}).click();
+ await expect(targetsRegion.getByText('Waiting for room on this test machine. Existing work can continue.',{exact:true})).toBeVisible();
+ assert.equal(targets.runners.length,0);
+ await targetsRegion.getByRole('heading',{name:'Connected test machines',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:'/tmp/connection-check-narrow.png'});
+ await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'testing');
+ await expect(targetsRegion.getByText('Waiting for room on this test machine. Existing work can continue.',{exact:true})).toBeVisible();
+ assert.equal(targetWrites,1);
+ targets={...targets,runners:[{...candidate,lastCheck:{status:'passed',checkedAt:Date.now()/1000}}],enrollments:targets.enrollments.map(item=>({...item,status:'connected',canCancel:false,detail:'Connection checked. Its result was retained and its test environment was removed.'}))};
+ await targetsRegion.getByRole('button',{name:'Refresh test machines',exact:true}).click();
+ await targetsRegion.getByText('Office testing machine · Allowed for new checks',{exact:true}).click();
+ await expect(targetsRegion.getByText(/Last connection check passed/)).toBeVisible();
  const targetLimits=targetsRegion.getByRole('region',{name:'Office testing machine environment limits'});
  await targetLimits.getByText('Advanced environment limits',{exact:true}).click();
  await targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true}).fill('13');
@@ -226,8 +240,13 @@ try{
  assert.equal(targetPolicy.effective.maxRunning,0);
  await targetsRegion.getByRole('button',{name:'Pause new checks',exact:true}).click();
  await expect(targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true})).toBeVisible();
- await targetsRegion.getByRole('button',{name:'Refresh test controller',exact:true}).click();
- await expect(targetsRegion.getByRole('status').first()).toContainText('refreshed for future checks');assert.equal(refreshes,1);
+ await targetsRegion.getByRole('button',{name:'Check connection and controller',exact:true}).click();
+ await expect(targetsRegion.getByRole('status').first()).toContainText('Connection check saved');assert.equal(refreshes,1);
+ await expect(targetsRegion.getByText(/The last operation is not yet confirmed/)).toBeVisible();
+ await targetsRegion.getByRole('button',{name:'Check saved result',exact:true}).click();
+ assert.equal(refreshes,1);
+ await targetsRegion.getByRole('button',{name:'Cancel connection check',exact:true}).click();
+ await expect(targetsRegion.getByText('Connection check cancelled. This request did not enable the machine.',{exact:true})).toBeVisible();
  assert.equal(targets.runners[0].enabled,false);
  await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'testing');
  await expect(targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true})).toBeVisible();
@@ -236,8 +255,24 @@ try{
  await expect(targetLimits.getByLabel('Office testing machine: Maximum active test environments',{exact:true})).toHaveValue('0');
  await targetsRegion.scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/registered-test-machines-browser.png',fullPage:true});
+ // Capture the optional desktop evidence after the cold-reopen assertions.
+ // Resizing Settings changes browser history asynchronously; do not combine
+ // that separate transition with the reload under test.
+ await page.setViewportSize({width:1100,height:900});
+ await expect(targetsRegion.getByText('Office testing machine · Paused for new checks',{exact:true})).toBeVisible();
+ await targetsRegion.getByRole('heading',{name:'Connected test machines',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:'/tmp/connection-check-desktop.png'});
 
  assert.deepEqual(errors,[]);
  console.log('PASS: global settings without a runner, zero override, lost-acknowledgement readback without replay, stale writer protection, preserved draft, narrow layout and cold reopen');
-}catch(error){failure=error;throw error}
+}catch(error){
+ failure=error;
+ await page?.screenshot({path:'/tmp/testing-settings-failure.png',fullPage:true}).catch(()=>{});
+ const state=await page?.evaluate(()=>({url:location.href,panel:window.amplifier?.getState()?.view?.panel,
+  route:document.querySelector('.a-settings-experience')?.dataset.settingsRoute,
+  compact:document.querySelector('.a-settings-experience')?.dataset.compact,
+  buttons:[...document.querySelectorAll('.a-settings-mobile-head button')].map(item=>item.getAttribute('aria-label'))})).catch(()=>null);
+ console.error(JSON.stringify({pageErrors:errors,settingsState:state}));
+ throw error;
+}
 finally{await finishFixture({label:'Testing settings fixture',close:[['Testing settings browser',()=>browser?.close()]],stop,originalError:failure})}

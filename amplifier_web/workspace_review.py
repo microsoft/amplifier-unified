@@ -103,7 +103,8 @@ def review(app, args, origin, caller):
             actor = PRINCIPAL.get()
             native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
             if actor and actor != native:
-                raise AppError('A child cannot borrow its root’s assignment review authority.', 403)
+                from .coordination_guidance import ROOT_SCOPE_MESSAGE
+                raise AppError(ROOT_SCOPE_MESSAGE, 403)
         if not source.get('workspace'):
             raise AppError('This chat has no available workspace scope to review.', 409)
         where, params = "session_kind='root' AND workspace=?", [source['workspace']]

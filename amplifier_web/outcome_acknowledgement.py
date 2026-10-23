@@ -8,6 +8,9 @@ from amplifier_operations.coordination import fingerprint
 from .task_binding import matches as task_matches
 
 
+REVIEWABLE_ACTIONS = {'coordination.send', 'workspace.tests.submit'}
+
+
 def review_key(request, outcome):
     # Sealing a negative report does not change its meaning. Qualification,
     # report identity, content and linked evidence do; retain those in the CAS.
@@ -28,9 +31,12 @@ def reference(request):
     from .collaboration import PROTOCOL, continuation_outcome
     outcome = continuation_outcome(request)
     wait = request.get('subscription') or {}
-    if (request.get('commandAction') != 'coordination.send'
+    if (request.get('commandAction') not in REVIEWABLE_ACTIONS
             or request.get('protocol') != PROTOCOL or not outcome
             or not outcome.get('outcomeRevision') or wait.get('notificationVersion') != 2):
+        return None
+    if (request.get('commandAction') == 'workspace.tests.submit'
+            and wait.get('status') not in {'waiting', 'claimed', 'backpressured'}):
         return None
     return {'acknowledged': acknowledged(request, outcome),
         'review': {'action': 'coordination.acknowledge', 'args': {
@@ -50,11 +56,17 @@ async def acknowledge(owner, source, args, origin, command_id):
             return duplicate
         lineage = owner.lineage(source, origin)
         request = owner.receipt(args['requestId'])
-        if (args['sessionId'] != source['id'] or request.get('commandAction') != 'coordination.send'
+        if (args['sessionId'] != source['id'] or request.get('commandAction') not in REVIEWABLE_ACTIONS
                 or request.get('senderSessionId') != source['id'] or request.get('protocol') != PROTOCOL
                 or request.get('workspace') != source['workspace']):
             owner.error('Acknowledge only your own request in its current workspace.')
         owner.authorize(source, request['target'], hydrate=False)
+        if request.get('commandAction') == 'workspace.tests.submit':
+            # Test waits belong to this root's exact placement and cancellation
+            # boundary, in addition to the shared task/Stop guards below.
+            if (request['target'].get('sessionId') != source['id']
+                    or service.test_queue.continuation_guard(request)):
+                owner.error('The saved test notification boundary changed.', 409)
         wait = request.get('subscription') or {}
         task = source.get('task') or service.coordination.task(source['id'])
         if (wait.get('notificationVersion') != 2

@@ -14,9 +14,9 @@ longer than 10,000 characters becomes a **Pasted text** attachment.
 Reply adds a saved quotation inside the composer without sending or moving your
 reading position. Add several messages, or select text and choose **Quote
 selection** beside the selected text. Formatted passages, simple lists, links
-and literal code retain exact source spans. **Choose passage** provides an exact,
-read-only source selection for transformed text (such as entities), complex
-blocks or formatting that cannot be mapped directly.
+and literal code retain exact source spans. Selections that cannot be mapped
+exactly (such as transformed entities or complex blocks) show an explanation
+without adding a quote or opening a source editor.
 Write before, between and after quotes. Quote controls move or remove only that
 quote; commentary and attachments stay. Long quotes expand to show their full
 text. Quotes are immutable historical references, not new instructions.

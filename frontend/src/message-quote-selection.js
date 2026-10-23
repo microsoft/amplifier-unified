@@ -82,7 +82,7 @@ export function selectedQuote(article,selection){
  const range=selection.getRangeAt(0);
  if(!article.contains(range.startContainer)||!article.contains(range.endContainer))return null;
  const root=[...article.querySelectorAll('.a-detail-text [data-message-quote-source]')].find(node=>node.contains(range.startContainer)&&node.contains(range.endContainer));
- if(!root)return {error:'Choose text within one message. Use Choose passage for other content.'};
+ if(!root)return {error:'Select text within one message.'};
  const map=sources.get(root);if(!map)return {error:'The rendered source is not available.'};
  const selected=[],edgeSeparators=[],walker=root.ownerDocument.createTreeWalker(root,4);let node;
  while((node=walker.nextNode())){
@@ -103,12 +103,12 @@ export function selectedQuote(article,selection){
    continue;
   }
   const index=Number(owner.dataset.messageQuoteLeaf),leaf=map.leaves[index];
-  if(!leaf||owner.textContent!==node.textContent||node.textContent!==leaf.value)return {error:'Use Choose passage for transformed source text.',source:map.source};
+  if(!leaf||owner.textContent!==node.textContent||node.textContent!==leaf.value)return {error:'This transformed text cannot be quoted exactly.',source:map.source};
   const prefix=root.ownerDocument.createRange();prefix.selectNodeContents(node);prefix.setEnd(leafRange.startContainer,leafRange.startOffset);
   const from=prefix.toString().length,to=from+leafRange.toString().length;
   selected.push({leaf:index,from,to});
  }
- if(edgeSeparators.some(at=>at===0||at===selected.length))return {error:'Use Choose passage to include this boundary whitespace exactly.',source:map.source};
+ if(edgeSeparators.some(at=>at===0||at===selected.length))return {error:'This boundary whitespace cannot be quoted exactly.',source:map.source};
  const result=quoteSpans(map,selected);
  return result&&{...result,source:map.source,root,range:range.cloneRange()};
 }

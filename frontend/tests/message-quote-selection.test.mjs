@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import ReactMarkdown from 'react-markdown';
@@ -13,6 +14,12 @@ const mapped=source=>{
 };
 const all=map=>map.leaves.map((leaf,index)=>({leaf:index,from:0,to:leaf.value.length}));
 const excerpt=result=>result.spans.map(s=>[...result.source].slice(s.start,s.end).join('')).join('');
+test('quote UI has no passage picker, footer or fallback entry point',()=>{
+ for(const name of ['message-interactions.jsx','message-interactions.css','message-quote-selection.js']){
+  const source=readFileSync(new URL('../src/'+name,import.meta.url),'utf8');
+  assert.doesNotMatch(source,/Choose passage|PassagePicker|choosePassage|a-quote-picker|a-quote-fallback|Message source for quotation/,name);
+ }
+});
 test('formatting and paragraph separators quote exact raw spans, not the enclosing syntax',()=>{
  const {map}=mapped('**one**\n\n*two*');
  const result=quoteSpans(map,all(map));

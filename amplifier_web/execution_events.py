@@ -61,6 +61,7 @@ class ExecutionEvents:
         self.root_id, self.emit = root_id, emit
         self.producer_id = str(uuid.uuid4())
         self.turn_id = None
+        self.admission_inputs = {}
         self.calls = {}
         self.children = {}
         self.last_foreground_provider = {}
@@ -92,7 +93,12 @@ class ExecutionEvents:
 
     def lifecycle(self, event):
         kind = event.get("type")
-        if (kind == "input.delivered" and event.get("source", "user") == "user"
+        sid = event.get('sessionId') or event.get('session_id') or self.root_id
+        if sid == self.root_id and kind == 'generation.started':
+            self.admission_inputs[sid] = event.get('initial_input_id')
+        elif sid == self.root_id and kind == 'input.delivered' and not event.get('target_generation_id'):
+            self.admission_inputs[sid] = event.get('input_id')
+        if (sid == self.root_id and kind == "input.delivered" and event.get("source", "user") == "user"
                 and not event.get('target_generation_id')):
             self.turn_id = event.get("input_id") or self.turn_id
         elif kind == "child.updated":
@@ -105,6 +111,11 @@ class ExecutionEvents:
             previous = self.children.get(identity, {})
             if event.get("runId") and event["runId"] != previous.get("runId"):
                 previous = {}
+            # A returning root observation owns a new admission input while its
+            # display ancestry stays on the original user turn. Existing child
+            # runs retain their spawning input; a later root cannot renew them.
+            self.admission_inputs[identity] = (self.admission_inputs.get(identity)
+                if previous else parent.get('admissionInputId', self.admission_input(parent_sid)))
             from .delegate_exchange import worker_id
             row = {"id": worker_id(identity, call_id), "parentId": parent.get("id") or previous.get("parentId"),
                    "turnId": previous.get("turnId") or parent.get("turnId") or self.turn_id,
@@ -145,8 +156,12 @@ class ExecutionEvents:
         child = self.children.get(sid)
         return (child["id"], child.get("turnId")) if child else (None, self.turn_id)
 
+    def admission_input(self, sid):
+        return self.admission_inputs.get(sid, self.admission_inputs.get(self.root_id, self.turn_id))
+
     async def _begin_provider_call(self, sid, provider, request, *, label=None):
         parent,turn = self.parent(sid)
+        admission_input = self.admission_input(sid)
         purpose=CALL_PURPOSE.get()
         if purpose:parent,turn=None,purpose.get('turnId',turn)
         info = provider.get_info()
@@ -155,6 +170,7 @@ class ExecutionEvents:
         defaults = (info.get("defaults", {}) if isinstance(info, dict) else getattr(info,"defaults",{})) or {}
         provider_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", type(provider).__name__)
         row = {"id":"llm:"+str(uuid.uuid4()),"parentId":parent,"turnId":turn,"sessionId":sid,
+               "admissionInputId":admission_input,
                "rootSessionId":self.root_id,"producerId":self.producer_id,"kind":"llm","phase":"running","label":label or (purpose["label"] if purpose else "Model call"),
                "provider":str(provider_id)[:160],
                "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
@@ -334,6 +350,7 @@ class ExecutionEvents:
                 return
             key = (sid, call)
             row = self.calls.get(key) or {"id": f"tool:{sid}:{call}", "parentId": parent, "turnId": turn,
+                "admissionInputId": self.admission_input(sid),
                 "sessionId": sid, "rootSessionId": self.root_id, "kind": "tool", "toolCallId": call,
                 "label": str(data.get("tool_name") or "Tool")[:120], "startedAt": now}
             row = dict(row)

@@ -50,7 +50,7 @@ def library(monkeypatch):
             return value
         return call
     lib = SimpleNamespace(
-        export_repository_snapshot=record('snapshot', Value(snapshot_commit='exact', snapshot_tree='tree', archive_sha256='digest')),
+        export_repository_snapshot=record('snapshot', Value(snapshot_commit='exact', snapshot_tree='tree', archive_sha256=hashlib.sha256(b'source').hexdigest())),
         launch_id=record('identity', 'owned'),
         launch=record('launch', Value(id='owned', state='running', services=[])),
         push_files=record('push', Value()),
@@ -76,7 +76,7 @@ def payload(tmp_path, action):
     (tmp_path/'source.tar').write_bytes(b'source')
     return {'rootOwner': 'parent-root', 'expectedBackendIdentity': {'backend': 'docker', 'daemon': 'fixture-daemon'}, 'action': action, 'root': str(tmp_path), 'source': '/approved/task/worktree',
             'resourceId': 'fixture-resource', 'resourceRevision': 9, 'admissionRevision': 8, 'backendKey': 'fixture-config-key',
-            'snapshot': {'snapshot_commit': 'exact', 'snapshot_tree': 'tree', 'archive_sha256': 'digest'},
+            'snapshot': {'snapshot_commit': 'exact', 'snapshot_tree': 'tree', 'archive_sha256': hashlib.sha256(b'source').hexdigest()},
             'operationId': 'durable-launch', 'universeId': 'owned', 'dockerHost': 'unix:///approved/docker.sock',
             'image': owner.APPROVED_IMAGE, 'requestId': 'stable-request', 'timeoutSeconds': 12, 'command': 'python -V',
             'admissionRoot': str(tmp_path / 'admission')}
@@ -111,7 +111,7 @@ def test_start_copies_exact_snapshot_without_host_mount(library, tmp_path):
     assert launch[2]['config']['state_root'] == tmp_path / 'backend'
     assert next(item for item in calls if item[0] == 'push')[1] == ('owned', tmp_path / 'source.tar', '/artifacts/.source.tar')
     assert next(item for item in calls if item[0] == 'execute')[2]['max_output_bytes'] == 32768
-    assert "filter='data'" in next(item for item in calls if item[0] == 'execute')[1][1]
+    assert "filter='data'" in shlex.split(next(item for item in calls if item[0] == 'execute')[1][1])[2]
     assert worker.source_ready(tmp_path, 'owned', payload(tmp_path, 'read')['snapshot'])
 
 

@@ -46,6 +46,26 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   original queue outcome, notifications and operation receipts remain unchanged.
   Reading does not rerun a check, export files, remove a guest or release an
   uncertain reservation. Missing or conflicting evidence keeps the original view.
+- The existing host queue maintenance also checks retained local machine
+  reservations without opening their chats or starting a model. At most once
+  every 30 seconds it visits up to 32 canonical allocation records, rotating
+  through older pages and probing at most one exact native owner. Only a proven
+  stopped or absent environment with settled launch admission releases its CPU
+  and memory allowance. A running owner, incomplete preparation, unavailable or
+  changed backend, busy resource, or conflicting observation keeps the allowance
+  held. Shutdown, update activation and runtime replacement fence the pass and
+  its final settlement. The additive `reservationRecovery` receipt preserves
+  every original uncertain operation, storage owner, source and result archive.
+  Registered target reservations remain the target controller's responsibility;
+  this maintenance does not scan other installations or issue remote work.
+- After reviewing an exact completed check, the requester can use the
+  `notificationReview` handle from these test reads with
+  `coordination.acknowledge` and a stable command ID. This retires only that
+  result’s still-queued notification. It never cancels accepted input, changes
+  the check outcome or its qualification, or retries an uncertain effect. Reads
+  alone never acknowledge. Stop, cancellation, changed placement/task or a newer
+  outcome invalidate an old review; later changed outcomes remain eligible for
+  notification. Checks submitted with `notify:false` need no acknowledgment.
 - Cancellation before admission starts no command. New admitted checks run in a
   durable guest supervisor, independent of host request/connection lifetime.
   Cancellation requests termination of the exact command group; the supervisor

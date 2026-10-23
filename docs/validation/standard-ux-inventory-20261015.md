@@ -1053,7 +1053,8 @@ The same journey checks compact writing-wrapper containment and narrow layout;
 it does not substitute quote-shaped Markdown for immutable source identity.
 The Composer and Peer owners above and the frozen baseline remain unchanged.
 The same owner also exercises nearby rendered-text selection, exact raw spans
-across supported formatting, explicit transformed/boundary-text fallback,
+across supported formatting, explained rejection of transformed/boundary text
+without adding a quote or opening an editor,
 selection-receipt ownership, source changes and chat changes. Scrolled-card
 checks use readable text and control hit tests at narrow/enlarged sizes, not
 only element presence. Quote-only height is bounded while ordinary drafts

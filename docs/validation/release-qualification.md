@@ -107,6 +107,26 @@ If the source has changed, build that source again instead of importing old outp
 This repair artifact never supplies release qualification or skips checks. The
 existing successful-run proof and committed-assets requirement still apply.
 
+Review generated assets through exact source identity, the verified file/hash
+manifest and the resulting diff. Do not read every minified bundle into model
+context before importing verified build output. A tool's read-before-edit rule
+still applies when editing source through that tool; it is not a requirement to
+read each generated file before a checked archive import. Preserve local changes
+and reject changed inputs, unexpected paths or links before copying.
+
+### Efficient post-release monitoring
+
+Assign one monitor the exact published source and workflow run IDs. Passive
+watching should wait for completion, not wake a model for each progress line.
+With Bash, use a direct `action: run` with an explicit supported timeout and a
+bounded/private progress log, then read the exact GitHub conclusion. Managed
+`wait` wakes on output as well as completion; `wait_ms` does not extend the
+process's start-time lifetime. Do not nest a long wait inside a shorter
+`tool_exec` deadline. If the lifetime expires, inspect that exact remote run
+before renewing within the original task deadline. Keep actual failures and
+cancellation visible. This is a bounded tool call, not a durable detached watch
+or authority to retry publishing, replay work or adopt the release on a host.
+
 ## Local-first, fast publication policy (updated October 14, 2026)
 
 The development loop depends on published releases reaching local development
