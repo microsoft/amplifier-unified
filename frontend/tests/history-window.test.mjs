@@ -21,3 +21,15 @@ test('cursor loading and failure are distinct from canonical hydration',()=>{
  assert.equal(conversationHistoryPending(undefined),false);
  assert.equal(conversationHistoryPending({historyLoading:true,messages:[]},false,[{id:'outbox'}]),false);
 });
+
+test('canonical hydration cannot hide retained or newly arriving conversation content',()=>{
+ const loading={historyLoaded:false,historyLoading:true};
+ for(const messageWindow of [undefined,{offset:40},{mode:'cursor'}]){
+  const session={...loading,messageWindow,messages:[{id:'retained'}]};
+  assert.equal(conversationHistoryPending(session),false);
+  assert.equal(conversationHistoryPending({...session,messages:[]},false,[{id:'outbox'}]),false);
+  assert.equal(conversationHistoryPending({...session,messages:[],streaming:'Live response'}),false);
+  assert.equal(conversationHistoryPending({...session,messages:[]}),true);
+  assert.equal(conversationHistoryPending(session,true),true,'A new navigation owner still gates the old page');
+ }
+});

@@ -17,6 +17,7 @@ from .components import declarations, git_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
+_KNOWN_PROVIDER_SOURCES = json.loads((Path(__file__).parents[1] / 'provider_sources.json').read_text())
 
 
 def redact(value):
@@ -325,6 +326,24 @@ def _apply_settings(bundle, config):
             else:
                 values.append(expand_environment(row))
         setattr(bundle, kind, values)
+    # Foundation intentionally skips source-less rows during preparation and
+    # will not let another account's prepared module stand in at mount time.
+    # Bind the source while composing ordinary host settings, before that
+    # boundary. Do not copy credentials/config or rewrite explicit sources.
+    sources = {}
+    for row in bundle.providers:
+        if row.get('source'):
+            sources.setdefault(row['module'], set()).add(row['source'])
+    for row in bundle.providers:
+        if row.get('source'):
+            continue
+        module = row['module']
+        explicit = settings.get('overrides', {}).get(module, {}).get('source') or settings.get('sources', {}).get('modules', {}).get(module)
+        candidates = sources.get(module, set())
+        source = explicit or (next(iter(candidates)) if len(candidates) == 1 else
+                              _KNOWN_PROVIDER_SOURCES.get(module) if not candidates else None)
+        if source:
+            row['source'] = expand_environment(source)
     # Context and orchestrator are modules too (e.g. context-simple.token_meter).
     for kind in ("context", "orchestrator"):
         row = bundle.session.get(kind)
