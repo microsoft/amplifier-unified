@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from amplifier_web.coordination_guidance import ROOT_SCOPE_MESSAGE
 from amplifier_web.management import Management
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.runtime_controls import override_path
@@ -29,7 +30,7 @@ MODULE = 'patch-fixture'
 SECRET = 'synthetic-secret-must-never-enter-placement-projection'
 PEER_REFUSAL = ('A user must explicitly perform this peer mutation; collaboration '
                 'does not grant stop, worker or settings authority.')
-CHILD_REFUSAL = "A child cannot borrow its root's collaboration authority."
+CHILD_REFUSAL = ROOT_SCOPE_MESSAGE
 
 
 def require_contract():
