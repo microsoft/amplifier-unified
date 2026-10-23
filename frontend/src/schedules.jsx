@@ -12,6 +12,7 @@ const unknown=record=>record?.runs?.some(run=>run.phase==='unknown');
 const missedLabel=value=>value==='skip'?'Skip occurrences more than a minute late':'Run only the latest missed occurrence';
 const notifyLabel=value=>value==='changes'?'Changes and failures':value==='always'?'Every result and failure':'Failures only';
 const repeats=spec=>spec.kind==='interval'?`Every ${spec.intervalSeconds/60} minutes`:spec.kind==='weekly'?`Weekly: ${(spec.weekdays||[]).map(day=>['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(', ')} at ${spec.localTime}`:spec.kind==='once'?`Once: ${spec.startAt||`${spec.startDate} ${spec.localTime}`}`:`Daily at ${spec.localTime}`;
+const startDate=spec=>spec.startAt?localFields(spec.startAt,spec.timezone).startDate:spec.startDate;
 // Private browser-tab drafts only: no backend writes, preview hashes or authority.
 // Remounting a panel restores details, never a previous confirmation.
 const retainedDrafts=new Map();
@@ -147,6 +148,7 @@ function OwnerScheduleControls({session,act,focused}){
  return <section className="a-settings-section a-schedule-editor" aria-label="Scheduled work" data-part="schedules">
   <h3>Scheduled work</h3>
   <p className="a-schedule-editor-owner">Owning chat: <strong>{session.title||'Untitled chat'}</strong></p>
+  <p className="a-caption">Workspace: <span data-part="schedule-owner-workspace">{session.workspace||'Unavailable'}</span></p>
   <p>Save instructions for this chat to run later. Each run uses normal tool permissions. Stops and changes to the reviewed configuration require schedule review.</p>
   <div className="a-dialog-actions">
    <button type="button" ref={editing?undefined:triggerRef} className="a-primary" onClick={createSchedule} aria-expanded={!editing&&open} aria-controls="schedule-editor-form">Create schedule</button>
@@ -196,6 +198,7 @@ function OwnerScheduleControls({session,act,focused}){
     <h4 ref={reviewHeading} tabIndex={-1}>Confirm scheduled work</h4>
     <p>{visibleReview.binding.prompt}</p>
     <p>Owning chat: {session.title||'Untitled chat'}</p>
+    <p>Workspace: {session.workspace}</p>
     {visibleReview.binding.destination==='new_task'?<div data-part="schedule-destination-preview">
      <p>Create a new task for each run: {visibleReview.binding.newTaskTitle}</p>
      <p>Workspace: {visibleReview.binding.newTaskConfiguration.workspace}</p>
@@ -206,6 +209,7 @@ function OwnerScheduleControls({session,act,focused}){
     <dl>
      <dt>Purpose</dt><dd>{visibleReview.binding.kind==='monitor'?'Monitor changes':'Work on the saved instructions'}</dd>
      <dt>Repeats</dt><dd>{repeats(visibleReview.binding.spec)} ({visibleReview.binding.spec.timezone})</dd>
+     <dt>Start date</dt><dd>{startDate(visibleReview.binding.spec)} ({visibleReview.binding.spec.timezone})</dd>
      <dt>Missed runs</dt><dd>{missedLabel(visibleReview.binding.missedRunPolicy)}</dd>
      <dt>Notifications</dt><dd>{notifyLabel(visibleReview.binding.notificationPolicy)}</dd>
     </dl>
