@@ -260,6 +260,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "amplifier-module-tool-filesystem"
+version = "1.0.0"
+source = { git = "https://github.com/microsoft/amplifier-module-tool-filesystem?rev=663f26a878ae71e136f439fa73ded52b2eb24174#663f26a878ae71e136f439fa73ded52b2eb24174" }
+
+[[package]]
+name = "amplifier-module-tool-skills"
+version = "1.0.0"
+source = { git = "https://github.com/microsoft/amplifier-bundle-skills?subdirectory=modules%2Ftool-skills&rev=2f58408a879535df36da5c92d2b073f49271ade4#2f58408a879535df36da5c92d2b073f49271ade4" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[[package]]
 name = "amplifier-unified"
 version = "0.27.8"
 source = { editable = "." }
@@ -304,6 +317,8 @@ dev = [
     { name = "amplifier-module-context-simple" },
     { name = "amplifier-module-hook-context-intelligence" },
     { name = "amplifier-module-loop-live" },
+    { name = "amplifier-module-tool-filesystem" },
+    { name = "amplifier-module-tool-skills" },
     { name = "hatchling" },
     { name = "pytest" },
     { name = "pytest-aiohttp" },
@@ -347,6 +362,8 @@ dev = [
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=db641363013ff906b656f49498a87ab01f5c506f" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=76073827ba6742ae026a12b524f596120cd2b314" },
+    { name = "amplifier-module-tool-filesystem", git = "https://github.com/microsoft/amplifier-module-tool-filesystem?rev=663f26a878ae71e136f439fa73ded52b2eb24174" },
+    { name = "amplifier-module-tool-skills", git = "https://github.com/microsoft/amplifier-bundle-skills?subdirectory=modules%2Ftool-skills&rev=2f58408a879535df36da5c92d2b073f49271ade4" },
     { name = "hatchling", specifier = ">=1.27" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-aiohttp", specifier = ">=1.1" },
