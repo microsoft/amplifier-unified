@@ -148,7 +148,7 @@ async def mount(coordinator, config=None):
                 'instance_id': 'fixture', 'reason_code': 'provider_mount_failed',
                 'guidance': REMEDIATION['provider_mount_failed'],
                 'diagnostic': {'stage': 'mount', 'category': 'unknown',
-                               'errorType': 'ValueError'}}], exc.failures
+                               'errorType': 'Error'}}], exc.failures
         else:
             raise AssertionError('Broken replacement was accepted')
         saved, metadata = saved_history(store, sid)
