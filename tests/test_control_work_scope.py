@@ -73,6 +73,23 @@ async def test_idle_control_uses_exact_host_check_without_loop_witness_or_replay
     assert len(f.effects) == len(f.requests) == 1
 
 
+async def test_host_check_can_finish_after_short_observation_timeout(app):
+    f = await controlled(app)
+    originating_task = asyncio.current_task()
+    async def host(operation, arguments):
+        # An otherwise healthy host can queue this read behind other work.
+        # It still owns the admission decision and transport deadline.
+        await asyncio.sleep(1.6)
+        assert asyncio.current_task() is originating_task
+        return await f.host(operation, arguments)
+    f.worker.bridge = host
+    result = await invoke(f)
+    assert result['result']['success']
+    assert f.effects == [{'value': 'original'}]
+    assert len(f.requests) == 1
+    assert f.worker.control_invocations == {}
+
+
 @pytest.mark.parametrize('policy', ['deny', 'modify'])
 async def test_policy_runs_before_scope_binds_final_arguments(app, policy):
     f = await controlled(app)
@@ -139,15 +156,16 @@ async def test_current_owner_is_retained_across_approval_and_host_await(app, pha
     assert not f.effects and not f.worker.control_invocations
 
 
-@pytest.mark.parametrize('fault', ['arguments', 'timeout', 'unknown', 'exception', 'cancel', 'task'])
-async def test_changed_arguments_unknown_and_cancelled_checks_never_execute_or_replay(app, monkeypatch, fault):
+@pytest.mark.parametrize('fault', ['arguments', 'timeout', 'connection', 'unknown', 'exception', 'cancel', 'task'])
+async def test_changed_arguments_unknown_and_cancelled_checks_never_execute_or_replay(app, fault):
     f = await controlled(app)
     async def host(operation, arguments):
         f.requests.append(copy.deepcopy(arguments))
         if fault == 'arguments':
             f.events[0][1]['tool_input']['value'] = 'redirected'
         elif fault == 'timeout':
-            await asyncio.Event().wait()
+            raise TimeoutError('canonical transport deadline')
+        elif fault == 'connection': raise ConnectionError('private transport details')
         elif fault == 'unknown': return {}
         elif fault == 'exception': raise RuntimeError('connection lost')
         elif fault == 'cancel': raise asyncio.CancelledError()
@@ -157,13 +175,17 @@ async def test_changed_arguments_unknown_and_cancelled_checks_never_execute_or_r
             return {'allowed': False}
         return {'allowed': True}
     f.worker.bridge = host
-    monkeypatch.setattr('amplifier_web.runtime_worker.WORK_EFFECT_TIMEOUT', .01)
     if fault in {'exception', 'cancel'}:
         with pytest.raises(RuntimeError if fault == 'exception' else asyncio.CancelledError):
             await invoke(f)
     else:
         result = await invoke(f)
-        assert result['result']['error']['code'] == 'work_precondition_unavailable'
+        error = result['result']['error']
+        expected = {'timeout': 'work_check_timeout', 'connection': 'work_check_unavailable'}
+        assert error['code'] == expected.get(fault, 'work_precondition_unavailable')
+        if fault in expected:
+            assert 'The tool was not run.' in error['message']
+            assert 'private transport details' not in error['message']
     assert not f.effects and len(f.requests) == 1 and not f.worker.control_invocations
 
 
