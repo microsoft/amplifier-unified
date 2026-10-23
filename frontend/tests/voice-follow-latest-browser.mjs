@@ -43,7 +43,14 @@ try {
  const observerPane=observer.locator('.a-messages');await expect(observerPane).toContainText('Spoken item '+sequence+'\n');
  await observerPane.evaluate(el=>{el.dispatchEvent(new WheelEvent('wheel',{deltaY:-800}));el.scrollTop=1000;el.dispatchEvent(new Event('scroll'))});
  await workReady(observer);const observerTop=await observerPane.evaluate(el=>el.scrollTop);
+ // Starting this client's call intentionally follows speech even when it was
+ // reading earlier history; another observing client's position is independent.
+ await scrollBack();assert.ok(await remaining()>500);
  await action('call.start');await page.getByRole('button',{name:'End call',exact:true}).waitFor();await bottom();
+ // A wheel gesture toward newer messages at the bottom cannot move the pane.
+ // It must not silently pause follow-latest for the next spoken fragment.
+ const bottomBox=await pane.boundingBox();await page.mouse.move(bottomBox.x+bottomBox.width/2,bottomBox.y+bottomBox.height/2);
+ await page.mouse.wheel(0,500);await page.waitForTimeout(100);await bottom();
  await append(call,2);await bottom();
  // A retained user bubble can still receive a late fragment after an assistant
  // reply. Growth above that reply must not strand it below the viewport. New
