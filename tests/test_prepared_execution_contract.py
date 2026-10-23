@@ -233,7 +233,72 @@ def test_failed_packaging_prerequisite_does_not_block_source_checks(tmp_path, mo
     observed = []
     monkeypatch.setattr(guest, 'run', lambda *args, **kwargs: observed.append(args))
     guest.verify_contract({**expected, 'pythonBuild': value})
-    assert len(observed) == 1 and observed[0][0] == expected['python']
+    assert observed == [(expected['python'], '-c', 'import sys; assert sys.version_info >= (3, 13)'),
+                        ('ps', '-axo', 'command=')]
+
+
+@pytest.mark.parametrize('outcome', ['missing', 'nonzero', 'success'])
+def test_contract_requires_successful_process_listing(tmp_path, monkeypatch, capfd, outcome):
+    # Real subprocess execution with a synthetic executable, not proof that the
+    # managed image has procps installed. No host process list is inspected.
+    monkeypatch.setenv('PATH', str(tmp_path))
+    if outcome != 'missing':
+        executable = tmp_path / 'ps'
+        executable.write_text(
+            f'#!{sys.executable}\nimport sys\n'
+            'assert sys.argv[1:] == ["-axo", "command="]\n'
+            'print("synthetic-private-process-argument")\n'
+            f'raise SystemExit({1 if outcome == "nonzero" else 0})\n')
+        executable.chmod(0o700)
+    contract = {**profiles.execution_contract('python-project'), 'python': sys.executable,
+                'pythonBuild': {'available': False}}
+    if outcome == 'success':
+        guest.verify_contract(contract)
+    else:
+        expected = FileNotFoundError if outcome == 'missing' else subprocess.CalledProcessError
+        with pytest.raises(expected):
+            guest.verify_contract(contract)
+    captured = capfd.readouterr()
+    assert 'synthetic-private-process-argument' not in captured.out + captured.err
+
+
+@pytest.mark.parametrize('mode', ['cold', 'finalize'])
+@pytest.mark.parametrize('failure', ['missing', 'nonzero'])
+def test_failed_process_preflight_never_publishes_usable_contract(tmp_path, monkeypatch, mode, failure):
+    prefix = tmp_path / 'prepared'
+    plan_path = tmp_path / 'plan.json'
+    plan_path.write_text(json.dumps({
+        'profileId': 'python-project', 'preparationId': 'fixture',
+        'sourceSha256': 'a' * 64, 'lockfiles': [], 'pythonProject': False,
+        'dependencyMode': mode, 'executionContract': profiles.execution_contract('python-project'),
+    }))
+    monkeypatch.setattr(guest, 'PREFIX', prefix)
+    monkeypatch.setattr(guest, 'Path', lambda value: {
+        '/prepare/plan.json': plan_path, '/tmp/build-home': tmp_path / 'build-home',
+    }.get(str(value), Path(value)))
+    monkeypatch.setattr(guest.os, 'environ', dict(os.environ))
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        if args == ('ps', '-axo', 'command='):
+            assert kwargs == {'capture': True}
+            if failure == 'missing':
+                raise FileNotFoundError('ps')
+            raise subprocess.CalledProcessError(1, args)
+        return 'fixture' if kwargs.get('capture') else None
+
+    monkeypatch.setattr(guest, 'run', run)
+    with pytest.raises(FileNotFoundError if failure == 'missing' else subprocess.CalledProcessError):
+        guest.main()
+    assert calls[-1] == ('ps', '-axo', 'command=')
+    if mode == 'cold':
+        assert any(args[:2] == ('apt-get', 'install') and 'procps' in args for args in calls)
+    else:
+        assert not any(args[0] == 'apt-get' for args in calls)
+    assert not (prefix / 'execution-contract.json').exists()
+    assert not (prefix / 'inventory.json').exists()
+    assert not (prefix / 'plan.json').exists()
 
 
 @pytest.mark.parametrize('error', [TimeoutError('deadline'), subprocess.TimeoutExpired('probe', 1), KeyboardInterrupt()])
