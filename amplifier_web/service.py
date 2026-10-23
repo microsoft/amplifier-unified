@@ -988,7 +988,7 @@ class AppService:
         if worktrees is not None:
             worktrees.resolve_placements(session_ids)
         if getattr(self, 'event_log_view', None) is not None:
-            self.event_log_view.invalidate(session_ids)
+            self.event_log_view.invalidate(session_ids, notify=False)
         if session_ids is None:
             self._history_local_revision += 1
         detail_only = getattr(self, '_publish_detail_only', False)
@@ -1233,7 +1233,7 @@ class AppService:
         if session_ids is not None:
             session_ids = set(session_ids) | handoff_sources
         if getattr(self, 'event_log_view', None) is not None:
-            self.event_log_view.invalidate(session_ids)
+            self.event_log_view.invalidate(session_ids, notify=False)
         # A mixed publication commits the union, never just the newer writer's
         # scope. Unknown writers retain the conservative complete-save path.
         if getattr(self, '_progress_dirty', False):
@@ -1332,6 +1332,8 @@ class AppService:
         self._progress_record_only = True
         self._progress_global_keys = set()
         self._progress_publish_error = None
+        if getattr(self, 'event_log_view', None) is not None:
+            self.event_log_view.flush_work_notifications()
         from .history_residency import retire
         try:
             retire(self)
@@ -1341,7 +1343,7 @@ class AppService:
     def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=(), stream=False):
         """Batch stream/progress updates; final responses and approvals flush now."""
         if getattr(self, 'event_log_view', None) is not None:
-            self.event_log_view.invalidate(session_ids)
+            self.event_log_view.invalidate(session_ids, notify=False)
         if not getattr(self, '_progress_dirty', False):
             self._progress_session_ids = set(session_ids) if session_ids is not None else None
             self._progress_detail_only = detail_only
@@ -4319,7 +4321,7 @@ class AppService:
             from .conversation_steering import observe as observe_steering
             try:
                 for kind, payload in events:
-                    self.event_log_view.invalidate({session['id']})
+                    self.event_log_view.invalidate({session['id']}, notify=False)
                     self.diagnostics.runtime_event(kind, payload, session)
                     runtime_activity(session, kind, payload)
                     self._ingest_runtime_execution(session, payload)
@@ -4345,7 +4347,6 @@ class AppService:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
                 return
-            self.event_log_view.invalidate({session['id']})
             if kind == 'worker.updated' and payload.get('activityOnly'):
                 worker = next((w for w in session.get('workers', []) if w['id'] == payload.get('id')), None)
                 # Progress is not lifecycle authority. Delayed hooks cannot
@@ -4357,6 +4358,7 @@ class AppService:
                 payload = {**{key: payload[key] for key in (
                     'sessionId', 'id', 'phase', 'detail', 'updatedAt', 'retryAttempt', 'retryMax') if key in payload},
                     'status': worker['status'], 'activityOnly': True}
+            self.event_log_view.invalidate({session['id']}, notify=False)
             self.diagnostics.runtime_event(kind,payload,session)
             from .chat_navigation import runtime_activity
             runtime_activity(session, kind, payload)
