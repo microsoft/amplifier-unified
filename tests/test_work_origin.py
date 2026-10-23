@@ -107,7 +107,7 @@ def test_child_assignment_retains_full_inputs_and_expires_with_parent_generation
 
 @pytest.mark.parametrize('fault', ['none', 'work_deny', 'stop_after_await', 'new_input_after_await',
                                  'changed_arguments', 'late_mount', 'timeout', 'check_replaced'])
-async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, monkeypatch, fault):
+async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, fault):
     from amplifier_core import ToolResult, HookResult
     from amplifier_core.message_models import ToolCall
     adapter, child, required = await installed_work_adapter(app)
@@ -133,7 +133,7 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
         stages.append('service')
         witnesses.append(copy.deepcopy(args))
         if fault == 'timeout':
-            await asyncio.Event().wait()
+            raise TimeoutError('canonical transport deadline')
         await asyncio.sleep(0)
         if fault == 'stop_after_await':
             worker.stop_revision += 1
@@ -144,8 +144,6 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
         return {'applicable': True, 'allowed': fault != 'work_deny',
                 'reason': None, 'requiredVersion': required['version'], 'effectAuthorized': False}
     worker.bridge = service
-    if fault == 'timeout':
-        monkeypatch.setattr('amplifier_web.runtime_worker.WORK_EFFECT_TIMEOUT', .01)
     class Probe:
         name = 'probe'
         async def execute(self, value):

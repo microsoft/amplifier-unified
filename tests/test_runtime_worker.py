@@ -189,7 +189,11 @@ async def test_child_transport_cannot_borrow_root_principal_or_generation(worker
     assert PRINCIPAL.get() is None and BINDING.get() is None
     assert app.clients.current.get() is None
 
-async def test_bridge_timeout_emits_bounded_correlated_diagnostic(monkeypatch):
+@pytest.mark.parametrize('operation,args,deadline', [
+    ('dispatch', {'action': 'coordination.wait', 'args': {'waitMs': 60000, 'secret': 'private'}}, 65),
+    ('work.effect.check', {'toolName': 'probe', 'toolInput': {'secret': 'private'}}, 60),
+])
+async def test_bridge_timeout_emits_bounded_correlated_diagnostic(monkeypatch, operation, args, deadline):
     import asyncio
     from amplifier_web import runtime_worker
     worker = runtime_worker.Worker()
@@ -197,15 +201,16 @@ async def test_bridge_timeout_emits_bounded_correlated_diagnostic(monkeypatch):
     emitted = []
     monkeypatch.setattr(runtime_worker, 'publish', emitted.append)
     async def expire(future, timeout):
+        assert timeout == deadline
         future.cancel()
         raise TimeoutError()
     monkeypatch.setattr(asyncio, 'wait_for', expire)
     with pytest.raises(TimeoutError, match='App bridge response timed out'):
-        await worker.bridge('dispatch', {'action': 'coordination.wait', 'args': {'waitMs': 60000, 'secret': 'private'}})
+        await worker.bridge(operation, args)
     diagnostics = [row for row in emitted if row.get('type') == 'runtime.bridge']
     assert [row['phase'] for row in diagnostics] == ['requested', 'timeout']
     assert diagnostics[0]['bridgeId'] == diagnostics[1]['bridgeId']
-    assert diagnostics[1]['timeoutSeconds'] == 65
+    assert diagnostics[1]['timeoutSeconds'] == deadline
     assert diagnostics[1]['generation_id'] == 'g'
     assert 'private' not in str(diagnostics)
     assert not worker.bridges
