@@ -32,8 +32,8 @@ MAX_SOURCE = 512 * 1024**2
 CHUNK = 512 * 1024
 MAX_CONTROL = 1024 * 1024
 MUTATIONS = {'start', 'execute', 'job_start', 'job_cancel', 'stop', 'remove', 'finishCleanup', 'exportArtifacts', 'prepareDependencies', 'cleanupDependencies'}
-ACTIONS = MUTATIONS | {'prepare', 'capacity', 'read', 'job_read', 'reconcile', 'source', 'artifact', 'describe', 'machine.read', 'machine.save', 'cancelPreparation', 'capacity.read', 'capacity.save'}
-PAYLOAD = {'action', 'source', 'backendKey', 'expectedBackendIdentity', 'retentionMode', 'snapshot', 'operationId', 'universeId', 'rootOwner', 'resourceId', 'resourceRevision', 'admissionRevision', 'requestId', 'command', 'jobId', 'profileId', 'resourceRequest', 'timingRequest', 'timeoutSeconds', 'limits', 'offset', 'content', 'archiveIndex', 'exportRequestId', 'expectedRevision'}
+ACTIONS = MUTATIONS | {'prepare', 'capacity', 'read', 'job_read', 'reconcile', 'source', 'artifact', 'describe', 'machine.read', 'machine.save', 'cancelPreparation', 'capacity.read', 'capacity.save', 'isolation', 'receipt'}
+PAYLOAD = {'action', 'source', 'backendKey', 'expectedBackendIdentity', 'retentionMode', 'snapshot', 'operationId', 'universeId', 'rootOwner', 'resourceId', 'resourceRevision', 'admissionRevision', 'requestId', 'command', 'jobId', 'profileId', 'resourceRequest', 'timingRequest', 'timeoutSeconds', 'limits', 'offset', 'content', 'archiveIndex', 'exportRequestId', 'expectedRevision', 'effectAction'}
 
 
 def digest(value):
@@ -306,6 +306,24 @@ def dispatch(request, *, _configuration=None, _engine_owner=None):
             raise ValueError('The original source and target owner are required.')
         if action == 'artifact':
             return artifact(root, payload)
+        if action == 'receipt':
+            effect = payload.get('effectAction')
+            if effect not in MUTATIONS:
+                raise ValueError('Choose an exact retained effect.')
+            intent = {k: v for k, v in payload.items() if k not in {'resourceRevision', 'admissionRevision', 'limits', 'effectAction'}}
+            intent['action'] = effect
+            previous = read(root / ('effect-' + digest([payload.get('requestId'), effect]) + '.json'))
+            if previous and previous['intent'] != intent:
+                raise ValueError('The original effect arguments changed.')
+            return {'ok': True, 'receiptState': previous['state'] if previous else 'missing',
+                    **({'result': previous['result']} if previous and 'result' in previous else {})}
+        if action == 'isolation':
+            from amplifier_web import managed_runner_isolation
+            proof = managed_runner_isolation.inspect({'backend': 'incus', 'incus': config}, root,
+                {'profileId': saved['profileId'], 'resourceRequest': saved['resourceRequest'],
+                 'sessionId': original['rootOwner'], 'launchOperationId': original['operationId'],
+                 'universeId': worker.identity(payload)})
+            return {'ok': True, 'isolation': proof}
         if action in {'execute', 'job_start'}:
             profiles.validate_timeout(saved['profileId'], payload.get('timeoutSeconds'), saved.get('timingRequest'))
         row = row_for(payload)

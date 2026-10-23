@@ -6,6 +6,10 @@ on:
       - 'amplifier_web/registered_test_runners.py'
       - 'amplifier_web/test_runner_routing.py'
       - 'amplifier_web/test_queue.py'
+      - 'amplifier_web/test_runner_enrollment.py'
+      - 'amplifier_web/managed_runner_qualification.py'
+      - 'amplifier_web/test_runner_controller.py'
+      - 'tests/test_runner_enrollment*.py'
       - 'tests/test_runner_routing.py'
       - 'tests/test_registered_test_runner_queue.py'
       - 'amplifier_web/test_environment_configs.py'
@@ -30,7 +34,7 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install 'pytest>=8,<9' 'filelock>=3.20,<4'
       - name: Check origin snapshot, private receipts and target routing without a local runner
-        run: python -m pytest -q tests/test_remote_test_origins.py --junitxml=origin-results.xml
+        run: python -m pytest -q tests/test_remote_test_origins.py tests/test_runner_enrollment_origin.py --junitxml=origin-results.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -48,7 +52,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --group dev
       - name: Check queued routing across approved machines
-        run: uv run --no-sync pytest -q tests/test_runner_routing.py tests/test_registered_test_runner_queue.py --junitxml=routing-results.xml
+        run: uv run --no-sync pytest -q tests/test_runner_routing.py tests/test_registered_test_runner_queue.py tests/test_runner_enrollment.py tests/test_registered_test_runner_recovery.py --junitxml=routing-results.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:

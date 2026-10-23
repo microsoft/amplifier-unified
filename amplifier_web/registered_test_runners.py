@@ -18,7 +18,7 @@ import time
 
 from . import test_capacity_settings as capacity
 
-FILES = ('incus_engine_core_binding.py', 'managed_runner_binding.py', 'incus_engine_generations.py', 'managed_runner_identity.py', 'incus_engine_probe.py',
+FILES = ('managed_runner_isolation.py', 'incus_engine_core_binding.py', 'managed_runner_binding.py', 'incus_engine_generations.py', 'managed_runner_identity.py', 'incus_engine_probe.py',
          'managed_incus_target.py', 'test_runner_backend_policy.py', 'test_runner_controller.py', 'incus_environment_worker.py', 'test_environment_worker.py',
          'test_host_resources.py', 'test_environment_profiles.py', 'environment_retention.py',
          'test_job_transport.py', 'test_environment_preparation.py', 'test_dependency_layers.py', 'test_environment_prepare_guest.py',
@@ -36,12 +36,15 @@ if hashlib.sha256(json.dumps(v['files'],sort_keys=True).encode()).hexdigest()!=v
 home=pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir)
 p=pathlib.Path(v['configPath']) if v['configPath'] else home/'.amplifier-unified/test-environments.json'
 if not p.is_absolute() or any(x.is_symlink() for x in (p,*p.parents)): raise ValueError('bad config path')
+if not p.exists():
+ print(json.dumps({'error':'setup-required'}));sys.exit(0)
 f=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
 with os.fdopen(f) as s:
  i=os.fstat(s.fileno())
  if not stat.S_ISREG(i.st_mode) or i.st_uid!=os.getuid() or i.st_mode&0o077 or i.st_size>65536: raise ValueError('bad config')
  c=json.load(s)
-if c.get('enabled') is not True or c.get('backend')!='incus': raise ValueError('Set up the target Incus runner first')
+if c.get('enabled') is not True or c.get('backend')!='incus':
+ print(json.dumps({'error':'setup-required'}));sys.exit(0)
 config=c['incus']; config_digest=hashlib.sha256(json.dumps(config,sort_keys=True).encode()).hexdigest()
 root=home/'.local/share/amplifier-test-runners'/v['digest']/config_digest
 if any(x.is_symlink() for x in (root,*root.parents)): raise ValueError('linked package')
@@ -68,11 +71,26 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+class ConnectionFailure(ValueError):
+    """Only fixed plain-language diagnostics, never remote stderr or secrets."""
+
+
+def connection_failure(code):
+    return ConnectionFailure({
+        'setup-required': 'Testing is not set up on this machine. Open its Amplifier Settings, set up a native Linux Incus test runner, then connect again.',
+        'trust-required': 'This machine’s SSH identity is not trusted or has changed. Verify it using your normal SSH connection before connecting here.',
+        'authentication-required': 'The saved SSH connection needs sign-in. Configure non-interactive access for this account, then connect again.',
+        'unavailable': 'This machine could not be reached through the saved SSH connection. Check that it is online and the connection works.',
+    }[code])
+
+
 def definitions(schema, string):
     return {
         'testing.runners.read': ('Read globally registered test machines. Does not start tests or reconnect to targets.', schema()),
-        'testing.runners.register': ('Register an already approved SSH machine with its configured native Incus test runner. Installs only this app’s fixed controller in private user storage; uses existing SSH authentication and host-key trust. Global setup authority is required once.', schema({'expectedRevision': string(64), 'connection': string(200), 'name': string(80), 'configPath': string(4096)}, ['expectedRevision', 'connection', 'name'])),
-        'testing.runners.refresh': ('Refresh a registered machine to this app’s verified controller for future checks. Existing owned work retains its original controller and cleanup identity.', schema({'expectedRevision': string(64), 'id': string(64)}, ['expectedRevision', 'id'])),
+        'testing.runners.register': ('Connect and check an approved SSH machine with testing already set up. Installs the fixed controller, waits for existing machine limits, runs a small fixed isolated check and retains its result before cleanup. Only a passed check enables a new machine. Read the saved operation; do not repeat an uncertain request. No host setup or credential copying.', schema({'expectedRevision': string(64), 'requestId': string(200), 'connection': string(200), 'name': string(80), 'configPath': string(4096)}, ['expectedRevision', 'connection', 'name'])),
+        'testing.runners.refresh': ('Check a registered connection with this app’s current controller before replacing it for future work. Existing owned work retains its original controller. A failed check leaves the existing registration unchanged.', schema({'expectedRevision': string(64), 'requestId': string(200), 'id': string(64)}, ['expectedRevision', 'id'])),
+        'testing.runners.enrollment.cancel': ('Cancel the saved connection check. Its original owned effects must settle and clean up before cancellation is confirmed; it never enables the target.', schema({'id': string(32)}, ['id'])),
+        'testing.runners.enrollment.reconcile': ('Observe the original uncertain connection check again. Does not submit a replacement guest or repeat a test.', schema({'id': string(32)}, ['id'])),
         'testing.runners.enable': ('Enable or pause a registered test machine for future checks. Existing owned work keeps its original target and cleanup route.', schema({'expectedRevision': string(64), 'id': string(64), 'enabled': {'type': 'boolean'}}, ['expectedRevision', 'id', 'enabled'])),
         'testing.runners.capacity.read': ('Inspect registered backend limits and their source.', schema({'id': string(64)}, ['id'])),
         'testing.runners.capacity.save': ('Change registered backend limits for future admissions across cooperating controllers on the same target account. Active checks keep running.', schema({'id': string(64), 'expectedRevision': string(64), 'limits': schema({key: {'type': 'integer', 'minimum': 0, 'maximum': capacity.MAXIMUM} for key in ('maxRunning', 'maxInstances', 'minFreeBytes')}, [])}, ['id', 'expectedRevision', 'limits'])),
@@ -90,6 +108,8 @@ def store(app):
         return {'version': 1, 'runners': []}
     if value.get('version') != 1 or not isinstance(value.get('runners'), list) or len(value['runners']) > 16:
         raise ValueError('The test machine settings are invalid.')
+    if not isinstance(value.get('enrollments', []), list) or len(value.get('enrollments', [])) > 32:
+        raise ValueError('The saved connection check list is invalid.')
     return value
 
 
@@ -99,8 +119,11 @@ def publish(app, value):
 
 
 def snapshot(app):
+    from . import test_runner_enrollment as enrollment
     value = store(app)
-    return {'revision': digest(value), 'runners': [{key: row[key] for key in ('id', 'name', 'enabled', 'connection', 'machineId', 'profiles', 'configPath')} for row in value['runners']],
+    return {'revision': digest(value), 'runners': [{**{key: row[key] for key in ('id', 'name', 'enabled', 'connection', 'machineId', 'profiles', 'configPath')},
+            'lastCheck': {key: row.get('lastCheck', {}).get(key) for key in ('status', 'checkedAt', 'profileId', 'requestId')}} for row in value['runners']],
+            'enrollments': enrollment.listing(app, value),
             'scope': 'Approved native Linux Incus machines. Each machine shares its budget across cooperating runners using the same OS account. Pausing a machine affects only new checks.'}
 
 
@@ -112,6 +135,13 @@ def ssh(connection, command, payload, timeout=60, maximum=2*1024*1024):
         raise ValueError('SSH is unavailable on this computer.')
     result = subprocess.run([executable, '-oBatchMode=yes', '-oStrictHostKeyChecking=yes', '-oForwardAgent=no', '-oClearAllForwardings=yes', '-oConnectTimeout=10', connection, shlex.join(command)], input=json.dumps(payload).encode(), capture_output=True, timeout=timeout)
     if result.returncode or len(result.stdout) > maximum:
+        diagnostic = result.stderr[:4096].lower()
+        if b'host key verification failed' in diagnostic or b'remote host identification has changed' in diagnostic:
+            raise connection_failure('trust-required')
+        if b'permission denied' in diagnostic and result.returncode == 255:
+            raise connection_failure('authentication-required')
+        if result.returncode == 255:
+            raise connection_failure('unavailable')
         raise ValueError('The approved test machine did not return a bounded response. Check its SSH connection and configured runner.')
     return json.loads(result.stdout)
 
@@ -144,6 +174,8 @@ def register(connection, name, config_path=''):
         raise ValueError('Give the test machine a short name.')
     package = bundle()
     installed = ssh(connection, ['/usr/bin/python3', '-I', '-B', '-c', INSTALL], {**package, 'configPath': config_path}, timeout=90)
+    if installed.get('error') == 'setup-required':
+        raise connection_failure('setup-required')
     runner = {'connection': connection, 'controller': installed['controller'], 'packageDigest': package['digest'], 'packageFiles': ['__init__.py', *FILES], 'configPath': config_path}
     observed = call(runner, {'action': 'describe'})
     if not observed.get('ok') or observed.get('version') != 1:
@@ -244,6 +276,9 @@ async def dispatch(app, action, args, authority):
     try:
         if action.endswith('.read') and action == 'testing.runners.read':
             return {'accepted': True, 'result': snapshot(app)}
+        if action in {'testing.runners.register', 'testing.runners.refresh', 'testing.runners.enrollment.cancel', 'testing.runners.enrollment.reconcile'}:
+            from . import test_runner_enrollment
+            return await test_runner_enrollment.request(app, action, args, authority)
         if action.startswith(('testing.runners.machine.', 'testing.runners.capacity.')):
             runner = next((r for r in store(app)['runners'] if r['id'] == args['id']), None)
             if runner is None:
@@ -271,33 +306,7 @@ async def dispatch(app, action, args, authority):
                 runner['enabled'] = args['enabled']
                 publish(app, value)
             else:
-                prior_refresh = next((r for r in value['runners'] if r['id'] == args.get('id')), None) if action.endswith('.refresh') else None
-                if action.endswith('.refresh') and prior_refresh is None:
-                    raise ValueError('Choose a registered test machine.')
-                if len(value['runners']) >= 16 and prior_refresh is None:
-                    raise ValueError('At most 16 test machines can be registered.')
-                # Authorization is checked again after bounded setup completes.
-                original_revision = digest(value)
-        if action.endswith(('.register', '.refresh')):
-            settings = prior_refresh if action.endswith('.refresh') else args
-            runner = await asyncio.to_thread(register, settings['connection'], settings['name'], settings.get('configPath', ''))
-            async with app.lock:
-                app.configuration_authority.check(authority)
-                value = store(app)
-                if digest(value) != original_revision:
-                    raise AppError('Test machines changed while connecting. Refresh to finish registration.', 409)
-                prior = next((r for r in value['runners'] if r['id'] == runner['id']), None)
-                if action.endswith('.refresh'):
-                    if prior is None or runner['id'] != args['id']:
-                        raise ValueError('The registered machine identity changed. Register the new target separately.')
-                    runner['enabled'] = prior['enabled']
-                    value['runners'][value['runners'].index(prior)] = runner
-                    publish(app, value)
-                elif prior and prior != runner:
-                    raise ValueError('This machine and account are already registered. Reuse its existing connection; aliases do not create extra budgets.')
-                if prior is None:
-                    value['runners'].append(runner)
-                    publish(app, value)
+                raise ValueError('Unsupported test machine setting.')
         app.test_queue.backoff.clear()
         app.test_queue.wakeup.set()
         app.test_queue.start()

@@ -156,28 +156,37 @@ def test_refresh_changes_only_future_descriptor_and_preserves_paused_preference(
             self.status = status
     monkeypatch.setitem(sys.modules, 'amplifier_web.service', SimpleNamespace(AppError=AppError))
     async def scenario():
+        from amplifier_web import test_runner_enrollment as enrollment
+        from amplifier_web import managed_runner_qualification as qualification
         checks = []
         app = SimpleNamespace(data_dir=tmp_path, lock=asyncio.Lock(),
             configuration_authority=SimpleNamespace(check=lambda authority: checks.append(authority)),
             test_queue=SimpleNamespace(backoff={}, wakeup=asyncio.Event(), start=lambda: None))
+        app.test_queue.app = app
         old = {'id': 'a'*64, 'name': 'test machine', 'enabled': False, 'connection': 'test-target',
                'machineId': 'b'*32, 'profiles': ['linux-python'], 'packageDigest': 'c'*64,
-               'controller': '/old/controller', 'configPath': '/retained/config'}
+               'controller': '/old/controller', 'configPath': '/retained/config', 'incus': {}}
         retained_owner = copy.deepcopy(old)
         client.publish(app, {'version': 1, 'runners': [old]})
         updated = {**old, 'packageDigest': 'd'*64, 'controller': '/new/controller', 'enabled': True}
         if changed_identity:
             updated['id'] = 'e'*64
         monkeypatch.setattr(client, 'register', lambda *args: copy.deepcopy(updated))
+        def qualify(app, path, record, config, **kwargs):
+            qualification.save(path, record, probeState='qualified', proof={'artifactVerified': True, 'probeRemoved': True})
+            return 'qualified'
+        monkeypatch.setattr(qualification, 'advance', qualify)
         args = {'id': old['id'], 'expectedRevision': client.snapshot(app)['revision']}
+        response = await client.dispatch(app, 'testing.runners.refresh', args, 'host-authority')
+        assert response['accepted'] and client.store(app)['runners'] == [old]
+        identity = response['result']['enrollments'][0]['id']
+        await enrollment.run(app.test_queue, identity)
         if changed_identity:
-            with pytest.raises(AppError, match='identity changed'):
-                await client.dispatch(app, 'testing.runners.refresh', args, 'host-authority')
+            assert enrollment.read(app, identity)['status'] == 'failed'
             assert client.store(app)['runners'] == [old]
         else:
-            assert (await client.dispatch(app, 'testing.runners.refresh', args, 'host-authority'))['accepted']
             current = client.store(app)['runners'][0]
             assert current['packageDigest'] == 'd'*64 and current['enabled'] is False
         assert retained_owner == old and retained_owner['packageDigest'] == 'c'*64
-        assert checks == ['host-authority', 'host-authority']
+        assert len(checks) >= 2 and set(checks) == {'host-authority'}
     asyncio.run(scenario())

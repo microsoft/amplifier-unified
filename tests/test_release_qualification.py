@@ -840,9 +840,12 @@ def test_remote_machine_queue_routing_has_a_focused_ci_owner():
     assert all(path in paths for path in (
         'amplifier_web/registered_test_runners.py', 'amplifier_web/test_runner_routing.py',
         'amplifier_web/test_queue.py', 'tests/test_runner_routing.py',
-        'tests/test_registered_test_runner_queue.py'))
+        'tests/test_registered_test_runner_queue.py', 'amplifier_web/test_runner_enrollment.py',
+        'amplifier_web/managed_runner_qualification.py', 'amplifier_web/test_runner_controller.py',
+        'tests/test_runner_enrollment*.py'))
     steps = workflow['jobs']['queue-routing']['steps']
     run = next(step['run'] for step in steps if step.get('name') == 'Check queued routing across approved machines')
     assert run == ('uv run --no-sync pytest -q tests/test_runner_routing.py '
-                   'tests/test_registered_test_runner_queue.py --junitxml=routing-results.xml')
+                   'tests/test_registered_test_runner_queue.py tests/test_runner_enrollment.py '
+                   'tests/test_registered_test_runner_recovery.py --junitxml=routing-results.xml')
     assert any(step.get('if') == 'always()' and step.get('with', {}).get('path') == 'routing-results.xml' for step in steps)
