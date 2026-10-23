@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess
 import sys
 import tarfile
@@ -66,6 +67,7 @@ def test_real_transport_boundaries_and_exact_parts(tmp_path, size):
 @pytest.mark.parametrize('change', ['oversize', 'hash', 'size', 'symlink', 'fifo'])
 def test_invalid_source_refused_without_staging(tmp_path, change):
     path, value = archive(tmp_path)
+    fifo = None
     if change == 'oversize':
         with path.open('wb') as source: source.truncate(transfer.MAX_ARCHIVE + 1)
     elif change == 'hash': value['archive_sha256'] = '0' * 64
@@ -74,9 +76,63 @@ def test_invalid_source_refused_without_staging(tmp_path, change):
         saved = path.with_suffix('.saved'); path.rename(saved); path.symlink_to(saved)
     else:
         path.unlink(); os.mkfifo(path)
-    with pytest.raises((OSError, ValueError)):
-        with transfer.staged(path, value): pytest.fail('invalid source admitted')
-    assert not list(tmp_path.glob('.source-transfer-*'))
+        fifo = path.lstat()
+    try:
+        with pytest.raises((OSError, ValueError)):
+            with transfer.staged(path, value): pytest.fail('invalid source admitted')
+        assert not list(tmp_path.glob('.source-transfer-*'))
+    finally:
+        # Pytest scratch can live in retained /artifacts. Remove only our exact
+        # FIFO, including on assertion failure; keep ordinary failure evidence.
+        if fifo is not None:
+            try:
+                current = path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if stat.S_ISFIFO(current.st_mode) and (current.st_dev, current.st_ino) == (fifo.st_dev, fifo.st_ino):
+                    path.unlink()
+
+
+@pytest.mark.parametrize('unexpected_admission', [False, True])
+def test_fifo_negative_fixture_leaves_preservable_artifacts(tmp_path, monkeypatch, unexpected_admission):
+    from contextlib import contextmanager
+    from amplifier_web import environment_retention as retention
+
+    artifacts = tmp_path / 'artifacts'
+    scratch = artifacts / 'pytest-tmp'
+    scratch.mkdir(parents=True)
+    evidence = artifacts / 'result.txt'
+    evidence.write_text('retained check evidence')
+    if unexpected_admission:
+        @contextmanager
+        def admitted(*args):
+            yield None
+        monkeypatch.setattr(transfer, 'staged', admitted)
+        with pytest.raises(pytest.fail.Exception, match='invalid source admitted'):
+            test_invalid_source_refused_without_staging(scratch, 'fifo')
+    else:
+        test_invalid_source_refused_without_staging(scratch, 'fifo')
+    assert not (scratch / 'source.tar').exists()
+    assert evidence.read_text() == 'retained check evidence'
+    exported = tmp_path / 'artifacts.tar'
+    with tarfile.open(exported, 'w') as output:
+        output.add(artifacts, arcname='artifacts')
+    assert retention.inspect_archive(exported, 'artifacts', archive_only=True) == evidence.stat().st_size
+
+
+def test_fifo_negative_fixture_preserves_replacement_evidence(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def replaced(path, value):
+        path.unlink()
+        path.write_text('replacement diagnostic')
+        raise ValueError('source changed')
+        yield  # pragma: no cover - context manager rejects before admission.
+    monkeypatch.setattr(transfer, 'staged', replaced)
+    test_invalid_source_refused_without_staging(tmp_path, 'fifo')
+    assert (tmp_path / 'source.tar').read_text() == 'replacement diagnostic'
 
 
 @pytest.mark.parametrize('chunked', [False, True])

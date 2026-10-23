@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {ChevronRight,ArrowLeft,HardDrive,Folder,MessagesSquare,Archive,Database,Settings} from 'lucide-react';
 import {ChatDelete} from './chat-delete';
 import {StorageCleanupSettings} from './storage-cleanup-settings';
+import {SavedTestStorage} from './saved-test-storage';
 import './storage-settings.css';
 import {formatStorageBytes as bytes} from './storage-bytes';
 function WorkspaceCleanupResult({result}){return <p role="status">{result.status==='completed'?`Workspace files deleted (${bytes(result.deletedBytes)} of file content). Chat history was retained.`:result.message||'Cleanup was interrupted; inspect the recorded folder before proceeding.'}{result.status!=='completed'&&<code style={{display:'block',overflowWrap:'anywhere'}}>{result.cleanupPath}</code>}</p>}
@@ -80,6 +81,7 @@ export function StorageSettings({act,onPrivacy,navigate}){
  {notice&&<p role="status">{notice}</p>}
  {workspaceResult&&<WorkspaceCleanupResult result={workspaceResult}/>}
  {overview&&<StorageCleanupSettings act={act} navigate={navigate}/>}
+  {overview&&<SavedTestStorage act={act}/>}
  <nav className="a-storage-breadcrumbs" aria-label="Storage navigation">{onPrivacy&&<><button className="a-link" onClick={onPrivacy}>Privacy &amp; files</button><ChevronRight size={14}/></>}{trail.map((entry,index)=><React.Fragment key={index}><button className="a-link" onClick={()=>jump(index)}>{index===0?'Storage':entry.label}</button><ChevronRight size={14}/></React.Fragment>)}<span aria-current="page">{overview?'Storage':data?.label||'Loading…'}</span></nav>
  <div className="a-storage-heading" ref={heading}><div><h3>{overview?'Storage on this host':data?.label||category?.title||'Storage'}</h3></div><button className="a-soft" disabled={!data&&!error} onClick={invalidate}>Refresh storage</button></div>
  {error&&<p role="alert">{error}</p>}{!data&&!error?<p role="status">Opening storage…</p>:data&&<>
