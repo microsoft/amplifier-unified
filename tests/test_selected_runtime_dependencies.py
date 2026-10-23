@@ -3,6 +3,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 from types import SimpleNamespace
 
 import pytest
@@ -119,6 +120,8 @@ async def test_real_selected_dependency_only_recovers_after_exact_branch_proof(t
     content = runtime.augmented_manifest(baseline, [{'kind':'runtime dependency', 'package':NAME,
                                                    'url':url,'ref':old}])
     project = runtime.prepare_project(home, generation, content=content)
+    original_manifest = tomllib.loads(content.decode())
+    assert original_manifest['tool']['amplifier-unified']['generated-source-overrides'][NAME].endswith('@' + old)
     await updates.process(uv, 'sync', '--project', str(project), '--python', sys.executable, timeout=90)
     paths = [str(path) for path in (project / '.venv').glob('lib/python*/site-packages')]
     authored = manifest([NAME + ' @ git+' + url + '@main'])
@@ -137,6 +140,11 @@ async def test_real_selected_dependency_only_recovers_after_exact_branch_proof(t
     manager = SimpleNamespace(home=home, stage_cache_sources=lambda *a: value(None))
     await migration.reconcile(manager, stage, project, lambda: value(collect()))
     saved = json.loads(stage.joinpath('runtime-sources.json').read_text())[NAME]
+    reconciled_manifest = tomllib.loads(project.joinpath('pyproject.toml').read_text())
+    rebound = reconciled_manifest['tool']['amplifier-unified']['generated-source-overrides'][NAME]
+    assert rebound in reconciled_manifest['tool']['uv']['override-dependencies']
+    assert rebound in reconciled_manifest['dependency-groups']['unified-managed-runtime']
+    assert rebound.endswith('@' + (new if ref == 'branch' else old))
     if ref == 'branch':
         assert saved['ref'] == 'main' and saved['revision'] == new
         installed = next(row for row in qualification.installed_graph(project) if row['name'] == NAME)

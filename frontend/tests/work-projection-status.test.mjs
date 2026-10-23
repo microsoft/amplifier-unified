@@ -39,3 +39,27 @@ test('a deterministic loading limit is unavailable without an endless retry spin
  assert.equal(root.root.findAllByProps({'className':'a-progress-spinner'}).length,0);
  await act(async()=>root.unmount());
 });
+
+test('live and retained projection refreshes do not insert a loading row',async()=>{
+ let root;
+ const render=(patch={},messages)=>React.createElement(WorkProjectionStatus,{session:{id:'selected',workProjection:{status:'loading',current:false},...patch},messages});
+ for(const patch of [
+  {messages:[{id:'voice-text',via:'call'}]},
+  {messages:[{id:'typed-text'}],historyLoaded:false},
+  {messages:[],streaming:'Live response'},
+  {messages:[],workProjection:{status:'loading',current:false,receipt:{sessionId:'selected',generation:1}}},
+ ]){
+  await act(async()=>{root=create(render(patch))});
+  assert.equal(root.toJSON(),null,'A background read must add neither a spinner nor an empty flex child');
+  for(const status of ['retrying','unavailable']){
+   await act(async()=>root.update(render({...patch,workProjection:{...patch.workProjection,status,current:false}})));
+   assert.equal(root.root.findAllByProps({role:'status'}).length,1,'Read failures remain visible alongside retained content');
+  }
+  await act(async()=>root.unmount());
+ }
+ await act(async()=>{root=create(render({messages:[]},[{id:'outbox'}]))});
+ assert.equal(root.toJSON(),null,'An outgoing local message is readable before host admission');
+ await act(async()=>root.update(render({messages:[],workProjection:{status:'loading',receipt:{sessionId:'another-chat'}}})));
+ assert.match(JSON.stringify(root.toJSON()),/Loading work details/,'Another chat receipt cannot suppress this initial load');
+ await act(async()=>root.unmount());
+});

@@ -1,4 +1,5 @@
 import {isRunning} from './timeline-data.js';
+import {isVoiceWorkMessage} from './voice-work-message.js';
 
 // These are host-qualified presentation facts, not a last-bubble heuristic.
 export function interimResponse(message){
@@ -19,10 +20,11 @@ export function foldInterimRows(rows,data,enabled,{deferred=new Set(),revealId=n
    response.inputIds?.includes(turn.originalTurnId||turn.id);
  });
  for(const row of rows){
-  const response=row.kind==='message'&&interimResponse(row.message);
+  // Voice work is placed by exact input ownership before this optional fold.
+  const response=row.kind==='message'&&!isVoiceWorkMessage(row.message)&&interimResponse(row.message);
   if(response&&!deferred.has(response.generationId)){
    if(!group||group.generationId!==response.generationId){
-    const previous=result.at(-1),work=previous?.kind==='work'&&!previous.interim&&compatible(previous.items,response)?result.pop():null;
+    const previous=result.at(-1),work=previous?.kind==='work'&&!previous.interim&&!previous.voiceWork&&compatible(previous.items,response)?result.pop():null;
     group={kind:'work',interim:true,id:`interim:${response.generationId}:${row.id}`,
      generationId:response.generationId,response,items:[...(work?.items||[])],outputs:[],reveal:false};
     result.push(group);
@@ -32,7 +34,7 @@ export function foldInterimRows(rows,data,enabled,{deferred=new Set(),revealId=n
   }else if(row.kind==='artifacts'&&group?.items.some(item=>item.message?.id===row.message.id)){
    // Keep the original output association outside the collapsed prose.
    group.outputs.push(row);
-  }else if(row.kind==='work'&&group&&compatible(row.items,group.response)){
+  }else if(row.kind==='work'&&!row.voiceWork&&group&&compatible(row.items,group.response)){
    group.items.push(...row.items);
   }else{
    group=null;result.push(row);
@@ -62,5 +64,5 @@ export function retainInterimIds(rows,previous=[]){
 }
 
 export function groupForMessage(rows,id){
- return rows.find(row=>row.interim&&row.items.some(item=>item.message?.id===id));
+ return rows.find(row=>(row.interim||row.voiceWork)&&row.items.some(item=>item.message&&(item.message.id===id||item.message.nativeMessageId===id)));
 }

@@ -106,10 +106,15 @@ test('new everyday ChatGPT setup defaults to Codex and retains the explicit plan
  const {AIConnections}=await server.ssrLoadModule('/src/ai-connections.jsx');
  let root;const calls=[];
  const state={view:{aiConnectionEditor:{step:'services'}},setup:{providers:[]}};
- await act(async()=>{root=create(React.createElement(AIConnections,{state,navigate:()=>{},act:async(name,args)=>{calls.push({name,args});return {accepted:true,operationId:'request'}}}))});
+ const draft={step:'connect',id:'chatgpt-new',module:'provider-openai-chatgpt',authMode:'chatgpt_codex',scope:'global'};
+ const dispatch=async(name,args)=>{
+  calls.push({name,args});
+  return {accepted:true,operationId:'request',result:{editor:{id:draft.id,module:draft.module}}};
+ };
+ await act(async()=>{root=create(React.createElement(AIConnections,{state,navigate:()=>{},act:dispatch}))});
  const button=root.root.findAllByType('button').find(button=>button.findAllByType('strong').some(label=>label.children.join('').includes('ChatGPT')));
  await act(async()=>button.props.onClick());
- const draft=calls.find(call=>call.args?.patch?.aiConnectionEditor?.step==='connect').args.patch.aiConnectionEditor;
+ assert.deepEqual(calls.find(call=>call.name==='settings.connection.select').args,{scope:'global',module:'provider-openai-chatgpt'});
  assert.equal(draft.authMode,'chatgpt_codex');
  await act(async()=>root.update(React.createElement(AIConnections,{state:{...state,view:{aiConnectionEditor:draft}},navigate:()=>{},act:async()=>({accepted:true,operationId:'request'})})));
  const select=root.root.findAllByType('select').find(select=>select.props.value==='chatgpt_codex');

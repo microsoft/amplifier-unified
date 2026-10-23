@@ -91,6 +91,9 @@ def verify_contract(contract):
     """Cheap checks fail before publishing an unusable prepared image."""
     python = contract['python']
     run(python, '-c', 'import sys; assert sys.version_info >= (3, 13)')
+    # Storage's fail-closed reference guard needs this exact process listing.
+    # Capture it without publishing command lines in preparation diagnostics.
+    run('ps', '-axo', 'command=', capture=True)
     if contract.get('pythonBuild', {}).get('available'):
         run(contract['pythonBuild']['python'], '-c', 'import build')
     if contract['profileId'] == 'browser-test':
@@ -116,7 +119,7 @@ def main():
     if not reused:
         run('apt-get', 'update')
         run('apt-get', 'install', '-y', '--no-install-recommends', 'ca-certificates', 'git',
-            'build-essential', 'python3', 'python3-venv', 'pkg-config', 'libffi-dev')
+            'build-essential', 'python3', 'python3-venv', 'pkg-config', 'libffi-dev', 'procps')
         run('python3', '-m', 'venv', str(PREFIX / 'bootstrap'))
     bootstrap = str(PREFIX / 'bootstrap/bin/python')
     if not reused:

@@ -455,6 +455,8 @@ class TestQueue:
                 if not task.cancelled():
                     task.exception()
                 self.tasks.pop(identity, None)
+        from . import test_runner_enrollment
+        test_runner_enrollment.schedule(self)
         notifications = self.app.db.execute("""SELECT rowid,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='workspace.tests.submit'
                 AND json_extract(receipt,'$.terminalOutcome.status')='observed'

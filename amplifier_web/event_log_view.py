@@ -699,15 +699,19 @@ class EventLogView:
         self._retry_at = OrderedDict()
         self._refused = OrderedDict()  # At most eight small deterministic-cap receipts.
         self._work_generation = 0
+        self._pending_work_notifications = {}
         from .work_windows import WorkWindows
         self.windows = WorkWindows(service)
 
-    def invalidate(self, session_ids=None):
+    def invalidate(self, session_ids=None, *, notify=True):
         """Invalidate before mutations are published, including deferred/failed saves."""
         # The same bounded weak owners that justify passive reuse own the public
         # completion receipt. Never leave a retained generation labelled current
         # after a writer invalidates it, and never admit an owner to update it.
-        self.windows.invalidate(session_ids)
+        # A writer invalidates immediately, but its canonical publication owns
+        # notification after commit. Otherwise shell.notify can snapshot the
+        # in-progress mutation with the previous revision.
+        self.windows.invalidate(session_ids, notify=notify)
         transcript = getattr(getattr(self.service, 'history', None), 'windows', None)
         if transcript is not None:
             transcript.invalidate(session_ids)
@@ -1434,10 +1438,25 @@ class EventLogView:
         identities.update(getattr(self.service, 'queue_clients', {}).values())
         current = getattr(clients, 'current', None)
         identities.add(current.get() if current is not None else None)
+        # Retain at most one notice per interested client. A read of B can
+        # complete while A has unsaved progress; A's narrow publication need not
+        # include B. Do not leak dirty state or lose B's eventual ready notice.
+        self._pending_work_notifications = {
+            client: owner for client, owner in self._pending_work_notifications.items()
+            if client in identities and clients.records.get(client, {}).get('selectedSessionId') == owner}
         for client in identities:
             record = clients.records.get(client, {})
             if record.get('kind') == 'web' and record.get('selectedSessionId') == identity:
-                shell.notify(client)
+                if getattr(self.service, '_progress_dirty', False):
+                    self._pending_work_notifications[client] = identity
+                else:
+                    shell.notify(client)
+
+    def flush_work_notifications(self):
+        """After a successful canonical commit, deliver retained read notices."""
+        pending, self._pending_work_notifications = self._pending_work_notifications, {}
+        for identity in set(pending.values()):
+            self._notify_work(identity)
 
     async def _refresh_process(self, identity):
         """Publish only an exact, still-owned display read from the subprocess.

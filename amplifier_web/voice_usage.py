@@ -4,6 +4,9 @@ import math
 def normalize_voice_usage(raw):
     raw=raw if isinstance(raw,dict) else {}
     result={'costType':'unavailable'}
+    seconds=raw.get('seconds')
+    if isinstance(seconds,(int,float)) and not isinstance(seconds,bool) and math.isfinite(seconds) and seconds>=0:
+        result['voiceSeconds']=seconds
     for source,target in [('input_tokens','inputTokens'),('output_tokens','outputTokens'),('total_tokens','totalTokens')]:
         value=raw.get(source)
         if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0:result[target]=value

@@ -309,6 +309,7 @@ def invoke(config, home, row, action, args, *, _qualification=False):
                'resourceId': row.get('id'), 'resourceRevision': row.get('revision'),
                'admissionRevision': args.get('expectedRevision'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
+               **({'effectAction': args['effectAction']} if 'effectAction' in args else {}),
                'jobId': args.get('jobId', args.get('requestId')),
                'profileId': row.get('profileId', PROFILE), 'resourceRequest': row.get('resourceRequest'), 'timingRequest': row.get('timingRequest'),
                'timeoutSeconds': args.get('timeoutSeconds', 60),

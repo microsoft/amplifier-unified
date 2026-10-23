@@ -111,6 +111,42 @@ def test_each_qualified_dependency_input_changes_key(tmp_path, change):
     assert layers.key_for(value) != original
 
 
+def test_procps_recipe_change_invalidates_preparation_and_reusable_layer(prepared, tmp_path, monkeypatch):
+    run, calls, config = prepared
+    recipes = tmp_path / 'recipes'
+    recipes.mkdir()
+    module = Path(preparation.__file__)
+    for name in (*preparation.RECIPE_FILES, module.name):
+        (recipes / name).write_bytes(module.with_name(name).read_bytes())
+    monkeypatch.setattr(preparation, '__file__', str(recipes / module.name))
+    recipe = recipes / 'test_environment_prepare_guest.py'
+    current = recipe.read_text()
+    legacy = current.replace(", 'procps')", ')').replace(
+        "    run('ps', '-axo', 'command=', capture=True)\n", '')
+    assert legacy != current and "'procps'" not in legacy
+    recipe.write_text(legacy)
+    first, before = run('legacy')
+    recipe.write_text(current)
+    with pytest.raises(ValueError, match='different frozen source'):
+        preparation.prepare(config, first, {'archive_sha256': before['sourceSha256']},
+                            'python-project', 'request-legacy',
+                            host_reservation={'admitted': True}, dependency_store=layers.store(tmp_path))
+    second, after = run('procps')
+    assert before['sourceSha256'] == after['sourceSha256']
+    assert before['lockfiles'] == after['lockfiles']
+    assert before['recipeSha256'] != after['recipeSha256']
+    assert before['intent']['preparationId'] != after['intent']['preparationId']
+    assert layers.key_for(before['intent']) != layers.key_for(after['intent'])
+    assert [call['mode'] for call in calls] == ['layer', 'finalize', 'layer', 'finalize']
+    assert layers.read(second / 'preparation/dependency-reuse.json')['hit'] is False
+    third, same = run('same-procps')
+    assert same['recipeSha256'] == after['recipeSha256']
+    assert layers.read(third / 'preparation/dependency-reuse.json')['hit'] is True
+    assert [call['mode'] for call in calls] == ['layer', 'finalize', 'layer', 'finalize', 'finalize']
+    # No old receipt was rewritten to claim the new prerequisite.
+    assert layers.read(first / 'preparation/receipt.json') == before
+
+
 @pytest.mark.parametrize('project,lock', [
     (PROJECT.replace('version="1"', 'dynamic=["version"]'), LOCK),
     (PROJECT + '[tool.uv.workspace]\nmembers=["child"]', LOCK),

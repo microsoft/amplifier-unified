@@ -29,10 +29,17 @@ async def main(home):
     class Manager:
         api_key=True
         call=None
-        async def end(self,*args):
-            if self.call:self.call.closed=True
-            await service.set_voice_status({'status':'ended'})
-            return {'closed':True}
+        ends=[]
+        sequence=0
+        async def end(self,identity=None,*,attempt_id=None,expected_call=None,**kwargs):
+            call=self.call
+            if call and ((identity and identity!=call.id) or (attempt_id and attempt_id!=call.attempt_id) or (expected_call and expected_call is not call)):
+                raise ValueError('This call is no longer active.')
+            if call:
+                self.ends.append({'id':identity,'attemptId':attempt_id})
+                call.closed=True
+                await service.set_voice_status({'status':'ended','id':call.id,'attemptId':call.attempt_id,'finalized':True})
+            return {'closed':True,'finalized':True,'workContinues':True}
     service.voice_service=Manager()
     class SyntheticNative:
         calls=[]
@@ -50,14 +57,21 @@ async def main(home):
     service.computer_visual.for_client = computer_visual
     async def config(request):return web.json_response({'available':True})
     async def connect(request):
-        data=await request.json();sid=data['sessionId'];call=SimpleNamespace(id='fixture-call',session_id=sid,closed=False,closing=False,client_id=service.clients.current.get())
+        data=await request.json();sid=data['sessionId']
+        manager=service.voice_service
+        if manager.call and not manager.call.closed:return web.json_response({'error':'A call is already active.','code':'call_active'},status=409)
+        manager.sequence+=1
+        call=SimpleNamespace(id='fixture-call-'+str(manager.sequence),attempt_id=data['attemptId'],session_id=sid,closed=False,closing=False,client_id=service.clients.current.get())
         service.voice_service.call=call
-        await service.set_voice_status({'id':call.id,'sessionId':sid,'status':'connecting'})
+        await service.set_voice_status({'id':call.id,'attemptId':call.attempt_id,'sessionId':sid,'status':'connecting','finalized':False})
         return web.json_response({'id':call.id,'sessionId':sid,'sdp':'synthetic-answer','provider':'synthetic','model':'Synthetic voice fixture'})
     async def ready(request):await service.set_voice_status({'status':'connected'});return web.json_response({'ready':True})
-    async def end(request):return web.json_response(await service.voice_service.end())
+    async def end(request):
+        data=await request.json()
+        if not data.get('id') and not data.get('attemptId'):return web.json_response({'error':'A call identity is required.'},status=400)
+        return web.json_response(await service.voice_service.end(data.get('id'),attempt_id=data.get('attemptId')))
     async def inspect(request):
-        return web.json_response({'grant':service.voice_visual.grant,'receipts':list(service.voice_visual.receipts.values()),'sent':runtime.sent,'stopped':runtime.stopped,'nativeCalls':service.voice_visual.native.calls,'computerGrants':[v.grant for v in service.computer_visual.clients.values() if v.grant],'computerReceipts':[r for v in service.computer_visual.clients.values() for r in v.receipts.values()]})
+        return web.json_response({'grant':service.voice_visual.grant,'receipts':list(service.voice_visual.receipts.values()),'sent':runtime.sent,'stopped':runtime.stopped,'ends':service.voice_service.ends,'nativeCalls':service.voice_visual.native.calls,'computerGrants':[v.grant for v in service.computer_visual.clients.values() if v.grant],'computerReceipts':[r for v in service.computer_visual.clients.values() for r in v.receipts.values()]})
     async def activity(request):
         data=await request.json();session=service._session(data['sessionId'])
         session['status']=data.get('status','idle');session['workers']=data.get('workers',[])

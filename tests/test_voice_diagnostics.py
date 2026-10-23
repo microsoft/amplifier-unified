@@ -70,7 +70,8 @@ async def test_provider_error_retains_correlation_without_payload_or_state_chang
     assert all(value not in text for value in ('private context', 'sk-private-fixture-key', 'request', 'content'))
     assert not call.closed and not call.closing and not call.final.is_set()
     assert call.socket.sent == [command]
-    assert call.service.statuses == [{'error': 'Voice provider reported an error: context_injection_incomplete'}]
+    assert call.service.statuses == [{'id': 'call_1', 'attemptId': None,
+        'error': 'Voice could not accept an update. Reconnect the call for current context; Amplifier work continues.'}]
 
 
 async def test_terminal_reason_and_local_finalization_are_retained_without_transcripts(tmp_path):
@@ -95,7 +96,8 @@ async def test_storage_failure_does_not_mask_provider_error_or_closure(tmp_path)
     call.final.set()
     result = await call.close()
     assert result == {'closed': True, 'finalized': True, 'workContinues': True}
-    assert call.service.statuses[0]['error'].endswith('server_error')
+    assert 'Reconnect the call' in call.service.statuses[0]['error']
+    assert 'server_error' not in call.service.statuses[0]['error']
     assert call.manager.protocol_diagnostics.storage_error is True
     assert (tmp_path / 'voice-diagnostics').read_text() == 'preserve this file'
 

@@ -9,6 +9,101 @@ from amplifier_web.server import create_app
 from test_service import Runtime
 
 
+@pytest.mark.parametrize('publication', ['commit', 'failed-save', 'progress', 'progress-ready', 'peer-ready', 'save-only'])
+async def test_work_invalidation_does_not_publish_uncommitted_state(authenticated_client, tmp_path, monkeypatch, publication):
+    from amplifier_web.shell_resources import scope_for
+
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    service = app['service']
+    client = await authenticated_client(app)
+    await client.post('/api/clients/attach', json={'clientId': 'work-reader', 'kind': 'web'})
+    headers = {'X-Amplifier-Client': 'work-reader'}
+    await client.post('/api/actions', headers=headers,
+                      json={'id': 'create', 'action': 'session.create', 'args': {}})
+    windows = service.event_log_view.windows
+    peer_id = peer_queue = None
+    if publication == 'peer-ready':
+        await client.post('/api/clients/attach', json={'clientId': 'peer-reader', 'kind': 'web'})
+        await client.post('/api/actions', headers={'X-Amplifier-Client': 'peer-reader'},
+                          json={'id': 'peer-create', 'action': 'session.create', 'args': {}})
+        with service.clients.bind('peer-reader'):
+            peer_id = service.state['selectedSessionId']
+            service.shell.resources.register('peer-reader', 1, ['recentNavigation'], scope_for(service.state))
+            peer_queue = service.subscribe()
+    with service.clients.bind('work-reader'):
+        sid = service.state['selectedSessionId']
+        service.shell.resources.register('work-reader', 1, ['recentNavigation'], scope_for(service.state))
+        queue = service.subscribe()
+    try:
+        # Exclude unrelated startup/background publications from this exact
+        # writer-boundary test while the bounded window worker finishes.
+        async with service.lock:
+            await windows.read(sid)
+            assert windows.status[sid]['current']
+            while not queue.empty():
+                queue.get_nowait()
+            previous = service._state['revision']
+            service._session(sid)['streaming'] = 'Uncommitted sentinel'
+            if publication == 'failed-save':
+                def fail_save():
+                    raise OSError('Synthetic commit failure')
+                with monkeypatch.context() as patch:
+                    patch.setattr(service, '_save', fail_save)
+                    with pytest.raises(OSError, match='Synthetic commit failure'):
+                        service._publish_changes(sessions={sid})
+                assert service._state['revision'] == previous
+                assert queue.empty(), 'Failed publication must not leak the invalidation snapshot'
+            elif publication in {'progress', 'progress-ready', 'peer-ready'}:
+                service._publish_progress(session_ids={sid}, record_only=True, detail_only=True)
+                assert queue.empty(), 'Deferred progress must not publish through invalidation'
+                assert not windows.status[sid]['current']
+                if publication == 'progress-ready':
+                    await windows.read(sid)
+                    assert queue.empty(), 'Read completion must not expose deferred progress'
+                elif publication == 'peer-ready':
+                    while not peer_queue.empty():
+                        peer_queue.get_nowait()
+                    await windows.read(peer_id)
+                    assert windows.status[peer_id]['current']
+                    assert peer_queue.empty(), 'Peer readiness waits for the dirty writer commit'
+            elif publication == 'save-only':
+                service._save_changes(sessions={sid})
+                assert queue.empty(), 'Saving without publication must not emit a Work snapshot'
+            if publication not in {'commit', 'progress-ready'}:
+                assert not windows.status[sid]['current'], 'Writer invalidation remains immediate'
+            service._publish(session_ids={sid}, record_only=True, detail_only=True)
+            assert not windows.status[sid]['current']
+            if peer_queue is not None:
+                peer_frames = []
+                while not peer_queue.empty():
+                    peer_frames.append(peer_queue.get_nowait())
+                assert peer_frames, 'A narrow commit must deliver the unrelated retained ready notice'
+                assert all(frame['revision'] == previous + 1 for frame in peer_frames)
+                assert any(next(row for row in frame['sessions'] if row['id'] == peer_id)
+                           ['workProjection']['current'] for frame in peer_frames)
+            frames = []
+            while not queue.empty():
+                frames.append(queue.get_nowait())
+            assert frames
+            assert all(frame['revision'] == previous + 1 for frame in frames)
+            assert all(next(row for row in frame['sessions'] if row['id'] == sid)['streaming'] ==
+                       'Uncommitted sentinel' for frame in frames)
+            # A real completed read must still notify without another action.
+            await windows.read(sid)
+            assert windows.status[sid]['current']
+            ready = []
+            while not queue.empty():
+                ready.append(queue.get_nowait())
+            assert ready
+            assert any(next(row for row in frame['sessions'] if row['id'] == sid)
+                       ['workProjection']['current'] for frame in ready)
+    finally:
+        service.unsubscribe(queue)
+        if peer_queue is not None:
+            service.unsubscribe(peer_queue)
+
+
 @pytest.mark.parametrize('compact', [False, True])
 @pytest.mark.parametrize('peer_after_completion', [False, True])
 async def test_send_receipt_observes_consumption_after_admission(authenticated_client, tmp_path, compact, peer_after_completion, monkeypatch):
