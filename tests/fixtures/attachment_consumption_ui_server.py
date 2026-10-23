@@ -33,6 +33,8 @@ class ConsumptionRuntime(fixture.Runtime):
                'text': text, 'acceptedEvent': False, 'returned': False,
                'returnGate': asyncio.Event(), 'emit': emit}
         self.sends[input_id] = row
+        # Read the committed command before runtime.status can publish anything.
+        row['initial'] = self.snapshot(input_id)
         if mode == 'failed':
             row['returned'] = True
             raise RuntimeStartupError('Synthetic preparation rejection before input admission')
@@ -46,6 +48,7 @@ class ConsumptionRuntime(fixture.Runtime):
             row['timedOut'] = True
             raise
         row['returned'] = True
+        row['final'] = self.snapshot(input_id)
         return {'accepted': True}
 
     async def accept(self, input_id):
@@ -58,6 +61,7 @@ class ConsumptionRuntime(fixture.Runtime):
                                 row['sessionId'], input_id)
         await row['emit'](*event)
         row['acceptedEvent'] = True
+        row['accepted'] = self.snapshot(input_id)
 
     async def finish(self, input_id):
         row = self.sends[input_id]
@@ -81,6 +85,22 @@ async def main(home):
     app = await fixture.main(home)
     service, runtime = app['service'], app['service'].runtime
 
+    def snapshot(input_id):
+        saved = service.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+        return {'receipt': json.loads(saved[0]) if saved else None,
+                'stateRevision': service._state['revision']}
+
+    runtime.snapshot = snapshot
+    if os.environ.get('AMPLIFIER_TEST_PRECOMMIT_NOTIFY') == '1':
+        # Explicit negative control: restore the old notification timing, not
+        # message/attachment/revision data. The unchanged browser oracle must fail.
+        invalidate = service.event_log_view.invalidate
+
+        def precommit_invalidate(session_ids=None, *, notify=True):
+            return invalidate(session_ids, notify=True)
+
+        service.event_log_view.invalidate = precommit_invalidate
+
     def authorized(request):
         if request.headers.get('Authorization') != 'Bearer ' + TOKEN:
             raise web.HTTPForbidden()
@@ -93,7 +113,8 @@ async def main(home):
             if record is None:
                 raise web.HTTPNotFound(text='Synthetic client not found')
             rows = [{key: copy.deepcopy(row.get(key)) for key in
-                     ('sessionId', 'inputId', 'mode', 'acceptedEvent', 'returned', 'timedOut')}
+                     ('sessionId', 'inputId', 'mode', 'acceptedEvent', 'returned', 'timedOut',
+                      'initial', 'accepted', 'final')}
                     for row in runtime.sends.values()]
             return web.json_response({
                 'revision': service._state['revision'], 'hostInstanceId': service.instance_id,
@@ -101,6 +122,7 @@ async def main(home):
                 'drafts': copy.deepcopy(record.get('drafts', {})),
                 'attachments': copy.deepcopy(record.get('attachments', {})),
                 'sends': rows,
+                'workStatus': copy.deepcopy(service.event_log_view.windows.status),
                 'sessions': [{key: copy.deepcopy(row.get(key)) for key in ('id', 'messages', 'status')}
                              for row in service._state['sessions']],
             })
@@ -111,6 +133,8 @@ async def main(home):
         op = body.get('op')
         if op == 'next-mode' and body.get('mode') in {'held', 'failed', 'unknown'}:
             runtime.next_mode = body['mode']
+        elif op == 'read-work':
+            await asyncio.wait_for(service.event_log_view.windows.read(body['sessionId']), 5)
         elif op == 'accept':
             await asyncio.wait_for(runtime.accept(body['inputId']), 5)
         elif op == 'finish':
