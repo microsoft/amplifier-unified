@@ -17,6 +17,7 @@ on:
       - 'tests/test_assignment_brief.py'
       - 'amplifier_web/workspace_awareness.py'
       - 'amplifier_web/coordination_delivery.py'
+      - 'amplifier_web/coordination_guidance.py'
       - 'frontend/src/workspace-awareness.jsx'
       - 'frontend/tests/workspace-awareness-browser.mjs'
       - 'tests/test_workspace_awareness.py'
