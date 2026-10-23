@@ -21,8 +21,8 @@ def row(identity='test-1'):
             'lastOperation': {'resourceId': identity, 'sessionId': 'root', 'state': 'completed',
                 'action': 'workspace.environments.remove', 'result': {'ok': True, 'status': 'removed', 'universeId': 'test-environment',
                     'retention': {'verified': True, 'policy': 'files', 'sourceSha256': 'a'*64, 'sourceBytes': 100, 'archiveBytes': 220, 'totalBytes': 320},
-                    'archives': [{'source': '/workspace', 'bytes': 200, 'verified': True},
-                                 {'source': '/artifacts', 'bytes': 20, 'verified': True}]}}}
+                    'archives': [{'id': 'test-environment', 'source': '/workspace', 'bytes': 200, 'sha256': 'b'*64, 'verified': True},
+                                 {'id': 'test-environment', 'source': '/artifacts', 'bytes': 20, 'sha256': 'c'*64, 'verified': True}]}}}
 
 
 def insert(app, value):
@@ -91,7 +91,7 @@ def test_remote_receipt_is_not_double_counted_and_full_archive_stays_distinct(ap
     result['downloadedArchives'] = copy.deepcopy(result['archives'])
     insert(app, remote)
     full = row('full'); result = full['lastOperation']['result']
-    result['archives'] = [{'source': '/', 'bytes': 220, 'verified': True}]
+    result['archives'] = [{'id': 'test-environment', 'source': '/', 'bytes': 220, 'sha256': 'd'*64, 'verified': True}]
     result['retention']['policy'] = 'full'
     insert(app, full)
     page = sizes.read(app)
@@ -99,6 +99,60 @@ def test_remote_receipt_is_not_double_counted_and_full_archive_stays_distinct(ap
     assert page['items'][0]['otherArchiveBytes'] == 220
     assert page['items'][0]['workspaceBytes'] is None and page['items'][0]['combinedArchive']
     assert 'downloaded' in page['items'][1]['custody']
+
+
+@pytest.mark.parametrize('change', ['foreign-id', 'missing-id', 'missing-hash', 'invalid-hash', 'oversized-id', 'oversized-hash'])
+@pytest.mark.parametrize('downloaded', [False, True])
+def test_archive_identity_is_required_for_original_and_downloaded_records(app, change, downloaded):
+    value = row(); result = value['lastOperation']['result']
+    if downloaded:
+        result['downloadedArchives'] = copy.deepcopy(result['archives'])
+    archive = result['downloadedArchives' if downloaded else 'archives'][0]
+    if change == 'foreign-id': archive['id'] = 'another-environment'
+    if change == 'missing-id': archive.pop('id')
+    if change == 'missing-hash': archive.pop('sha256')
+    if change == 'invalid-hash': archive['sha256'] = 'not-a-hash'
+    if change == 'oversized-id': archive['id'] = 'x'*100000
+    if change == 'oversized-hash': archive['sha256'] = 'a'*100000
+    insert(app, value)
+    page = sizes.read(app); item, = page['items']
+    assert item['totalBytes'] is None and 'custody' not in item
+    assert page['unaccountedCount'] == 1 and page['recordedBytes'] == 0
+    assert len(json.dumps(page)) < 3000
+
+
+@pytest.mark.parametrize('change', ['swapped-sizes', 'swapped-hashes', 'missing-original', 'invalid-original', 'missing-role', 'empty', 'null', 'object'])
+def test_download_cannot_replace_or_contradict_original_exports(app, change):
+    value = row(); result = value['lastOperation']['result']
+    result['downloadedArchives'] = copy.deepcopy(result['archives'])
+    downloads = result['downloadedArchives']
+    if change == 'swapped-sizes': downloads[0]['bytes'], downloads[1]['bytes'] = downloads[1]['bytes'], downloads[0]['bytes']
+    if change == 'swapped-hashes': downloads[0]['sha256'], downloads[1]['sha256'] = downloads[1]['sha256'], downloads[0]['sha256']
+    if change == 'missing-original': result.pop('archives')
+    if change == 'invalid-original': result['archives'][0]['id'] = 'another-environment'
+    if change == 'missing-role': downloads.pop()
+    if change == 'empty': result['downloadedArchives'] = []
+    if change == 'null': result['downloadedArchives'] = None
+    if change == 'object': result['downloadedArchives'] = {}
+    insert(app, value)
+    page = sizes.read(app); item, = page['items']
+    assert item['totalBytes'] is None and 'custody' not in item
+    assert page['unaccountedCount'] == 1 and page['recordedBytes'] == 0
+
+
+def test_matching_downloads_are_compared_by_role_without_reading_archive_paths(app):
+    value = row(); value['testMachine'] = {'id': 'remote'}
+    result = value['lastOperation']['result']
+    result['downloadedArchives'] = list(reversed(copy.deepcopy(result['archives'])))
+    for archive in result['archives']:
+        archive['destination'] = '/not-accessed/original/' + archive['source'].strip('/')
+    for archive in result['downloadedArchives']:
+        archive['destination'] = '/not-accessed/download/' + archive['source'].strip('/')
+    insert(app, value)
+    page = sizes.read(app); item, = page['items']
+    assert (item['sourceBytes'], item['workspaceBytes'], item['resultBytes'], item['totalBytes']) == (100, 200, 20, 320)
+    assert 'downloaded' in item['custody'] and page['accountedCount'] == 1
+    assert '/not-accessed' not in json.dumps(page)
 
 
 def test_unrelated_large_metadata_and_malformed_label_are_not_returned(app):

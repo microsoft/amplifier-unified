@@ -38,10 +38,11 @@ def projection():
         'policy': 'text', 'sourceSha256': 'text'}.items()})
     def archives(name):
         return 'json_array(' + ','.join(object_fields({key: scalar(base + name + f'[{i}].' + key, kind)
-            for key, kind in {'source': 'text', 'bytes': 'integer', 'verified': 'true'}.items()}) for i in range(3)) + ')'
+            for key, kind in {'id': 'text', 'source': 'text', 'bytes': 'integer', 'sha256': 'text', 'verified': 'true'}.items()}) for i in range(3)) + ')'
     result = object_fields({'ok': scalar(base + 'ok', 'true'), 'status': scalar(base + 'status'),
         'universeId': scalar(base + 'universeId'), 'retention': retention,
         **{name: archives(name) for name in ('archives', 'downloadedArchives')},
+        'downloadedArchivesPresent': "json_type(body,'$." + base + "downloadedArchives') IS NOT NULL",
         **{name + 'Count': "json_array_length(body,'$." + base + name + "')" for name in ('archives', 'downloadedArchives')}})
     request = object_fields({**{key: scalar('lastOperation.' + key) for key in ('resourceId', 'sessionId', 'state', 'action')}, 'result': result})
     return object_fields({**{key: scalar(key) for key in ('id', 'sessionId', 'status', 'profileId', 'universeId')},
@@ -52,6 +53,26 @@ def projection():
 
 def number(value):
     return value if type(value) is int and 0 <= value <= LIMIT else None
+
+
+def archive_selection(value, name, universe, policy):
+    """Bind each bounded receipt to its environment, role and recorded bytes."""
+    count = value.get(name + 'Count')
+    if type(count) is not int or not 1 <= count <= 3:
+        raise ValueError('Incomplete archive accounting')
+    roles = {}
+    for archive in value[name][:count]:
+        role, size = archive.get('source'), number(archive.get('bytes'))
+        checksum = archive.get('sha256')
+        if (archive.get('id') != universe or role not in {'/workspace', '/artifacts', '/'}
+                or role in roles or size is None or archive.get('verified') is not True
+                or not isinstance(checksum, str) or not re.fullmatch('[a-f0-9]{64}', checksum)):
+            raise ValueError('Incomplete archive accounting')
+        roles[role] = (size, checksum)
+    if (policy in {'files', 'archive-only'} and set(roles) != {'/workspace', '/artifacts'}
+            or policy == 'full' and set(roles) != {'/'} or policy not in {'files', 'archive-only', 'full'}):
+        raise ValueError('The archive selection is incomplete')
+    return roles
 
 
 def project(position, identity, root, status, encoded):
@@ -83,22 +104,14 @@ def project(position, identity, root, status, encoded):
                 or row['sourceHash'] != retained.get('sourceSha256')):
             raise ValueError('The saved source or environment identity does not match')
         source = number(retained.get('sourceBytes'))
-        downloaded = bool(value.get('downloadedArchivesCount'))
-        key = 'downloadedArchives' if downloaded else 'archives'
-        count = value.get(key + 'Count')
-        if source is None or type(count) is not int or not 1 <= count <= 3:
+        if source is None:
             raise ValueError('Incomplete accounting')
-        archives = value[key][:count]
-        roles = {}
-        for archive in archives:
-            role, size = archive.get('source'), number(archive.get('bytes'))
-            if role not in {'/workspace', '/artifacts', '/'} or role in roles or size is None or archive.get('verified') is not True:
-                raise ValueError('Incomplete archive accounting')
-            roles[role] = size
         policy = retained.get('policy')
-        if (policy in {'files', 'archive-only'} and set(roles) != {'/workspace', '/artifacts'}
-                or policy == 'full' and set(roles) != {'/'} or policy not in {'files', 'archive-only', 'full'}):
-            raise ValueError('The archive selection is incomplete')
+        original = archive_selection(value, 'archives', row['universeId'], policy)
+        downloaded = bool(value.get('downloadedArchivesPresent'))
+        if downloaded and archive_selection(value, 'downloadedArchives', row['universeId'], policy) != original:
+            raise ValueError('The downloaded archives do not match the original exports')
+        roles = {role: size for role, (size, _) in original.items()}
         total = source + sum(roles.values())
         if number(total) is None or number(retained.get('archiveBytes')) != sum(roles.values()) or number(retained.get('totalBytes')) != total:
             raise ValueError('Inconsistent accounting')

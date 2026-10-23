@@ -74,15 +74,15 @@ async def main(home):
                     'result': {'ok': True, 'status': 'removed', 'universeId': 'test-environment',
                         'retention': {'verified': True, 'sourceBytes': 1024, 'policy': 'files', 'sourceSha256': 'c'*64,
                             'archiveBytes': 5120, 'totalBytes': 6144},
-                        'archives': [{'source': '/workspace', 'bytes': 3072, 'verified': True},
-                            {'source': '/artifacts', 'bytes': 2048, 'verified': True}]}}}
+                        'archives': [{'id': 'test-environment', 'source': '/workspace', 'bytes': 3072, 'sha256': 'd'*64, 'verified': True},
+                            {'id': 'test-environment', 'source': '/artifacts', 'bytes': 2048, 'sha256': 'e'*64, 'verified': True}]}}}
             if index == 34:
                 row['lastOperation']['state'] = 'outcome_unknown'
             if index == 32:
                 row['profileId'] = 'linux-python'
                 result = row['lastOperation']['result']
                 result['retention'].update(archiveBytes=10240, totalBytes=11264, policy='full')
-                result['archives'] = [{'source': '/', 'bytes': 10240, 'verified': True}]
+                result['archives'] = [{'id': 'test-environment', 'source': '/', 'bytes': 10240, 'sha256': 'f'*64, 'verified': True}]
             if index == 31:
                 row['testMachine'] = {'id': 'fixture-remote'}
                 result = row['lastOperation']['result']
