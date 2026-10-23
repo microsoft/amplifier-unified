@@ -35,12 +35,12 @@ try{
  await probe('narrow-options-dismiss-focus',['composer.options'],async()=>{
   await input.fill('Keep this unsent draft');await page.setViewportSize({width:390,height:844});
   const trigger=page.getByRole('button',{name:'Model and reasoning settings',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
-  await click('Open ordinary narrow options',trigger);await expect(menu.locator('#chat-provider')).toBeFocused();
+  await click('Open ordinary narrow options',trigger);await expect(menu.getByRole('button',{name:'Choose model',exact:true})).toBeFocused();
   const before=(await state()).view.newSessionDraft??null;
-  await menu.locator('#chat-provider').press('Escape');await expect(menu).toHaveCount(0);await expect(trigger).toBeFocused();
+  await menu.getByRole('button',{name:'Choose model',exact:true}).press('Escape');await expect(menu).toHaveCount(0);await expect(trigger).toBeFocused();
   evidence.assertion('Escape keeps exact selection',(await state()).view.newSessionDraft??null,before);await expect(input).toHaveDraft('Keep this unsent draft');
-  await click('Open options again',trigger);await click('Done without selecting',menu.getByRole('button',{name:'Done',exact:true}));await expect(trigger).toBeFocused();
-  evidence.assertion('Done never sends',(await inspect()).sent.length,0);await page.setViewportSize({width:1366,height:1000});
+  await click('Open options again',trigger);await click('Close options without selecting',menu.getByRole('button',{name:'Close chat options',exact:true}));await expect(trigger).toBeFocused();
+  evidence.assertion('Close options never sends',(await inspect()).sent.length,0);await page.setViewportSize({width:1366,height:1000});
  });
  await probe('desktop-upload-pending-and-duplicate',['composer.attachment-add','composer.send'],async()=>{
   await input.fill('Create the attachment owner');await click('Create one intentional chat',page.getByRole('button',{name:'Send message',exact:true}));await expect(page.locator('.a-assistant')).toContainText('Synthetic first response');original=(await state()).selectedSessionId;

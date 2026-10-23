@@ -17,9 +17,13 @@ export function useComposerPopover(open,ref){
    const viewportWidth=viewport?.width||window.innerWidth,viewportHeight=viewport?.height||window.innerHeight;
    // Keep persistent navigation reachable when a long phone menu must scroll.
    const safeTop=Math.max(top+12,header?.getBoundingClientRect().bottom||0);
-   const a=anchor.getBoundingClientRect(),width=Math.min(340,viewportWidth-24),maxHeight=Math.max(0,top+viewportHeight-safeTop-12);
+   const a=anchor.getBoundingClientRect(),actions=anchor.closest('.a-composer')?.querySelector('.a-compose-add');
+   // A menu above the external model trigger must not cover Add/Send/Stop.
+   // Rich drafts can still scroll behind it; their action row stays reachable.
+   const bottom=Math.min(top+viewportHeight-12,actions?actions.getBoundingClientRect().top-10:a.top-10);
+   const width=Math.min(340,viewportWidth-24),maxHeight=Math.max(0,bottom-safeTop);
    const height=Math.min(panel.getBoundingClientRect().height,maxHeight);
-   setStyle({width,maxHeight,left:Math.max(left+12,Math.min(a.left,left+viewportWidth-width-12)),top:Math.max(safeTop,Math.min(a.top-height-10,top+viewportHeight-height-12)),visibility:'visible'});
+   setStyle({width,maxHeight,left:Math.max(left+12,Math.min(a.left,left+viewportWidth-width-12)),top:Math.max(safeTop,bottom-height),visibility:'visible'});
   };
   place();const observer=new ResizeObserver(place);observer.observe(panel);if(header)observer.observe(header);
   window.addEventListener('resize',place);window.addEventListener('scroll',place,true);

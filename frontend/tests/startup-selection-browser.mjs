@@ -1,4 +1,5 @@
 // Real host/transport with a gated, failing worker. No model calls.
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -15,7 +16,7 @@ try{
  await page.goto(url);await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();
  const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true});
  const bundle=page.getByLabel('Registered root bundles',{exact:true});
- const bundleLabel=async()=>{await model.click();await expect(bundle.locator('option:checked')).toHaveText('Work');const label=await bundle.locator('option:checked').innerText();await page.getByRole('button',{name:'Close chat options',exact:true}).click();return label};
+ const bundleLabel=async()=>{await model.click();await showComposerOption(page,'bundle');await expect(bundle.locator('option:checked')).toHaveText('Work');const label=await bundle.locator('option:checked').innerText();await page.getByRole('button',{name:'Close chat options',exact:true}).click();return label};
  await expect(model).toContainText('first');
  const before={model:await model.innerText(),bundle:await bundleLabel()};
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});

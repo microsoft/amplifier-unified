@@ -59,7 +59,7 @@ try{
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`${width}: no page overflow`);
    const chat=await page.locator('.a-conversation').boundingBox(),composer=await page.locator('.a-composer').boundingBox();
    assert.ok(chat.x+chat.width<=width+1&&composer.x+composer.width<=width+1,`${width}: chat and composer fully visible`);
-   if(width<520){await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Done',exact:true}).click();}
+   if(width<520){await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Close chat options',exact:true}).click();}
    await page.getByRole('button',{name:'Open canvas',exact:true}).click();await expect(panel).toBeVisible();
    if(width<660)assert.ok((await panel.boundingBox()).width<=width);
    await page.getByRole('button',{name:'Hide canvas',exact:true}).click();

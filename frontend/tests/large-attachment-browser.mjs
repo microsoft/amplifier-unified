@@ -13,7 +13,10 @@ try{
  const bytes=Buffer.alloc(22*1024*1024,1);
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'camera-sized.bin',mimeType:'application/octet-stream',buffer:bytes});
  await page.locator('.a-composer .a-attachment').waitFor();
- assert.match(await page.getByRole('button',{name:'Add attachments',exact:true}).getAttribute('title'),/32 MB/);
+ await page.getByRole('button',{name:'Add attachments',exact:true}).click();
+ const addMenu=page.getByRole('dialog',{name:'Add to your message',exact:true});
+ await addMenu.waitFor();assert.match(await addMenu.getByRole('button',{name:'Attach files',exact:true}).innerText(),/32 MB/);
+ await addMenu.getByRole('button',{name:'Close attachment menu',exact:true}).click();
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this original file.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.locator('.a-assistant h2').waitFor();

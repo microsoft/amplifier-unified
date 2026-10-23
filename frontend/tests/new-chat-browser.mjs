@@ -1,4 +1,5 @@
 import {clearComposer} from './composer-test-helpers.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 // Real packaged UI, isolated storage, and synthetic runtime. No model calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -28,6 +29,7 @@ try{
  const originalWorkspace=(await state()).settings.workspace;
  await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await showComposerOption(page,'bundle');
  await expect(page.getByLabel('Registered root bundles',{exact:true}).locator('option:checked')).toHaveText('Work');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  assert.deepEqual((await state()).view.newSessionDraft?.selection||{},{});
@@ -36,8 +38,11 @@ try{
  await expect(page.getByText('Chat settings',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Notify me when ready',exact:true})).toHaveCount(0);
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await showComposerOption(page,'bundle');
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('work');
+ await showComposerOption(page,'model');
  await page.locator('select#chat-model').selectOption('chosen-model');
+ await showComposerOption(page,'effort');
  await page.locator('#chat-effort').press('End');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
@@ -54,9 +59,12 @@ try{
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});
  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`});
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(panel).toBeVisible();
- const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}});
- assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry));
- await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();
+ const assertPanelFits=async()=>{const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}});
+ assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry))};
+ await assertPanelFits();
+ await showComposerOption(page,'model');await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();await assertPanelFits();
+ await showComposerOption(page,'bundle');await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();await assertPanelFits();
+ await panel.getByRole('button',{name:'Back to chat options',exact:true}).click();
  await expect(panel.locator('input:not([type=range])')).toHaveCount(0);await page.screenshot({path:out+`/compact-options-${width}.png`});await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
  await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{navPinned:true}});

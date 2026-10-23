@@ -1,8 +1,8 @@
 import {conversationHistoryPending} from './history-window.js';
 import {SettingsActions} from './settings-layout';
 import {useOutsideDismiss} from './use-outside-dismiss';
-import React,{useState,useEffect,useRef} from 'react';
-import {Layers,ChevronDown,X} from 'lucide-react';
+import React,{useState,useEffect,useRef,useId} from 'react';
+import {Layers,ChevronDown,ChevronRight,X} from 'lucide-react';
 import {BundlePicker,BundleCatalogStatus,ResultNotice} from './settings-ui';
 import {newChatSetup,draftDefaults} from './new-chat';
 import {useComposerPopover} from './composer-popover';
@@ -11,7 +11,8 @@ import {nextMessageBlocked,useNextMessageConfiguration} from './chat-controls';
 export const bundleLabel=(state,value)=>state.registeredBundles?.find(row=>row.value===value)?.label||value||'Bundle';
 const EMPTY={};
 export function BundleControl(props){return props.compact?<CompactBundleControl {...props}/>:<DetailedBundleControl {...props}/>}
-function CompactBundleControl({state,session,act,working,embedded=false,nextMessageControl}){
+function CompactBundleControl({state,session,act,working,embedded=false,nextMessageControl,page,onNavigate}){
+ const descriptionId=useId();
  const setup=newChatSetup(state),defaults=draftDefaults(state),shared=state.view?.composerBundle||EMPTY;
  const nextMessage=useNextMessageConfiguration(session,act,nextMessageControl);
  const [draft,setDraft]=useState(shared),[pending,setPending]=useState(false),[error,setError]=useState(''),guard=useRef(false);
@@ -33,15 +34,17 @@ function CompactBundleControl({state,session,act,working,embedded=false,nextMess
  const resetBundle=failedBundle||previewBundle;
  const renderPanel=embedded?content=>content:renderPopover;
  return <div className="a-model-control a-bundle-control" ref={popover}>
+  {embedded&&onNavigate&&<button type="button" className="a-composer-option" data-composer-option="bundle" aria-label="Choose agent bundle" aria-describedby={descriptionId} hidden={page!=='overview'} onClick={()=>onNavigate('bundle')}><span id={descriptionId}>Bundle · {current?bundleLabel(state,current):'Choose a bundle'}</span><ChevronRight/></button>}
   {!embedded&&<button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" disabled={!!unavailable} aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current})}><Layers/><span>{current?bundleLabel(state,current):rows.length?'Choose a bundle':catalogPhase==='ready'?'No bundle choices':defaults.phase==='error'||catalogPhase==='error'?'Bundle unavailable':'Loading bundle…'}</span>{session?.pendingBundleSelection&&<small>Next message</small>}<ChevronDown/></button>}
-  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-bundle":"a-model-popover a-compact-popover"} style={embedded?undefined:position} aria-label="Choose conversation bundle">{embedded?<label htmlFor="composer-options-bundle">Agent bundle</label>:<div className="a-settings-row"><strong>Conversation bundle</strong><button type="button" className="a-icon" aria-label="Close bundle settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>}
-   <p className="a-caption" role="status">{pending?'Saving Next message settings…':session?.pendingBundleSelection?'Next message · Saved; not applied yet.':'Next message · Changes apply when you send.'}</p>
+  {open&&renderPanel(<section ref={panelRef} data-composer-page="bundle" hidden={!!onNavigate&&page!=='bundle'} className={embedded?"a-embedded-bundle":"a-model-popover a-compact-popover"} style={embedded?undefined:position} aria-label="Choose conversation bundle">{embedded?<label className={onNavigate?'a-sr-only':undefined} htmlFor="composer-options-bundle">Agent bundle</label>:<div className="a-settings-row"><strong>Conversation bundle</strong><button type="button" className="a-icon" aria-label="Close bundle settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>}
+   {!onNavigate&&<p className="a-caption" role="status">{pending?'Saving Next message settings…':session?.pendingBundleSelection?'Next message · Saved; not applied yet.':'Next message · Changes apply when you send.'}</p>}
    <select id={embedded?"composer-options-bundle":undefined} aria-label="Registered root bundles" value={current||''} disabled={blocked} data-action={session?'conversation.configure':'view.update'} onChange={e=>choose(e.target.value)}>{!current&&<option value="" disabled>{rows.length?'Choose a bundle':catalogPhase==='ready'?'No bundle choices':catalogPhase==='error'?'Bundle choices unavailable':'Loading bundles…'}</option>}{current&&!rows.some(row=>row.value===current)&&<option value={current}>{bundleLabel(state,current)}</option>}{rows.map(row=><option key={row.value} value={row.value}>{row.label||row.value}</option>)}</select>
    {rows.find(row=>row.value===current)?.description&&<p className="a-caption a-composer-bundle-description">{rows.find(row=>row.value===current).description}</p>}
    <BundleCatalogStatus state={state} act={act} value={current} disabled={blocked}/>
    {resetBundle&&<><p>Your pinned model is unavailable in this bundle.</p><button type="button" className="a-soft" disabled={blocked} onClick={()=>choose(resetBundle,true)}>Use the new bundle’s model</button></>}
-   {(error||session?.nextMessageError||session?.bundleChange?.phase==='error')&&<small className="a-danger" role="status">{error||session?.nextMessageError||session.bundleChange.error}</small>}
+   {(error||(!onNavigate&&session?.nextMessageError)||session?.bundleChange?.phase==='error')&&<small className="a-danger" role="status">{error||(!onNavigate&&session?.nextMessageError)||session.bundleChange.error}</small>}
   </section>)}
+  {onNavigate&&page!=='bundle'&&(error||resetBundle)&&<small className="a-danger" role="status">{error||'Your pinned model is unavailable in this bundle. Open Agent bundle to review.'}</small>}
  </div>;
 }
 function DetailedBundleControl({state,session,act,working}){
