@@ -1043,6 +1043,31 @@ synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
 qualify installed wheels and negative controls; they do not replace these
 automatic ordinary-path owners.
 
+### Keyboard Settings ownership registration (October 24)
+
+PR #1149 source `2db7f630fffdef34aa081e90f37563a82efd16ab` adds the maintained
+`composer-panel-ownership` journey to the existing Composer owner
+(`delta.compact-composer` / `composer.compact-options`). Add → Ctrl/Cmd+, must
+yield focus/Escape to Settings without pointer dismissal; dirty Settings retain
+their guard, and accepted close returns to the persistent Add trigger. Ordinary
+Add Escape and the private composer draft remain intact, with no send, upload,
+provider-save or access-change action.
+
+The extended manifest owns this source journey exactly once. Its existing writer
+retains `result.json`, `keyboard-settings-1280.png`, `keyboard-settings-390.png`
+and, on failure, `failure.png` under
+`output/browser-checks/composer-panel-ownership`. These are output destinations,
+not newly executed evidence. Synthetic Linux/Mac navigator branches at 1280/390px
+do not qualify physical macOS keyboards.
+
+This registration-only increment has **120 extended scenarios / 163 distinct
+scripts** across the maintained readiness/extended owners. The original 65
+scenarios and their hash, frozen inventory, historical delta source identity,
+existing `composer-options` readiness owner and prior failures remain unchanged.
+Combined runtime/package qualification belongs to Releases; no broad browser run,
+new environment, product change, or change to the frozen Inline/Canvas batch is
+required for this registration.
+
 ## Immutable multi-quote integration (October 22)
 
 The additive `multi-quote` source journey uses the existing automatic browser
