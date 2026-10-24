@@ -553,6 +553,7 @@ async def test_chat_reference_revision_includes_unknown_organization_invalidatio
 
     before = projected()
     revision = app.state["revision"]
+    unknown_epoch = app.shell.resources.unknown_epoch
     organization_epoch = app.shell.resources.epochs["conversationOrganization"]
     directory = (app.directory.navigation_revision, app.directory.workspace_revision)
     app.shell.resources.invalidate()
@@ -561,7 +562,17 @@ async def test_chat_reference_revision_includes_unknown_organization_invalidatio
     assert (app.directory.navigation_revision, app.directory.workspace_revision) == directory
     after = projected()
     assert after != before and projected() == after
-    assert len(after.encode()) < 256 and args["targetSessionId"] not in after
+    before_parts, after_parts = json.loads(before), json.loads(after)
+    # Existing directory tuples already contain SHA-256 digests. Bound the
+    # added dependency's shape, not the byte size of those unchanged tuples.
+    assert len(before_parts) == len(after_parts) == 4
+    assert after_parts[:3] == before_parts[:3]
+    assert before_parts[3] == [unknown_epoch, [["conversationOrganization", organization_epoch]]]
+    assert after_parts[3] == [unknown_epoch + 1, [["conversationOrganization", organization_epoch]]]
+    for suffix in (before_parts[3], after_parts[3]):
+        assert type(suffix[0]) is int and suffix[0] >= 0
+        assert type(suffix[1][0][1]) is int and suffix[1][0][1] >= 0
+    assert args["targetSessionId"] not in after
     assert effects(app) == [[], [], [], []]
 
 
