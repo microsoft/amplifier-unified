@@ -41,7 +41,7 @@ try{
  const context=await browser.newContext({extraHTTPHeaders:headers,viewport:{width:1440,height:1000}});
  context.setDefaultTimeout(15000);context.setDefaultNavigationTimeout(15000);
  page=await context.newPage();
- const peer=await context.newPage(),posts=[];
+ const peer=await context.newPage(),posts=[],fixtureRestores=new Set();
  let additionalPages=0;
  context.on('page',()=>additionalPages++);
  for(const p of [page,peer]){
@@ -206,7 +206,9 @@ try{
   assert.deepEqual(after.messages,boot.messages);
   assert.deepEqual(after.approvals,boot.approvals);
   const forbidden=/^(conversation\.(send|stop)|worker\.|approval\.respond|session\.(create|warm|restore|handoff\.(start|propose|confirm))|coordination\.(send|followup)|smartTools\.call)/;
-  assert.deepEqual(posts.filter(row=>forbidden.test(row.action)),[]);
+  // Only the explicit test-owned canonical restore below is allowed. A restore
+  // from any card click, another target, or a duplicate request still fails.
+  assert.deepEqual(posts.filter(row=>forbidden.test(row.action)&&!fixtureRestores.has(row)),[]);
  }
  // Ordinary guarded selection and the card must retain the same draft/attachment.
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({
@@ -457,9 +459,37 @@ try{
  });
  await act(page,'session.select',{id:source});
  await act(page,'canvas.close');
+ await expect(renamed).toBeVisible();
+ const mountedCard=await renamed.elementHandle(),archiveMarker=await marker(page);
+ assert.ok(mountedCard);
  await act(page,'session.archive',{id:target});
  await expect(renamed).toHaveAccessibleName(/^Open archived chat:/);
  await expect(sourceArticle.getByText('Opens here for viewing. The chat stays archived; no message is sent or work started.',{exact:true})).toBeVisible();
+ assert.equal((await authoritative(page)).selectedSessionId,source);
+ assert.deepEqual(await marker(page),archiveMarker);
+ assert.ok(await renamed.evaluate((node,original)=>node===original&&original.isConnected,mountedCard));
+ // Restore through the same canonical owner while the source card stays mounted.
+ // Retain exactly this test-issued request; do not exempt card-originated restores.
+ const restoreStart=posts.length;
+ const restored=await act(page,'session.restore',{id:target});
+ assert.equal(restored.accepted,true);
+ const restorePosts=posts.slice(restoreStart).filter(row=>row.action==='session.restore');
+ assert.equal(restorePosts.length,1);assert.deepEqual(restorePosts[0].args,{id:target});
+ fixtureRestores.add(restorePosts[0]);
+ await expect(renamed).toHaveAccessibleName(/^Open chat:/);
+ await expect(sourceArticle.getByText('Opens here. Does not send a message or start work.',{exact:true})).toBeVisible();
+ assert.equal((await authoritative(page)).selectedSessionId,source);
+ assert.ok(!Object.hasOwn((await authoritative(page)).conversationOrganization.archived,target));
+ assert.deepEqual(await marker(page),archiveMarker);
+ assert.ok(await renamed.evaluate((node,original)=>node===original&&original.isConnected,mountedCard));
+ await expect(composer(page)).toHaveDraft('Source draft before debounced save');
+ await expect(page.getByRole('button',{name:'Remove reference-note.txt'})).toBeVisible();
+ // Preserve the original archived-label/help and open-without-restore journey.
+ await act(page,'session.archive',{id:target});
+ await expect(renamed).toHaveAccessibleName(/^Open archived chat:/);
+ await expect(sourceArticle.getByText('Opens here for viewing. The chat stays archived; no message is sent or work started.',{exact:true})).toBeVisible();
+ assert.ok(await renamed.evaluate((node,original)=>node===original&&original.isConnected,mountedCard));
+ await mountedCard.dispose();
  await renamed.click();await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
  await expect(page.getByRole('heading',{name:'Renamed investigation destination',exact:true})).toBeFocused();
  assert.ok(Object.hasOwn((await authoritative(page)).conversationOrganization.archived,target));
