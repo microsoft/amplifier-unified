@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createDestinationHistory,destination,destinationCommand} from '../src/destination-history.js';
+import {createDestinationHistory,destination,destinationCommand,destinationKey} from '../src/destination-history.js';
 
 const STORAGE='amplifier.destinationHistory';
 function memory(seed){
@@ -231,4 +231,107 @@ test('stream-first sign-in change is not invalidated again by its later HTTP res
  assert.deepEqual(history.snapshot().entries.map(row=>row.id),['new-account']);
  history.invalidate();history.observe(frame('new-account',2,{scope:'scope-b'}),{baseline:true});
  assert.equal(history.snapshot().ready,false);
+});
+
+test('Recent places deduplicates identities and follows confirmed traversal without changing steps',()=>{
+ const {history}=trail();
+ history.observe(frame('a',4));
+ assert.deepEqual(history.snapshot().entries.map(row=>row.id),['a','b','c','a']);
+ assert.deepEqual(history.snapshot().recent.map(row=>row.id),['a','c','b']);
+ const before=history.snapshot().entries;
+ back(history,5);
+ assert.deepEqual(history.snapshot().recent.map(row=>row.id),['c','a','b']);
+ assert.deepEqual(history.snapshot().entries,before);
+ const forward=history.begin(history.snapshot().forwardKey);
+ history.observe(frame(forward.id,6));
+ assert.deepEqual(history.snapshot().recent.map(row=>row.id),['c','a','b'],'unconfirmed frames cannot reorder MRU');
+ assert.equal(history.finish(receipt(6)),true);
+ assert.deepEqual(history.snapshot().recent.map(row=>row.id),['a','c','b']);
+ assert.deepEqual(history.snapshot().entries,before);
+});
+
+test('choosing a recent place is a new guarded visit, not a cursor jump',async()=>{
+ const {history}=trail();back(history);
+ const target=history.snapshot().recent.find(row=>row.id==='a');
+ const attempt=history.beginRecent(destinationKey(target));
+ history.observe(frame('a',5));
+ assert.deepEqual(history.snapshot().entries.map(row=>row.id),['a','b','c']);
+ assert.equal(history.finish(receipt(5)),true);assert.equal(await attempt.confirmed,true);
+ assert.deepEqual(history.snapshot().entries.map(row=>row.id),['a','b','a']);
+ assert.equal(history.snapshot().forwardKey,null);
+ assert.deepEqual(history.snapshot().recent.map(row=>row.id),['a','b','c'],'places survive Forward branching');
+});
+
+test('recent-place failure, wrong host/revision/route or missing receipt keeps both projections',()=>{
+ for(const failure of ['rejected','old-revision','wrong-host','wrong-route','unknown']){
+  const {history}=trail(),before=history.snapshot();
+  history.beginRecent(destinationKey(before.recent.find(row=>row.id==='a')));
+  history.observe(frame(failure==='wrong-route'?'b':'a',4));
+  const result=failure==='unknown'?null:failure==='rejected'?{...receipt(4),accepted:false}:failure==='old-revision'?receipt(5):failure==='wrong-host'?{...receipt(4),hostInstanceId:'other'}:receipt(4);
+  const outcome=history.finish(result);
+  if(outcome===null)history.finish(null);
+  assert.notEqual(outcome,true,failure);
+  assert.deepEqual(history.snapshot().entries,before.entries);
+  assert.deepEqual(history.snapshot().recent,before.recent);
+  assert.equal(history.snapshot().cursor,before.cursor);
+ }
+});
+
+test('recent identity ignores names, refreshes renamed metadata without reordering, and remembers workspace tab',()=>{
+ const {history}=harness();history.observe(frame('a',1,{title:'Same title'}));
+ history.observe(frame('b',2,{title:'Same title'}));
+ history.observe(frame('b',3,{surface:'workspace',tab:'files'}));
+ history.observe(frame('b',4,{surface:'workspace',tab:'work'}));
+ history.observe(frame('a',5,{title:'Same title'}));
+ const before=history.snapshot().recent.map(destinationKey);
+ history.observe({...frame('a',6,{title:'Renamed'}),sessions:[{id:'a',title:'Renamed',workspaceId:'project'},{id:'b',title:'Same title',workspaceId:'other'}],workspaces:[{id:'project',name:'Renamed project'},{id:'other',name:'Other'}]});
+ assert.deepEqual(history.snapshot().recent.map(destinationKey),before);
+ const recent=history.snapshot().recent;
+ assert.equal(recent.length,3);assert.equal(recent[0].label,'Renamed');
+ assert.equal(recent[1].tab,'work');assert.equal(recent[1].label,'Renamed project');
+ assert.equal(recent[2].id,'b');assert.equal(recent[2].workspaceLabel,'Other');
+ history.observe({...frame('a',7),sessions:[],workspaces:[]});
+ assert.deepEqual(history.snapshot().recent,recent,'absence from bounded catalogs is not deletion');
+});
+
+test('MRU reload, cap and sign-in scope are independent of the visit cursor',()=>{
+ const {history,store}=trail();back(history);
+ const before=history.snapshot();
+ const restored=harness(store).history;restored.observe(frame('b',5),{baseline:true});
+ assert.deepEqual(restored.snapshot().recent,before.recent);
+ assert.equal(restored.snapshot().cursor,1);
+ for(let i=0;i<40;i++)restored.observe(frame('new-'+i,i+6));
+ assert.equal(restored.snapshot().recent.length,30);
+ assert.equal(restored.snapshot().recent[29].id,'new-10');
+ restored.invalidate();assert.equal(store.getItem(STORAGE),null);assert.deepEqual(restored.snapshot().recent,[]);
+ restored.observe(frame('new-account',1,{scope:'scope-b'}));
+ assert.deepEqual(restored.snapshot().recent.map(row=>row.id),['new-account']);
+});
+
+test('legacy trail is retained and seeds bounded recent places; malformed optional recent data cannot erase it',()=>{
+ for(const recent of [undefined,'invalid',[{kind:'chat',id:'unsafe',key:null}]]){
+  const value={version:1,scope:'scope-a',cursor:1,entries:[
+   {key:'a1',kind:'chat',id:'a',label:'Alpha'},
+   {key:'b1',kind:'chat',id:'b',label:'Beta'},
+   {key:'a2',kind:'chat',id:'a',label:'Alpha'}],...(recent===undefined?{}:{recent})};
+  const {history}=harness(memory([[STORAGE,JSON.stringify(value)]]));
+  history.observe({...frame('b'),sessions:[],workspaces:[]},{baseline:true});
+  assert.deepEqual(history.snapshot().entries.map(row=>[row.key,row.id]),value.entries.map(row=>[row.key,row.id]));
+  assert.equal(history.snapshot().cursor,1);
+  assert.deepEqual(history.snapshot().recent.map(row=>row.id),['a','b']);
+ }
+});
+
+test('queued recent selection retains the selected tab while an earlier browse updates the same place',async()=>{
+ const {history}=harness();
+ history.observe(frame('a',1,{surface:'workspace',tab:'files'}));history.observe(frame('a',2));
+ const chosen=history.snapshot().recent.find(row=>row.kind==='workspace');
+ history.observe(frame('a',3,{surface:'workspace',tab:'chats'}));
+ assert.equal(history.snapshot().recent[0].tab,'chats');
+ const attempt=history.beginRecent(destinationKey(chosen),chosen,'scope-a');
+ assert.equal(attempt.tab,'files');
+ history.observe(frame('a',4,{surface:'workspace',tab:'files'}));history.finish(receipt(4));
+ assert.equal(await attempt.confirmed,true);
+ assert.equal(history.snapshot().recent[0].tab,'files');
+ assert.equal(history.beginRecent(destinationKey(chosen),chosen,'old-scope'),null);
 });

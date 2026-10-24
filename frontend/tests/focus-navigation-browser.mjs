@@ -36,7 +36,7 @@ try{
  const identity=()=>card.getAttribute('data-session-id');
  const next=page.locator('[data-focus-move=next]'),previous=page.locator('[data-focus-move=previous]');
  const filters=page.getByRole('group',{name:'Filter work'});
- const home=async()=>{await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
+ const home=async()=>{await page.getByRole('navigation',{name:'Site navigation'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
  await page.goto(`http://127.0.0.1:${port}`);await ready();
  await page.getByRole('group',{name:'Work view'}).getByRole('button',{name:'Focus',exact:true}).click();
  await expect(card).toHaveCount(1);await expect(previous).toBeDisabled();

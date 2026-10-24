@@ -72,7 +72,7 @@ import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraft
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation,isNavigationAction,usesNavigationQueue} from './conversation-navigation';
-import {createDestinationHistory,destinationCommand} from './destination-history.js';
+import {createDestinationHistory,destinationCommand,destinationKey} from './destination-history.js';
 import {onAuthenticationChange} from './api';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
@@ -114,7 +114,7 @@ function App(){
  const archiveRevision=useRef(0),archiveAction=useRef(null),[archiveFeedback,setArchiveFeedback]=useState({notice:null,pending:[]});
  const narrow=useNarrowScreen();
  const [creatingWorkspace,setCreatingWorkspace]=useState(false);
- const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null);
+ const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null),workspaceSettingsNavigation=useRef(null);
  const dictationControl=useRef(null);
  const [streamClient,setStreamClient]=useState(null);
  const [destinationTrail,setDestinationTrail]=useState(null),destinationHistory=useRef(null);
@@ -214,8 +214,11 @@ function App(){
   if(chatReference)meta={...meta,chatReferenceIntent:meta.chatReferenceIntent??archiveRevision.current};
   if(meta.chatLink&&!meta.chatLinkIsCurrent())return Promise.resolve({accepted:false});
   const presentationOnly=['canvas.select','canvas.show'].includes(action)&&args.presentation&&args.presentation!=='canvas'&&args.id!==latest.current?.canvas?.id;
-  const leavingSettings=!!meta.historyVisit||!presentationOnly&&(['peer.preview','session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action));
+  const leavingSettings=!!meta.historyVisit||!!meta.recentPlace||!presentationOnly&&(['peer.preview','session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action));
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,superseded:!!chatReference&&meta.chatReferenceIntent!==archiveRevision.current,error:'Settings changes were kept.'});
+  const workspaceGuard=workspaceSettingsNavigation.current;
+  if(!meta.workspaceSettingsConfirmed&&workspaceGuard?.hasUnsaved()&&(meta.historyVisit||meta.recentPlace||workspaceGuard.leaving(action,args)))
+   return workspaceGuard.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,workspaceSettingsConfirmed:true}):{accepted:false,error:'Workspace settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
   if(action==='call.start')args={attemptId:crypto.randomUUID(),...args};
@@ -293,8 +296,8 @@ function App(){
     return {accepted:false,superseded:true,error:'The view changed. Open the reference from its original reply.'};
    // Begin only when this queued command executes, after local/settings guards.
    // No file-open/create action is replayed by a history traversal.
-   const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):null;
-   if(meta.historyVisit&&!historyVisit)return {accepted:false};
+   const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):meta.recentPlace?destinationHistory.current.beginRecent(destinationKey(meta.recentPlace.entry),meta.recentPlace.entry,meta.recentPlace.scope):null;
+   if((meta.historyVisit||meta.recentPlace)&&!historyVisit)return {accepted:false};
    try{
     const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
     if(historyVisit)destinationHistory.current.finish(result);
@@ -708,6 +711,12 @@ function App(){
   const [action,args]=destinationCommand(entry);
   try{await dispatch(action,args,{historyVisit:key})}catch(error){reportError(error)}
  };
+ const visitRecent=async key=>{
+  const entry=destinationHistory.current.snapshot().recent.find(row=>destinationKey(row)===key);
+  if(!entry||destinationHistory.current.snapshot().pending)return;
+  const [action,args]=destinationCommand(entry);
+  try{await dispatch(action,args,{recentPlace:{entry,scope:serverState.current?.client?.historyScope}})}catch(error){reportError(error)}
+ };
  if(!archiveAction.current)archiveAction.current=createArchiveAction({
   getState:()=>pendingView.current.apply(latest.current),getRevision:()=>archiveRevision.current,dispatch,
   onChange:setArchiveFeedback,
@@ -727,7 +736,7 @@ function App(){
   },
  });
  const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
- const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,history:destinationTrail,visitHistory,
+ const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,history:destinationTrail,visitHistory,visitRecent,
   sidebarView:view,updateSidebar:patch=>act('view.update',{patch}),
   home:(extra={})=>act('view.update',{patch:homePatch(presentation,extra,view)}),
   setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};
@@ -749,7 +758,7 @@ function App(){
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} act={act}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
-  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act} dispatch={dispatch}/>
+  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act} dispatch={dispatch} navigationRef={workspaceSettingsNavigation}/>
    <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session} messages={messages}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} messages={messages} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{!voiceStream&&<StreamingMessage session={session} state={state}/>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
    {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
