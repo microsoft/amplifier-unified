@@ -125,6 +125,14 @@ try {
  await retained();await capture('dirty-details-narrow');
  await page.keyboard.press('Escape');await expect(details).toBeHidden();await expect(primary).toBeFocused();
  assert.equal(await primary.evaluate(el=>!!el.closest('[inert]')),false);await retained();
+ for(const width of [390,320]){
+  await page.setViewportSize({width,height:850});
+  await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
+  await toggle.click();await expect(panel).toBeHidden();
+  await toggle.click();await expect(details).toBeVisible();await retained();
+  await closeDetails().click();await expect(details).toBeHidden();await retained();
+  assert.equal(await panel.locator('[data-part="canvas-view-controls"]').evaluate((el,original)=>el===original,controlsHost),true);
+ }
  const sheetScroll=async delta=>{
   const r=await details.boundingBox();assert.ok(r&&r.width>0&&r.height>0);
   await page.mouse.move(r.x+r.width*.6,r.y+r.height*.8);
@@ -148,8 +156,6 @@ try {
  for(const width of [390,320]){
   await page.setViewportSize({width,height:480});
   await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
-  await toggle.click();await expect(panel).toBeHidden();
-  await toggle.click();await expect(details).toBeVisible();await retained();
   // Actual File/version/renderer controls overflow the short narrow sheet.
   // Do not manufacture overflow or let a locator scroll Close back into view.
   await sheetScroll(-2000);await expect.poll(()=>details.evaluate(el=>el.scrollTop)).toBeLessThanOrEqual(1);
