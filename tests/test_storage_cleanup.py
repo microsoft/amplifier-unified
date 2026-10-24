@@ -203,18 +203,28 @@ async def test_bounded_batches_do_not_reset_unseen_retention_age(app, monkeypatc
 async def test_disable_after_final_measurement_prevents_unadmitted_deletion(app, monkeypatch):
     settings(app, keepDays=0)
     original = retention._probe
+    reclaim = retention.reclaim
     measured = 0
+    removing = False
+    async def removal_scope(manager, **kwargs):
+        nonlocal removing
+        removing = not kwargs.get('inspect_only', False)
+        try:
+            return await reclaim(manager, **kwargs)
+        finally:
+            removing = False
     async def boundary(operation, values, **kwargs):
         nonlocal measured
         result = await original(operation, values, **kwargs)
-        if operation == 'measure' and any(app.names[3] in path for path in values['paths']):
+        if (operation == 'measure' and removing and app.runtime_lifecycle_lock.locked()
+                and any(app.names[3] in path for path in values['paths'])):
             measured += 1
-            if measured == 2:
-                settings(app, enabled=False, revision=1)
+            settings(app, enabled=False, revision=1)
         return result
+    monkeypatch.setattr(retention, 'reclaim', removal_scope)
     monkeypatch.setattr(retention, '_probe', boundary)
     result = await cleanup.run(app, 'late-disable', automatic=True)
-    assert measured == 2 and not result['effects']
+    assert measured == 1 and not result['effects']
     assert (app.update_manager.directory/'releases'/app.names[3]).exists()
 
 
