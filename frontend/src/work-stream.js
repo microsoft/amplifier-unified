@@ -9,6 +9,12 @@ export function workStream(data,turnId){
  const tree=treeForTurn(data,turnId),entries=[],statuses=[],undatedReplies=[],seen=new Set(),exchanges=new Set();
  const workers=new Map(),source=new Map(data.nodes.map(node=>[node.id,node]));
  const workerSessions=new Set(data.nodes.flatMap(node=>[node.kind==='worker'&&node.sessionId,node.delegate?.sessionId]).filter(Boolean));
+ const sourceActor=node=>{
+  const rootId=node?.rootSessionId||data.sessionId,sid=node?.sessionId;
+  if(sid&&rootId&&sid===rootId)return 'Main chat';
+  if(sid&&(workerSessions.has(sid)||rootId&&sid!==rootId))return 'Worker (owner unavailable)';
+  return 'Sender unavailable';
+ };
  const local=new Set(data.nodes.filter(node=>node.turnId===turnId).map(node=>node.id));
  // treeForTurn guards cycles; use a separate bounded walk for arbitrary roots.
  const visited=new Set();
@@ -31,8 +37,13 @@ export function workStream(data,turnId){
   const rootId=node.rootSessionId||data.sessionId;
   const followupFrom=sender?workerLabel(sender):senders.length>1||workerSessions.has(node.sessionId)?'Worker (owner unavailable)':rootId&&node.sessionId===rootId?'Main chat':'Sender unavailable';
   const recipient=followup&&node.exchangeOwnerId&&(owner?.ownerId||owner?.id)===node.exchangeOwnerId?owner:null;
-  const from=unverified?'Recorded sender':followup?followupFrom:parent?workerLabel(parent):'Main chat';
-  const to=unverified?'Delegate (association unverified)':followup?(recipient?workerLabel(recipient):'Delegate (recipient unavailable)'):parent?workerLabel(owner):'Delegate';
+  // A worker header describes the recipient, but an unspawned delegate tool
+  // remains under its caller. Missing ancestry is not evidence of Main chat.
+  const caller=node.kind==='tool'&&!followup&&owner?.sessionId===node.sessionId?owner:parent;
+  const requestSource=report?source.get(owner?.exchange?.id)||owner?.exchange:
+   source.get(key)||exchange;
+  const from=unverified?'Recorded sender':followup?followupFrom:caller?workerLabel(caller):sourceActor(requestSource);
+  const to=unverified?'Delegate (association unverified)':followup?(recipient?workerLabel(recipient):'Delegate (recipient unavailable)'):parent&&(node.kind==='worker'||report)?workerLabel(owner):'Delegate';
   const sourceNode=node.kind==='worker'?node:{...node,exchange};
   const running=isRunning({phase:node.workerPhase||node.phase||exchange.phase});
   const request=hasField(exchange,'delegateRequest'),response=hasField(exchange,'delegateResponse');
