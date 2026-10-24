@@ -134,8 +134,22 @@ try {
   assert.equal(await panel.locator('[data-part="canvas-view-controls"]').evaluate((el,original)=>el===original,controlsHost),true);
  }
  const sheetScroll=async delta=>{
-  const r=await details.boundingBox();assert.ok(r&&r.width>0&&r.height>0);
-  await page.mouse.move(r.x+r.width*.6,r.y+r.height*.8);
+  // The File form is itself scrollable. Target the outer sheet's padding,
+  // not a percentage point that may belong to a nested scroll container.
+  const point=await details.evaluate(el=>{
+   const r=el.getBoundingClientRect(),style=getComputedStyle(el),padding=parseFloat(style.paddingLeft);
+   const x=r.left+el.clientLeft+padding/2,y=r.top+el.clientTop+el.clientHeight*.8,hit=document.elementFromPoint(x,y);
+   return {x,y,padding,width:r.width,height:r.height,overflow:style.overflowY,
+    inside:x>r.left&&x<r.right&&y>r.top&&y<r.bottom&&x>=0&&x<innerWidth&&y>=0&&y<innerHeight,
+    hitsSheet:hit===el,hitTag:hit?.tagName,hitClass:hit?.className,scrollTop:el.scrollTop};
+  });
+  const sample={delta,...point};(report.detailsWheelTargets??=[]).push(sample);
+  assert.ok(point.width>0&&point.height>0&&point.padding>=4&&point.inside&&/auto|scroll/.test(point.overflow),
+   'OUTER_DETAILS_WHEEL requires a rendered outer-sheet padding target');
+  assert.equal(point.hitsSheet,true,'OUTER_DETAILS_WHEEL must hit the sheet itself, not a nested scroll owner');
+  await page.mouse.move(point.x,point.y);
+  sample.hitAfterMove=await details.evaluate((el,{x,y})=>document.elementFromPoint(x,y)===el,point);
+  assert.equal(sample.hitAfterMove,true,'OUTER_DETAILS_WHEEL target changed before wheel input');
   await page.mouse.wheel(0,delta);
  };
  const closeGeometry=()=>details.evaluate(el=>{
