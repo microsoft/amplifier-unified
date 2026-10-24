@@ -1,4 +1,5 @@
 import {createServer} from 'vite';
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import {mkdir,mkdtemp} from 'node:fs/promises';
@@ -142,13 +143,14 @@ try{
  await expect(rail).toBeHidden();
  await pane.evaluate(el=>{el.scrollTop=(el.scrollHeight-el.clientHeight)/2;el.dispatchEvent(new Event('scroll'))});
  const latest=page.getByRole('button',{name:'Jump to latest messages'});await expect(latest).toBeVisible();
- // Published compact composer puts both controls in one Chat options dialog.
+ // Published compact composer keeps both controls in one paged Chat options dialog.
  // Reopen for each control. The compact layout need not overlap Latest;
  // when it does, keep the original intersection hit test. Always hit-test
  // Close and separated Latest as well, so visibility alone cannot pass.
  for(const label of ['Conversation model','Registered root bundles']){
   await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click({timeout:8000});
   const popup=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(popup).toBeVisible();
+  await showComposerOption(page,label==='Conversation model'?'model':'bundle');
   await expect(popup.getByRole('combobox',{name:label,exact:true})).toBeVisible();
   const unobscured=()=>popup.evaluate((el,jump)=>{
    const a=el.getBoundingClientRect(),b=document.querySelector(jump).getBoundingClientRect();
@@ -177,7 +179,9 @@ try{
  await page.setViewportSize({width:390,height:844});await expect(rail).toBeHidden();
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
+ await showComposerOption(page,'model');
  await expect(page.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
+ await showComposerOption(page,'bundle');
  await expect(page.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.setViewportSize({width:1440,height:900});await expect(rail).toBeVisible();

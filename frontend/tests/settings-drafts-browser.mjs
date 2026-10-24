@@ -1,4 +1,5 @@
 import {finishFixture} from './fixture-lifecycle.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
@@ -45,6 +46,7 @@ try{
  await page.setViewportSize({width:1100,height:900});
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workSurface:'chat'}}));
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await showComposerOption(page,'provider');
  await expect(page.getByRole('button',{name:'Add connection',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Manage connections',exact:true}).click();
  await expect(page.locator('[data-part=ai-connections]')).toBeVisible();

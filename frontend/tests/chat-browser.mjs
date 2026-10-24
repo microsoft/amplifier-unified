@@ -1,4 +1,5 @@
 import {startChatFixture} from './chat-fixture.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {finishFixture} from './fixture-lifecycle.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {chromium} from '@playwright/test';
@@ -16,9 +17,12 @@ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42
  assert.equal(await page.locator('.a-conversation .a-operations,.a-conversation .a-computation').count(),0);
  const initial=await page.locator('.a-composer').boundingBox();assert.ok(initial.y>250&&initial.y<650);
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
+ await showComposerOption(page,'provider');
  await page.locator('#chat-provider').waitFor();
+ await showComposerOption(page,'model');
  await page.locator('#chat-model').selectOption('fixture-vision');
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.model==='fixture-vision'));
+ await showComposerOption(page,'effort');
  await page.locator('#chat-effort').press('End');
  await page.waitForFunction(()=>window.amplifier.getState().view.composerModel?.effort==='high');
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.pinned&&c['configuration.catalog']?.selection?.effort==='high'));

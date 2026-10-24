@@ -1,4 +1,5 @@
 // Packaged UI and real state transport; isolated host with a synthetic runtime.
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -23,7 +24,7 @@ try{
  const before=await(await page.request.get(url+'/fixture')).json();
  assert.deepEqual(before.started,[]);assert.deepEqual(before.sent,[]);
  // An explicit chat choice survives subsequent changes to the default.
- await model.click();await page.locator('select#chat-model').selectOption('first');
+ await model.click();await showComposerOption(page,'model');await page.locator('select#chat-model').selectOption('first');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await preference('chosen-model');
  await expect.poll(async()=>(await state()).configurationRevision).toBe(2);

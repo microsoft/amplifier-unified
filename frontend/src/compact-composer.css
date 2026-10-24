@@ -46,8 +46,19 @@
 #amp-one .a-compact-composer.drag-over .a-compose-surface{outline:2px dashed var(--a-accent);background:var(--a-tint)}
 #amp-one .a-composer-options-panel{overflow-y:auto;overscroll-behavior:contain}
 #amp-one .a-composer-options-panel :is(button,select,input[type=range]){min-height:44px;min-width:44px}
-#amp-one .a-composer-options-panel .a-embedded-bundle{margin-top:12px}
+#amp-one .a-composer-options-panel .a-embedded-bundle{margin-top:0}
 #amp-one .a-composer-options-panel :focus-visible{outline:2px solid var(--a-accent);outline-offset:2px}
+#amp-one .a-composer-options-panel .a-composer-options-heading{gap:8px;margin-bottom:6px}
+#amp-one .a-composer-options-heading>strong{flex:1;min-width:0}
+#amp-one .a-composer-options-panel .a-composer-option{
+ display:flex;align-items:center;gap:10px;text-align:left;width:100%;padding:8px;
+ border:0;border-radius:var(--a-radius-sm,8px);background:transparent;color:var(--a-ink);min-height:44px;
+}
+#amp-one .a-composer-option:hover{background:var(--a-tint)}
+#amp-one .a-composer-option>span{flex:1;min-width:0;overflow-wrap:anywhere}
+#amp-one .a-composer-option>svg{width:18px;height:18px;flex:none}
+#amp-one .a-composer-option small{display:block;color:var(--a-muted);font-size:var(--a-text-sm,13px);font-weight:400}
+#amp-one.a-chat-shell .a-composer-options-panel>.a-caption{margin:6px 8px}
 @container conversation (max-width:360px){
  #amp-one .a-compact-composer .a-compose-surface{padding:5px;gap:2px}
  #amp-one .a-compact-composer .a-compose-end{gap:0}

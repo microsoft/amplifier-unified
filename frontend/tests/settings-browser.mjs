@@ -1,4 +1,5 @@
 import {finishFixture} from './fixture-lifecycle.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {startSettingsFixture} from './settings-fixture.mjs';
@@ -139,6 +140,7 @@ try{
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
  await page.getByRole('button',{name:'New chat',exact:true}).click();
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await showComposerOption(page,'bundle');
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');

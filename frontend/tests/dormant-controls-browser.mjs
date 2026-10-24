@@ -1,6 +1,7 @@
 // Real rendered controls over HTTP, with conversation startup forbidden.
 import './composer-test-helpers.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -36,6 +37,7 @@ try{
  await api('/fixture/state',{status:'starting'});
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
+ await showComposerOption(page,'bundle');
  const bundles=page.getByRole('combobox',{name:'Registered root bundles',exact:true});
  await expect(bundles).toBeEnabled();
  await bundles.focus();await bundles.press('w');await bundles.press('Enter');
@@ -46,19 +48,24 @@ try{
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
  // A new root with no pin has no proven provider default until discovery.
  // Cached choices remain selectable; explicitly choose their connection.
+ await showComposerOption(page,'provider');
  await page.locator('#chat-provider').selectOption('one');
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.instance).toBe('one');
+ await showComposerOption(page,'model');
  await expect(page.locator('#chat-model')).toBeEnabled();
  await page.locator('#chat-model').selectOption('second');
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.model).toBe('second');
  // The combined dialog shares acknowledged revisions across its controls.
  // Keep it open for model -> bundle -> effort; no reload/reopen may repair it.
+ await showComposerOption(page,'bundle');
  await bundles.selectOption('anchors');
  await expect.poll(async()=>{const value=(await inspect()).session;return value.pendingBundleSelection?.bundle||value.bundle}).toBe('anchors');
+ await showComposerOption(page,'effort');
  await expect(page.locator('#chat-effort')).toBeEnabled();
  await page.locator('#chat-effort').focus();await page.locator('#chat-effort').press('End');
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection).toEqual({instance:'one',model:'second',effort:'high'});
  // A held metadata resolver cannot hold rename, settings saves, or artifacts.
+ await showComposerOption(page,'model');
  await page.getByRole('button',{name:'Refresh models',exact:true}).click();
  await expect.poll(async()=>(await inspect()).resolverCalls).toBeGreaterThan(0);
  const act=(name,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[name,args]);
@@ -95,6 +102,7 @@ try{
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).focus();
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).press('Enter');
  await expect(page.getByRole('dialog',{name:'Chat options'})).toBeVisible();
+ await page.getByRole('dialog',{name:'Chat options',exact:true}).getByRole('button',{name:'Choose agent bundle',exact:true}).press('Enter');
  await expect(page.locator('#composer-options-bundle')).toBeEnabled();
  await page.locator('#composer-options-bundle').focus();await page.locator('#composer-options-bundle').press('w');await page.locator('#composer-options-bundle').press('Enter');
  await expect.poll(async()=>{const value=(await inspect()).session;return value.pendingBundleSelection?.bundle||value.bundle}).toBe('work');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {resizeComposer,composerPrimaryAction,composerExpanded} from '../src/composer.js';
+import {resizeComposer,composerPrimaryAction,composerExpanded,quoteComposerHeightBudget} from '../src/composer.js';
 test('compact presentation expands content without altering it or action priority',()=>{
  assert.equal(composerExpanded({draft:''}),false);
  assert.equal(composerExpanded({draft:'Ready to send'}),false);
@@ -21,6 +21,21 @@ test('quote drafts have a viewport-bounded reading area without enlarging plain 
  const element={style:{},hasAttribute:()=>true,querySelector:()=>quote?{}:null};
  resizeComposer(element);assert.equal(element.style.maxHeight,'min(400px, 35dvh)');assert.equal(element.style.overflowY,'auto');
  quote=false;resizeComposer(element);assert.equal(element.style.maxHeight,'180px');
+});
+test('quote height reserves the conversation after enlarged chrome and padding-floor overflow',()=>{
+ const layout={viewportHeight:844,contentBottom:800,messagesTop:100,messagesBottom:400,composerBottom:792,composerMarginBottom:8,editorHeight:295};
+ assert.equal(quoteComposerHeightBudget(layout),295.4);
+ // At the padding floor, the form extends 6px below its content boundary.
+ const cramped={...layout,messagesBottom:144,composerBottom:806};
+ assert.equal(quoteComposerHeightBudget(cramped),245);
+ assert.ok(quoteComposerHeightBudget(cramped)>181);
+ const naive=cramped.editorHeight+(cramped.messagesBottom-cramped.messagesTop)-80;
+ assert.equal(naive,259);assert.ok(quoteComposerHeightBudget(cramped)<naive,'Overflow is part of the budget');
+ // After shrinking, editor + chrome is unchanged: no feedback-loop ratchet.
+ assert.equal(quoteComposerHeightBudget({...cramped,editorHeight:245,composerBottom:756}),245);
+ assert.equal(quoteComposerHeightBudget(layout),295.4,'More space restores the original ceiling');
+ assert.equal(quoteComposerHeightBudget({...layout,viewportHeight:2000,contentBottom:2000}),400);
+ assert.equal(quoteComposerHeightBudget({...cramped,contentBottom:200}),44);
 });
 
 test('content keeps Send during voice, work, and pending attachments',()=>{
