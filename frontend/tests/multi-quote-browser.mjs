@@ -145,19 +145,28 @@ async function expectLayout(stage,expected,{canonicalReady=true}={}){
  checkpoints.at(-1).canonical=canonical;
  if(proof)writeFileSync(join(proof,'commentary-checkpoints.json'),JSON.stringify(checkpoints,null,2));
 }
-async function expectCompact(stage){
+const settleComposerLayout=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+async function measureCompact(){
  const surface=page.locator('.a-compact-composer [data-part="composer-surface"]');
  await expect(surface).toHaveAttribute('data-expanded','true');
- const geometry=await surface.evaluate(node=>{
-  const rect=el=>{const {x,y,width,height}=el.getBoundingClientRect();return {x,y,width,height};};
+ return surface.evaluate(node=>{
+  const rect=el=>{if(!el)return null;const {x,y,width,height,top,bottom}=el.getBoundingClientRect();return {x,y,width,height,top,bottom};};
   const editor=node.querySelector('[role=textbox]'),writing=node.querySelector('.a-compose-writing');
+  const conversation=node.closest('.a-conversation'),composer=node.closest('.a-composer'),messages=conversation.querySelector('.a-messages');
   return {surface:rect(node),editor:rect(editor),writing:rect(writing),viewportHeight:innerHeight,
-   editorScrollHeight:editor.scrollHeight,messages:rect(document.querySelector('.a-messages')),
+   editorScrollHeight:editor.scrollHeight,editorMaxHeight:getComputedStyle(editor).maxHeight,messages:rect(messages),
+   conversation:rect(conversation),composer:rect(composer),header:rect(document.querySelector('.a-work-header')),
+   latest:rect(conversation.querySelector('.a-chat-jump')),latestButton:rect(conversation.querySelector('.a-chat-jump button')),
+   rows:[...conversation.children].map(row=>({className:row.className,...rect(row)})),
    quoteCount:writing.querySelectorAll('[data-quote-instance]').length,
    overflow:node.scrollWidth>node.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
    theme:document.querySelector('#amp-one').dataset.themeScheme,
    primary:rect(node.querySelector('[data-part="composer-primary-action"]'))};
  });
+}
+async function expectCompact(stage){
+ await settleComposerLayout();
+ const geometry=await measureCompact();
  compactGeometry.push({stage,...geometry});
  if(proof)writeFileSync(join(proof,'compact-quote-geometry.json'),JSON.stringify(compactGeometry,null,2));
  assert.ok(geometry.quoteCount>=2,'Real immutable quotes belong inside the compact writing wrapper');
@@ -168,7 +177,13 @@ async function expectCompact(stage){
  assert.equal(geometry.overflow,false,'Compact quote surface must not overflow');
  assert.equal(geometry.pageOverflow,false,'Compact quote page must not overflow');
  assert.ok(geometry.primary.width>=44&&geometry.primary.height>=44,'Primary action retains its touch target');
+ if(geometry.latest){
+  assert.ok(geometry.latest.top>=geometry.messages.bottom-1,'Latest has its own row, outside readable messages');
+  assert.ok(geometry.latest.bottom<=geometry.composer.top+1,'Latest does not overlay the composer');
+  assert.ok(geometry.latestButton.width>=44&&geometry.latestButton.height>=44,'Latest retains its touch target');
+ }
  await expect(page.locator('[data-part="composer-primary-action"]')).toBeInViewport();
+ return geometry;
 }
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
@@ -347,16 +362,49 @@ try{
    if(proof)await page.locator('.a-composer').screenshot({path:join(proof,`quotes-${width}-${colorScheme}.png`)});
   }
  }
+ const messagesPane=page.locator('.a-messages'),latest=page.getByRole('button',{name:'Jump to latest messages',exact:true});
+ const showLatest=async()=>{
+  assert.ok(await messagesPane.evaluate(node=>node.scrollHeight>node.clientHeight+80),'Fixture has genuine scrollback');
+  await messagesPane.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'))});
+  await expect(latest).toBeVisible();
+ };
+ await showLatest();await expectCompact('320px Latest in flow before enlargement');
+ const layoutOnlyDraft=await documentValue();
  const enlargedStyle=await page.addStyleTag({content:'#amp-one{--a-text-lg:24px;--a-text-sm:20px} #amp-one .a-composer-quote small{font-size:1rem}'});
  // Layout stress only: this is the real longest peer caption, not a forged
  // canonical attribution. Restore the DOM label after measuring both cards.
  const sourceLabels=await quotes.evaluateAll(cards=>cards.map(card=>card.querySelector('.a-composer-quote-head>button').textContent));
  await quotes.evaluateAll(cards=>cards.forEach(card=>card.querySelector('.a-composer-quote-head>button').textContent='Sent by Amplifier from another chat'));
+ await settleComposerLayout();
  await visibleCardControls('320px enlarged text long caption short quote',quotes.first());
  await visibleCardControls('320px enlarged text',quotes.nth(1));
- await expectCompact('320px enlarged text');
+ const enlargedGeometry=await expectCompact('320px enlarged text');
  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'quotes-320-enlarged.png')});
+ // Negative control restores the exact superseded bound, not fake quote nodes.
+ const oldCap=await page.addStyleTag({content:'#amp-one .a-markdown-composer{max-height:min(400px,35dvh)!important}'});
+ try{
+  await settleComposerLayout();const negative=await measureCompact();
+  compactGeometry.push({stage:'negative: restored viewport-only quote cap',negativeControl:true,...negative});
+  if(proof)writeFileSync(join(proof,'compact-quote-geometry.json'),JSON.stringify(compactGeometry,null,2));
+  assert.ok(negative.messages.height<80,'Restoring the old quote cap must fail the unchanged conversation-space oracle');
+ }finally{await oldCap.evaluate(node=>node.remove())}
+ await expectCompact('320px enlarged text after negative control removed');
  await enlargedStyle.evaluate(node=>node.remove());
+ await quotes.evaluateAll((cards,labels)=>cards.forEach((card,index)=>card.querySelector('.a-composer-quote-head>button').textContent=labels[index]),sourceLabels);
+ const recovered=await expectCompact('320px font recovery without draft edit');
+ assert.ok(Number.parseFloat(recovered.editorMaxHeight)>Number.parseFloat(enlargedGeometry.editorMaxHeight),'Removing enlarged chrome returns editor reading space');
+ await latest.click();await expect(latest).toHaveCount(0);
+ await expectCompact('320px Latest removed without draft edit');
+ await showLatest();await expectCompact('320px Latest restored without draft edit');
+ const settledFrames=await page.evaluate(async()=>{
+  const frames=[];for(let i=0;i<8;i++){await new Promise(requestAnimationFrame);frames.push({
+   editor:document.querySelector('.a-markdown-composer').getBoundingClientRect().height,
+   messages:document.querySelector('.a-messages').getBoundingClientRect().height})}
+  return frames;
+ });
+ for(const key of ['editor','messages'])assert.ok(Math.max(...settledFrames.map(row=>row[key]))-Math.min(...settledFrames.map(row=>row[key]))<1,'Layout budget settles without height oscillation');
+ checkpoints.push({stage:'layout-only budget recovery',enlargedGeometry,recovered,settledFrames});
+ assert.deepEqual(await documentValue(),layoutOnlyDraft,'Sizing never changes immutable quotes or commentary');
  await quotes.nth(1).getByRole('button',{name:/Show all/}).tap();
  await expect(quotes.nth(1).getByRole('button',{name:'Collapse quote'})).toBeVisible();
  await visibleCardControls('320px expanded long quote',quotes.nth(1));
