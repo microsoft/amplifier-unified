@@ -210,8 +210,10 @@ an otherwise unused generation when a bounded inspection reproduces its payload
 from regular, tracked source covered by the verified installed graph. Caches from
 other interpreters or producers, unknown files, packaging metadata and nested
 environments remain protected. Owners repeat their checks at removal admission;
-links are not followed as cleanup targets. Files changed during ecosystem
-retirement remain in an owned quarantine for inspection. Interrupted cleanup
+links are not followed as cleanup targets. Ecosystem qualification is bound to
+a bounded inventory captured before its source checks; a changed inventory or
+runtime-sharing decision defers that candidate. The same inventory follows the
+retirement rename, and later changes remain in an owned quarantine for inspection. Interrupted cleanup
 receipts remain visible and are not permission to repeat an uncertain effect.
 
 **Review unused copies** is an explicit bounded inspection. The ordinary setting

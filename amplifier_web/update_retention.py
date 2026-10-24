@@ -251,6 +251,18 @@ def _generated_bytecode(source, name, tracked):
         return False
 
 
+def _retirement_paths(manager, folder, project):
+    """Fresh sharing determines the exact tree that an inventory must fence."""
+    from .runtime_environment import project_path
+
+    root = Path(manager.directory) / 'releases'
+    surviving_projects = {project_path(manager.home, row.name).resolve()
+                          for row in root.iterdir() if row.is_dir() and row != folder}
+    remove_project = (project.resolve() not in surviving_projects and project.exists()
+                      and project.parent.resolve() == (Path(manager.home) / 'runtime').resolve())
+    return [str(folder)] + ([str(project)] if remove_project else [])
+
+
 def retire(manager, folder, project, *, remove_project, measurement=None):
     """Only metadata renames hold admission; partial retirement is preserved."""
     from .deployment import write_private
@@ -395,6 +407,10 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
                 raise ValueError("No installed graph proof")
             graph_text = graph.read_text()
             checked += 1
+            # Qualification must describe this inventory, not a later tree
+            # that acquired unknown work after its source/cache proof passed.
+            paths = _retirement_paths(manager, folder, project)
+            measured = await _probe('measure', {'paths': paths}, timeout=remaining(INSPECTION_SECONDS))
             await verify_generation(project, folder, timeout=remaining(INSPECTION_SECONDS))
             verified_graph = json.loads(graph_text)
             for meta in (folder / "foundation/cache").rglob(
@@ -428,9 +444,9 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
                 if extra_names:
                     if not _verified_cache(source, verified_graph):
                         raise ValueError("Unverified generated files retained")
-                    paths = await process('git', 'ls-files', '-z', cwd=source,
-                                          timeout=remaining(INSPECTION_SECONDS), raw=True)
-                    tracked = [os.fsdecode(name) for name in paths.split(b'\0') if name]
+                    tracked_paths = await process('git', 'ls-files', '-z', cwd=source,
+                                                  timeout=remaining(INSPECTION_SECONDS), raw=True)
+                    tracked = [os.fsdecode(name) for name in tracked_paths.split(b'\0') if name]
                     if not await _probe('bytecode', {'source': str(source), 'names': extra_names, 'tracked': tracked},
                                         timeout=remaining(INSPECTION_SECONDS)):
                         raise ValueError("Unknown generated files retained")
@@ -455,31 +471,31 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
                     retained += 1
                     inspected_protected.add(folder.name)
                     continue
-                # Recompute sharing from all surviving receipts, including
-                # generations created while the inspection was in progress.
-                root = Path(manager.directory) / 'releases'
-                surviving_projects = {project_path(manager.home, row.name).resolve()
-                                      for row in root.iterdir() if row.is_dir() and row != folder}
-                remove_project = (project.resolve() not in surviving_projects and project.exists()
-                                  and project.parent.resolve() == (Path(manager.home) / 'runtime').resolve())
-                paths = [str(folder)] + ([str(project)] if remove_project else [])
-                measured = None
-                if inspect_only or selected is not None:
-                    measured = await _probe('measure', {'paths': paths}, timeout=remaining(INSPECTION_SECONDS))
+                # Never replace the pre-proof baseline. Changed sharing also
+                # changes the deletion set, so defer the whole candidate.
+                if _retirement_paths(manager, folder, project) != paths:
+                    raise ValueError('Runtime sharing changed during inspection')
+                admission = await _probe('measure', {'paths': paths}, timeout=remaining(INSPECTION_SECONDS))
+                if admission['stamp'] != measured['stamp']:
+                    raise ValueError('Files changed during qualification')
+                # Measuring yielded; preserve newly active work, settings and
+                # receipts before either publishing eligibility or retiring.
+                latest_references = await inspect_references(manager, timeout=remaining(REFERENCE_SECONDS))
+                if (maintenance_blocked(manager) or folder.name in protected_generations(manager)
+                        or str(folder) in latest_references or str(project) in latest_references
+                        or (not modern and manager.busy()) or folder.is_symlink() or project.is_symlink()
+                        or project_path(manager.home, folder.name) != project
+                        or marker.read_text() != marker_text or graph.read_text() != graph_text
+                        or _retirement_paths(manager, folder, project) != paths):
+                    inspected_protected.add(folder.name)
+                    continue
                 if inspect_only:
                     candidates.append({'kind': 'ecosystem', 'id': folder.name,
                         'label': 'Unused component version', 'paths': paths, **measured})
                     continue
-                # Measuring yielded; preserve newly active work and settings.
-                latest_references = await inspect_references(manager, timeout=remaining(REFERENCE_SECONDS))
-                if (maintenance_blocked(manager) or folder.name in protected_generations(manager)
-                        or str(folder) in latest_references or str(project) in latest_references
-                        or (not modern and manager.busy())):
-                    inspected_protected.add(folder.name)
-                    continue
                 if evidence:
-                    evidence('attempting', {'kind': 'ecosystem', 'id': folder.name, **(measured or {})})
-                entry = retire(manager, folder, project, remove_project=remove_project, measurement=measured)
+                    evidence('attempting', {'kind': 'ecosystem', 'id': folder.name, **measured})
+                entry = retire(manager, folder, project, remove_project=len(paths) == 2, measurement=measured)
             # Recursive deletion may be slow or cancelled. The generation is
             # already detached, so it cannot delay activation or shutdown.
             if maintenance_blocked(manager):

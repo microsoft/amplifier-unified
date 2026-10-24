@@ -4,6 +4,7 @@ import marshal
 import os
 from pathlib import Path
 import py_compile
+import shutil
 import subprocess
 import sys
 
@@ -169,3 +170,109 @@ async def test_import_cache_does_not_waive_generation_protection(tmp_path, monke
         (manager.directory / 'active.json').write_text(json.dumps({'current': names[0], 'previous': names[3]}))
     assert (await retention.reclaim(manager))['removed'] == 0
     assert cached.exists()
+
+
+@pytest.mark.parametrize('mode', ['preview', 'selected', 'automatic'])
+@pytest.mark.parametrize('change', ['cache', 'source', 'unknown'])
+async def test_post_proof_edits_cannot_become_the_retirement_baseline(tmp_path, monkeypatch, mode, change):
+    manager, names, project, folder, source, cached = imported_generation(tmp_path, monkeypatch)
+    probe = retention._probe
+    changed = {}
+    async def race(operation, values, **kwargs):
+        result = await probe(operation, values, **kwargs)
+        if operation == 'bytecode' and result is True and not changed:
+            target = {'cache': cached, 'source': source / 'fixture.py', 'unknown': source / 'private-notes.txt'}[change]
+            contents = b'VALUE = 99\n' if change == 'source' else b'preserve post-proof work'
+            target.write_bytes(contents)
+            changed.update(path=target, contents=contents)
+        return result
+    monkeypatch.setattr(retention, '_probe', race)
+    options = {'inspect_only': True} if mode == 'preview' else {'selected': {names[3]}} if mode == 'selected' else {}
+    result = await retention.reclaim(manager, **options)
+    assert changed and result['removed'] == 0
+    assert not result.get('candidates')
+    assert folder.exists() and changed['path'].read_bytes() == changed['contents']
+    assert not list((manager.directory / 'retired').glob('*/payload'))
+
+
+async def test_post_proof_same_size_edit_with_restored_mtime_stays_protected(tmp_path, monkeypatch):
+    manager, names, project, folder, source, cached = imported_generation(tmp_path, monkeypatch)
+    target = source / 'fixture.py'
+    original = target.stat()
+    probe = retention._probe
+    changed = False
+    async def race(operation, values, **kwargs):
+        nonlocal changed
+        result = await probe(operation, values, **kwargs)
+        if operation == 'bytecode' and result is True and not changed:
+            target.write_bytes(b'VALUE = 99\n')
+            os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+            assert target.stat().st_size == original.st_size
+            assert target.stat().st_mtime_ns == original.st_mtime_ns
+            changed = True
+        return result
+    monkeypatch.setattr(retention, '_probe', race)
+    result = await retention.reclaim(manager, selected={names[3]})
+    assert changed and result['removed'] == 0
+    assert folder.exists() and target.read_bytes() == b'VALUE = 99\n'
+
+
+def unique_runtime(manager, folder, project):
+    unique = project.with_name('q-' + 'b' * 32)
+    shutil.copytree(project, unique)
+    (folder / 'runtime-project.json').write_text(json.dumps({'project': unique.name}))
+    return unique
+
+
+async def test_unchanged_unique_runtime_retires_with_the_verified_generation(tmp_path, monkeypatch):
+    manager, names, project, folder, source, cached = imported_generation(tmp_path, monkeypatch)
+    unique = unique_runtime(manager, folder, project)
+    result = await retention.reclaim(manager, selected={names[3]})
+    assert result['removed'] == 1
+    assert not folder.exists() and not unique.exists() and project.exists()
+
+
+@pytest.mark.parametrize('timing', ['after-proof', 'after-admission-measure'])
+@pytest.mark.parametrize('direction', ['becomes-shared', 'becomes-unique'])
+async def test_runtime_sharing_change_defers_the_entire_candidate(tmp_path, monkeypatch, timing, direction):
+    manager, names, project, folder, source, cached = imported_generation(tmp_path, monkeypatch)
+    target = unique_runtime(manager, folder, project) if direction == 'becomes-shared' else project
+    probe = retention._probe
+    proved = changed = False
+    async def race(operation, values, **kwargs):
+        nonlocal proved, changed
+        result = await probe(operation, values, **kwargs)
+        if operation == 'bytecode' and result is True:
+            proved = True
+        boundary = (operation == 'bytecode' if timing == 'after-proof' else operation == 'measure')
+        if proved and boundary and not changed:
+            if direction == 'becomes-shared':
+                rows, destination = names[:1], target.name
+            else:
+                rows, destination = names[:3], 'q-' + 'c' * 32
+            for name in rows:
+                (manager.directory / 'releases' / name / 'runtime-project.json').write_text(json.dumps({'project': destination}))
+            changed = True
+        return result
+    monkeypatch.setattr(retention, '_probe', race)
+    result = await retention.reclaim(manager, selected={names[3]})
+    assert proved and changed and result['removed'] == 0
+    assert folder.exists() and target.exists() and cached.exists()
+
+
+async def test_timestamp_preserving_edit_at_retirement_is_quarantined(tmp_path, monkeypatch):
+    manager, names, project, folder, source, cached = imported_generation(tmp_path, monkeypatch)
+    target = source / 'fixture.py'
+    original = target.stat()
+    retire = retention.retire
+    def race(*args, **kwargs):
+        target.write_bytes(b'VALUE = 99\n')
+        os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+        return retire(*args, **kwargs)
+    monkeypatch.setattr(retention, 'retire', race)
+    result = await retention.reclaim(manager, selected={names[3]})
+    assert result['removed'] == 0
+    kept = list((manager.directory / 'retired').glob('*/payload/release/foundation/cache/fixture/fixture.py'))
+    assert len(kept) == 1 and kept[0].read_bytes() == b'VALUE = 99\n'
+    assert (await retention.reclaim(manager))['removed'] == 0
+    assert kept[0].exists() and project.exists()

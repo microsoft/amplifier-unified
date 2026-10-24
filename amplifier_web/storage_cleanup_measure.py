@@ -20,8 +20,11 @@ def measure(paths, *, limit=200000, seconds=4):
                 raise ValueError('Storage measurement reached its limit.')
             path = stack.pop()
             info = path.lstat()
+            # Moving a retirement root changes its ctime; its children retain
+            # theirs. Include child ctime to catch timestamp-preserving edits.
             rows.append([index, str(path.relative_to(root)), info.st_dev, info.st_ino, info.st_mode,
-                         info.st_size, info.st_mtime_ns, info.st_nlink])
+                         info.st_size, info.st_mtime_ns, info.st_nlink,
+                         info.st_ctime_ns if path != root else None])
             if stat.S_ISDIR(info.st_mode):
                 with os.scandir(path) as entries:
                     for entry in entries:
