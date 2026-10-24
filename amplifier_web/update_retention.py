@@ -8,7 +8,9 @@ remain. This is not a global Amplifier/uv cache cleaner or a history migration.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import marshal
 import os
 import re
 import shutil
@@ -191,6 +193,76 @@ def _folders(manager):
                   and not folder.is_symlink() and folder.is_dir()) if root.exists() else []
 
 
+def _verified_cache(source, graph):
+    """Only sources covered by the already verified tracked-content graph."""
+    # installed_graph hashes all tracked files at the cache root before
+    # recording the distribution's subdirectory; the proof is repo-wide.
+    for row in graph:
+        proof = row.get('cacheSource') or {}
+        relative = Path(proof.get('subdirectory', ''))
+        if (not relative.is_absolute() and '..' not in relative.parts
+                and re.fullmatch('[a-f0-9]{64}', proof.get('trackedContentSha256', ''))
+                and proof.get('dirty') is False and row.get('path')
+                and Path(row['path']).resolve() == (source / relative).resolve()):
+            return True
+    return False
+
+
+def _generated_bytecode(source, name, tracked):
+    """Reproduce import caches in a bounded probe; never execute their contents."""
+    relative = Path(name)
+    if (relative.is_absolute() or '..' in relative.parts
+            or relative.parent.name != '__pycache__' or sys.implementation.name != 'cpython'):
+        return False
+    match = re.fullmatch(r'(.+)\.' + re.escape(sys.implementation.cache_tag)
+                         + r'(?:\.opt-([12]))?\.pyc', relative.name)
+    if match is None:
+        return False
+    cached = source / relative
+    original = cached.parent.parent / (match[1] + '.py')
+    try:
+        if original.relative_to(source).as_posix() not in tracked:
+            return False
+        for file in (cached, original):
+            if not file.is_file():
+                return False
+            for part in (file, *file.parents):
+                if part == source:
+                    break
+                if part.is_symlink():
+                    return False
+        # Unknown versions/producers and unusually large files stay protected.
+        # Compile only the already verified source, never unmarshal a cache.
+        limit = 16 * 1024 * 1024
+        with cached.open('rb') as stream:
+            header = stream.read(16)
+            payload = stream.read(limit + 1)
+        if (len(header) != 16 or header[:4] != importlib.util.MAGIC_NUMBER
+                or int.from_bytes(header[4:8], 'little') not in {0, 1, 3}
+                or not payload or len(payload) > limit):
+            return False
+        with original.open('rb') as stream:
+            contents = stream.read(limit + 1)
+        if len(contents) > limit:
+            return False
+        code = compile(contents, str(original), 'exec', dont_inherit=True, optimize=int(match[2] or 0))
+        return payload == marshal.dumps(code)
+    except (OSError, ValueError, SyntaxError):
+        return False
+
+
+def _retirement_paths(manager, folder, project):
+    """Fresh sharing determines the exact tree that an inventory must fence."""
+    from .runtime_environment import project_path
+
+    root = Path(manager.directory) / 'releases'
+    surviving_projects = {project_path(manager.home, row.name).resolve()
+                          for row in root.iterdir() if row.is_dir() and row != folder}
+    remove_project = (project.resolve() not in surviving_projects and project.exists()
+                      and project.parent.resolve() == (Path(manager.home) / 'runtime').resolve())
+    return [str(folder)] + ([str(project)] if remove_project else [])
+
+
 def retire(manager, folder, project, *, remove_project, measurement=None):
     """Only metadata renames hold admission; partial retirement is preserved."""
     from .deployment import write_private
@@ -335,7 +407,12 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
                 raise ValueError("No installed graph proof")
             graph_text = graph.read_text()
             checked += 1
+            # Qualification must describe this inventory, not a later tree
+            # that acquired unknown work after its source/cache proof passed.
+            paths = _retirement_paths(manager, folder, project)
+            measured = await _probe('measure', {'paths': paths}, timeout=remaining(INSPECTION_SECONDS))
             await verify_generation(project, folder, timeout=remaining(INSPECTION_SECONDS))
+            verified_graph = json.loads(graph_text)
             for meta in (folder / "foundation/cache").rglob(
                 ".amplifier_cache_meta.json"
             ):
@@ -354,15 +431,25 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
                     timeout=remaining(INSPECTION_SECONDS),
                 )
                 extras = await process(
-                    "git", "ls-files", "--others", cwd=source, timeout=remaining(INSPECTION_SECONDS)
+                    "git", "ls-files", "--others", '-z', cwd=source,
+                    timeout=remaining(INSPECTION_SECONDS), raw=True,
                 )
                 local_commits = await process(
                     'git', 'rev-list', '--max-count=1', '--all', '--not', 'HEAD', '--remotes',
                     cwd=source, timeout=remaining(INSPECTION_SECONDS))
-                if local_commits or changes or any(
-                    name != ".amplifier_cache_meta.json" for name in extras.splitlines()
-                ):
-                    raise ValueError("Local or generated changes retained")
+                extra_names = [os.fsdecode(name) for name in extras.split(b'\0')
+                               if name and name != b'.amplifier_cache_meta.json']
+                if local_commits or changes:
+                    raise ValueError("Local changes retained")
+                if extra_names:
+                    if not _verified_cache(source, verified_graph):
+                        raise ValueError("Unverified generated files retained")
+                    tracked_paths = await process('git', 'ls-files', '-z', cwd=source,
+                                                  timeout=remaining(INSPECTION_SECONDS), raw=True)
+                    tracked = [os.fsdecode(name) for name in tracked_paths.split(b'\0') if name]
+                    if not await _probe('bytecode', {'source': str(source), 'names': extra_names, 'tracked': tracked},
+                                        timeout=remaining(INSPECTION_SECONDS)):
+                        raise ValueError("Unknown generated files retained")
             # Activation may have won while inspection yielded. No cleanup
             # lock is held during qualification, Git inspection or hashing.
             if maintenance_blocked(manager):
@@ -384,31 +471,31 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
                     retained += 1
                     inspected_protected.add(folder.name)
                     continue
-                # Recompute sharing from all surviving receipts, including
-                # generations created while the inspection was in progress.
-                root = Path(manager.directory) / 'releases'
-                surviving_projects = {project_path(manager.home, row.name).resolve()
-                                      for row in root.iterdir() if row.is_dir() and row != folder}
-                remove_project = (project.resolve() not in surviving_projects and project.exists()
-                                  and project.parent.resolve() == (Path(manager.home) / 'runtime').resolve())
-                paths = [str(folder)] + ([str(project)] if remove_project else [])
-                measured = None
-                if inspect_only or selected is not None:
-                    measured = await _probe('measure', {'paths': paths}, timeout=remaining(INSPECTION_SECONDS))
+                # Never replace the pre-proof baseline. Changed sharing also
+                # changes the deletion set, so defer the whole candidate.
+                if _retirement_paths(manager, folder, project) != paths:
+                    raise ValueError('Runtime sharing changed during inspection')
+                admission = await _probe('measure', {'paths': paths}, timeout=remaining(INSPECTION_SECONDS))
+                if admission['stamp'] != measured['stamp']:
+                    raise ValueError('Files changed during qualification')
+                # Measuring yielded; preserve newly active work, settings and
+                # receipts before either publishing eligibility or retiring.
+                latest_references = await inspect_references(manager, timeout=remaining(REFERENCE_SECONDS))
+                if (maintenance_blocked(manager) or folder.name in protected_generations(manager)
+                        or str(folder) in latest_references or str(project) in latest_references
+                        or (not modern and manager.busy()) or folder.is_symlink() or project.is_symlink()
+                        or project_path(manager.home, folder.name) != project
+                        or marker.read_text() != marker_text or graph.read_text() != graph_text
+                        or _retirement_paths(manager, folder, project) != paths):
+                    inspected_protected.add(folder.name)
+                    continue
                 if inspect_only:
                     candidates.append({'kind': 'ecosystem', 'id': folder.name,
                         'label': 'Unused component version', 'paths': paths, **measured})
                     continue
-                # Measuring yielded; preserve newly active work and settings.
-                latest_references = await inspect_references(manager, timeout=remaining(REFERENCE_SECONDS))
-                if (maintenance_blocked(manager) or folder.name in protected_generations(manager)
-                        or str(folder) in latest_references or str(project) in latest_references
-                        or (not modern and manager.busy())):
-                    inspected_protected.add(folder.name)
-                    continue
                 if evidence:
-                    evidence('attempting', {'kind': 'ecosystem', 'id': folder.name, **(measured or {})})
-                entry = retire(manager, folder, project, remove_project=remove_project, measurement=measured)
+                    evidence('attempting', {'kind': 'ecosystem', 'id': folder.name, **measured})
+                entry = retire(manager, folder, project, remove_project=len(paths) == 2, measurement=measured)
             # Recursive deletion may be slow or cancelled. The generation is
             # already detached, so it cannot delay activation or shutdown.
             if maintenance_blocked(manager):
@@ -442,6 +529,10 @@ if __name__ == '__main__':
         from .runtime_qualification import verify_recorded
         verify_recorded(Path(values['project']), Path(values['folder']))
         print('null')
+    elif sys.argv[1] == 'bytecode':
+        tracked = set(values['tracked'])
+        print(json.dumps(all(_generated_bytecode(Path(values['source']), name, tracked)
+                             for name in values['names'])))
     elif sys.argv[1] == 'runner':
         from .managed_runner_updates import runtime_identity
         if runtime_identity(values['installation']) != values['runtime']:
