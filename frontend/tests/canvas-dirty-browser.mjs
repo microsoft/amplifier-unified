@@ -109,6 +109,87 @@ try {
    await expect(overviewTab).toHaveAttribute('aria-selected','true');await expect(overview).toBeVisible();
   }else await expect(primary).toBeVisible();
  };
+ // Layout-only Details changes must retain the actual dirty renderer and lease,
+ // not a new editor that happens to contain the same saved source.
+ const details=page.getByRole('region',{name:'Canvas details',exact:true});
+ const closeDetails=()=>details.getByRole('button',{name:'Close canvas details',exact:true});
+ const controlsHost=await panel.locator('[data-part="canvas-view-controls"]').elementHandle();
+ await action('view.update',{patch:{canvasWidth:800}});
+ await expect(panel.locator('.a-canvas-content')).toHaveAttribute('data-details-overlay','false');
+ assert.equal(await details.locator('.a-canvas-inspector-head').evaluate(el=>getComputedStyle(el).position),'static','Wide inspector header keeps its original non-sticky layout');
+ await primary.click();await expect(primary).toBeFocused();
+ await page.setViewportSize({width:390,height:850});
+ await expect(panel.locator('.a-canvas-content')).toHaveAttribute('data-details-overlay','true');
+ await expect(closeDetails()).toBeFocused();
+ assert.equal(await primary.evaluate(el=>!!el.closest('[inert]')),true,'Covered editor must leave the keyboard/assistive reading order');
+ await retained();await capture('dirty-details-narrow');
+ await page.keyboard.press('Escape');await expect(details).toBeHidden();await expect(primary).toBeFocused();
+ assert.equal(await primary.evaluate(el=>!!el.closest('[inert]')),false);await retained();
+ for(const width of [390,320]){
+  await page.setViewportSize({width,height:850});
+  await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
+  await toggle.click();await expect(panel).toBeHidden();
+  await toggle.click();await expect(details).toBeVisible();await retained();
+  await closeDetails().click();await expect(details).toBeHidden();await retained();
+  assert.equal(await panel.locator('[data-part="canvas-view-controls"]').evaluate((el,original)=>el===original,controlsHost),true);
+ }
+ const sheetScroll=async delta=>{
+  const r=await details.boundingBox();assert.ok(r&&r.width>0&&r.height>0);
+  await page.mouse.move(r.x+r.width*.6,r.y+r.height*.8);
+  await page.mouse.wheel(0,delta);
+ };
+ const closeGeometry=()=>details.evaluate(el=>{
+  const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
+  const button=el.querySelector('[aria-label="Close canvas details"]'),head=el.querySelector('.a-canvas-inspector-head'),r=box(button);
+  const points=[[r.left+r.width/2,r.top+r.height/2],[r.left+4,r.top+4],[r.right-4,r.bottom-4]];
+  return {sheet:box(el),header:box(head),close:r,position:getComputedStyle(head).position,scrollTop:el.scrollTop,
+   scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,viewport:{width:innerWidth,height:innerHeight},
+   hit:points.every(([x,y])=>button.contains(document.elementFromPoint(x,y)))};
+ });
+ const assertScrolledClose=sample=>{
+  const {sheet,header,close,viewport}=sample,inside=(a,b)=>a.left>=b.left-1&&a.right<=b.right+1&&a.top>=b.top-1&&a.bottom<=b.bottom+1;
+  assert.ok(sample.scrollTop>=80,'SCROLLED_DETAILS_CLOSE requires observed native scrolling');
+  assert.ok(close.width>=44&&close.height>=44&&inside(close,sheet)&&inside(close,header)&&
+   inside(close,{left:0,top:0,right:viewport.width,bottom:viewport.height})&&sample.hit,
+   'SCROLLED_DETAILS_CLOSE must stay inside the sheet and pointer-hit reachable');
+ };
+ for(const width of [390,320]){
+  await page.setViewportSize({width,height:480});
+  await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
+  // Actual File/version/renderer controls overflow the short narrow sheet.
+  // Do not manufacture overflow or let a locator scroll Close back into view.
+  await sheetScroll(-2000);await expect.poll(()=>details.evaluate(el=>el.scrollTop)).toBeLessThanOrEqual(1);
+  const file=details.getByRole('button',{name:'Open a file in canvas',exact:true});
+  if(await file.getAttribute('aria-expanded')!=='true')await file.click();
+  await expect(details.getByLabel('File in this workspace')).toBeVisible();
+  await expect.poll(()=>details.evaluate(el=>el.scrollHeight-el.clientHeight)).toBeGreaterThan(80);
+  await sheetScroll(2000);
+  await expect.poll(()=>details.evaluate(el=>el.scrollTop)).toBeGreaterThanOrEqual(80);
+  const scrolled=await closeGeometry();assert.equal(scrolled.position,'sticky');assertScrolledClose(scrolled);
+  if(width===390){
+   const header=details.locator('.a-canvas-inspector-head'),prior=await header.getAttribute('style');
+   try{
+    await header.evaluate(el=>{el.style.position='static'});
+    const old=await closeGeometry();assert.throws(()=>assertScrolledClose(old),/SCROLLED_DETAILS_CLOSE must stay/);
+    report.detailsCloseNegative={width,sample:old,rejected:true};
+    await capture('negative-details-close-static-390');
+   }finally{await header.evaluate((el,value)=>value===null?el.removeAttribute('style'):el.setAttribute('style',value),prior)}
+  }
+  await capture('dirty-details-scrolled-'+width);
+  const reachable=await closeGeometry();assertScrolledClose(reachable);
+  (report.scrolledDetails??=[]).push({width,sample:reachable});
+  // Pointer input at the already-measured DOM center cannot autoscroll a locator.
+  await page.mouse.click(reachable.close.left+reachable.close.width/2,reachable.close.top+reachable.close.height/2);
+  await expect(details).toBeHidden();await retained();
+  await expect(panel.getByRole('button',{name:'Canvas details',exact:true})).toBeFocused();
+  assert.equal(await panel.locator('[data-part="canvas-view-controls"]').evaluate((el,original)=>el===original,controlsHost),true);
+ }
+ report.checks.push({name:'390/320 overflowing Details keeps Close hit reachable and preserves dirty mount, value, lease and focus',status:'passed'});
+ await controlsHost.dispose();
+ await page.setViewportSize({width:1500,height:1050});
+ await action('view.update',{patch:{canvasWidth:720}});
+ await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();await retained();
+ report.checks.push({name:'wide Details, responsive side sheet and header hide retain the same dirty renderer/controls',status:'passed'});
  // Browsing retains the dirty mount; explicitly reopening the same chat must
  // neither block nor discard its edit just because return shortcuts are gone.
  await action('view.update',{patch:{workSurface:'workspaces'}});
