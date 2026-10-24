@@ -11,6 +11,18 @@ another approval. A `workspace` argument filters that selected scope; it cannot
 silently widen it. Native identity/registration, paging, source revision and
 internal/child inclusion checks remain independent.
 
+History query discovery diagnostics describe global index coverage, not errors
+limited to the requested chat or workspace. List, search and read return the
+loading/error state, total issue count, reconciliation status and number of
+retained issue samples. `complete` keeps its coverage meaning even when samples
+are omitted. Detailed samples are opt-in with `include_discovery_issues: true`
+(the index retains at most 100); `issuesOmitted` and `detailsHint` make that
+omission explicit. This changes no discovery work, scope, paging or saved state.
+Search failures for the requested sessions still appear in `errors`.
+The `history.list`, `history.shared.list` and `history.shared.view` action aliases
+accept the same optional flag and forward it to the canonical history query,
+so their returned recovery hint can be followed without changing route or scope.
+
 | Route | Scope and retained checks |
 | --- | --- |
 | `app_control` history list/search/read | Shared workspace/all selector; native project/identity disambiguation, bounded text/pages, internal/child discovery flags; scope rechecked after history I/O. |

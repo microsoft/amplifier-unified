@@ -478,6 +478,7 @@ ACTION_POLICIES["session.create"] = {"access": "grant_creation", "target": None}
 ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
 from .configuration_authority import BUNDLE_GLOBAL
 from .owned_history import SESSION_READS, SCOPE as HISTORY_SCOPE, guard_action as guard_history_action
+from .history_query import SCHEMA as HISTORY_QUERY_SCHEMA
 for _action in SESSION_READS:
     ACTION_DEFINITIONS[_action][1]['properties']['scope'] = HISTORY_SCOPE
 for _action in {'history.list', 'history.shared.list', 'history.shared.view'}:
@@ -485,6 +486,7 @@ for _action in {'history.list', 'history.shared.list', 'history.shared.view'}:
     _properties['scope']=HISTORY_SCOPE
     _properties.setdefault('offset',{'type':'integer','minimum':0})
     _properties.setdefault('limit',{'type':'integer','minimum':1,'maximum':50})
+    _properties['include_discovery_issues']=HISTORY_QUERY_SCHEMA['properties']['include_discovery_issues']
 for _action in BUNDLE_GLOBAL:
     ACTION_POLICIES[_action] = {"access": "caller_controlled", "target": "sessionId"}
     ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
@@ -1965,6 +1967,8 @@ class AppService:
             from .history_query import query_history
             values = {'action':'read' if action.endswith('.view') else 'list',
                 'scope':args.get('scope','workspace'), 'offset':args.get('offset',0), 'limit':min(50,args.get('limit',20))}
+            if 'include_discovery_issues' in args:
+                values['include_discovery_issues'] = args['include_discovery_issues']
             if args.get('workspace'):
                 values['workspace'] = args['workspace']
             if action.endswith('.view'):
