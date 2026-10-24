@@ -14,6 +14,7 @@ import {workProjectionReceipt} from './work-projection-receipt.js';
 import {hasEarlierWindow,conversationHistoryPending} from './history-window.js';
 import {ChatPages,chatPageTitles} from './chat-pages';
 import {MarkdownComposer} from './markdown-composer.jsx';
+import {ComposerAdd} from './composer-add.jsx';
 import {ButtonTooltips} from './tooltips';
 import {ConversationRail} from './conversation-rail.jsx';
 import {ConversationStatus} from './conversation-usage.jsx';
@@ -522,7 +523,12 @@ function App(){
    if(!(mac?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey))return;
    event.preventDefault();
    if(!latest.current)return;
-   if(!latest.current.view?.panel)panelReturnFocus.current=document.activeElement;
+   if(!latest.current.view?.panel){
+    const active=document.activeElement;
+    // Add's menu unmounts when Settings takes ownership. Return to its lasting
+    // trigger, not a detached menu row, only after the Settings guard closes.
+    panelReturnFocus.current=active?.closest('.a-composer-add-panel')?root.current?.querySelector('.a-compose-add>button[aria-haspopup="dialog"]')||active:active;
+   }
    act('view.update',{patch:{panel:'settings',toolbarMenuOpen:false,
     ...(window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}});
   };
@@ -798,12 +804,12 @@ function App(){
     {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
     </div>
     <div role="status" aria-live="polite" aria-atomic="true" className="a-sr-only">{sendingHere?'Sending message…':''}</div>
-    <div className="a-compose-add"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button></div>
+    <ComposerAdd sessionId={session?.id} panel={settingsRoute||null} disabled={uploading||executionUnavailable||historyPending} accessDisabled={browsing} onFiles={kind=>{fileInput.current.accept=kind==='image'?'image/*':'';fileInput.current.click()}} onAccess={()=>open('chat-write-files')}><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/></ComposerAdd>
     <div className="a-compose-end"><DictationButton key={session?.id??'dictation-new'} draft={draft} onChange={value=>{if((latest.current?.selectedSessionId??null)===(session?.id??null))editDraft(value)}} controlRef={dictationControl} disabled={executionUnavailable||historyPending||referencingDraft||sendingHere||browsing||callActive}/><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
     </div>
     <div className="a-compose-configuration">
      {session&&responseActive&&!callActive&&primaryAction.action!=='conversation.stop'&&<button type="button" className="a-compose-stop" aria-label="Stop response" data-action="conversation.stop" disabled={session.status==='stopping'||executionUnavailable} onClick={()=>act('conversation.stop',{sessionId:session.id})}>{session.status==='stopping'?'Stopping…':'Stop'}</button>}
-     <ShellSlot name="composer.actions"><ComposerOptions state={state} session={session} act={act} working={working}/></ShellSlot>
+     <ShellSlot name="composer.actions"><ComposerOptions state={state} session={session} act={act} working={working} detail={presentation.interfaceDetail||presentation.executionDetail}/></ShellSlot>
     </div>
     </ComposerOwnership>
    </form>

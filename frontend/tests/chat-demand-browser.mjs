@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 // Packaged UI, real HTTP/state stream and synthetic discovery; no disabled effects.
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
@@ -91,10 +92,12 @@ try{
  await api('/fixture/activity',{});
  // Use actual desktop picker controls, preserving distinct connections.
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
+ await showComposerOption(page,'model');
  const model=page.locator('#chat-model');await expect(model.locator('option[value="second"]')).toBeAttached();
  evidence.openBytes=Buffer.byteLength(JSON.stringify(await snapshot()));
  await model.selectOption('second');await settle();
  await expect(model).toHaveValue('second');
+ await showComposerOption(page,'provider');
  await page.locator('#chat-provider').selectOption('two');await settle();
  await expect(model.locator('option[value="other-account"]')).toBeAttached();
  assert.equal(await model.locator('option[value="second"]').count(),0);
@@ -126,6 +129,7 @@ try{
  await page.setViewportSize({width:390,height:844});
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Chat options'})).toBeVisible();
+ await showComposerOption(page,'provider');
  await page.locator('#chat-provider').selectOption('one');await settle();
  await expect(page.locator('#chat-model option[value="second"]')).toBeAttached();
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();

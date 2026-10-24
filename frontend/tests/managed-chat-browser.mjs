@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 // Packaged UI plus isolated synthetic server. No provider inference or live data.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -42,10 +43,10 @@ try{
  await page.getByRole('button',{name:'No workspace',exact:true}).click();
  await expect(page.locator('#new-chat-workspace')).toHaveCount(0);
  await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
- await expect(page.locator('.a-composer').getByRole('button',{name:'Conversation bundle'})).toContainText('Work');
  assert.equal((await state()).sessions.length,0);await assert.rejects(stat(folders));
  const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'});
- await model.click();await expect(page.locator('#chat-provider')).toBeVisible();await page.locator('#chat-model').selectOption('chosen-model');await page.getByRole('button',{name:'Close model settings'}).click();
+ await model.click();await showComposerOption(page,'bundle');await expect(page.getByLabel('Registered root bundles',{exact:true}).locator('option:checked')).toHaveText('Work');
+ await showComposerOption(page,'provider');await expect(page.locator('#chat-provider')).toBeVisible();await showComposerOption(page,'model');await page.locator('#chat-model').selectOption('chosen-model');await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  const saved=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.args?.patch?.draft==='Save my managed chat');
  await composer.fill('Save my managed chat');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Managed attachment')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();

@@ -9,6 +9,37 @@ const {ComposerOptions}=await server.ssrLoadModule('/src/composer-options.jsx');
 const record=calls=>async(name,args)=>{calls.push({name,args});return {accepted:true,...(name==='conversation.configure'?{result:{revision:args.expectedRevision+1}}:{})}};
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+test('compact settings disclose one page at a time without mutating choices or losing the shared revision chain',async()=>{
+ const calls=[],session={id:'chat',status:'idle',bundle:'work',nextMessageRevision:4};
+ const selection={instance:'one',model:'model',effort:'high'};
+ const state={view:{composerModel:{open:true,sessionId:'chat',...selection}},
+  registeredBundles:[{value:'work',label:'Work'},{value:'research',label:'Research'}],
+  runtimeControl:{chat:{'configuration.catalog':{configurationRevision:0,nextMessageRevision:4,
+   providers:[{id:'one',info:{defaults:{model:'model'},config_fields:[{id:'reasoning_effort',choices:['low','high']}]}}],
+   effective:selection}}}};
+ let root;
+ const button=name=>root.root.findByProps({'aria-label':name});
+ const page=name=>root.root.findByProps({'data-composer-page':name});
+ try{
+  await renderAct(async()=>root=create(React.createElement(ComposerOptions,{state,session,act:record(calls)})));
+  assert.equal(page('overview').props.hidden,false);
+  assert.equal(page('model').props.hidden,true);
+  assert.equal(page('provider').props.hidden,true);
+  assert.equal(page('effort').props.hidden,true);
+  await renderAct(async()=>button('Choose model').props.onClick());
+  assert.equal(page('model').props.hidden,false);
+  assert.equal(page('overview').props.hidden,true);
+  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'other'}}));
+  await renderAct(async()=>button('Back to chat options').props.onClick());
+  await renderAct(async()=>button('Choose agent bundle').props.onClick());
+  assert.equal(page('bundle').props.hidden,false);
+  await renderAct(async()=>root.root.findByProps({id:'composer-options-bundle'}).props.onChange({target:{value:'research'}}));
+  await renderAct(async()=>button('Back to chat options').props.onClick());
+  assert.equal(page('overview').props.hidden,false);
+  assert.deepEqual(calls.filter(c=>c.name==='conversation.configure').map(c=>c.args.expectedRevision),[4,5]);
+  assert.equal(calls.some(c=>['conversation.send','session.create','bundle.switch'].includes(c.name)),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
 for(const commit of ['onPointerUp','onKeyUp','onBlur'])test('reasoning effort survives a background view refresh until '+commit,async()=>{
  const calls=[],session={id:'chat',status:'idle'},selection={instance:'one',model:'model',effort:'high'};
  let state={view:{composerModel:{open:true,sessionId:'chat',...selection}},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:0,providers:[{id:'one',info:{defaults:{model:'model'},config_fields:[{id:'reasoning_effort',choices:['low','medium','high']}] }}],effective:selection}}}},root;

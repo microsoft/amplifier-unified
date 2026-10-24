@@ -3,12 +3,12 @@ import {ModelControl,useNextMessageConfiguration} from './chat-controls';
 import {BundleControl} from './bundle-controls';
 
 /** One quiet model/effort entry below the field at every conversation width. */
-export function ComposerOptions({state,session,act,working}){
+export function ComposerOptions({state,session,act,working,detail}){
  // One dialog owns one acknowledged revision chain across its model and bundle.
  // External client revisions still cannot replace a touched form's captured one.
  const nextMessageControl=useNextMessageConfiguration(session,act);
  const props={state,session,act,working,nextMessageControl};
- return <ModelControl {...props} compact>
-  <BundleControl {...props} compact embedded/>
+ return <ModelControl {...props} compact detail={detail}>
+  {({page,navigate})=><BundleControl {...props} compact embedded page={page} onNavigate={navigate}/>}
  </ModelControl>;
 }

@@ -3,8 +3,8 @@ import {configurationHeld} from './configuration-recovery';
 import {ownershipState} from './ownership.js';
 import {delegationRoutingLabel} from './delegation-routing.js';
 import {useOutsideDismiss} from './use-outside-dismiss';
-import React,{useEffect,useState,useRef} from 'react';
-import {ChevronDown,X,Paperclip,Download} from 'lucide-react';
+import React,{useEffect,useState,useRef,useId} from 'react';
+import {ChevronDown,ChevronRight,ArrowLeft,X,Paperclip,Download} from 'lucide-react';
 import {providerFields,modelOptions} from './setup-data';
 import {newChatSetup,draftDefaults,draftDefaultsKey} from './new-chat';
 import {useComposerPopover} from './composer-popover';
@@ -61,7 +61,8 @@ export function useNextMessageConfiguration(session,act,sharedControl=null){
  }
  return sharedControl||{configure,pending:saving===owner.current};
 }
-export function ModelControl({state,session,act,working,embedded=false,compact=false,children,nextMessageControl}){
+export function ModelControl({state,session,act,working,embedded=false,compact=false,children,nextMessageControl,detail='standard'}){
+ const descriptionId=useId();
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
  const nextMessage=useNextMessageConfiguration(session,act,nextMessageControl);
  // A bundle change validates defaults in the background. Keep the current
@@ -120,16 +121,21 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
   act('view.update',{patch:{composerModel:{...shared,open:true,sessionId}}});
   return()=>{act('view.update',{patch:{composerModel:{open:false,sessionId}}})};
  },[embedded,sessionId]);
- const focusRequested=useRef(false);
+ const [page,setPage]=useState('overview'),focusRequested=useRef(false),returnRow=useRef(null);
+ const navigate=next=>{returnRow.current=next==='overview'?page:null;focusRequested.current=compact;setPage(next)};
  const close=reason=>{focusRequested.current=false;edit({open:false});if(compact&&reason!=='outside')popover.current?.querySelector('button')?.focus()};
  useOutsideDismiss(open&&!embedded,popover,close,panelRef);
  useEffect(()=>{
   if(compact&&open&&position.visibility==='visible'&&focusRequested.current){
    focusRequested.current=false;
-   (panelRef.current?.querySelector('select:not(:disabled)')||panelRef.current?.querySelector('button:not(:disabled)'))?.focus();
+   const panel=panelRef.current;
+   const preferred=returnRow.current?panel?.querySelector(`[data-composer-option="${returnRow.current}"]`):null;
+   const visible=[...(panel?.querySelectorAll('select:not(:disabled),input:not(:disabled),button:not(:disabled)')||[])].filter(node=>!node.closest('[hidden]'));
+   (preferred||(page!=='overview'?panel?.querySelector('[aria-label="Back to chat options"]'):null)||visible.find(node=>node.closest('[data-composer-page]'))||visible[0])?.focus();
+   returnRow.current=null;
   }
- },[compact,open,position.visibility]);
- useEffect(()=>{focusRequested.current=false},[sessionId]);
+ },[compact,open,page,position.visibility]);
+ useEffect(()=>{focusRequested.current=false;setPage('overview')},[sessionId]);
  const previousPanel=useRef(state.view?.panel);
  useEffect(()=>{
   if(previousPanel.current===state.view?.panel)return;
@@ -158,6 +164,7 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
   if(open&&!touched.current){draftRevision.current={sessionId,revision:nextMessageRevision};const instance=effective.instance||effective.id||draft.instance||'',row=providers.find(p=>p.id===instance);edit({instance,model:effective.model||draft.model||row?.info?.defaults?.model||'',effort:effectiveEffort||draft.effort||''})}
  },[open,sessionId,nextMessageRevision,providers.map(row=>row.id).join('|'),effective.instance,effective.id,effective.model,effectiveEffort]);
  function show(){touched.current=false;draftRevision.current={sessionId,revision:nextMessageRevision};effortPending.current=null;setError('');if(open){close();return}
+  setPage('overview');returnRow.current=null;
   focusRequested.current=compact;
   edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effectiveEffort||''});
  }
@@ -191,30 +198,47 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
  const failure=error||session?.nextMessageError||discovery.error||catalog?.error||(!isDraft&&op?.phase==='error'?op.error:'')||defaults.error;
  const delayed=isDraft&&checkingDefaults&&discovery.delayed;
  const renderPanel=embedded?content=>content:renderPopover,Advanced=embedded?'details':React.Fragment;
+ const paged=compact&&!embedded;
+ // These text rows already expose their purpose/value. An icon-label tooltip
+ // on focus covers the compact menu heading instead of adding useful help.
+ const option=(id,label,value,sub)=> <button type="button" className="a-composer-option" data-tooltip="off" data-composer-option={id} aria-label={label} aria-describedby={`${descriptionId}-${id}`} onClick={()=>navigate(id)}><span id={`${descriptionId}-${id}`}>{value}{sub&&<small>{sub}</small>}</span><ChevronRight/></button>;
  return <div className="a-model-control" ref={popover}>
   {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" aria-haspopup={compact?'dialog':undefined} disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{!effective.model&&(delayed||failure)?'Model settings unavailable':compact?modelAndEffort:modelLabel}</span>{(session?.pendingModelSelection||pendingBundle)&&<small>Next message</small>}<ChevronDown/></button>}
-  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":`a-model-popover a-compact-popover${compact?' a-composer-options-panel':''}`} style={embedded?undefined:position} role={compact?'dialog':undefined} aria-label={compact?'Chat options':'Conversation model'}>
-   {!embedded&&<div className="a-settings-row"><strong>{compact?'Chat options':'Conversation model'}</strong><button type="button" className="a-icon" aria-label={compact?'Close chat options':'Close model settings'} data-action="view.update" onClick={close}><X/></button></div>}
-   <p className="a-caption" role="status">{nextMessage.pending?'Saving Next message settings…':!isDraft&&session?.pendingModelSelection?'Next message · Saved; not applied yet.':'Next message · Changes apply when you send.'}</p>
-   {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}
-   {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
-   <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={draft.instance||''} data-action={isDraft?'view.update':'conversation.configure'} disabled={blocked} onChange={e=>chooseProvider(e.target.value)}>
+  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":`a-model-popover a-compact-popover${compact?' a-composer-options-panel':''}`} style={embedded?undefined:position} role={compact?'dialog':undefined} aria-label={compact?'Chat options':'Conversation model'} aria-describedby={paged?`${descriptionId}-heading`:undefined}>
+   {!embedded&&<div className="a-settings-row a-composer-options-heading">{paged&&page!=='overview'&&<button type="button" className="a-icon" aria-label="Back to chat options" onClick={()=>navigate('overview')}><ArrowLeft/></button>}<strong id={`${descriptionId}-heading`}>{paged?({overview:'Model and effort',model:'Model',effort:'Reasoning effort',provider:'Provider',bundle:'Agent bundle'})[page]:compact?'Chat options':'Conversation model'}</strong><button type="button" className="a-icon" aria-label={compact?'Close chat options':'Close model settings'} data-action="view.update" onClick={close}><X/></button></div>}
+   {paged&&<div data-composer-page="overview" hidden={page!=='overview'}>
+    {option('model','Choose model',model,detail==='minimal'?'':providerLabel)}
+    {option('effort','Choose reasoning effort',`Effort · ${effectiveEffort||'Model default'}`)}
+    {option('provider','Choose provider',`Provider · ${providerLabel||'Choose a provider'}`)}
+   </div>}
+   <div data-composer-page="provider" hidden={paged&&page!=='provider'}>
+   <label className={paged?'a-sr-only':undefined} htmlFor="chat-provider">Provider</label><select id="chat-provider" value={draft.instance||''} data-action={isDraft?'view.update':'conversation.configure'} disabled={blocked} onChange={e=>chooseProvider(e.target.value)}>
     {!draft.instance&&<option value="" disabled>{providers.length?'Choose a provider':noProviders?'No providers configured':failure||delayed?'Providers unavailable':'Loading providers…'}</option>}{draft.instance&&!selected&&<option value={draft.instance} disabled>{draft.instance} (unavailable)</option>}{options.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
    </select>
-   <label htmlFor="chat-model">Model</label><select id="chat-model" aria-label="Conversation model" value={draft.model||''} disabled={blocked||!selected} data-action={isDraft?'view.update':'conversation.configure'} onChange={e=>apply({model:e.target.value,effort:''})}>
+   </div>
+   <div data-composer-page="model" hidden={paged&&page!=='model'}>
+   <label className={paged?'a-sr-only':undefined} htmlFor="chat-model">Model</label><select id="chat-model" aria-label="Conversation model" value={draft.model||''} disabled={blocked||!selected} data-action={isDraft?'view.update':'conversation.configure'} onChange={e=>apply({model:e.target.value,effort:''})}>
     {!draft.model&&<option value="">{entry?.phase==='working'?'Loading models…':'Choose a model'}</option>}{draft.model&&!models.some(row=>row.id===draft.model)&&<option value={draft.model}>{draft.model}</option>}{models.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
    </select>
+   </div>
    <Advanced>{embedded&&<summary>Advanced model options</summary>}
+   <div data-composer-page="effort" hidden={paged&&page!=='effort'}>
    {choices.length>0?<><label htmlFor="chat-effort">Reasoning effort <strong>{effort||'Choose effort'}</strong></label><input id="chat-effort" type="range" min="0" max={choices.length-1} step="1" value={Math.max(0,choices.indexOf(effort))} aria-valuetext={effort||'Choose effort'} disabled={blocked||!draft.model} data-action={isDraft?'view.update':'conversation.configure'} onChange={previewEffort} onPointerUp={commitEffort} onKeyUp={commitEffort} onBlur={commitEffort}/><div className="a-effort-labels"><span>{choices[0]}</span><span>{choices.at(-1)}</span></div></>:<small>{entry?.metadata||selected?.configSchema||selected?.info?.config_fields?'Reasoning effort is not configurable for this model.':failure||delayed?'Model capabilities unavailable.':'Loading model capabilities…'}</small>}
-   {!isDraft&&<p className="a-muted" data-part="delegation-routing">{delegationRoutingLabel(catalog?.delegationRouting||session?.runtimeReport?.delegationRouting)}</p>}
+   </div>
+   {!isDraft&&<p hidden={paged&&(page!=='model'||detail==='minimal')} className="a-muted" data-part="delegation-routing">{delegationRoutingLabel(catalog?.delegationRouting||session?.runtimeReport?.delegationRouting)}</p>}
+   <div hidden={paged&&page!=='provider'}>
    <div className="a-dialog-actions"><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{composerModel:{...draft,open:false},panel:'settings',settingsSection:'setup',settingsExpanded:['ai-connections'],aiConnectionEditor:{...(state.view?.aiConnectionEditor||{}),step:'services'}}})}>Add connection</button><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{composerModel:{...draft,open:false},panel:'settings',settingsSection:'setup',settingsExpanded:['ai-connections'],aiConnectionEditor:{...(state.view?.aiConnectionEditor||{}),step:'list'}}})}>Manage connections</button></div>
-   <small>Model changes apply when you send the next message.</small><button type="button" className="a-link" onClick={()=>isDraft&&!draft.instance?discovery.retry():isDraft?act('providers.models',{id:draft.instance,workspace:setup.workspace,...location,refresh:true}):act('runtime.control',{sessionId,operation:'configuration.catalog',args:{refresh:true}})}>Refresh models</button>
+   </div>
+   {!paged&&<small>Model changes apply when you send the next message.</small>}<button type="button" className="a-link" hidden={paged&&page!=='model'} onClick={()=>isDraft&&!draft.instance?discovery.retry():isDraft?act('providers.models',{id:draft.instance,workspace:setup.workspace,...location,refresh:true}):act('runtime.control',{sessionId,operation:'configuration.catalog',args:{refresh:true}})}>Refresh models</button>
    </Advanced>
+   {typeof children==='function'?children({page,navigate}):children}
+   {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}
+   {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
    {isDraft&&(failure||delayed)&&<div className="a-discovery-recovery" role="status">{delayed&&!failure&&<p>Model settings are taking longer than expected. You can retry without refreshing or losing your draft.</p>}<button type="button" className="a-soft" onClick={discovery.retry}>Retry model settings</button></div>}
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}
-   {children}
-   {compact&&<button type="button" className="a-primary a-composer-options-done" onClick={close}>Done</button>}
+   <p className="a-caption" role="status">{nextMessage.pending?'Saving Next message settings…':!isDraft&&(session?.pendingModelSelection||pendingBundle)?'Next message · Saved; not applied yet.':'Next message · Changes apply when you send.'}</p>
+   {paged&&detail==='detailed'&&page==='overview'&&<p className="a-caption">Saved choices affect the next message, not running work. Bundles change tools and instructions.</p>}
   </section>)}
  </div>;
 }

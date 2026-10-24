@@ -1043,6 +1043,57 @@ synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
 qualify installed wheels and negative controls; they do not replace these
 automatic ordinary-path owners.
 
+### Keyboard Settings ownership registration (October 24)
+
+PR #1149 source `2db7f630fffdef34aa081e90f37563a82efd16ab` adds the maintained
+`composer-panel-ownership` journey to the existing Composer owner
+(`delta.compact-composer` / `composer.compact-options`). Add → Ctrl/Cmd+, must
+yield focus/Escape to Settings without pointer dismissal; dirty Settings retain
+their guard, and accepted close returns to the persistent Add trigger. Ordinary
+Add Escape and the private composer draft remain intact, with no send, upload,
+provider-save or access-change action.
+
+The extended manifest owns this source journey exactly once. Its existing writer
+retains `result.json`, `keyboard-settings-1280.png`, `keyboard-settings-390.png`
+and, on failure, `failure.png` under
+`output/browser-checks/composer-panel-ownership`. These are output destinations,
+not newly executed evidence. Synthetic Linux/Mac navigator branches at 1280/390px
+do not qualify physical macOS keyboards.
+
+The authored registration-only branch had **120 extended scenarios / 163
+distinct scripts**; its integration with the newer voice owners had **124 / 167**.
+Including the two Peer regression owners below gives the combined source
+**126 extended scenarios / 169 distinct scripts**. These are inventory counts,
+not executed coverage. The original 65
+scenarios and their hash, frozen inventory, historical delta source identity,
+existing `composer-options` readiness owner and prior failures remain unchanged.
+Combined runtime/package qualification belongs to Releases; no broad browser run,
+new environment, product change, or change to the frozen Inline/Canvas batch is
+required for this registration.
+
+### Peer narrow-header and dismissal regression ownership (October 24)
+
+PR #1182 adds the default positive `peer-preview-header` and
+`peer-preview-focus` journeys to the existing automatic extended source plan and
+`delta.peer-preview`. Distinct `AMPLIFIER_PROOF_DIR` paths retain their geometry,
+focus results, screenshots and failures. The original `peer-preview`, all newer
+feature owners and the frozen 65-scenario inventory hash remain unchanged.
+
+The header owner checks long titles at 320/390px with neutral, focus and real
+hover states: title/status containment, toolbar separation, a reachable 44px
+Close control, tooltip non-obstruction and parent continuity. The focus owner
+uses genuine fixture revocation to remove the invoker, then checks explicit
+Escape/Close return to the exact originating disclosure, editor selection and
+reading position, and separate successful Open chat behavior.
+
+`PEER_HEADER_MEASURE_ONLY` and `PEER_HEADER_NEGATIVE` remain manual
+qualification modes. They are not set in the automatic plan. The predecessor
+measurement retained two failing 320px states before real hover was intercepted;
+unreached 390px and continuity assertions remain unrun. Registering the corrected
+positive owners neither turns that failure into a pass nor claims current
+rendered acceptance. No new publication gate or broad browser run is required
+for this additive registration.
+
 ## Immutable multi-quote integration (October 22)
 
 The additive `multi-quote` source journey uses the existing automatic browser

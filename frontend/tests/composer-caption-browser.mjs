@@ -1,4 +1,5 @@
 import {createShellHttpFixture} from './shell-http-fixture.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 // Source renderer; synthetic Host/SSE/catalog only. Never forwards runtime/model work.
 import {readComposerDraft} from './composer-test-helpers.mjs';
 // Run --probe first in the manager's DTU. Each invocation has one context/page and a 60s budget.
@@ -119,6 +120,7 @@ async function run(){
  await expect(composer()).toBeEditable();
  await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toHaveText('model');
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await showComposerOption(page,'bundle');
  await expect(page.getByLabel('Registered root bundles',{exact:true}).locator('option:checked')).toHaveText('Work');
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  proof.readiness=await page.evaluate(()=>({stream:window.captionBootstrap,selectedSessionId:window.amplifier.getState().selectedSessionId,

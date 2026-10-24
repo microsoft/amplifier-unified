@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -29,6 +30,7 @@ try{
  await expect(composer).toHaveDraft(retainedDraft);
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  const panel=page.getByRole('dialog',{name:'Chat options',exact:true});
+ await showComposerOption(page,'provider');
  await expect(panel.locator('#chat-provider')).toBeEnabled();
  try{await expect(panel.locator('#chat-provider option[value="replacement-account"]')).toHaveCount(1)}catch(error){
   console.error(JSON.stringify({actions,inspect:await inspect()}));

@@ -7,7 +7,7 @@ import {EditorView} from 'prosemirror-view';
 import {composerState,composerMarkdown,composerDocument,insertQuote,composerNewline,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink,moveComposerBoundary} from './markdown-composer.js';
 import {quoteNodeView,refreshQuoteControls} from './composer-quote-view.js';
 import {clipboardPaste} from './clipboard-paste';
-import {resizeComposer} from './composer';
+import {resizeComposer,observeComposerLayout} from './composer';
 import './composer-formatting.css';
 
 export function MarkdownComposer({value,document:documentValue,onChange,onSend,onFiles,onReveal,quoteApi,disabled=false,readOnly=false,pasteDisabled=false,editorRef}){
@@ -104,7 +104,8 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
   window.addEventListener('resize',schedule);window.addEventListener('scroll',schedule,true);
   view.dom.dataset.empty=String(!latest.current.value);
   resizeComposer(view.dom);
-  return()=>{alive=false;view.dom.removeEventListener('focus',remember);if(quoteApi)quoteApi.current=null;resizeObserver.disconnect();cancelAnimationFrame(frame);refresh.current=()=>{};document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('scroll',schedule,true);view.destroy();editor.current=null;if(editorRef.current===view.dom)editorRef.current=null;};
+  const stopLayout=observeComposerLayout(view.dom);
+  return()=>{alive=false;stopLayout();view.dom.removeEventListener('focus',remember);if(quoteApi)quoteApi.current=null;resizeObserver.disconnect();cancelAnimationFrame(frame);refresh.current=()=>{};document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('scroll',schedule,true);view.destroy();editor.current=null;if(editorRef.current===view.dom)editorRef.current=null;};
  },[]);
  useLayoutEffect(()=>{
   const view=editor.current;if(!view)return;

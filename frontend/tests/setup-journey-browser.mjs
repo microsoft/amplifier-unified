@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {showComposerOption} from './composer-options-helpers.mjs';
 import {mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -55,13 +56,17 @@ try{
  await page.screenshot({path:join(evidence,'readiness107-narrow-composer.png')});
  await options.click();const menu=page.getByRole('dialog',{name:'Chat options',exact:true});
  await expect(menu).toBeVisible();
+ await showComposerOption(page,'provider');
  await expect(menu.getByLabel('Provider',{exact:true})).toBeVisible();
+ await showComposerOption(page,'model');
  await expect(menu.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
- await expect(menu.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeVisible();
  await expect(menu.getByRole('button',{name:'Refresh models',exact:true})).toBeVisible();
+ await showComposerOption(page,'bundle');
+ await expect(menu.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeVisible();
+ await menu.getByRole('button',{name:'Back to chat options',exact:true}).click();
  const box=await menu.boundingBox();assert.ok(box.height>200&&box.y>=0&&box.y+box.height<=1000,JSON.stringify(box));
  await page.screenshot({path:join(evidence,'readiness107-options-open.png')});
- await menu.getByRole('button',{name:'Done',exact:true}).click();await expect(menu).toHaveCount(0);
+ await menu.getByRole('button',{name:'Close chat options',exact:true}).click();await expect(menu).toHaveCount(0);
  await options.click();await menu.getByRole('button',{name:'Close chat options',exact:true}).press('Escape');
  await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
  await options.click();await page.locator('.a-messages').click({position:{x:40,y:40}});await expect(menu).toHaveCount(0);
@@ -69,7 +74,7 @@ try{
  for(const width of [320,390]){
   await page.setViewportSize({width,height:650});await expect(options).toBeVisible();await belowField();await options.click();await expect(menu).toBeVisible();
   await expect.poll(async()=>{const b=await menu.boundingBox();return b.x>=0&&b.y>=0&&b.x+b.width<=width&&b.y+b.height<=650}).toBe(true);
-  await menu.getByRole('button',{name:'Done',exact:true}).click();
+  await menu.getByRole('button',{name:'Close chat options',exact:true}).click();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
  }
  await page.setViewportSize({width:1600,height:1000});
