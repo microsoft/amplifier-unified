@@ -358,7 +358,10 @@ class ClientViews:
                     session['chatReferenceRevision'] = json.dumps([
                         session.get('chatReferenceVersion', 0),
                         self.service.directory.navigation_revision,
-                        self.service.directory.workspace_revision])
+                        self.service.directory.workspace_revision,
+                        # Archive/restore commits belong to organization, not
+                        # directory metadata. Include its unknown epoch too.
+                        self.service.shell.resources._epochs({'conversationOrganization'})])
         return snapshot
 
     def remember_canvas(self, record=None):

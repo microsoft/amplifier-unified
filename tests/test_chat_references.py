@@ -505,6 +505,88 @@ async def test_reference_metadata_is_current_bounded_and_message_owned(reference
     assert (await command(app, "outputs.chatReferences", read))["result"]["items"] == []
 
 
+async def test_chat_reference_revision_tracks_committed_archive_and_restore(reference_app):
+    app, args, _ = reference_app
+    record = await attach(app, args)
+    sid, tid = args["sessionId"], args["targetSessionId"]
+    read = {"sessionId": sid, "messageId": args["messageId"]}
+
+    def projected():
+        with app.clients.bind("one"):
+            snapshot = app.browser_state()
+            assert snapshot["selectedSessionId"] == sid
+            source = next(row for row in snapshot["sessions"] if row["id"] == sid)
+            assert source["linkedChatReferencesAvailable"]
+            return source["chatReferenceRevision"]
+
+    before = projected()
+    directory = (app.directory.navigation_revision, app.directory.workspace_revision)
+    version = app._session(sid).get("chatReferenceVersion")
+    for action, archived in (("session.archive", True), ("session.restore", False)):
+        receipt = await command(app, action, {"id": tid})
+        assert receipt["accepted"]
+        assert (tid in app.state["conversationOrganization"]["archived"]) is archived
+        after = projected()
+        # The source and directory did not change; organization owns this refresh.
+        assert (app.directory.navigation_revision, app.directory.workspace_revision) == directory
+        assert app._session(sid).get("chatReferenceVersion") == version
+        assert after != before
+        item = (await command(app, "outputs.chatReferences", read))["result"]["items"][0]
+        assert item["archived"] is archived and item["id"] == record["id"]
+        assert item["revision"] == record["revision"]
+        assert projected() == after
+        before = after
+    assert effects(app) == [[], [], [], []]
+
+
+async def test_chat_reference_revision_includes_unknown_organization_invalidation(reference_app):
+    app, args, _ = reference_app
+    await attach(app, args)
+    sid = args["sessionId"]
+
+    def projected():
+        # A fresh projection, not a cached browser frame: an unknown epoch must
+        # invalidate the token even without an app-wide revision increment.
+        with app.clients.bind("one"):
+            source = next(row for row in app.get_state()["sessions"] if row["id"] == sid)
+            return source["chatReferenceRevision"]
+
+    before = projected()
+    revision = app.state["revision"]
+    organization_epoch = app.shell.resources.epochs["conversationOrganization"]
+    directory = (app.directory.navigation_revision, app.directory.workspace_revision)
+    app.shell.resources.invalidate()
+    assert app.state["revision"] == revision
+    assert app.shell.resources.epochs["conversationOrganization"] == organization_epoch
+    assert (app.directory.navigation_revision, app.directory.workspace_revision) == directory
+    after = projected()
+    assert after != before and projected() == after
+    assert len(after.encode()) < 256 and args["targetSessionId"] not in after
+    assert effects(app) == [[], [], [], []]
+
+
+async def test_chat_reference_revision_does_not_churn_on_saved_drafts(reference_app):
+    app, args, other = reference_app
+    await attach(app, args)
+    sid = args["sessionId"]
+
+    def projected():
+        with app.clients.bind("one"):
+            snapshot = app.browser_state()
+            assert snapshot["selectedSessionId"] == sid
+            return next(row["chatReferenceRevision"] for row in snapshot["sessions"] if row["id"] == sid)
+
+    before = projected()
+    revision = app.state["revision"]
+    for target, text in ((other, "Unrelated saved draft"), (sid, "Retained source draft")):
+        receipt = await command(app, "view.update", {"sessionId": target, "patch": {"draft": text}})
+        assert receipt["accepted"] and app.clients.records["one"]["drafts"][target] == text
+        assert app.state["revision"] > revision
+        assert projected() == before
+        revision = app.state["revision"]
+    assert effects(app) == [[], [], [], []]
+
+
 @pytest.mark.parametrize("defect", ["missing", "worker", "foreign-host", "changed-source"])
 async def test_changed_reference_fails_closed_without_substitute(reference_app, defect):
     app, args, _ = reference_app
