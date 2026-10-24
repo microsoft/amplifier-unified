@@ -29,11 +29,10 @@ export function usePeerPreview(state,dispatch){
    &&current.current?.selectedSessionId===saved.origin?.sessionId&&peerFocusScope(current.current)===saved.scope);
  },[active]);
  const open=useCallback(async({peer,sourceSessionId,messageId})=>{
-  const token=++intent.current,trigger=document.activeElement;
+  const token=++intent.current,trigger=document.activeElement,returnTarget=peerReturnTarget(trigger,sourceSessionId,messageId);
   if(!peer?.available||!peer.proof)throw Error('Source chat unavailable.');
   const result=await dispatch('peer.preview',{proof:peer.proof,sourceSessionId});
   if(result?.accepted!==true||token!==intent.current||current.current?.selectedSessionId!==sourceSessionId)return;
-  const returnTarget=peerReturnTarget(trigger,sourceSessionId,messageId);
   setActive(old=>old?.source.sourceId===peer.sourceId?{...old,proof:peer.proof,sourceSessionId,messageId,trigger,returnTarget}:{source:result.result,proof:peer.proof,sourceSessionId,messageId,trigger,returnTarget});
  },[dispatch]);
  return {active:active?.sourceSessionId===state?.selectedSessionId?active:null,open,close};
