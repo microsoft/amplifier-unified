@@ -138,8 +138,8 @@ def test_metadata_summary_message_count_never_hydrates_cold_body():
     assert summary(Refusing(id='page', sharedHistoryTotal=203))['sharedHistoryTotal'] == 203
 
 
-async def test_background_gc_stops_before_decoding_dormant_catalog(tmp_path, monkeypatch):
-    """Existing GC budget checks each durable record before parsing it."""
+async def test_background_gc_collects_large_dormant_catalog_off_lock(tmp_path, monkeypatch):
+    """A complete large catalog proof must progress without a permanent deadline."""
     import asyncio
     import json
     import sqlite3
@@ -159,26 +159,30 @@ async def test_background_gc_stops_before_decoding_dormant_catalog(tmp_path, mon
     db.commit()
     service = SimpleNamespace(db=db, _state={}, closed=False, lock=asyncio.Lock(),
                               performance_diagnostics=PerformanceDiagnostics())
+    import threading
+    from amplifier_web import resource_roots
     parsed = []
-    original = resource_files.ReferenceBudget.decode
-    def decode(budget, text):
-        value = original(budget, text)
-        parsed.append(True)
-        return value
-    monkeypatch.setattr(resource_files.ReferenceBudget, 'decode', decode)
+    owner = threading.get_ident()
+    original = resource_roots.references
+    def decode(snapshot):
+        assert threading.get_ident() != owner and not service.lock.locked()
+        result = original(snapshot)
+        parsed.append(len(snapshot.records))
+        return result
+    monkeypatch.setattr(resource_roots, 'references', decode)
     began = time.monotonic()
     try:
         await storage_migration._maintenance_async(service)
         elapsed = time.monotonic() - began
-        assert 0 < len(parsed) < 27000
-        assert service._resource_scan_status['deferred']
-        assert service._resource_scan_status['phase'] == 'durable'
-        assert service._resource_scan_status['budgetReason'] == 'deadline'
+        assert parsed == [27000]
+        assert not service._resource_scan_status['blocked']
         assert not db.in_transaction and not service.lock.locked()
-        assert db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 2
-        for reference in (retained, garbage):
-            assert (resource_files.root(db) / (reference['$resource'] + '.json')).is_file()
-        print(json.dumps({'durableRows': 27000, 'decodedBeforeDeferral': len(parsed), 'elapsedMs': elapsed * 1000}))
+        assert db.execute('SELECT count(*) FROM state_records').fetchone()[0] == 27000
+        assert db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 1
+        assert (resource_files.root(db) / (retained['$resource'] + '.json')).is_file()
+        assert not (resource_files.root(db) / (garbage['$resource'] + '.json')).exists()
+        print(json.dumps({'durableRows': 27000, 'decodedRows': sum(parsed), 'elapsedMs': elapsed * 1000,
+                          'operations': service.performance_diagnostics.snapshot()['operations']}))
     finally:
         if getattr(service, '_resource_scan', None):
             service._resource_scan.close()

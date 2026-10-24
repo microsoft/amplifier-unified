@@ -114,22 +114,27 @@ committing or discarding unrelated caller work. Maintenance marks the retained
 graph once and inspects at most 128 artifact-directory entries per sweep, retaining
 a scan cursor. It removes only unindexed hash files and abandoned atomic-writer
 temporary files. Missing retained resources or uncertain presentation recovery
-block cleanup. Background root admission now cooperatively checks a 20 ms deadline,
-a 50,000-field work limit, and a 256 Ki-character limit per durable JSON record.
-If either initial or final root proof exceeds those limits, the entire collection
-is deferred: indexed candidates and unindexed files are retained, with a
-`root-budget-exhausted` status and diagnostic counter. Live and durable root costs
-are recorded separately. This protects responsiveness; it is not incremental GC.
-Large mutable graphs can postpone reclamation until a later smaller proof or
-explicit maintenance. JSON decoding, individual database operations and custom
-mapping access are indivisible, so the deadline is cooperative, not a strict
-wall-clock ceiling. Explicit/offline collection keeps its complete proof.
-The expensive immutable-resource
-walk runs without the application lock or a SQLite writer transaction. The
-collector reacquires those boundaries and rechecks the complete root set and
-all source-index bindings before pruning. Any change, missing body, uncertainty
-or cancellation defers deletion; navigation need not wait for body traversal.
-Confirmed deletion keeps its separate writer-excluded reconciliation protocol.
+block cleanup. Durable root rows are captured on the SQLite owner and decoded in
+a worker outside the application and writer locks. Large valid JSON records and
+wide live state no longer fail a fixed size/field/time admission test forever.
+Live mutable references stay on their owner thread and never hydrate cold fields;
+the canonical traversal/cycle guard still fails closed. Live and durable root
+costs are recorded separately; the live walk and individual SQL operations are
+not a strict wall-clock latency bound.
+
+Before collection, changed durable rows are decoded again off the interactive
+thread. Progress-only changes with the same roots can collect. The exact final
+durable snapshot, complete live root set and resource index bindings must agree
+under writer exclusion; uncertainty preserves all files. Each automatic pass
+prunes at most 1,024 indexed resources, commits, then rechecks re-adoption before
+removing those files in a worker. Cancellation settles the file worker before
+releasing exclusion. Later saves continue the backlog with a fresh proof.
+Explicit/offline collection keeps its complete proof and existing batch scope.
+The immutable-resource walk also runs outside the application and writer locks.
+Cancellation before pruning does not delete anything; cancellation after pruning
+settles the bounded file removal before releasing exclusion. Missing bodies or
+an uncertain reference graph defer collection, and navigation need not wait for
+body traversal.
 
 Deletion preview remains read-only. The confirmed path reconciles unindexed
 files under writer exclusion before reporting file cleanup complete, yielding
