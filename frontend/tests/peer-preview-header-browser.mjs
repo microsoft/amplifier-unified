@@ -78,7 +78,7 @@ try{
    const row={width,state,geometry,violations:violations(geometry)};samples.push(row);
    await page.screenshot({path:join(output,`peer-header-${width}-${state}.png`)});
   }
-  assert.deepEqual(await readState(),before);assert.equal(await composer.evaluate(n=>!!n.closest('[inert]')),true);
+  assert.deepEqual(await readState(),before);assert.equal(await composerNode.evaluate(n=>n.isConnected&&!!n.closest('[inert]')),true);
   await close.press('Escape');await expect(panel).toHaveCount(0);await expect(source).toBeFocused();
   assert.deepEqual(await readState(),before);assert.equal(await pane.evaluate((n,old)=>n===old,paneNode),true);assert.equal(await composer.evaluate((n,old)=>n===old,composerNode),true);
   assert.ok(Math.abs(await pane.evaluate(n=>n.scrollTop)-top)<2);assert.equal(await composer.evaluate(n=>!!n.closest('[inert]')),false);
