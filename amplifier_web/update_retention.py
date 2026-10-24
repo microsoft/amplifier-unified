@@ -8,7 +8,9 @@ remain. This is not a global Amplifier/uv cache cleaner or a history migration.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import marshal
 import os
 import re
 import shutil
@@ -191,6 +193,64 @@ def _folders(manager):
                   and not folder.is_symlink() and folder.is_dir()) if root.exists() else []
 
 
+def _verified_cache(source, graph):
+    """Only sources covered by the already verified tracked-content graph."""
+    # installed_graph hashes all tracked files at the cache root before
+    # recording the distribution's subdirectory; the proof is repo-wide.
+    for row in graph:
+        proof = row.get('cacheSource') or {}
+        relative = Path(proof.get('subdirectory', ''))
+        if (not relative.is_absolute() and '..' not in relative.parts
+                and re.fullmatch('[a-f0-9]{64}', proof.get('trackedContentSha256', ''))
+                and proof.get('dirty') is False and row.get('path')
+                and Path(row['path']).resolve() == (source / relative).resolve()):
+            return True
+    return False
+
+
+def _generated_bytecode(source, name, tracked):
+    """Reproduce import caches in a bounded probe; never execute their contents."""
+    relative = Path(name)
+    if (relative.is_absolute() or '..' in relative.parts
+            or relative.parent.name != '__pycache__' or sys.implementation.name != 'cpython'):
+        return False
+    match = re.fullmatch(r'(.+)\.' + re.escape(sys.implementation.cache_tag)
+                         + r'(?:\.opt-([12]))?\.pyc', relative.name)
+    if match is None:
+        return False
+    cached = source / relative
+    original = cached.parent.parent / (match[1] + '.py')
+    try:
+        if original.relative_to(source).as_posix() not in tracked:
+            return False
+        for file in (cached, original):
+            if not file.is_file():
+                return False
+            for part in (file, *file.parents):
+                if part == source:
+                    break
+                if part.is_symlink():
+                    return False
+        # Unknown versions/producers and unusually large files stay protected.
+        # Compile only the already verified source, never unmarshal a cache.
+        limit = 16 * 1024 * 1024
+        with cached.open('rb') as stream:
+            header = stream.read(16)
+            payload = stream.read(limit + 1)
+        if (len(header) != 16 or header[:4] != importlib.util.MAGIC_NUMBER
+                or int.from_bytes(header[4:8], 'little') not in {0, 1, 3}
+                or not payload or len(payload) > limit):
+            return False
+        with original.open('rb') as stream:
+            contents = stream.read(limit + 1)
+        if len(contents) > limit:
+            return False
+        code = compile(contents, str(original), 'exec', dont_inherit=True, optimize=int(match[2] or 0))
+        return payload == marshal.dumps(code)
+    except (OSError, ValueError, SyntaxError):
+        return False
+
+
 def retire(manager, folder, project, *, remove_project, measurement=None):
     """Only metadata renames hold admission; partial retirement is preserved."""
     from .deployment import write_private
@@ -336,6 +396,7 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
             graph_text = graph.read_text()
             checked += 1
             await verify_generation(project, folder, timeout=remaining(INSPECTION_SECONDS))
+            verified_graph = json.loads(graph_text)
             for meta in (folder / "foundation/cache").rglob(
                 ".amplifier_cache_meta.json"
             ):
@@ -354,15 +415,25 @@ async def reclaim(manager, *, inspect_only=False, selected=None, evidence=None):
                     timeout=remaining(INSPECTION_SECONDS),
                 )
                 extras = await process(
-                    "git", "ls-files", "--others", cwd=source, timeout=remaining(INSPECTION_SECONDS)
+                    "git", "ls-files", "--others", '-z', cwd=source,
+                    timeout=remaining(INSPECTION_SECONDS), raw=True,
                 )
                 local_commits = await process(
                     'git', 'rev-list', '--max-count=1', '--all', '--not', 'HEAD', '--remotes',
                     cwd=source, timeout=remaining(INSPECTION_SECONDS))
-                if local_commits or changes or any(
-                    name != ".amplifier_cache_meta.json" for name in extras.splitlines()
-                ):
-                    raise ValueError("Local or generated changes retained")
+                extra_names = [os.fsdecode(name) for name in extras.split(b'\0')
+                               if name and name != b'.amplifier_cache_meta.json']
+                if local_commits or changes:
+                    raise ValueError("Local changes retained")
+                if extra_names:
+                    if not _verified_cache(source, verified_graph):
+                        raise ValueError("Unverified generated files retained")
+                    paths = await process('git', 'ls-files', '-z', cwd=source,
+                                          timeout=remaining(INSPECTION_SECONDS), raw=True)
+                    tracked = [os.fsdecode(name) for name in paths.split(b'\0') if name]
+                    if not await _probe('bytecode', {'source': str(source), 'names': extra_names, 'tracked': tracked},
+                                        timeout=remaining(INSPECTION_SECONDS)):
+                        raise ValueError("Unknown generated files retained")
             # Activation may have won while inspection yielded. No cleanup
             # lock is held during qualification, Git inspection or hashing.
             if maintenance_blocked(manager):
@@ -442,6 +513,10 @@ if __name__ == '__main__':
         from .runtime_qualification import verify_recorded
         verify_recorded(Path(values['project']), Path(values['folder']))
         print('null')
+    elif sys.argv[1] == 'bytecode':
+        tracked = set(values['tracked'])
+        print(json.dumps(all(_generated_bytecode(Path(values['source']), name, tracked)
+                             for name in values['names'])))
     elif sys.argv[1] == 'runner':
         from .managed_runner_updates import runtime_identity
         if runtime_identity(values['installation']) != values['runtime']:
