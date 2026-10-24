@@ -158,6 +158,9 @@ async def test_source_guard_reports_only_mismatch_field_names(tmp_path, monkeypa
         'url': URL, 'ref': 'main', 'revision': 'a' * 40, 'subdirectory': ''}}))
     project = tmp_path / 'worker'; project.mkdir()
     (project / 'uv.lock').write_text('version=1')
+    (project / 'pyproject.toml').write_text(
+        '[project]\nname = "fixture-runtime"\nversion = "0.0.0"\n'
+        'dependencies = ["fixture-foundation"]\n')
     graph = [{'name': 'fixture-foundation', 'version': '1', 'directUrl': {
         'url': 'file:///private/path', 'dir_info': {}}, 'cacheSource': {
             'url': URL, 'ref': 'main', 'revision': 'b' * 40,
@@ -174,6 +177,10 @@ async def test_source_guard_reports_only_mismatch_field_names(tmp_path, monkeypa
 
 BACKEND = """
 from pathlib import Path
+import base64
+import csv
+import hashlib
+import io
 import tomllib
 import zipfile
 
@@ -188,7 +195,15 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
                        'Metadata-Version: 2.3\\nName: ' + info['name'] + '\\nVersion: ' + version + '\\n')
         wheel.writestr(dist + '.dist-info/WHEEL',
                        'Wheel-Version: 1.0\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n')
-        wheel.writestr(dist + '.dist-info/RECORD', '')
+        # Installers need every payload entry to remove old-version metadata.
+        record = io.StringIO(newline='')
+        writer = csv.writer(record, lineterminator='\\n')
+        for member in wheel.namelist():
+            payload = wheel.read(member)
+            digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b'=').decode()
+            writer.writerow((member, 'sha256=' + digest, len(payload)))
+        writer.writerow((dist + '.dist-info/RECORD', '', ''))
+        wheel.writestr(dist + '.dist-info/RECORD', record.getvalue())
     return filename
 build_editable = build_wheel
 """
@@ -232,6 +247,9 @@ async def test_real_composed_bundle_cannot_replace_checked_git_with_stale_cache(
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(config))
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     monkeypatch.setenv('UV_NO_INDEX', '1')
+    # uv's offline cache guard also blocks a fresh Git fetch redirected locally.
+    monkeypatch.delenv('UV_OFFLINE', raising=False)
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
     monkeypatch.setenv('UV_CACHE_DIR', str(c.home / 'uv-cache'))
     monkeypatch.setenv('PYTHONDONTWRITEBYTECODE', '1')
     generation = c.stage.name

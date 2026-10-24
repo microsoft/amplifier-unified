@@ -38,6 +38,11 @@ def compare_graphs(tmp_path, monkeypatch):
                             lambda project: expected if mode == 'freeze' and Path(project) == prepared else actual)
         try:
             if mode == 'freeze':
+                # The real retained-dependency guard reads the prepared manifest.
+                # These graph fixtures declare packages without generated overrides.
+                (prepared / 'pyproject.toml').write_text(
+                    manifest.read_text() + 'dependencies = '
+                    + json.dumps([row['name'] for row in expected]) + '\n')
                 manager = SimpleNamespace(home=tmp_path, diagnostics=Diagnostics())
                 await runtime_qualification.freeze(manager, generation, prepared)
                 # The receipt keeps the installer's raw metadata, not the comparison view.

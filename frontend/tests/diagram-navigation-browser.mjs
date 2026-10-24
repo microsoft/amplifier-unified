@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdirSync,writeFileSync} from 'node:fs';
@@ -9,7 +10,62 @@ import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 if(process.env.DIAGRAM_EVIDENCE)mkdirSync(dirname(process.env.DIAGRAM_EVIDENCE),{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,page,primary;const results=[],errors=[],panFacts=[],secondary=[];
+const stopFixture=ownFixture(fixture,{label:'Diagram fixture'});
+let browser,page,primary,fixtureExit;const results=[],errors=[],panFacts=[],readyLayouts=[],secondary=[];
+async function readyLayout(artifact,kind,content,{undersize=false}={}){
+ // A decoded image can precede its render receipt and the feedback portal's
+ // layout change. Bind readiness to this artifact's exact primary-view lease.
+ let target;
+ await expect.poll(async()=>{
+  target=await page.evaluate(({id,kind,content})=>{
+   const state=window.amplifier.getState(),view=state.canvasWorkspace?.views?.find(row=>row.viewId==='primary');
+   return state.canvas?.id===id&&state.canvas.kind===kind&&state.canvas.content===content&&view?.resourceId===id
+    ?Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]])):null;
+  },{id:artifact.id,kind,content});
+  return !!target?.resourceRevision&&Number.isInteger(target?.generation);
+ }).toBe(true);
+ await expect.poll(()=>page.evaluate(target=>{
+  const view=window.amplifier.getState().canvasWorkspace?.views?.find(row=>row.viewId===target.viewId);
+  return Object.entries(target).every(([key,value])=>view?.[key]===value)&&
+   view.activation?.status==='ready'&&view.renderReports?.preview?.status==='ready';
+ },target)).toBe(true);
+ const stage=page.locator('[data-canvas-view="primary"] .a-diagram-stage');
+ await expect(stage.locator('img')).toBeVisible();
+ if(undersize)await stage.evaluate(el=>{
+  el.style.setProperty('flex','0 0 80px','important');
+  for(const name of ['height','min-height','max-height'])el.style.setProperty(name,'80px','important');
+ });
+ let layout;
+ await expect.poll(async()=>{
+  layout=await page.evaluate(async({target,kind,content})=>{
+   const sample=()=>{
+    const state=window.amplifier.getState(),view=state.canvasWorkspace?.views?.find(row=>row.viewId===target.viewId);
+    const stage=document.querySelector('[data-canvas-view="primary"] .a-diagram-stage'),image=stage?.querySelector('img');
+    const panel=stage?.closest('[data-part="canvas"]'),viewer=stage?.closest('.a-canvas-viewer');
+    if(state.canvas?.id!==target.resourceId||state.canvas.kind!==kind||state.canvas.content!==content||
+     !Object.entries(target).every(([key,value])=>view?.[key]===value)||
+     view.activation?.status!=='ready'||view.renderReports?.preview?.status!=='ready'||
+     !image?.complete||!image.naturalWidth||getComputedStyle(image).visibility!=='visible'||!viewer||
+     panel.querySelector('.a-canvas-result:not(.success)'))return null;
+    const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};
+    return {box:rect(stage),picture:rect(image),body:rect(viewer),src:image.src};
+   };
+   let previous=sample();
+   for(let frame=0;frame<3;frame++){
+    await new Promise(resolve=>requestAnimationFrame(resolve));
+    const current=sample();
+    if(!previous||!current||JSON.stringify(previous)!==JSON.stringify(current))return null;
+    previous=current;
+   }
+   const {src,...geometry}=previous;return geometry;
+  },{target,kind,content});
+  return !!layout;
+ }).toBe(true);
+ // Stability is independent of acceptance: a stable undersized stage must fail
+ // the same fit checks, not be polled until it happens to satisfy them.
+ readyLayouts.push({kind,target,undersize,...layout});
+ return layout;
+}
 async function recordPan(kind,phase,assertionImageBox=null){
  const sample={kind,phase,assertionImageBox};panFacts.push(sample);let timer;
  try{
@@ -27,7 +83,7 @@ async function recordPan(kind,phase,assertionImageBox=null){
    return {at:performance.now(),
     artifact:{id:scalar(canvas?.id),kind:scalar(canvas?.kind),selectedVersion:number(canvas?.selectedVersion),
      resourceId:scalar(view?.resourceId),resourceRevision:scalar(view?.resourceRevision),generation:number(view?.generation)},
-    state:{viewStatus:scalar(view?.status),previewStatus:scalar(view?.renderReports?.preview?.status),
+    state:{viewStatus:scalar(view?.activation?.status),previewStatus:scalar(view?.renderReports?.preview?.status),
      canvasPreviewStatus:scalar(canvas?.renderReports?.preview?.status),
      savedPanX:number(view?.view?.panX),savedPanY:number(view?.view?.panY),savedZoom:number(view?.view?.zoom)},
     stage:{box:rect(stage),clientWidth:stage?.clientWidth??null,clientHeight:stage?.clientHeight??null,
@@ -60,12 +116,13 @@ try{
  await act('session.create',{});await act('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:700}});
  for(const kind of ['mermaid','dot']){
   const content=kind==='mermaid'?'flowchart TD\n'+Array.from({length:10},(_,i)=>`N${i}[Step ${i}] --> N${i+1}[Step ${i+1}]`).join('\n'):'digraph { '+Array.from({length:10},(_,i)=>`n${i}->n${i+1};`).join(' ')+' }';
-  await act('canvas.show',{kind,content,title:kind+' navigation'});
-  const stage=page.locator('.a-diagram-stage'),img=stage.locator('img');
-  await expect(img).toBeVisible();await expect.poll(()=>img.evaluate(el=>el.complete&&el.naturalWidth>0)).toBe(true);
-  const box=await stage.boundingBox(),picture=await img.boundingBox(),body=await page.locator('.a-canvas-viewer').boundingBox();
+  const artifact=(await act('canvas.show',{kind,content,title:kind+' navigation'})).result;
+  const stage=page.locator('[data-canvas-view="primary"] .a-diagram-stage'),img=stage.locator('img');
+  const undersize=process.env.DIAGRAM_UNDERSIZED_STAGE==='1';
+  const {box,picture,body}=await readyLayout(artifact,kind,content,{undersize});
   record(kind,'fit uses available pane height',box.height>=body.height*.75,{stageHeight:box.height,paneHeight:body.height});
   record(kind,'fit retains complete tall graph',picture.height<=box.height+1&&picture.width<=box.width+1&&picture.height>=box.height*.8,{imageHeight:picture.height});
+  if(undersize)assert.ok(results.every(row=>row.passed),JSON.stringify(results.filter(row=>!row.passed)));
   const x=box.x+box.width*.65,y=box.y+box.height*.6;
   const before=await img.boundingBox(),requestStart=commands.length;
   await recordPan(kind,'baseline',before);
@@ -94,7 +151,7 @@ try{
   }).toBe(true);
   await expect.poll(saved).toMatchObject(wheel.args.args.patch);
   record(kind,'wheel persistence is bounded',commands.length-wheelStart<=2,{commands:commands.length-wheelStart});
-  const retained=await saved();await page.reload();await expect(img).toBeVisible();
+  const retained=await saved();await page.reload();await readyLayout(artifact,kind,content);
   await expect.poll(async()=>(await saved()).zoom).toBe(retained.zoom);
   record(kind,'reload retains zoom and pan',(await saved()).panX===retained.panX&&(await saved()).panY===retained.panY);
   const keyBefore=(await saved()).panX||0;await stage.focus();await page.keyboard.press('ArrowRight');
@@ -102,6 +159,7 @@ try{
   const keyboard=await saved();record(kind,'keyboard pan persists',Number.isFinite(keyboard.panX)&&keyboard.panX!==0);
   await page.getByRole('button',{name:'Fit',exact:true}).click();
   await page.setViewportSize({width:390,height:844});await act('view.update',{patch:{canvasFocused:true}});
+  await readyLayout(artifact,kind,content);
   await expect.poll(async()=>{const b=await stage.boundingBox(),i=await img.boundingBox();return i.width<=b.width+1&&i.height<=b.height+1}).toBe(true);
   record(kind,'narrow resize refits complete graph',true);
   const touchBox=await stage.boundingBox(),touchBefore=await img.boundingBox(),cdp=await page.context().newCDPSession(page);
@@ -124,7 +182,8 @@ try{
  // Viewer controls stay available without opening the general Canvas options.
  await act('view.update',{patch:{canvasControlsPinned:false,canvasControlsExpanded:false}});
  const authored='digraph { rankdir=LR; a [label="Authored node",shape=diamond,style=filled,fillcolor="#ffcc88",color="#713600"]; a -> b [color="#07802a"]; }';
- await act('canvas.show',{kind:'dot',content:authored,title:'Diagram presentation'});
+ const authoredArtifact=(await act('canvas.show',{kind:'dot',content:authored,title:'Diagram presentation'})).result;
+ await readyLayout(authoredArtifact,'dot',authored);
  const graph=page.locator('.a-diagram-stage img');await expect(graph).toBeVisible();
  await expect(page.getByRole('group',{name:'Diagram view'})).toBeVisible();
  await expect(page.getByRole('button',{name:'Zoom in',exact:true})).toBeVisible();
@@ -140,6 +199,7 @@ try{
  await expect.poll(async()=>(await saved()).engine).toBe('neato');
  await expect(graph).toBeVisible();
  await expect(graph).not.toHaveAttribute('src',flowSource);
+ await readyLayout(authoredArtifact,'dot',authored);
  const separated=await graph.evaluate(img=>{
   const svg=new DOMParser().parseFromString(decodeURIComponent(img.src.split(',').slice(1).join(',')),'image/svg+xml').documentElement;
   svg.style.cssText='position:fixed;visibility:hidden;pointer-events:none';document.body.append(svg);
@@ -150,11 +210,13 @@ try{
  record('dot','visible controls, authored styling/source and node inspection preserved',true);
  if(process.env.DIAGRAM_EVIDENCE)await page.screenshot({path:join(dirname(process.env.DIAGRAM_EVIDENCE),'diagram-viewer-desktop.png')});
  await page.setViewportSize({width:390,height:844});await act('view.update',{patch:{canvasFocused:true}});
+ await readyLayout(authoredArtifact,'dot',authored);
  const controls=await page.getByRole('group',{name:'Diagram view'}).boundingBox();assert.ok(controls.x>=0&&controls.x+controls.width<=390);
  record('dot','narrow toolbar stays within viewport',true);
  if(process.env.DIAGRAM_EVIDENCE)await page.screenshot({path:join(dirname(process.env.DIAGRAM_EVIDENCE),'diagram-viewer-narrow.png')});
  const mermaid='flowchart LR\n A[Authored Mermaid] --> B[Output]\n style A fill:#ffcc88,stroke:#713600';
- await act('canvas.show',{kind:'mermaid',content:mermaid,title:'Authored Mermaid'});await expect(graph).toBeVisible();
+ const mermaidArtifact=(await act('canvas.show',{kind:'mermaid',content:mermaid,title:'Authored Mermaid'})).result;
+ await readyLayout(mermaidArtifact,'mermaid',mermaid);
  const msvg=await graph.evaluate(img=>decodeURIComponent(img.src.split(',').slice(1).join(',')));assert.match(msvg,/#ffcc88/);assert.match(msvg,/#713600/);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.content),mermaid);
  record('mermaid','authored styling and source preserved',true);
@@ -165,15 +227,14 @@ try{
  primary=error;
  if(page&&!page.isClosed())await recordPan('failure','before-cleanup');
 }finally{
+ try{await finishFixture({label:'Diagram fixture',close:[['browser',()=>browser?.close()]],stop:async()=>{fixtureExit=await stopFixture()}})}catch(error){secondary.push(error)}
  try{
   const path=process.env.DIAGRAM_EVIDENCE||root+'output/browser-checks/diagram-navigation/report.json';
   mkdirSync(dirname(path),{recursive:true});
-  writeFileSync(path,JSON.stringify({results,errors,panFacts,
+  writeFileSync(path,JSON.stringify({results,errors,panFacts,readyLayouts,fixtureExit,
    primary:primary?{name:primary.name,code:primary.code??null}:null,
    diagnosticErrors:secondary.map(error=>({name:error.name,code:error.code??null}))},null,2));
  }catch(error){secondary.push(error)}
- try{await browser?.close()}catch(error){secondary.push(error)}
- try{fixture.kill('SIGTERM')}catch(error){secondary.push(error)}
 }
 if(primary&&secondary.length)throw new AggregateError([primary,...secondary],'Diagram primary failure with diagnostic/cleanup failures',{cause:primary});
 if(primary)throw primary;

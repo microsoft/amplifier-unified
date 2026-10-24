@@ -179,7 +179,7 @@ async def test_preflight_failure_leaves_source_usable_without_release(tmp_path, 
         record = next(r for r in app.worktrees.git.records() if r['sessionId'] == sid)
         def reject(*args):
             raise ValueError('Target preflight rejected')
-        monkeypatch.setattr(app.worktrees.git, 'inspect', reject)
+        monkeypatch.setattr('amplifier_web.worktrees.common', reject)
         await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': record['id'], 'expectedExecutionRevision': 0})
         await settle(app)
         if restart:

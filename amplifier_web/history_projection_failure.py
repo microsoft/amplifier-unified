@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 
-STAGES = frozenset({'setup', 'setup_policy', 'setup_import', 'setup_store', 'input_decode', 'model', 'model_cache_load',
+STAGES = frozenset({'spool_setup', 'setup', 'setup_policy', 'setup_import', 'setup_store', 'input_decode', 'model', 'model_cache_load',
     'source_scan', 'source_bindings', 'source_rows', 'source_associate',
     'source_join', 'source_plan', 'source_usage', 'source_retain',
     'model_store', 'model_retain', 'output_encode'})

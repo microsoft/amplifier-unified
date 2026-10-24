@@ -324,8 +324,10 @@ class Worktrees:
                 if binding['kind'] == 'inherited':
                     checkout = self.git.get(binding['checkoutId'])
                     if checkout['status'] != 'ready': raise ValueError('The inherited checkout is not ready; inspect it first')
-                checked = self.git.inspect(path)
-                if checked['root'] != binding['path'] or checked['repository'] != binding['repository']:
+                # Handoff changes execution placement, not file contents. Keep
+                # identity validation independent of preservation manifest limits.
+                root, repository = common(path)
+                if str(root) != binding['path'] or str(repository) != binding['repository']:
                     raise ValueError(f'The {side} is no longer in the recorded repository')
 
     def require_available_path(self, path):

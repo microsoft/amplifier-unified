@@ -64,7 +64,13 @@ async def test_worker_origin_controls_state_navigation_and_screen_status(origin)
     assert state['computerVisual']['source']['label'] == 'input-browser'
     assert state['inputOrigin'] == {'clientId': 'input-browser', 'status': 'client'}
     result = await action(bridge, 'view.update', patch={'runtimeDraft': {'section': 'screen-source'}})
-    assert result['state']['canvasContext']['clientId'] == 'input-browser'
+    assert result['accepted'] and result['state']['clientId'] == 'input-browser'
+    assert set(result['state']) == {'revision', 'sessionId', 'clientId', '_stateAccess'}
+    assert result['state']['sessionId'] == sid
+    request, = result['state']['_stateAccess']['readback']
+    assert request == {'operation': 'get_state', 'args': {'path': '/view', 'clientId': 'input-browser'}}
+    readback = await bridge(request['operation'], request['args'])
+    assert next(row['value'] for row in readback['items'] if row['key'] == 'panel') == 'runtime'
     assert app.clients.records['input-browser']['view']['runtimeDraft']['tab'] == 'computer'
     assert app.clients.records['old-browser'] == before
     result = await action(bridge, 'computer.visual.status', sessionId=sid)
@@ -80,16 +86,24 @@ async def test_explicit_navigation_and_canvas_remain_valid_but_cannot_move_conse
     await action(bridge, 'canvas.show', kind='text', title='Saved', content='fixture')
     artifact = app._state['canvasArtifacts'][-1]['id']
     selected = await action(bridge, 'canvas.select', id=artifact, clientId='old-browser')
-    assert selected['state']['canvasContext']['clientId'] == 'old-browser'
+    assert selected['accepted'] and selected['state']['clientId'] == 'old-browser'
+    assert set(selected['state']) == {'revision', 'sessionId', 'clientId', '_stateAccess'}
+    assert selected['state']['sessionId'] == sid
+    request, = selected['state']['_stateAccess']['readback']
+    assert request == {'operation': 'get_state', 'args': {'path': '/canvas', 'clientId': 'old-browser'}}
+    readback = await bridge(request['operation'], request['args'])
+    assert next(row['value'] for row in readback['items'] if row['key'] == 'id') == artifact
     explicit = await bridge('get_state', {'clientId': 'old-browser'})
     assert explicit['canvas']['id'] == artifact
     assert explicit['computerVisual']['available'] is False
     await action(bridge, 'canvas.visibility', clientId='old-browser', sessionId=sid, canvasId=artifact, open=False)
     assert not app.clients.records['old-browser']['canvas']['open']
+    grants = {client: deepcopy(visual.grant) for client, visual in app.computer_visual.clients.items()}
     for name in ('computer.visual.status', 'computer.visual.capture', 'computer.visual.revoke'):
         with pytest.raises(AppError, match='cannot be borrowed'):
             await action(bridge, name, sessionId=sid, clientId='old-browser')
     assert all(visual.grant and visual.pending is None for visual in app.computer_visual.clients.values())
+    assert {client: visual.grant for client, visual in app.computer_visual.clients.items()} == grants
 
 
 @pytest.mark.parametrize('clients', [[], [None], ['input-browser', None], ['input-browser', 'old-browser'], ['missing-browser']])

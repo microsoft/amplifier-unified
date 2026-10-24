@@ -1,5 +1,6 @@
 """Real spawned-process boundary tests; all files are synthetic and test owned."""
 import asyncio
+import errno
 import json
 import os
 from pathlib import Path
@@ -88,6 +89,75 @@ async def test_cancelled_waiter_does_not_cancel_shared_projection(tmp_path):
         assert (await second)['tree']['value'] == 1
         assert len(await called(tmp_path)) == 1
     finally:
+        await owner.close()
+
+
+async def test_spool_allocation_failure_recovers_on_next_request(tmp_path, monkeypatch):
+    owner = projector(tmp_path)
+    make_root = owner._make_root
+    attempts = 0
+
+    def fail_once():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError(errno.ENOSPC, 'private storage path', str(tmp_path))
+        return make_root()
+
+    monkeypatch.setattr(owner, '_make_root', fail_once)
+    try:
+        failed = await owner.project({'value': 'private input'}, key='first')
+        assert failed['status'] == 'retry' and failed['reason'] == 'worker_failed'
+        assert owner._process is None and not list(tmp_path.iterdir())
+        recovered = await owner.project({'value': 'recovered'}, key='second')
+        assert recovered['status'] == 'complete' and recovered['tree']['value'] == 'recovered'
+        assert attempts == 2 and len(await called(tmp_path)) == 1
+        facts = failed['failure']
+        assert (facts['stage'], facts['exceptionType'], facts['errno']) == ('spool_setup', 'OSError', errno.ENOSPC)
+        assert 'private' not in json.dumps(failed) and str(tmp_path) not in json.dumps(failed)
+        process, spool = owner._process, owner._root
+    finally:
+        await owner.close()
+    assert process.returncode == 0 and not spool.exists()
+
+
+@pytest.mark.parametrize('allocation_fails', [False, True])
+async def test_cancelled_waiter_and_close_settle_pending_spool_allocation(tmp_path, monkeypatch, allocation_fails):
+    owner = projector(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    make_root = owner._make_root
+    roots = []
+
+    def held_allocation():
+        entered.set()
+        assert release.wait(5)
+        if allocation_fails:
+            raise OSError(errno.ENOSPC, 'private allocation error')
+        root = make_root()
+        roots.append(root)
+        return root
+
+    monkeypatch.setattr(owner, '_make_root', held_allocation)
+    waiter = asyncio.create_task(owner.project({'value': 'never sent'}, key='held'))
+    try:
+        async with asyncio.timeout(5):
+            while not entered.is_set():
+                await asyncio.sleep(.001)
+        allocation = owner._root_task
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        closing = asyncio.create_task(owner.close())
+        await asyncio.sleep(.01)
+        assert not closing.done() and owner._root_task is allocation
+        release.set()
+        await asyncio.wait_for(closing, 5)
+        await owner.close()  # completed close remains idempotent
+        assert allocation.done() and not owner._tasks and owner._process is None
+        assert not list(tmp_path.iterdir()) and all(not root.exists() for root in roots)
+        assert await owner.project({}, key='closed') == {'status': 'retry', 'reason': 'closed'}
+    finally:
+        release.set()
         await owner.close()
 
 
