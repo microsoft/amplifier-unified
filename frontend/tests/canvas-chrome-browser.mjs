@@ -446,6 +446,16 @@ try{
     await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
     await page.keyboard.press('Escape');await expect(details).toBeHidden();
     await expect(panel,'Escape closes Details before leaving focused Canvas').toHaveAttribute('data-focused','true');
+    await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
+    // The native dialog still owns the first Escape. Then exercise the real
+    // document listener from the shared header, outside the Canvas aside.
+    await documents().click();await expect(dialog).toBeVisible();await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();await expect(details).toBeVisible();await expect(documents()).toBeFocused();
+    await toggle.focus();await expect(toggle).toBeFocused();await page.keyboard.press('Escape');
+    await expect(details,'Header Escape closes Details first').toBeHidden();
+    await expect(panel,'Header Escape must retain focused Canvas').toHaveAttribute('data-focused','true');
+    await expect(toggle,'Closing Details must not steal the header focus').toBeFocused();
+    (report.headerEscape??=[]).push({scheme,layout:size.name,detailsClosed:true,canvasFocused:true,headerFocusRetained:true});
     // Start on the included header control and traverse both modal boundaries.
     await toggle.focus();await page.keyboard.press('Shift+Tab');await page.keyboard.press('Tab');await expect(toggle).toBeFocused();
     await page.keyboard.press('Enter');await expect(panel).toBeHidden();await expect(toggle).toHaveAccessibleName('Open canvas');

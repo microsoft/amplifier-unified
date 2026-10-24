@@ -139,7 +139,9 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  },[controls,covered,visible,state.selectedSessionId]);
  useEffect(()=>{controlsInvoker.current=null;controlsFocus.current=null;controlsRestore.current=null},[state.selectedSessionId]);
  useCanvasReading(overviewRef,state.selectedSessionId,'overview',!!canvas.open&&overview&&!suppressed);
- useModalFocus(panel,focused,()=>patch(actRef.current,{canvasFocused:false}),'#canvas-toggle');
+ // The focused scope includes the external header toggle. Reuse its existing
+ // Escape owner so Details closes first there too, without a global listener.
+ useModalFocus(panel,focused,()=>controls?closeControls():patch(actRef.current,{canvasFocused:false}),'#canvas-toggle');
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
  useEffect(()=>{
   if(!canvas.open||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;
