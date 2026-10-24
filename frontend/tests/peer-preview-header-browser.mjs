@@ -80,6 +80,17 @@ try{
    if(state==='focus'&&!geometry.closeFocused)issues.push('Close did not retain keyboard focus');
    const row={width,state,geometry,violations:issues};samples.push(row);
    await page.screenshot({path:join(output,`peer-header-${width}-${state}.png`)});
+   if(negative&&state==='focus'&&samples.some(r=>r.violations.some(v=>/escapes header|crowds/.test(v)))){
+    // The predecessor's confirmed collision blocks real hover. Preserve the
+    // discriminating neutral/focus geometry and fail before that interaction;
+    // never force it or count later states/continuity assertions as reached.
+    writeFileSync(join(output,'header-geometry.json'),JSON.stringify({
+     mode:'negative',acceptance:'failed',samples,commands,
+     stoppedAt:{width,state,reason:'confirmed vertical collision before hover'},
+     postLoopAssertions:'not_run'
+    },null,2));
+    throw Error('PEER_HEADER_NEGATIVE_CONFIRMED: '+JSON.stringify(samples.map(r=>({width:r.width,state:r.state,violations:r.violations}))));
+   }
   }
   assert.deepEqual(await readState(),before);assert.equal(await composerNode.evaluate(n=>n.isConnected&&!!n.closest('[inert]')),true);
   await close.press('Escape');await expect(panel).toHaveCount(0);await expect(source).toBeFocused();
