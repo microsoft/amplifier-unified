@@ -55,6 +55,7 @@ try{
   await expect(panel.getByRole('button',{name:'Open chat',exact:true})).toBeEnabled();
   await expect(panel.locator('[data-preview-message-id]')).toHaveCount(1);
   const close=panel.getByRole('button',{name:'Close source preview',exact:true});
+  if(!measurement&&!negative)await expect(close).toHaveText('Close');
   if(negative){
    // Scoped DOM/CSS mutation only: restore the original header block while
    // preserving the actual built component, text, source proof and fixture.
@@ -75,7 +76,9 @@ try{
     const box=rect(close),hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
     return {header:rect(header),identity:rect(header.querySelector('div')),title:rect(title),titleLines:textRects(title),status:rect(status),statusLines:textRects(status),close:box,toolbar:rect(toolbar),snapshot:rect(snapshot),computed:{header:style(header),identity:style(header.querySelector('div')),title:style(title),status:style(status),close:style(close)},tooltips:[...document.querySelectorAll('[role="tooltip"]')].filter(n=>n.getClientRects().length).map(rect),closeCenterHits:hit===close||close.contains(hit),closeFocused:document.activeElement===close,panelOverflow:panel.scrollWidth>panel.clientWidth};
    });
-   const row={width,state,geometry,violations:violations(geometry)};samples.push(row);
+   const issues=violations(geometry);
+   if(state==='focus'&&!geometry.closeFocused)issues.push('Close did not retain keyboard focus');
+   const row={width,state,geometry,violations:issues};samples.push(row);
    await page.screenshot({path:join(output,`peer-header-${width}-${state}.png`)});
   }
   assert.deepEqual(await readState(),before);assert.equal(await composerNode.evaluate(n=>n.isConnected&&!!n.closest('[inert]')),true);

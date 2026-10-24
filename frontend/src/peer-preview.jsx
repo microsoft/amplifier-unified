@@ -7,18 +7,34 @@ import {useModalFocus} from './responsive-navigation';
 import {messageTime} from './message-time';
 import {Markdown} from './markdown';
 import {prependPeerPage,refreshPeerPages} from './peer-preview-pages.js';
+import {deferPeerFocus,peerFocusScope,peerReturnTarget} from './peer-preview-focus.js';
 import './peer-preview.css';
 
 export function usePeerPreview(state,dispatch){
  const [active,setActive]=useState(null),intent=useRef(0),current=useRef(state);current.current=state;
- useEffect(()=>{intent.current++;setActive(null)},[state?.selectedSessionId,state?.canvas?.id,state?.canvas?.selectedVersion,state?.view?.workSurface]);
- const close=useCallback(()=>{intent.current++;setActive(null)},[]);
+ const activeRef=useRef(active),dismissal=useRef(null);activeRef.current=active;
+ useEffect(()=>{intent.current++;dismissal.current=null;setActive(null)},[state?.selectedSessionId,state?.canvas?.id,state?.canvas?.selectedVersion,state?.view?.workSurface]);
+ const close=useCallback((expected,restoreFocus=false)=>{
+  if(activeRef.current!==expected)return;
+  const token=++intent.current;
+  dismissal.current=restoreFocus?{token,origin:expected.returnTarget,scope:peerFocusScope(current.current)}:null;
+  setActive(null);
+ },[]);
+ // Child modal layout cleanup releases inertness before this post-dismissal
+ // frame. Implicit teardown and successful Open chat never request a fallback.
+ useLayoutEffect(()=>{
+  if(active||!dismissal.current)return;
+  const saved=dismissal.current;dismissal.current=null;
+  return deferPeerFocus(saved.origin,()=>intent.current===saved.token&&!current.current?.navigationPending
+   &&current.current?.selectedSessionId===saved.origin?.sessionId&&peerFocusScope(current.current)===saved.scope);
+ },[active]);
  const open=useCallback(async({peer,sourceSessionId,messageId})=>{
   const token=++intent.current,trigger=document.activeElement;
   if(!peer?.available||!peer.proof)throw Error('Source chat unavailable.');
   const result=await dispatch('peer.preview',{proof:peer.proof,sourceSessionId});
   if(result?.accepted!==true||token!==intent.current||current.current?.selectedSessionId!==sourceSessionId)return;
-  setActive(old=>old?.source.sourceId===peer.sourceId?{...old,proof:peer.proof}:{source:result.result,proof:peer.proof,sourceSessionId,messageId,trigger});
+  const returnTarget=peerReturnTarget(trigger,sourceSessionId,messageId);
+  setActive(old=>old?.source.sourceId===peer.sourceId?{...old,proof:peer.proof,sourceSessionId,messageId,trigger,returnTarget}:{source:result.result,proof:peer.proof,sourceSessionId,messageId,trigger,returnTarget});
  },[dispatch]);
  return {active:active?.sourceSessionId===state?.selectedSessionId?active:null,open,close};
 }
@@ -42,7 +58,7 @@ export function PeerPreviewCanvas({active,onClose,state,dispatch}){
  const [snapshot,setSnapshot]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[unavailable,setUnavailable]=useState(false),[opening,setOpening]=useState(false),[unknown,setUnknown]=useState(false);
  const [metadata,setMetadata]=useState(active.source);
  const source=active.source,identity=source.sourceId,latest=useRef(active);latest.current=active;
- const close=useCallback(()=>{read.current?.abort();onClose();requestAnimationFrame(()=>active.trigger?.isConnected&&active.trigger.focus({preventScroll:true}))},[onClose,active.trigger]);
+ const close=useCallback(()=>{read.current?.abort();onClose(active,true)},[onClose,active]);
  useModalFocus(panel,layout.overlay,close);
  useEffect(()=>{panel.current?.querySelector('[aria-label="Close source preview"]')?.focus({preventScroll:true});return()=>{read.current?.abort();version.current++}},[]);
  function anchor(){const pane=scroll.current;if(!pane)return null;const top=pane.getBoundingClientRect().top,node=[...pane.querySelectorAll('[data-preview-message-id]')].find(n=>n.getBoundingClientRect().bottom>top);return node?{id:node.dataset.previewMessageId,offset:node.getBoundingClientRect().top-top}:null}
@@ -69,10 +85,10 @@ export function PeerPreviewCanvas({active,onClose,state,dispatch}){
   request('/api/peer/preview?'+new URLSearchParams({proof:latest.current.proof,metadata:'true'}),{signal:controller.signal}).then(result=>{if(!controller.signal.aborted)setMetadata(result.source)}).catch(e=>{if(!controller.signal.aborted){if([403,404].includes(e.status))failClosed(e);else setError('Source access could not be rechecked. Refresh before opening the chat.')}});
   return()=>controller.abort();
  },[bindingRevision,catalogRevision,workspaces,failClosed]);
- async function engage(){if(opening||unknown||unavailable)return;setOpening(true);setError('');try{const receipt=await dispatch('session.select',{id:identity,peerPreview:{proof:latest.current.proof,sourceSessionId:active.sourceSessionId}},{id:crypto.randomUUID()});if(receipt?.accepted===true)onClose();else if(!receipt?.superseded)setError(receipt?.error||'The chat was not opened.')}catch(e){if(e.unconfirmed||!Number.isInteger(e.status))setUnknown(true);setError(e.message)}finally{setOpening(false)}}
+ async function engage(){if(opening||unknown||unavailable)return;setOpening(true);setError('');try{const receipt=await dispatch('session.select',{id:identity,peerPreview:{proof:latest.current.proof,sourceSessionId:active.sourceSessionId}},{id:crypto.randomUUID()});if(receipt?.accepted===true)onClose(active);else if(!receipt?.superseded)setError(receipt?.error||'The chat was not opened.')}catch(e){if(e.unconfirmed||!Number.isInteger(e.status))setUnknown(true);setError(e.message)}finally{setOpening(false)}}
  return <aside className="a-canvas-panel a-peer-preview-panel" data-part="canvas" data-mode="artifact" data-focused={false} ref={panel} role={layout.overlay?'dialog':'region'} aria-modal={layout.overlay||undefined} aria-label="Read-only source chat preview" onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();close()}}}>
   {!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
-  <header className="a-canvas-head"><div><strong>{unavailable?'Source chat unavailable':metadata.title}</strong><small>Read only{!unavailable&&metadata.archived?' · Archived':''}</small></div><button type="button" className="a-icon" aria-label="Close source preview" onClick={close}><X/></button></header>
+  <header className="a-canvas-head"><div><strong>{unavailable?'Source chat unavailable':metadata.title}</strong><small>Read only{!unavailable&&metadata.archived?' · Archived':''}</small></div><button type="button" className="a-soft a-peer-preview-close" data-tooltip="off" aria-label="Close source preview" onClick={close}><X aria-hidden="true"/><span>Close</span></button></header>
   <div className="a-peer-preview-toolbar"><button className="a-soft" type="button" disabled={busy||unavailable} onClick={()=>load()}><RefreshCw/>Refresh</button><button className="a-soft" type="button" disabled={!snapshot||opening||unavailable||unknown} onClick={engage}><ArrowUpRight/>{opening?'Opening…':'Open chat'}</button></div>
   <p className="a-caption a-peer-snapshot-status" role="status">{snapshot?`Snapshot · ${new Date(snapshot.capturedAt*1000).toLocaleString()} · ${snapshot.source.status} at capture · not following`:busy?'Loading bounded source history…':'No source snapshot available.'}</p>
   {error&&<p className="a-peer-preview-error" role="alert">{error}{snapshot?' Previous snapshot retained; currentness unknown.':''}{unknown?' Opening was not confirmed; no automatic retry will run.':''}</p>}
