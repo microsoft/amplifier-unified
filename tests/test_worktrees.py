@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from amplifier_worktrees import GitWorktrees
-from amplifier_worktrees.git import git
+from amplifier_worktrees.git import MAX_FILES, git
 from amplifier_web.service import AppService, AppError
 
 
@@ -52,6 +52,21 @@ def test_clean_and_explicit_dirty_copies_preserve_source_index_and_manifest(tmp_
     removed = manager.remove(clean['id'], clean['revision'], 'remove')
     assert removed['status'] == 'removed' and root.exists()
     assert manager.remove(clean['id'], clean['revision'], 'remove')['duplicate']
+
+
+def test_manifest_file_limit_still_refuses_snapshot_and_carry_dirty(tmp_path):
+    root = repository(tmp_path); manager = GitWorktrees(tmp_path / 'managed')
+    revision = manager.inspect(root)['sourceRevision']
+    contents = {f'evidence-{index}.txt': f'evidence {index}\n'.encode() for index in range(MAX_FILES + 1)}
+    for name, value in contents.items():
+        (root / name).write_bytes(value)
+    with pytest.raises(ValueError, match='Too many untracked files'):
+        manager.inspect(root)
+    with pytest.raises(ValueError, match='Too many untracked files'):
+        manager.create(root, command_id='oversized-carry', expected_revision=revision, mode='carry_dirty')
+    assert not manager.records()
+    assert {name: (root / name).read_bytes() for name in contents} == contents
+    assert (root / 'a.txt').read_bytes() == b'original\n'
 
 
 def test_stale_branch_conflict_and_attached_ownership(tmp_path):
