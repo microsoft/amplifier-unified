@@ -76,7 +76,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
    <button type="button" className="a-icon a-work-home-nav" aria-label="Home" title="Home" aria-current={surface==='home'?'page':undefined} onClick={()=>nav.home({navExpanded:false})}><HomeIcon/></button>
    <DestinationHistory history={nav.history} onVisit={nav.visitHistory} onRecent={nav.visitRecent} disabled={!!state.navigationPending}/>
   </nav>
-  <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page">{title}</strong></nav>}</ShellSlot>
+  <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page" {...(surface==='chat'&&session?{role:'heading','aria-level':1,'data-part':'session-heading','data-session-id':session.id,tabIndex:-1}:{})}>{title}</strong></nav>}</ShellSlot>
   <div className="a-work-header-actions">
    {!browsing&&session&&<><ActionMenu label="Chat" icon={<MessageCircle/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
