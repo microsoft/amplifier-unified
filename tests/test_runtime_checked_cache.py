@@ -235,6 +235,9 @@ async def test_real_composed_bundle_cannot_replace_checked_git_with_stale_cache(
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(config))
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     monkeypatch.setenv('UV_NO_INDEX', '1')
+    # uv's offline cache guard also blocks a fresh Git fetch redirected locally.
+    monkeypatch.delenv('UV_OFFLINE', raising=False)
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
     monkeypatch.setenv('UV_CACHE_DIR', str(c.home / 'uv-cache'))
     monkeypatch.setenv('PYTHONDONTWRITEBYTECODE', '1')
     generation = c.stage.name
