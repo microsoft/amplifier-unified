@@ -10,7 +10,7 @@ import {McpAppVisibilityProvider} from './mcp-app-lifecycle';
 import {ShellModules,ShellSlot} from './shell/runtime';
 export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
-import React,{useContext,useEffect,useRef,useState} from 'react';
+import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {WorkNavigationContext} from './work-navigation';
 import {Home as HomeIcon,Info,SlidersHorizontal,MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
 import {PaneResizer,usePanelLayout,showingOverview} from './panel-layout';
@@ -75,6 +75,8 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
  actRef.current=act;
  const [controlsHost,setControlsHost]=useState(null),[actionsHost,setActionsHost]=useState(null),overviewRef=useRef(null);
+ const contentRef=useRef(null),readerRef=useRef(null),inspectorRef=useRef(null),controlsInvoker=useRef(null),controlsFocus=useRef(null),controlsRestore=useRef(null);
+ const [detailsOverlay,setDetailsOverlay]=useState(true);
  const [overviewDraft,setOverviewDraft]=useCanvasOverviewState(state),overviewState={...state,view:{...view,canvasDraft:overviewDraft}};
  const sectionChange=next=>setOverviewDraft({sections:next.sections});
  const artifacts=chatArtifacts(state),hasContent=!!state.canvasWorkspace?.views?.length&&!canvas.placeholder,hasArtifacts=artifacts.length>0;
@@ -87,10 +89,58 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  const resourceView=state.canvasWorkspace?.views?.find(item=>item.viewId==='primary');
  const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},...((value.open||value.browser)?{canvasControlsExpanded:true}:{})});
  const overview=showingOverview(state);
+ const visible=!suppressed&&!!state.selectedSessionId&&!!canvas.open,covered=visible&&controls&&detailsOverlay;
+ // Measure the Canvas, not the window: a narrow split pane also needs the sheet.
+ // The observed content box is independent of the inspector's own width.
+ useLayoutEffect(()=>{
+  const node=contentRef.current;if(!node||!visible)return;
+  const measure=()=>{
+   const narrow=(panel.current||node).getBoundingClientRect().width<720;
+   if(narrow&&readerRef.current?.contains(document.activeElement)){controlsInvoker.current=document.activeElement;controlsFocus.current='close'}
+   setDetailsOverlay(narrow);
+  };
+  measure();const observer=new ResizeObserver(measure);observer.observe(node);return()=>observer.disconnect();
+ },[visible]);
+ useEffect(()=>{
+  const supersede=()=>{controlsFocus.current=null;controlsRestore.current=null};
+  document.addEventListener('keydown',supersede,true);document.addEventListener('pointerdown',supersede,true);
+  return()=>{document.removeEventListener('keydown',supersede,true);document.removeEventListener('pointerdown',supersede,true)};
+ },[]);
+ const restoreControlsFocus=()=>{
+  const target=controlsInvoker.current;
+  if(target?.isConnected&&target.getClientRects().length&&!target.closest('[inert],[hidden]'))target.focus({preventScroll:true});
+  else panel.current?.querySelector(overview?'[aria-label="Chat overview"]':'[aria-label="Canvas details"]')?.focus({preventScroll:true});
+ };
+ const closeControls=()=>{
+  controlsFocus.current=null;
+  // Restore only after the reader is no longer inert. New input clears this
+  // intent; a late receipt must not steal navigation or header-toggle focus.
+  controlsRestore.current=inspectorRef.current?.contains(document.activeElement)?state.selectedSessionId:null;
+  return patch(act,{canvasControlsExpanded:false});
+ };
+ const openControls=(target='close')=>{
+  controlsInvoker.current=document.activeElement;
+  if(controls){inspectorRef.current?.querySelector(target==='version'?'[aria-label="Artifact version"]':'[aria-label="Close canvas details"]')?.focus({preventScroll:true});return}
+  controlsFocus.current=target;return patch(act,{canvasControlsExpanded:true});
+ };
+ useLayoutEffect(()=>{
+  if(!visible||!controls){
+   controlsFocus.current=null;
+   if(visible&&controlsRestore.current===state.selectedSessionId)restoreControlsFocus();
+   controlsRestore.current=null;return;
+  }
+  const target=controlsFocus.current;controlsFocus.current=null;
+  // A resize can cover a previously focused reader. Move to the same stable
+  // inspector, leaving the header toggle and document navigation available.
+  if(target||covered&&readerRef.current?.contains(document.activeElement)){
+   if(!target)controlsInvoker.current=document.activeElement;
+   inspectorRef.current?.querySelector(target==='version'?'[aria-label="Artifact version"]':'[aria-label="Close canvas details"]')?.focus({preventScroll:true});
+  }
+ },[controls,covered,visible,state.selectedSessionId]);
+ useEffect(()=>{controlsInvoker.current=null;controlsFocus.current=null;controlsRestore.current=null},[state.selectedSessionId]);
  useCanvasReading(overviewRef,state.selectedSessionId,'overview',!!canvas.open&&overview&&!suppressed);
  useModalFocus(panel,focused,()=>patch(actRef.current,{canvasFocused:false}),'#canvas-toggle');
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
- useEffect(()=>{if(!controls&&panel.current?.querySelector('#canvas-options')?.contains(document.activeElement))panel.current?.querySelector('[aria-label="Canvas details"]')?.focus({preventScroll:true})},[controls]);
  useEffect(()=>{
   if(!canvas.open||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;
   const id=draft.delivery==='outputs'?'review':'publishing';
@@ -102,27 +152,24 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  },[canvas.open,draft.library,draft.delivery]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
- return <CanvasPrimaryActionsHost.Provider value={actionsHost}><CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={overview?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined} aria-owns={focused?'canvas-toggle':undefined}>
+ return <CanvasPrimaryActionsHost.Provider value={actionsHost}><CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={overview?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined} aria-owns={focused?'canvas-toggle':undefined} onKeyDown={event=>{
+  if(controls&&event.key==='Escape'&&!event.defaultPrevented&&!event.target.closest('dialog[open]')){event.preventDefault();closeControls()}
+ }}>
 
   {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
   <div className="a-canvas-chrome">
-   <header className="a-canvas-head"><CanvasTabs state={state} act={act} dispatch={dispatch} overview={overview} onOverview={()=>patch(act,{settingsCanvas:false,canvasDraft:{...draft,library:true,open:false,browser:false}})}/>
+   <header className="a-canvas-head"><CanvasTabs state={state} act={act} dispatch={dispatch} overview={overview} onOverview={()=>patch(act,{settingsCanvas:false,canvasControlsExpanded:false,canvasDraft:{...draft,library:true,open:false,browser:false}})}/>
     <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
    </header>
+  </div>
+  <div ref={contentRef} className="a-canvas-content" data-details-overlay={detailsOverlay}>
+   <div ref={readerRef} className="a-canvas-reader" inert={covered} aria-hidden={covered||undefined}>
    <div className="a-canvas-artifact-toolbar" hidden={overview||!hasContent}>
     <strong title={canvas.title}>{canvas.title}</strong>
-    {resourceView?.versions?.length>0&&<button type="button" className="a-canvas-version-shortcut a-soft" aria-label="Choose artifact version" onClick={async()=>{await patch(act,{canvasControlsExpanded:true});requestAnimationFrame(()=>panel.current?.querySelector('[aria-label="Artifact version"]')?.focus())}}>v{resourceView.selectedVersion??resourceView.latestVersion}{resourceView.selectedVersion!=null?' · Saved':''}</button>}
+    {resourceView?.versions?.length>0&&<button type="button" className="a-canvas-version-shortcut a-soft" aria-label="Choose artifact version" aria-expanded={controls} aria-controls="canvas-options" onClick={()=>openControls('version')}>v{resourceView.selectedVersion??resourceView.latestVersion}{resourceView.selectedVersion!=null?' · Saved':''}</button>}
     <div ref={setActionsHost} className="a-canvas-primary-actions"/>
-    <button type="button" className="a-soft a-canvas-details" aria-label="Canvas details" aria-expanded={controls} aria-controls="canvas-options" onClick={()=>patch(act,{canvasControlsExpanded:!controls})}><Info/><span>Details</span></button>
+    <button type="button" className="a-soft a-canvas-details" aria-label="Canvas details" aria-expanded={controls} aria-controls="canvas-options" onClick={()=>controls?closeControls():openControls()}><Info/><span>Details</span></button>
    </div>
-   <div id="canvas-options" className="a-canvas-controls" hidden={!controls} inert={!controls}>
-    <div className="a-canvas-location"><ShellSlot name="canvas.toolbar"><button type="button" className="a-soft" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} onClick={()=>changeDraft({browser:!draft.browser,open:false})}><Globe/>Website</button><button type="button" className="a-soft" aria-label="Open a file in canvas" aria-expanded={!!draft.open} onClick={()=>changeDraft({open:!draft.open,browser:false})}><FolderOpen/>File</button></ShellSlot><button type="button" className="a-icon" aria-label="Close canvas details" onClick={()=>patch(act,{canvasControlsExpanded:false})}><X/></button></div>
-
-  {draft.browser&&<BrowserAddress state={state} act={act}/>}
-  {draft.open&&<form className="a-canvas-file-form" onSubmit={e=>{e.preventDefault();act('canvas.show',{kind:draft.kind||'auto',path:draft.path||''})}}><label htmlFor="canvas-file-path">File in this workspace</label><PathField id="canvas-file-path" value={draft.path||''} onChange={path=>changeDraft({path})} state={state} act={act} placeholder="README.md or a full path"/><div className="a-canvas-file-actions"><select aria-label="Canvas file format" value={draft.kind||'auto'} data-action="view.update" onChange={e=>changeDraft({kind:e.target.value})}><option value="auto">Detect automatically</option><option value="html">HTML</option><option value="babylon">3D · Babylon.js</option><option value="mermaid">Mermaid</option><option value="dot">Graphviz DOT</option><option value="json">JSON</option><option value="jsonl">JSONL</option><option value="text">Text</option><option value="markdown">Markdown</option><option value="code">Code</option><option value="image">Image</option></select><button type="submit" className="a-primary" data-action="canvas.show" disabled={!draft.path?.trim()}>Open file<ChevronRight/></button></div></form>}
-  <div ref={setControlsHost} hidden={!!draft.library||!hasContent}/>
-   </div>
-  </div>
   <div className="a-canvas-body">
    {settings&&<div className="a-settings-canvas">{settingsSurface}</div>}
    <div key={state.selectedSessionId??'draft'} hidden={settings} className="a-canvas-session-body">
@@ -136,6 +183,16 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
    </div>
 
   </div>
+  </div>
+   </div>
+   <div className="a-canvas-inspector-backdrop" hidden={!covered} aria-hidden="true" onClick={closeControls}/>
+   <aside ref={inspectorRef} id="canvas-options" className="a-canvas-controls a-canvas-inspector" role="region" aria-labelledby="canvas-details-title" hidden={!controls} inert={!controls}>
+    <header className="a-canvas-inspector-head"><h2 id="canvas-details-title">Canvas details</h2><button type="button" className="a-icon" aria-label="Close canvas details" onClick={closeControls}><X/></button></header>
+    <div className="a-canvas-location"><ShellSlot name="canvas.toolbar"><button type="button" className="a-soft" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} onClick={()=>changeDraft({browser:!draft.browser,open:false})}><Globe/>Website</button><button type="button" className="a-soft" aria-label="Open a file in canvas" aria-expanded={!!draft.open} onClick={()=>changeDraft({open:!draft.open,browser:false})}><FolderOpen/>File</button></ShellSlot></div>
+    {draft.browser&&<BrowserAddress state={state} act={act}/>}
+    {draft.open&&<form className="a-canvas-file-form" onSubmit={e=>{e.preventDefault();act('canvas.show',{kind:draft.kind||'auto',path:draft.path||''})}}><label htmlFor="canvas-file-path">File in this workspace</label><PathField id="canvas-file-path" value={draft.path||''} onChange={path=>changeDraft({path})} state={state} act={act} placeholder="README.md or a full path"/><div className="a-canvas-file-actions"><select aria-label="Canvas file format" value={draft.kind||'auto'} data-action="view.update" onChange={e=>changeDraft({kind:e.target.value})}><option value="auto">Detect automatically</option><option value="html">HTML</option><option value="babylon">3D · Babylon.js</option><option value="mermaid">Mermaid</option><option value="dot">Graphviz DOT</option><option value="json">JSON</option><option value="jsonl">JSONL</option><option value="text">Text</option><option value="markdown">Markdown</option><option value="code">Code</option><option value="image">Image</option></select><button type="submit" className="a-primary" data-action="canvas.show" disabled={!draft.path?.trim()}>Open file<ChevronRight/></button></div></form>}
+    <div ref={setControlsHost} data-part="canvas-view-controls" hidden={!!draft.library||!hasContent}/>
+   </aside>
   </div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}
  </aside></CanvasControlsHost.Provider></CanvasPrimaryActionsHost.Provider>;

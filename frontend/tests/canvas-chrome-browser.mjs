@@ -162,6 +162,31 @@ try{
   ].filter(Boolean);
  };
  const assertNavigation=async()=>{const g=await navigationGeometry();report.lastNavigation=g;assert.deepEqual(navigationViolations(g),[],'FIXED_CANVAS_NAVIGATION');return g};
+ const inspectorGeometry=()=>panel.evaluate(el=>{
+  const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
+  const content=el.querySelector('.a-canvas-content'),reader=el.querySelector('.a-canvas-reader'),inspector=el.querySelector('#canvas-options');
+  return {panel:box(el),content:box(content),reader:box(reader),body:box(el.querySelector('.a-canvas-body')),inspector:box(inspector),
+   navigation:box(el.querySelector('.a-canvas-head')),overlay:content.dataset.detailsOverlay==='true',readerInert:reader.inert,
+   inspectorScrollWidth:inspector.scrollWidth,inspectorClientWidth:inspector.clientWidth,overflow:getComputedStyle(inspector).overflowY,
+   viewport:{width:innerWidth,height:innerHeight}};
+ });
+ const inspectorViolations=(g,closed)=>{
+  const near=(a,b)=>Math.abs(a-b)<=2;
+  return [
+   near(g.body.top,closed.body.top)&&near(g.body.height,closed.body.height)?null:'Details consumes reader height',
+   near(g.inspector.top,g.content.top)&&near(g.inspector.bottom,g.content.bottom)?null:'Details is not bounded to the content row',
+   g.inspector.top>=g.navigation.bottom-1&&g.inspector.bottom<=Math.min(g.panel.bottom,g.viewport.height)+1?null:'Details covers navigation or escapes Canvas',
+   g.inspectorScrollWidth<=g.inspectorClientWidth+1?null:'Details has horizontal overflow',
+   /auto|scroll/.test(g.overflow)?null:'Details cannot scroll independently',
+   g.overlay
+    ?near(g.reader.width,closed.reader.width)&&g.readerInert&&g.inspector.width<=344+1&&near(g.inspector.right,g.content.right)?null:'Narrow sheet changes reader width or leaves covered content active'
+    :g.reader.width>=320&&near(g.inspector.width,264)&&g.reader.right<=g.inspector.left+1&&!g.readerInert?null:'Wide Details is not beside a usable reader'
+  ].filter(Boolean);
+ };
+ const assertInspector=async closed=>{
+  const sample=await inspectorGeometry();report.lastInspector=sample;
+  assert.deepEqual(inspectorViolations(sample,closed),[],'SIDE_CANVAS_INSPECTOR');return sample;
+ };
  const wheel=async(locator,x,y)=>{
   const b=await locator.boundingBox();assert.ok(b?.width>0&&b.height>0,'Wheel target must be rendered');
   await page.mouse.move(b.x+b.width*.8,b.y+b.height/2);await page.mouse.wheel(x,y);
@@ -385,13 +410,42 @@ try{
      const button=panel.getByRole('button',{name,exact:true});await requireReachable(button,name);
      const box=await button.boundingBox();assert.ok(box.width>=44&&box.height>=44,`${name}: at least 44px target`);
     }
+    const closedInspector=await inspectorGeometry();
+    const stableControls=await panel.locator('[data-part="canvas-view-controls"]').elementHandle();
+    const stableRenderer=await panel.locator('.a-resource-renderer').elementHandle();
     await panel.getByRole('button',{name:'Choose artifact version'}).click();
     await expect(panel.getByRole('combobox',{name:'Artifact version',exact:true})).toBeFocused();
-    await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(page.locator('#canvas-options')).toBeHidden();
+    const details=page.getByRole('region',{name:'Canvas details',exact:true}),closeDetails=details.getByRole('button',{name:'Close canvas details',exact:true});
+    await expect(details).toBeVisible();
+    const openInspector=await assertInspector(closedInspector);
+    assert.equal(openInspector.overlay,size.pane<720,'Wide and narrow Canvas use the intended inspector modes');
+    await requireReachable(closeDetails,'Details close');await requireReachable(toggle,'Header toggle with Details open');await requireReachable(overviewTab,'Overview with Details open');
+    await capture(scheme+'-'+size.name+'-details');
+    if(scheme==='light'&&size.name==='desktop-1500'){
+     // Restore the old above-reader geometry on the real nodes. The SAME
+     // positive assertion must reject reader-height loss, not a missing element.
+     const broken=await page.addStyleTag({content:'#amp-one .a-canvas-content{flex-direction:column!important}#amp-one .a-canvas-content>.a-canvas-inspector{position:static!important;order:-1!important;flex:0 0 35dvh!important;width:100%!important;height:35dvh!important;max-height:35dvh!important}'});
+     try{
+      const sample=await inspectorGeometry();assert.ok(inspectorViolations(sample,closedInspector).includes('Details consumes reader height'));
+      await assert.rejects(assertInspector(closedInspector),/SIDE_CANVAS_INSPECTOR/);
+      report.inspectorTopBandNegative={sample,rejected:true};await capture('negative-details-top-band');
+     }finally{await broken.evaluate(el=>el.remove())}
+     await assertInspector(closedInspector);
+    }
+    await documents().click();await expect(dialog).toBeVisible();await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();await expect(details).toBeVisible();
+    await closeDetails.click();await expect(page.locator('#canvas-options')).toBeHidden();
+    await expect(panel.getByRole('button',{name:'Choose artifact version'})).toBeFocused();
+    assert.equal(await panel.locator('[data-part="canvas-view-controls"]').evaluate((el,original)=>el===original,stableControls),true);
+    assert.equal(await panel.locator('.a-resource-renderer').evaluate((el,original)=>el===original,stableRenderer),true);
+    await stableControls.dispose();await stableRenderer.dispose();
     await capture(scheme+'-'+size.name+'-artifact');
     await panel.getByRole('button',{name:'Focus canvas',exact:true}).click();await expect(panel).toHaveAttribute('data-focused','true');
     await requireReachable(toggle,'Header Hide canvas in focus mode');
     await capture(scheme+'-'+size.name+'-focused');
+    await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
+    await page.keyboard.press('Escape');await expect(details).toBeHidden();
+    await expect(panel,'Escape closes Details before leaving focused Canvas').toHaveAttribute('data-focused','true');
     // Start on the included header control and traverse both modal boundaries.
     await toggle.focus();await page.keyboard.press('Shift+Tab');await page.keyboard.press('Tab');await expect(toggle).toBeFocused();
     await page.keyboard.press('Enter');await expect(panel).toBeHidden();await expect(toggle).toHaveAccessibleName('Open canvas');
@@ -402,7 +456,7 @@ try{
     await expect(panel).toHaveAttribute('data-focused','true');await page.keyboard.press('Escape');
     await expect(panel).toHaveAttribute('data-focused','false');
     await expect(panel.getByRole('button',{name:/^(Close canvas panel|Back to canvas)$/})).toHaveCount(0);
-    return {...bounds,navigation};
+    return {...bounds,navigation,details:{closed:closedInspector,open:openInspector}};
    });
   }
  }

@@ -109,6 +109,33 @@ try {
    await expect(overviewTab).toHaveAttribute('aria-selected','true');await expect(overview).toBeVisible();
   }else await expect(primary).toBeVisible();
  };
+ // Layout-only Details changes must retain the actual dirty renderer and lease,
+ // not a new editor that happens to contain the same saved source.
+ const details=page.getByRole('region',{name:'Canvas details',exact:true});
+ const closeDetails=()=>details.getByRole('button',{name:'Close canvas details',exact:true});
+ const controlsHost=await panel.locator('[data-part="canvas-view-controls"]').elementHandle();
+ await action('view.update',{patch:{canvasWidth:800}});
+ await primary.click();await expect(primary).toBeFocused();
+ await page.setViewportSize({width:390,height:850});
+ await expect(panel.locator('.a-canvas-content')).toHaveAttribute('data-details-overlay','true');
+ await expect(closeDetails()).toBeFocused();
+ assert.equal(await primary.evaluate(el=>!!el.closest('[inert]')),true,'Covered editor must leave the keyboard/assistive reading order');
+ await retained();await capture('dirty-details-narrow');
+ await page.keyboard.press('Escape');await expect(details).toBeHidden();await expect(primary).toBeFocused();
+ assert.equal(await primary.evaluate(el=>!!el.closest('[inert]')),false);await retained();
+ for(const width of [390,320]){
+  await page.setViewportSize({width,height:850});
+  await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();
+  await toggle.click();await expect(panel).toBeHidden();
+  await toggle.click();await expect(details).toBeVisible();await retained();
+  await closeDetails().click();await expect(details).toBeHidden();await retained();
+  assert.equal(await panel.locator('[data-part="canvas-view-controls"]').evaluate((el,original)=>el===original,controlsHost),true);
+ }
+ await controlsHost.dispose();
+ await page.setViewportSize({width:1500,height:1050});
+ await action('view.update',{patch:{canvasWidth:720}});
+ await panel.getByRole('button',{name:'Canvas details',exact:true}).click();await expect(details).toBeVisible();await retained();
+ report.checks.push({name:'wide Details, responsive side sheet and header hide retain the same dirty renderer/controls',status:'passed'});
  // Browsing retains the dirty mount; explicitly reopening the same chat must
  // neither block nor discard its edit just because return shortcuts are gone.
  await action('view.update',{patch:{workSurface:'workspaces'}});

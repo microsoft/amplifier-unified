@@ -206,6 +206,73 @@ test('reopening the canvas keeps its saved snapshot without creating another art
  assert.deepEqual(called,{name:'canvas.visibility',args:{open:true}});
 });
 
+test('Canvas Details and reader are stable siblings below the one navigation bar',async()=>{
+ const previousDocument=globalThis.document;
+ globalThis.document={addEventListener(){},removeEventListener(){}};
+ let root,state={selectedSessionId:'a',view:{settingsCanvas:true},canvas:{open:true,kind:'settings',title:'Settings'}};
+ const render=()=>React.createElement(AgentCanvas,{state,act:async()=>({accepted:true}),settingsSurface:React.createElement('input',{'aria-label':'Retained field',defaultValue:'Unsent'})});
+ try{
+  await renderAct(async()=>{root=create(render())});
+  const inspector=root.root.findByProps({id:'canvas-options'}),host=root.root.findByProps({'data-part':'canvas-view-controls'});
+  const reader=root.root.findByProps({className:'a-canvas-reader'}),field=root.root.findByProps({'aria-label':'Retained field'});
+  assert.equal(inspector.parent,reader.parent);
+  assert.equal(reader.parent.props.className,'a-canvas-content');
+  assert.equal(root.root.findByProps({className:'a-canvas-chrome'}).findAllByProps({id:'canvas-options'}).length,0);
+  assert.equal(reader.findAllByProps({className:'a-canvas-artifact-toolbar'}).length,1);
+  assert.equal(inspector.props.role,'region');assert.equal(inspector.props['aria-labelledby'],'canvas-details-title');
+  for(const [open,visible] of [[true,true],[true,false],[true,true],[false,true]]){
+   state={...state,view:{...state.view,canvasControlsExpanded:open},canvas:{...state.canvas,open:visible}};
+   await renderAct(async()=>root.update(render()));
+   assert.equal(root.root.findByProps({id:'canvas-options'}),inspector);
+   assert.equal(root.root.findByProps({'data-part':'canvas-view-controls'}),host,'Portal target must not be replaced by visibility/layout changes');
+   assert.equal(root.root.findByProps({'aria-label':'Retained field'}),field);
+   assert.equal(inspector.props.hidden,!open);
+   assert.equal(root.root.findAllByProps({'aria-label':'Back to chat'}).length,0);
+  }
+ }finally{if(root)await renderAct(async()=>root.unmount());if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument}
+});
+
+test('Canvas Details resize, Escape priority and focus return follow the current interaction',async()=>{
+ const previousDocument=globalThis.document,previousObserver=globalThis.ResizeObserver,listeners=new Map();
+ let root,width=800,measure,state={selectedSessionId:'a',view:{canvasControlsExpanded:false},canvas:{open:true,kind:'text',title:'Document'}};
+ const calls=[],doc={body:{},activeElement:null,addEventListener(name,fn){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn)},removeEventListener(name,fn){listeners.get(name)?.delete(fn)},querySelector(){return invoker}};
+ const node=area=>({area,isConnected:true,getClientRects:()=>[{}],closest:()=>null,focus(){doc.activeElement=this}});
+ const invoker=node('reader'),readerField=node('reader'),close=node('inspector'),version=node('inspector'),newIntent=node('header');
+ const panelNode={getBoundingClientRect:()=>({width}),contains:n=>['reader','inspector'].includes(n?.area),querySelector:()=>invoker};
+ const readerNode={contains:n=>n?.area==='reader'};
+ const inspectorNode={contains:n=>n?.area==='inspector',querySelector:selector=>selector.includes('Artifact version')?version:close};
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const render=()=>React.createElement(AgentCanvas,{state,act});
+ const update=async patch=>{state={...state,view:{...state.view,...patch}};await renderAct(async()=>root.update(render()))};
+ const open=async()=>{doc.activeElement=invoker;await renderAct(async()=>root.root.findByProps({'aria-label':'Canvas details'}).props.onClick());await update({canvasControlsExpanded:true})};
+ globalThis.document=doc;
+ globalThis.ResizeObserver=class {constructor(callback){measure=callback}observe(){}disconnect(){}};
+ try{
+  await renderAct(async()=>{root=create(render(),{createNodeMock:({props})=>props.id==='workspace-canvas'?panelNode:props.id==='canvas-options'?inspectorNode:props.className==='a-canvas-content'?{getBoundingClientRect:()=>({width})}:props.className==='a-canvas-reader'?readerNode:null})});
+  await open();assert.equal(doc.activeElement,close);assert.equal(root.root.findByProps({className:'a-canvas-reader'}).props.inert,false);
+  doc.activeElement=readerField;width=390;await renderAct(async()=>measure());
+  assert.equal(doc.activeElement,close,'A responsive overlay must not strand focus in its covered reader');
+  assert.equal(root.root.findByProps({className:'a-canvas-reader'}).props.inert,true);
+  const panel=()=>root.root.findByProps({id:'workspace-canvas'});
+  let prevented=false;
+  await renderAct(async()=>panel().props.onKeyDown({key:'Escape',defaultPrevented:false,target:{closest:()=>({})},preventDefault(){prevented=true}}));
+  assert.equal(prevented,false,'Native dialog owns Escape before Details');
+  calls.length=0;
+  await renderAct(async()=>panel().props.onKeyDown({key:'Escape',defaultPrevented:false,target:{closest:()=>null},preventDefault(){prevented=true}}));
+  assert.equal(prevented,true);assert.deepEqual(calls,[{name:'view.update',args:{patch:{canvasControlsExpanded:false}}}]);
+  await update({canvasControlsExpanded:false});assert.equal(doc.activeElement,readerField);
+  assert.equal(root.root.findByProps({className:'a-canvas-reader'}).props.inert,false);
+  await open();
+  await renderAct(async()=>root.root.findByProps({'aria-label':'Close canvas details'}).props.onClick());
+  doc.activeElement=newIntent;for(const fn of listeners.get('pointerdown')||[])fn();
+  await update({canvasControlsExpanded:false});assert.equal(doc.activeElement,newIntent,'Late close settlement cannot steal newer header intent');
+ }finally{
+  if(root)await renderAct(async()=>root.unmount());
+  if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  if(previousObserver===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=previousObserver;
+ }
+});
+
 
 test('rename preserves failed text and newer drafts across external renames',async()=>{
  let finish;const calls=[];let cancelled=0;
