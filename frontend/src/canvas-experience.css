@@ -56,6 +56,7 @@
 #amp-one .a-canvas-inspector-backdrop{position:absolute;inset:0;background:#10152550;z-index:1}
 #amp-one .a-canvas-inspector-backdrop[hidden]{display:none}
 #amp-one .a-canvas-inspector-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+#amp-one .a-canvas-content[data-details-overlay=true] .a-canvas-inspector-head{position:sticky;top:-12px;padding-block:4px;background:var(--a-soft);z-index:1}
 #amp-one .a-canvas-inspector-head h2{flex:1;min-width:0;margin:0;font-size:16px;line-height:1.4}
 #amp-one .a-canvas-inspector .a-resource-view-controls>strong{display:block;flex-basis:100%;white-space:normal;overflow-wrap:anywhere;font-size:14px}
 #amp-one .a-canvas-inspector :is(button,select,input){min-height:44px;min-width:0;max-width:100%;box-sizing:border-box}
